@@ -113,7 +113,7 @@ codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 
 4. 새 설치 검증에 성공한 뒤에만 기존 플러그인을 제거합니다.
 ```powershell
-codex plugin remove gpt-codex-hwp@hwp-local
+codex plugin remove hwp-korean-docs@hwp-local
 ```
 
 5. 새 설치 검증에 실패하면 이전 플러그인을 유지하고 새 설치만 제거한 뒤 다시 시도하십시오. 로컬 소스를 갱신한 뒤에는 manifest 버전 캐시버스터를 갱신하고 새 플러그인을 다시 설치해야 합니다.

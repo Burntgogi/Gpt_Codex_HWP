@@ -113,3 +113,14 @@ Thank you to Lovell Fuller and the Sharp contributors for the cross-platform ima
 - Use in this project: runtime schemas and validation for the public MCP tool inputs.
 
 Thank you to Colin McDonnell and the Zod contributors for the schema-validation library.
+
+## Pixelify Sans
+
+- Repository directory: <https://github.com/google/fonts/tree/main/ofl/pixelifysans>
+- Source repository recorded by Google Fonts: <https://github.com/eifetx/Pixelify-Sans>
+- Source commit recorded by Google Fonts metadata: `39df74aba80df8157546034b878e8be1eb565ced`
+- Copyright: `Copyright 2021 The Pixelify Sans Project Authors (https://github.com/eifetx/Pixelify-Sans)`
+- License: SIL Open Font License, Version 1.1 (`OFL-1.1`)
+- Use in this project: production-only typography input for rasterizing the title into `assets/gpt-codex-hwp-banner.png`. The font software is not bundled in the plugin or embedded in generated HWPX documents; only the rendered PNG is distributed.
+
+Thank you to the Pixelify Sans Project Authors and Google Fonts maintainers for the typeface and its curated distribution.

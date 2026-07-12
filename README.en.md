@@ -113,7 +113,7 @@ This command alone does not prepare npm production dependencies. From the valida
 
 4. Only after the new installation passes verification, remove the old plugin.
 ```powershell
-codex plugin remove gpt-codex-hwp@hwp-local
+codex plugin remove hwp-korean-docs@hwp-local
 ```
 
 5. If verification fails, keep the old plugin, remove only the new installation, and retry. After updating local source, update the manifest version cache-buster and reinstall the new plugin.
