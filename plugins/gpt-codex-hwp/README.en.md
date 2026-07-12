@@ -55,15 +55,17 @@ This project was developed and validated primarily on Windows x64. Its launcher 
 
 ## Agent-assisted installation from GitHub
 
+`v0.1.3`, when published, will be the first release published under GitHub release immutability. `v0.1.0`, `v0.1.1`, and `v0.1.2` remain historical releases; new installations should use `v0.1.3` after it is published.
+
 A user can ask a Codex agent:
 
-> Install release `v0.1.2` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and verify all nine MCP tools in a new task.
+> Install release `v0.1.3` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and verify all nine MCP tools in a new task.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.2 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.3 --json
 ```
 
 Verify that the returned JSON has `marketplaceName` equal to `gpt-codex-hwp-local`.
