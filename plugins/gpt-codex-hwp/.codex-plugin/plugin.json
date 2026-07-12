@@ -1,6 +1,6 @@
 {
   "name": "gpt-codex-hwp",
-  "version": "0.1.0+codex.20260712222741",
+  "version": "0.1.1+codex.20260712232355",
   "description": "Read and preview Korean HWP files, and create, edit, validate, and preview HWPX documents in Codex.",
   "author": {
     "name": "Gpt_Codex_HWP contributors"
@@ -30,7 +30,7 @@
       "이 마크다운을 HWPX 문서로 만들어줘.",
       "이 HWPX 양식의 빈칸을 채워줘."
     ],
-    "brandColor": "#6574D9",
+    "brandColor": "#2563EB",
     "composerIcon": "./assets/gpt-codex-hwp-icon-64.png",
     "logo": "./assets/gpt-codex-hwp-icon.png"
   }

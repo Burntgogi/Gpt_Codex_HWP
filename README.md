@@ -53,6 +53,45 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 이 프로젝트는 Windows x64 환경을 중심으로 제작하고 실제 검증했습니다. macOS Apple Silicon 호환성을 고려해 런처와 런타임 경로를 구성했지만, 실제 Mac 기기 스모크 테스트는 아직 수행하지 않았습니다. 따라서 macOS Apple Silicon은 호환 대상이지만 현재 검증 완료된 플랫폼은 아닙니다.
 
+## 에이전트를 통한 GitHub 설치
+
+사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
+
+> `Burntgogi/Gpt_Codex_HWP`의 `v0.1.1` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 새 작업에서 MCP 도구 9개를 확인해 주세요.
+
+1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
+2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
+
+```powershell
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.1 --json
+```
+
+반환된 JSON의 `marketplaceName`이 `gpt-codex-hwp-local`인지 확인합니다.
+
+3. 설치 결과를 JSON으로 받습니다.
+
+```powershell
+$installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
+$installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
+```
+
+4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/mcp.js`가 모두 있어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
+5. 검증한 정확한 경로에서 잠금 파일 기반 운영 의존성을 설치하고 감사합니다.
+
+```powershell
+Push-Location -LiteralPath $installedPath
+try {
+  npm ci --omit=dev
+  if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+  npm audit --omit=dev
+  if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
+} finally {
+  Pop-Location
+}
+```
+
+6. Codex를 재시작하거나 새 작업을 열고 문서에 나열된 정확히 9개 도구(`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`)를 확인합니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
+
 ## 설치 및 마이그레이션
 
 기존 설치에서 안전하게 전환하려면 다음 순서를 지키십시오.
@@ -68,11 +107,13 @@ codex plugin marketplace add .
 codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
+이 명령만으로 npm 운영 의존성이 준비되지는 않습니다. 설치 결과의 검증된 런타임 경로에서 아래 `런타임 설치` 절의 `npm ci --omit=dev`를 실행하십시오.
+
 3. 새 Codex 작업을 열어 `gpt-codex-hwp@gpt-codex-hwp-local` 플러그인 ID와 정확히 9개 도구(`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`)가 등록됐는지 확인합니다.
 
 4. 새 설치 검증에 성공한 뒤에만 기존 플러그인을 제거합니다.
 ```powershell
-codex plugin remove hwp-korean-docs@hwp-local
+codex plugin remove gpt-codex-hwp@hwp-local
 ```
 
 5. 새 설치 검증에 실패하면 이전 플러그인을 유지하고 새 설치만 제거한 뒤 다시 시도하십시오. 로컬 소스를 갱신한 뒤에는 manifest 버전 캐시버스터를 갱신하고 새 플러그인을 다시 설치해야 합니다.

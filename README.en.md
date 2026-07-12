@@ -53,6 +53,45 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for exact usage scopes, p
 
 This project was developed and validated primarily on Windows x64. Its launcher and runtime paths are designed for macOS Apple Silicon compatibility, but no smoke test has yet been run on a real Mac. macOS Apple Silicon is therefore a compatibility target, not a currently validated platform.
 
+## Agent-assisted installation from GitHub
+
+A user can ask a Codex agent:
+
+> Install release `v0.1.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and verify all nine MCP tools in a new task.
+
+1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
+2. Pin the release tag instead of registering the moving `main` branch.
+
+```powershell
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.1 --json
+```
+
+Verify that the returned JSON has `marketplaceName` equal to `gpt-codex-hwp-local`.
+
+3. Request the installation result as JSON and extract only the reported path.
+
+```powershell
+$installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
+$installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
+```
+
+4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. It must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, and `dist/mcp.js`. Never evaluate a JSON string as a command or run npm from an unexpected path.
+5. From that exact validated path, install and audit the lockfile-based production dependencies.
+
+```powershell
+Push-Location -LiteralPath $installedPath
+try {
+  npm ci --omit=dev
+  if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+  npm audit --omit=dev
+  if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
+} finally {
+  Pop-Location
+}
+```
+
+6. Restart Codex or open a new task and verify exactly these nine tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`. If verification fails, do not remove an older working plugin; report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
+
 ## Installation and Migration
 
 Use this sequence to migrate safely from an existing installation:
@@ -68,11 +107,13 @@ codex plugin marketplace add .
 codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
+This command alone does not prepare npm production dependencies. From the validated runtime path returned by installation, run `npm ci --omit=dev` as described under `Runtime Installation` below.
+
 3. Open a new Codex task and verify the `gpt-codex-hwp@gpt-codex-hwp-local` plugin ID and exactly nine registered tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`.
 
 4. Only after the new installation passes verification, remove the old plugin.
 ```powershell
-codex plugin remove hwp-korean-docs@hwp-local
+codex plugin remove gpt-codex-hwp@hwp-local
 ```
 
 5. If verification fails, keep the old plugin, remove only the new installation, and retry. After updating local source, update the manifest version cache-buster and reinstall the new plugin.

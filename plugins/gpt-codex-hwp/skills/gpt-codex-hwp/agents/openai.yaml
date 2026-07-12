@@ -2,6 +2,3 @@ interface:
   display_name: "Gpt_Codex_HWP"
   short_description: "Read HWP and safely create or edit HWPX files"
   default_prompt: "Use $gpt-codex-hwp to read a Korean HWP/HWPX document or safely create and edit HWPX."
-  icon_small: "./assets/gpt-codex-hwp-icon-64.png"
-  icon_large: "./assets/gpt-codex-hwp-icon.png"
-  brand_color: "#6574D9"

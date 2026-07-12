@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-The versions below are the versions fixed by `package-lock.json` or, for non-runtime inputs, the exact source commit recorded during production. License identifiers describe those fixed sources.
+The versions below are fixed by `package-lock.json` or, for non-runtime inputs, by the exact source commit recorded during production. License identifiers describe those fixed sources.
 
 ## hwpx-editing-skill
 
@@ -68,7 +68,7 @@ Thank you to the modelcontextprotocol maintainers and contributors for the TypeS
 
 - Repository: <https://github.com/xmldom/xmldom>
 - Version: `@xmldom/xmldom` `0.9.10` (`0.9.10`)
-- Copyright: `Copyright 2019 - present Christopher J. Brody and other contributors, as listed in: https://github.com/xmldom/xmldom/graphs/contributors`; `Copyright 2012 - 2017 @jindw and other contributors, as listed in: https://github.com/jindw/xmldom/graphs/contributors`
+- Copyright: `Copyright 2019 - present Christopher J. Brody and other contributors, as listed in: https://github.com/xmldom/xmldom/graphs/contributors`; `Copyright 2012 - 2017 @jindw and other contributors, as listed in: https://github.com/xmldom/xmldom/graphs/contributors`
 - License: MIT
 - Use in this project: parsing, inspecting, modifying, and serializing HWPX XML for font-integrity checks and image insertion.
 
@@ -113,14 +113,3 @@ Thank you to Lovell Fuller and the Sharp contributors for the cross-platform ima
 - Use in this project: runtime schemas and validation for the public MCP tool inputs.
 
 Thank you to Colin McDonnell and the Zod contributors for the schema-validation library.
-
-## Pixelify Sans
-
-- Repository directory: <https://github.com/google/fonts/tree/main/ofl/pixelifysans>
-- Source repository recorded by Google Fonts: <https://github.com/eifetx/Pixelify-Sans>
-- Source commit recorded by Google Fonts metadata: `39df74aba80df8157546034b878e8be1eb565ced`
-- Copyright: `Copyright 2021 The Pixelify Sans Project Authors (https://github.com/eifetx/Pixelify-Sans)`
-- License: SIL Open Font License, Version 1.1 (`OFL-1.1`)
-- Use in this project: production-only typography input for rasterizing the title into `assets/gpt-codex-hwp-banner.png`. The font software is not bundled in the plugin or embedded in generated HWPX documents; only the rendered PNG is distributed.
-
-Thank you to the Pixelify Sans Project Authors and Google Fonts maintainers for the typeface and its curated distribution.
