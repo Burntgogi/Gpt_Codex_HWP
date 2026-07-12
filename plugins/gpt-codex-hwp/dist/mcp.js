@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./tools/index.js";
 const SERVER_NAME = "hwp-korean-docs";
-const SERVER_VERSION = "0.1.1";
+const SERVER_VERSION = "0.1.2";
 export function createMcpServer() {
     const server = new McpServer({
         name: SERVER_NAME,
