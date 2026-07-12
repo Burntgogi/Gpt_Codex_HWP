@@ -1,0 +1,37 @@
+{
+  "name": "gpt-codex-hwp",
+  "version": "0.1.0+codex.20260712222741",
+  "description": "Read and preview Korean HWP files, and create, edit, validate, and preview HWPX documents in Codex.",
+  "author": {
+    "name": "Gpt_Codex_HWP contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "hwp",
+    "hwpx",
+    "hancom",
+    "hangul",
+    "korean-documents"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Gpt_Codex_HWP",
+    "shortDescription": "Read HWP and safely create or edit HWPX.",
+    "longDescription": "Provides Codex tools for read-only HWP detection, reading, and preview, plus HWPX generation, preserve-format edits, form filling, visual assets, preview rendering, and structural validation.",
+    "developerName": "Gpt_Codex_HWP contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "이 HWP 파일을 읽고 요약해줘.",
+      "이 마크다운을 HWPX 문서로 만들어줘.",
+      "이 HWPX 양식의 빈칸을 채워줘."
+    ],
+    "brandColor": "#6574D9",
+    "composerIcon": "./assets/gpt-codex-hwp-icon-64.png",
+    "logo": "./assets/gpt-codex-hwp-icon.png"
+  }
+}

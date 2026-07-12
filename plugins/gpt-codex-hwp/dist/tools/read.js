@@ -1,0 +1,378 @@
+import { createHash } from "node:crypto";
+import { lstat, mkdir, open, realpath, stat, } from "node:fs/promises";
+import { extname, join, parse as parsePath, resolve } from "node:path";
+import { parse, } from "kordoc";
+import { z } from "zod";
+import { resolveLocalPath } from "../shared/paths.js";
+import { readFileBounded } from "../shared/files.js";
+import { MarkdownDeliveryError, planMarkdownDelivery, } from "../shared/markdown-output.js";
+import { writeFilesExclusively } from "../shared/output.js";
+import { inspectExactDocumentProtection } from "../shared/protection.js";
+import { toolError, toolSuccess } from "../shared/result.js";
+import { MAX_MCP_RESPONSE_BYTES, serializedBytes, } from "../shared/resource-limits.js";
+import { detectPreciseDocumentFormat } from "./rhwp-backend.js";
+export const HWP_READ_TOOL_NAME = "hwp_read";
+export async function handleHwpRead(input, parseDocument = parse) {
+    let filePath;
+    try {
+        filePath = resolveLocalPath(input.file_path, "file_path");
+        const pristineBytes = Uint8Array.from(await readFileBounded(filePath, "source document"));
+        const preciseFormat = await detectPreciseDocumentFormat(exactArrayBuffer(pristineBytes));
+        if (preciseFormat === "hwp" || preciseFormat === "hwpx") {
+            const protection = await inspectExactDocumentProtection(pristineBytes, preciseFormat);
+            if (protection !== undefined) {
+                return toolError(`Could not read the protected document: ${protection.error}`, {
+                    code: protection.code,
+                    error: protection.error,
+                    file_path: filePath,
+                    file_type: preciseFormat,
+                });
+            }
+        }
+        const parsed = await parseDocument(exactArrayBuffer(pristineBytes), {
+            filePath,
+            pages: input.pages,
+        });
+        if (!parsed.success) {
+            return toolError(`Could not read the document: ${parsed.error}`, {
+                code: parsed.code ?? "PARSE_ERROR",
+                error: parsed.error,
+                file_path: filePath,
+                file_type: parsed.fileType,
+            });
+        }
+        let delivery;
+        try {
+            delivery = planMarkdownDelivery(parsed.markdown, input.markdown_output_path);
+        }
+        catch (error) {
+            if (error instanceof MarkdownDeliveryError) {
+                return toolError(error.message, {
+                    code: error.code,
+                    file_path: filePath,
+                    file_type: parsed.fileType,
+                    ...error.details,
+                });
+            }
+            throw error;
+        }
+        const warnings = copyWarnings(parsed.warnings);
+        const shouldExtractImages = input.extract_images ?? input.output_dir !== undefined;
+        const assets = shouldExtractImages
+            ? await collectImageAssets(parsed.images ?? [], input.output_dir, filePath, warnings)
+            : [];
+        const metadata = {
+            ...(parsed.metadata ?? {}),
+            fileType: parsed.fileType,
+        };
+        if (parsed.pageCount !== undefined) {
+            metadata.pageCount = parsed.pageCount;
+        }
+        if (parsed.isImageBased !== undefined) {
+            metadata.isImageBased = parsed.isImageBased;
+        }
+        const details = {
+            markdown: delivery.inlineMarkdown,
+            metadata,
+            warnings,
+            assets,
+        };
+        if (delivery.outputPath !== undefined) {
+            Object.assign(details, {
+                markdown_truncated: delivery.truncated,
+                markdown_path: delivery.outputPath,
+                markdown_characters: delivery.characters,
+                markdown_bytes: delivery.bytes,
+                recommended_chunk_characters: delivery.recommendedChunkCharacters,
+                source_fingerprint: createHash("sha256")
+                    .update(pristineBytes)
+                    .digest("hex"),
+            });
+        }
+        const summary = delivery.outputPath === undefined
+            ? `Read ${parsed.fileType} document.`
+            : `Read ${parsed.fileType} document and saved complete Markdown.`;
+        const successResult = toolSuccess(summary, details);
+        const responseBytes = serializedBytes(successResult);
+        if (responseBytes > MAX_MCP_RESPONSE_BYTES) {
+            return toolError("The complete result is too large for one MCP response. Read a smaller page/section range with pages.", {
+                code: "RESPONSE_TOO_LARGE",
+                file_path: filePath,
+                file_type: parsed.fileType,
+                response_bytes: responseBytes,
+                maximum_response_bytes: MAX_MCP_RESPONSE_BYTES,
+                guidance: "Retry hwp_read with a narrower pages range.",
+            });
+        }
+        if (delivery.outputPath !== undefined) {
+            await writeFilesExclusively([{ path: delivery.outputPath, data: parsed.markdown }], { sourcePaths: [filePath] });
+        }
+        return successResult;
+    }
+    catch (error) {
+        const message = errorMessage(error);
+        const details = {
+            code: errorCode(error, "READ_ERROR"),
+            error: message,
+            file_path: safeResolvedPath(input.file_path),
+        };
+        const markdownOutputPath = safeResolvedPath(input.markdown_output_path, "markdown_output_path");
+        if (markdownOutputPath !== undefined) {
+            details.markdown_output_path = markdownOutputPath;
+        }
+        return toolError(`Could not read the document: ${message}`, details);
+    }
+}
+export function registerHwpRead(server) {
+    server.registerTool(HWP_READ_TOOL_NAME, {
+        title: "Read HWP document",
+        description: "Read the exact requested local HWP/HWPX or supported office document as Markdown with metadata, warnings, and optional extracted images.",
+        inputSchema: {
+            file_path: z.string().min(1).describe("Local document path to read."),
+            output_dir: z
+                .string()
+                .min(1)
+                .optional()
+                .describe("Directory for extracted image files."),
+            markdown_output_path: z
+                .string()
+                .min(1)
+                .optional()
+                .describe("New local .md path for the complete extracted Markdown; existing files are never overwritten."),
+            pages: z
+                .string()
+                .min(1)
+                .optional()
+                .describe("1-based page or section range, such as 1-3 or 1,3,5."),
+            extract_images: z
+                .boolean()
+                .optional()
+                .describe("Return or write extracted image assets."),
+        },
+        annotations: {
+            readOnlyHint: false,
+        },
+    }, (args) => handleHwpRead(args));
+}
+function copyWarnings(warnings) {
+    return (warnings ?? []).map((warning) => ({ ...warning }));
+}
+async function collectImageAssets(images, outputDir, sourceFilePath, warnings) {
+    const filenames = uniqueSafeFilenames(images);
+    if (outputDir === undefined) {
+        warnings.push({
+            code: "IMAGES_NOT_WRITTEN",
+            message: "extract_images was requested without output_dir; returning image names only, without raw bytes.",
+        });
+        return filenames;
+    }
+    const resolvedOutputDir = resolveLocalPath(outputDir, "output_dir");
+    const resolvedSourceFilePath = resolveLocalPath(sourceFilePath, "file_path");
+    const outputDirectory = await prepareCanonicalOutputDirectory(resolvedOutputDir);
+    const paths = [];
+    for (const [index, image] of images.entries()) {
+        paths.push(await writeImageAssetExclusively(image, filenames[index], outputDirectory, resolvedSourceFilePath));
+    }
+    return paths;
+}
+class UnsafeOutputDirectoryError extends Error {
+    code = "UNSAFE_OUTPUT_DIR";
+    constructor(message) {
+        super(message);
+        this.name = "UnsafeOutputDirectoryError";
+    }
+}
+async function prepareCanonicalOutputDirectory(outputDir) {
+    await assertNoLinkedExistingComponents(outputDir);
+    await mkdir(outputDir, { recursive: true });
+    await assertNoLinkedExistingComponents(outputDir);
+    const [canonicalPath, stats] = await Promise.all([
+        realpath(outputDir),
+        stat(outputDir, { bigint: true }),
+    ]);
+    if (!stats.isDirectory()) {
+        throw new UnsafeOutputDirectoryError("output_dir must resolve to a directory.");
+    }
+    if (comparablePath(canonicalPath) !== comparablePath(outputDir)) {
+        throw new UnsafeOutputDirectoryError("output_dir must be a canonical path without symlinks or junctions.");
+    }
+    return {
+        path: outputDir,
+        realPath: canonicalPath,
+        device: stats.dev,
+        inode: stats.ino,
+    };
+}
+async function assertCanonicalDirectoryIdentity(expected) {
+    await assertNoLinkedExistingComponents(expected.path);
+    const [canonicalPath, stats] = await Promise.all([
+        realpath(expected.path),
+        stat(expected.path, { bigint: true }),
+    ]);
+    if (!stats.isDirectory() ||
+        comparablePath(canonicalPath) !== comparablePath(expected.realPath) ||
+        comparablePath(canonicalPath) !== comparablePath(expected.path) ||
+        stats.dev !== expected.device ||
+        stats.ino !== expected.inode) {
+        throw new UnsafeOutputDirectoryError("output_dir changed or became non-canonical before asset creation.");
+    }
+}
+async function assertNoLinkedExistingComponents(path) {
+    for (const component of absolutePathComponents(path)) {
+        let stats;
+        try {
+            stats = await lstat(component);
+        }
+        catch (error) {
+            if (errorCode(error, "") === "ENOENT") {
+                return;
+            }
+            throw error;
+        }
+        if (stats.isSymbolicLink()) {
+            throw new UnsafeOutputDirectoryError(`output_dir path component is a symlink or junction: ${component}`);
+        }
+    }
+}
+function absolutePathComponents(path) {
+    const root = parsePath(path).root;
+    const components = [root];
+    let current = root;
+    for (const segment of path.slice(root.length).split(/[\\/]+/u)) {
+        if (segment.length === 0) {
+            continue;
+        }
+        current = join(current, segment);
+        components.push(current);
+    }
+    return components;
+}
+async function writeImageAssetExclusively(image, baseFilename, outputDirectory, sourceFilePath) {
+    let attempt = 1;
+    while (true) {
+        const filename = filenameForAttempt(baseFilename, attempt);
+        const outputPath = resolve(outputDirectory.path, filename);
+        if (comparablePath(outputPath) === comparablePath(sourceFilePath)) {
+            attempt += 1;
+            continue;
+        }
+        await assertCanonicalDirectoryIdentity(outputDirectory);
+        let handle;
+        try {
+            handle = await open(outputPath, "wx");
+        }
+        catch (error) {
+            if (errorCode(error, "") === "EEXIST") {
+                attempt += 1;
+                continue;
+            }
+            throw error;
+        }
+        let closed = false;
+        try {
+            await handle.stat({ bigint: true });
+            await handle.writeFile(image.data);
+            await handle.close();
+            closed = true;
+            return outputPath;
+        }
+        catch (error) {
+            if (!closed) {
+                await handle.close().catch(() => undefined);
+            }
+            // Never delete a failed output by pathname: a concurrent replacement
+            // could be removed between any identity check and deletion.
+            throw error;
+        }
+    }
+}
+function filenameForAttempt(baseFilename, attempt) {
+    if (attempt === 1) {
+        return baseFilename;
+    }
+    const extension = extname(baseFilename);
+    const stem = extension.length > 0
+        ? baseFilename.slice(0, -extension.length)
+        : baseFilename;
+    return `${stem}_${attempt}${extension}`;
+}
+function uniqueSafeFilenames(images) {
+    const used = new Set();
+    return images.map((image, index) => {
+        const original = safeFilename(image.filename, image.mimeType, index);
+        const extension = extname(original);
+        const stem = extension.length > 0 ? original.slice(0, -extension.length) : original;
+        let filename = original;
+        let suffix = 2;
+        while (used.has(comparableFilename(filename))) {
+            filename = `${stem}_${suffix}${extension}`;
+            suffix += 1;
+        }
+        used.add(comparableFilename(filename));
+        return filename;
+    });
+}
+function safeFilename(filename, mimeType, index) {
+    const leaf = filename.replaceAll("\\", "/").split("/").at(-1) ?? "";
+    let safe = leaf
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/gu, "_")
+        .replace(/[. ]+$/gu, "");
+    if (safe.length === 0 || safe === "." || safe === "..") {
+        safe = `image_${String(index + 1).padStart(3, "0")}${extensionForMime(mimeType)}`;
+    }
+    const deviceName = safe.split(".", 1)[0]?.toUpperCase();
+    if (deviceName !== undefined &&
+        /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/u.test(deviceName)) {
+        safe = `_${safe}`;
+    }
+    return safe;
+}
+function extensionForMime(mimeType) {
+    const extensions = {
+        "image/bmp": ".bmp",
+        "image/gif": ".gif",
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/svg+xml": ".svg",
+        "image/tiff": ".tiff",
+        "image/webp": ".webp",
+    };
+    return extensions[mimeType.toLowerCase()] ?? ".bin";
+}
+function comparableFilename(filename) {
+    return process.platform === "win32"
+        ? filename.toLocaleLowerCase("en-US")
+        : filename;
+}
+function comparablePath(path) {
+    return process.platform === "win32"
+        ? path.toLocaleLowerCase("en-US")
+        : path;
+}
+function safeResolvedPath(path, label = "file_path") {
+    try {
+        return typeof path === "string"
+            ? resolveLocalPath(path, label)
+            : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function errorCode(error, fallback) {
+    if (typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string" &&
+        error.code.length > 0) {
+        return error.code;
+    }
+    return fallback;
+}
+function exactArrayBuffer(bytes) {
+    const copy = Uint8Array.from(bytes);
+    return copy.buffer;
+}

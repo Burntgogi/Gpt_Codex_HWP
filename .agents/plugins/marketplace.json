@@ -1,0 +1,20 @@
+{
+  "name": "gpt-codex-hwp-local",
+  "interface": {
+    "displayName": "Gpt_Codex_HWP Local"
+  },
+  "plugins": [
+    {
+      "name": "gpt-codex-hwp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gpt-codex-hwp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

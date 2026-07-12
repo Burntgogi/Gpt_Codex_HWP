@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gpt-codex-hwp": {
+      "command": "node",
+      "args": [
+        "./dist/mcp.js"
+      ],
+      "cwd": "."
+    }
+  }
+}
