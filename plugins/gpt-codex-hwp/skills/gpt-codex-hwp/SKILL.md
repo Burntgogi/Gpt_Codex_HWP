@@ -1,6 +1,6 @@
 ---
 name: gpt-codex-hwp
-description: Read, create, edit, fill, validate, and preview Korean Hangul documents with Codex. Use for .hwp, .hwpx, or .hml files; 한글/한컴 documents; Korean official-document generation; HWPX tables, forms, images, SVG/PNG assets, preserve-format text patches, or document validation.
+description: Read, create, edit, fill, validate, and preview Korean Hangul documents with Codex. Use for .hwp or .hwpx files; 한글/한컴 documents; Korean official-document generation; HWPX tables, forms, images, SVG/PNG assets, preserve-format text patches, or document validation.
 ---
 
 # Gpt_Codex_HWP
@@ -42,7 +42,7 @@ Read and preview supported classic HWP 5.x files. Binary HWP is strictly input-o
 
 `hwp_render_preview` uses Kordoc first. Its optional rhwp fallback renders page 0 only, ignores requested Kordoc reflow/highlights, and uses approximate Node font metrics; report the returned warnings and do not present the fallback SVG as exact Hancom layout.
 
-The target platforms are Windows x64 and macOS Apple Silicon. Windows x64 is verified for this release; actual macOS Apple Silicon smoke remains a gate for declaring macOS validated support until recorded. The plugin requires Node.js 22 or newer and target-local installation with `npm ci --omit=dev`; never copy `node_modules` between platforms. `after-paragraph` image insertion also requires Python 3.10 or newer on `PATH`. Windows tries `python` then `py -3`; macOS tries `python3` then `python`. If neither command exists, only that mode fails with `PYTHON_NOT_FOUND`; other tools remain available.
+The target platforms are Windows x64 and macOS Apple Silicon. Windows x64 is verified for this release; actual macOS Apple Silicon smoke remains a gate for declaring macOS validated support until recorded. The plugin requires Node.js 22 or newer and target-local installation with `npm ci --omit=dev --ignore-scripts`; never copy `node_modules` between platforms. Kordoc Core excludes optional PDF, OCR, ONNX, and formula-engine dependencies, and the verified Windows x64 `node_modules` budget is 64 MiB. `after-paragraph` image insertion also requires Python 3.10 or newer on `PATH`. Windows tries `python` then `py -3`; macOS tries `python3` then `python`. If neither command exists, only that mode fails with `PYTHON_NOT_FOUND`; other tools remain available.
 
 ## Privacy and errors
 

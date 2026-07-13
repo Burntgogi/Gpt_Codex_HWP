@@ -38,7 +38,7 @@ export async function handleHwpDetectFormat(input) {
 export function registerHwpDetectFormat(server) {
     server.registerTool(HWP_DETECT_FORMAT_TOOL_NAME, {
         title: "Detect HWP document format",
-        description: "Detect the exact requested local document as HWP, HWPX, HWPML, PDF, Word, Excel, or unknown.",
+        description: "Detect the exact requested local document format before applying the HWP/HWPX-only read contract.",
         inputSchema: {
             file_path: z.string().min(1).describe("Local document path to inspect."),
         },

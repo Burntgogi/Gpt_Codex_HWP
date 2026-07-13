@@ -8,6 +8,10 @@
 
 Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
 
+## v0.1.4 릴리즈
+
+`v0.1.4`는 Windows x64 최종 검증을 마친 현재 릴리즈입니다. 주요 변경, 검증 수치, 설치·업그레이드 주의사항은 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있으며 [영문 릴리즈 노트](RELEASE_NOTES.en.md)도 함께 제공합니다. 설치할 때는 움직이는 `main` 대신 `v0.1.4` 태그를 지정하십시오.
+
 ## 기능
 
 - Markdown에서 보고서, 계획서, 공문서, 회의록 등의 HWPX 생성
@@ -24,7 +28,7 @@ Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수
 | HWPX | 읽기, 생성, 구조 보존 패치, 양식 채우기, 이미지 삽입, 검증, 미리보기 |
 | HWP 5.x | 형식 감지, 읽기, 미리보기만 지원. 읽은 내용은 새 HWPX로 저장 |
 | HWP 3.x | 실제 fixture 검증이 없어 지원을 보장하지 않음 |
-| PDF, DOCX, XLSX 등 | Kordoc이 지원하는 범위에서 형식 감지와 읽기 |
+| PDF, DOCX, XLSX 등 | 지원하지 않음. `hwp_read`는 Kordoc 파싱 전에 거부 |
 
 HWPX는 이 프로젝트의 정식 작성 형식입니다. 바이너리 HWP를 수정하려면 먼저 `hwp_read`로 읽고, 필요한 내용을 Markdown으로 정리한 다음 `hwp_generate_hwpx`로 새로운 HWPX 경로에 저장하십시오.
 
@@ -37,7 +41,7 @@ HWPX는 이 프로젝트의 정식 작성 형식입니다. 바이너리 HWP를 �
 
 Python이 없으면 Python 기반 이미지 삽입 모드만 `PYTHON_NOT_FOUND`로 실패하며 다른 도구는 계속 사용할 수 있습니다.
 
-## 첫 배포 전 주요 보완 사항
+## v0.1.4 배포 전 주요 보완 사항
 
 Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://github.com/edwardkim/rhwp), [hwpx-editing-skill](https://github.com/kangdacool/hwpx-editing-skill)과 여러 공개 오픈소스를 통합·적용하는 과정에서 확인한 문서 처리 경계 문제를 첫 배포 전에 보완했습니다. 이는 해당 원본 프로젝트들에 동일한 버그나 취약점이 존재한다는 뜻이 아닙니다. 기반 작업을 공개한 모든 유지관리자와 기여자께 감사드립니다.
 
@@ -46,6 +50,8 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 - 문서·이미지 처리와 실제 최종 MCP 응답에 크기 제한을 적용합니다.
 - 수정 결과를 의미 단위로 재검증하고 Python 앵커 탐색은 전체 일치 목록을 만들지 않고 순차 처리합니다.
 - 공개 배포 메타데이터에서 개인 식별 흔적을 제거했습니다.
+- Kordoc 3.18.1 공식 아카이브를 고정 SHA-512로 인증하고 필요한 Core만 포함해 소스맵과 선택 의존성을 제거했습니다.
+- 공개 배포물을 패킹하기 전에 개인정보 경로, 개인키, 실제 자격증명, `.env`, 테스트·사용자 문서가 없는지 검사합니다.
 
 세부 참고 범위, 고정 버전, 저작권과 라이선스는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 확인하십시오.
 
@@ -53,19 +59,21 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 이 프로젝트는 Windows x64 환경을 중심으로 제작하고 실제 검증했습니다. macOS Apple Silicon 호환성을 고려해 런처와 런타임 경로를 구성했지만, 실제 Mac 기기 스모크 테스트는 아직 수행하지 않았습니다. 따라서 macOS Apple Silicon은 호환 대상이지만 현재 검증 완료된 플랫폼은 아닙니다.
 
+`v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 릴리즈 노트](RELEASE_NOTES.md#검증-결과)를 참조하십시오.
+
 ## 에이전트를 통한 GitHub 설치
 
-`v0.1.3`은 게시되면 최초로 GitHub 릴리스 불변성 하에 게시되는 릴리스가 됩니다. `v0.1.0`, `v0.1.1`, `v0.1.2`는 과거 릴리스로 유지되며, 새 설치는 `v0.1.3`이 게시된 뒤 사용해야 합니다.
+`v0.1.4`는 현재 권장 릴리즈입니다. `v0.1.0`, `v0.1.1`, `v0.1.2`, `v0.1.3`은 과거 릴리스로 유지됩니다. 새 설치는 `v0.1.4` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
 
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
-> `Burntgogi/Gpt_Codex_HWP`의 `v0.1.3` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 새 작업에서 MCP 도구 9개를 확인해 주세요.
+> `Burntgogi/Gpt_Codex_HWP`의 `v0.1.4` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 새 작업에서 MCP 도구 9개를 확인해 주세요.
 
 1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
 2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.3 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.4 --json
 ```
 
 반환된 JSON의 `marketplaceName`이 `gpt-codex-hwp-local`인지 확인합니다.
@@ -78,12 +86,12 @@ $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
 4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp@gpt-codex-hwp-local`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/mcp.js`가 모두 있어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
-5. 검증한 정확한 경로에서 잠금 파일 기반 운영 의존성을 설치하고 감사합니다.
+5. 검증한 정확한 경로에서 잠금 파일 기반 운영 의존성을 설치하고 감사합니다. Windows x64에서 `node_modules`는 64 MiB 이하인지 확인합니다.
 
 ```powershell
 Push-Location -LiteralPath $installedPath
 try {
-  npm ci --omit=dev
+  npm ci --omit=dev --ignore-scripts
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
   npm audit --omit=dev
   if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
@@ -109,7 +117,7 @@ codex plugin marketplace add .
 codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
-이 명령만으로 npm 운영 의존성이 준비되지는 않습니다. 설치 결과의 검증된 런타임 경로에서 아래 `런타임 설치` 절의 `npm ci --omit=dev`를 실행하십시오.
+이 명령만으로 npm 운영 의존성이 준비되지는 않습니다. 설치 결과의 검증된 런타임 경로에서 아래 `런타임 설치` 절의 `npm ci --omit=dev --ignore-scripts`를 실행하십시오.
 
 3. 새 Codex 작업을 열어 `gpt-codex-hwp@gpt-codex-hwp-local` 플러그인 ID와 정확히 9개 도구(`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`)가 등록됐는지 확인합니다.
 
@@ -182,10 +190,11 @@ HWPX는 `HANGUL`, `LATIN`, `HANJA`, `JAPANESE`, `OTHER`, `SYMBOL`, `USER` 언어
 플랫폼별 네이티브 의존성은 각 런타임 환경에서 별도로 설치합니다. Windows에서 설치한 `node_modules`를 macOS로 복사하지 마십시오.
 
 ```bash
-npm ci --omit=dev
+npm ci --omit=dev --ignore-scripts
+npm audit --omit=dev
 ```
 
-이 명령은 잠금 파일을 사용해 Sharp를 포함한 런타임 의존성을 현재 OS와 CPU에 맞게 설치합니다. 글꼴 파일은 설치하지 않습니다.
+이 명령은 잠금 파일을 사용해 Sharp를 포함한 런타임 의존성을 현재 OS와 CPU에 맞게 설치합니다. 글꼴 파일은 설치하지 않습니다. Kordoc Core는 HWP/HWPX 작업에 필요한 고정 런타임만 제공하며 PDF, OCR, ONNX, 수식 엔진 선택 의존성을 설치하지 않습니다. 검증된 Windows x64의 `node_modules` 예산은 64 MiB 이하입니다.
 
 ## 오픈 소스 감사
 

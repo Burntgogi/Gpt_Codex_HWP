@@ -18,16 +18,22 @@ export async function handleHwpRead(input, parseDocument = parse) {
         filePath = resolveLocalPath(input.file_path, "file_path");
         const pristineBytes = Uint8Array.from(await readFileBounded(filePath, "source document"));
         const preciseFormat = await detectPreciseDocumentFormat(exactArrayBuffer(pristineBytes));
-        if (preciseFormat === "hwp" || preciseFormat === "hwpx") {
-            const protection = await inspectExactDocumentProtection(pristineBytes, preciseFormat);
-            if (protection !== undefined) {
-                return toolError(`Could not read the protected document: ${protection.error}`, {
-                    code: protection.code,
-                    error: protection.error,
-                    file_path: filePath,
-                    file_type: preciseFormat,
-                });
-            }
+        if (preciseFormat !== "hwp" && preciseFormat !== "hwpx") {
+            return toolError("Only HWP and HWPX documents are supported.", {
+                code: "UNSUPPORTED_FORMAT",
+                file_path: filePath,
+                file_type: preciseFormat,
+                supported_formats: ["hwp", "hwpx"],
+            });
+        }
+        const protection = await inspectExactDocumentProtection(pristineBytes, preciseFormat);
+        if (protection !== undefined) {
+            return toolError(`Could not read the protected document: ${protection.error}`, {
+                code: protection.code,
+                error: protection.error,
+                file_path: filePath,
+                file_type: preciseFormat,
+            });
         }
         const parsed = await parseDocument(exactArrayBuffer(pristineBytes), {
             filePath,
@@ -126,7 +132,7 @@ export async function handleHwpRead(input, parseDocument = parse) {
 export function registerHwpRead(server) {
     server.registerTool(HWP_READ_TOOL_NAME, {
         title: "Read HWP document",
-        description: "Read the exact requested local HWP/HWPX or supported office document as Markdown with metadata, warnings, and optional extracted images.",
+        description: "Read the exact requested local HWP/HWPX document as Markdown with metadata, warnings, and optional extracted images.",
         inputSchema: {
             file_path: z.string().min(1).describe("Local document path to read."),
             output_dir: z

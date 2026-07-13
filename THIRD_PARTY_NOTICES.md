@@ -40,7 +40,9 @@ SOFTWARE.
 - Version: `3.18.1` (`v3.18.1`)
 - Copyright: `Copyright (c) 2026 chrisryugj`
 - License: MIT
-- Use in this project: runtime document-format detection, HWP/HWPX reading, Markdown-to-HWPX generation, HWPX validation, and SVG preview rendering.
+- Registry source: `https://registry.npmjs.org/kordoc/-/kordoc-3.18.1.tgz`
+- Registry integrity: `sha512-/SrgNK9RKnz1wdlhOvBeJi6+pNSO+vZeBHMxKd8TvfIkuinQBpwbE+W76TGNsMC7bxx2NJhNQAJPqCyD5ltiGA==`
+- Use in this project: runtime document-format detection, HWP/HWPX reading, Markdown-to-HWPX generation, HWPX validation, and SVG preview rendering. The published `dist` runtime and upstream notices are repackaged without metadata for optional PDF, OCR, ONNX, formula, CLI, development, or lifecycle dependencies. Per-file SHA-256 provenance is recorded in `vendor/kordoc-core/PROVENANCE.json`.
 
 Thank you to the Kordoc maintainer and contributors for the document runtime on which these workflows rely.
 

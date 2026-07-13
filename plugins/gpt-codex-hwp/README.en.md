@@ -8,6 +8,10 @@
 
 Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
+## v0.1.4 Release
+
+`v0.1.4` is the current release and has completed final Windows x64 validation. See the [English release notes](RELEASE_NOTES.en.md) for highlights, verification evidence, and installation or upgrade cautions; [Korean release notes](RELEASE_NOTES.md) are provided alongside them. Pin the `v0.1.4` tag instead of installing from the moving `main` branch.
+
 ## Features
 
 - Generate HWPX reports, plans, official documents, and meeting notes from Markdown
@@ -24,7 +28,7 @@ Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating
 | HWPX | Read, generate, structure-preserving patch, form fill, image insertion, validation, preview |
 | HWP 5.x | Detect, read, and preview only; read content can be saved as a new HWPX |
 | HWP 3.x | Not guaranteed because no real fixture has been validated |
-| PDF, DOCX, XLSX, and others | Detection and reading where supported by Kordoc |
+| PDF, DOCX, XLSX, and others | Unsupported; `hwp_read` rejects them before Kordoc parsing |
 
 HWPX is the supported authoring format. To revise a binary HWP, read it with `hwp_read`, organize the required content as Markdown, and save it to a new HWPX path with `hwp_generate_hwpx`.
 
@@ -37,7 +41,7 @@ HWPX is the supported authoring format. To revise a binary HWP, read it with `hw
 
 Without Python, only the Python-backed image insertion mode fails with `PYTHON_NOT_FOUND`; the other tools remain available.
 
-## Notable Pre-Release Hardening
+## Notable v0.1.4 Pre-Release Hardening
 
 Before its first release, Gpt_Codex_HWP hardened document-processing boundaries identified while integrating and applying public open-source work including [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://github.com/edwardkim/rhwp), and [hwpx-editing-skill](https://github.com/kangdacool/hwpx-editing-skill). This does not imply that the same bugs or vulnerabilities exist in those upstream projects. We thank all of their maintainers and contributors for making this work available.
 
@@ -46,6 +50,8 @@ Before its first release, Gpt_Codex_HWP hardened document-processing boundaries 
 - Size limits cover document and image processing as well as the actual final MCP response.
 - Mutations receive semantic post-verification, and Python anchor selection streams matches without materializing the full result set.
 - Personal identifying traces were removed from public distribution metadata.
+- The official Kordoc 3.18.1 archive is authenticated against a pinned SHA-512 value, and only the required Core is shipped without source maps or optional engines.
+- Public packages are scanned for personal paths, private keys, literal credentials, `.env` files, test documents, and user documents before release.
 
 See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for exact usage scopes, pinned versions, copyright notices, and licenses.
 
@@ -53,19 +59,21 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for exact usage scopes, p
 
 This project was developed and validated primarily on Windows x64. Its launcher and runtime paths are designed for macOS Apple Silicon compatibility, but no smoke test has yet been run on a real Mac. macOS Apple Silicon is therefore a compatibility target, not a currently validated platform.
 
+The final release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 verification results](RELEASE_NOTES.en.md#verification-results) for details.
+
 ## Agent-assisted installation from GitHub
 
-`v0.1.3`, when published, will be the first release published under GitHub release immutability. `v0.1.0`, `v0.1.1`, and `v0.1.2` remain historical releases; new installations should use `v0.1.3` after it is published.
+`v0.1.4` is the current recommended release. `v0.1.0`, `v0.1.1`, `v0.1.2`, and `v0.1.3` remain historical releases. New installations should pin `v0.1.4` and review the [release notes](RELEASE_NOTES.en.md) first.
 
 A user can ask a Codex agent:
 
-> Install release `v0.1.3` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and verify all nine MCP tools in a new task.
+> Install release `v0.1.4` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and verify all nine MCP tools in a new task.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.3 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.4 --json
 ```
 
 Verify that the returned JSON has `marketplaceName` equal to `gpt-codex-hwp-local`.
@@ -78,12 +86,12 @@ $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
 4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. It must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, and `dist/mcp.js`. Never evaluate a JSON string as a command or run npm from an unexpected path.
-5. From that exact validated path, install and audit the lockfile-based production dependencies.
+5. From that exact validated path, install and audit the lockfile-based production dependencies. On Windows x64, confirm that `node_modules` is at most 64 MiB.
 
 ```powershell
 Push-Location -LiteralPath $installedPath
 try {
-  npm ci --omit=dev
+  npm ci --omit=dev --ignore-scripts
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
   npm audit --omit=dev
   if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
@@ -109,7 +117,7 @@ codex plugin marketplace add .
 codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
-This command alone does not prepare npm production dependencies. From the validated runtime path returned by installation, run `npm ci --omit=dev` as described under `Runtime Installation` below.
+This command alone does not prepare npm production dependencies. From the validated runtime path returned by installation, run `npm ci --omit=dev --ignore-scripts` as described under `Runtime Installation` below.
 
 3. Open a new Codex task and verify the `gpt-codex-hwp@gpt-codex-hwp-local` plugin ID and exactly nine registered tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`.
 
@@ -182,10 +190,11 @@ The plugin does not bundle font files, embed them in HWPX, or install system fon
 Install platform-specific native dependencies separately in each runtime environment. Do not copy Windows `node_modules` to macOS.
 
 ```bash
-npm ci --omit=dev
+npm ci --omit=dev --ignore-scripts
+npm audit --omit=dev
 ```
 
-This command uses the lockfile to install runtime dependencies, including Sharp, for the current OS and CPU. It does not install font files.
+This command uses the lockfile to install runtime dependencies, including Sharp, for the current OS and CPU. It does not install font files. Kordoc Core provides only the pinned runtime required by HWP/HWPX workflows; optional PDF, OCR, ONNX, and formula-engine dependencies are not installed. The verified Windows x64 `node_modules` budget is at most 64 MiB.
 
 ## Open-Source Acknowledgements
 
