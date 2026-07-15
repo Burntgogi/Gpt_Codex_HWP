@@ -3,14 +3,17 @@ import {
   access,
   link,
   mkdir,
+  mkdtemp,
   readFile,
   rm,
   stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import test, { after, before } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import JSZip from "jszip";
@@ -136,9 +139,10 @@ interface PreviewToolModule {
   ): Promise<CallToolResult>;
 }
 
-const tmpRoot = resolve("tmp");
-const simplePath = join(tmpRoot, "simple.hwpx");
-const fixturePath = resolve("tests/fixtures/simple.md");
+const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+const fixturePath = join(SOURCE_ROOT, "tests", "fixtures", "simple.md");
+let tmpRoot = "";
+let simplePath = "";
 const generatedPaths = new Set<string>();
 let simpleHwpxBytes: Uint8Array;
 
@@ -284,7 +288,8 @@ const passThroughFontNormalization: NormalizeFonts = async (input) => ({
 const acceptFontReferences: InspectFonts = async () => ({ issues: [] });
 
 before(async () => {
-  await mkdir(tmpRoot, { recursive: true });
+  tmpRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-source-tests-"));
+  simplePath = join(tmpRoot, "simple.hwpx");
   const markdown = await readFile(fixturePath, "utf8");
   simpleHwpxBytes = (
     await normalizeGeneratedFontReferences(await markdownToHwpx(markdown))
@@ -297,6 +302,7 @@ after(async () => {
   for (const path of generatedPaths) {
     await rm(path, { recursive: true, force: true });
   }
+  await rm(tmpRoot, { recursive: true, force: true });
 });
 
 test("hwp_detect_format refines the generated ZIP container to HWPX", async () => {
@@ -399,7 +405,7 @@ test("hwp_read parses one immutable exact-byte snapshot with filePath and pages 
   };
 
   const result = await handleHwpRead(
-    { file_path: join("tmp", "simple.hwpx"), pages: "1-2" },
+    { file_path: simplePath, pages: "1-2" },
     parseDocument,
   );
 

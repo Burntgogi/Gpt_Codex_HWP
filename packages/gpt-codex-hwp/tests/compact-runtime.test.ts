@@ -22,6 +22,7 @@ import {
   verifyCompactRuntime,
 } from "../release-scripts/verify-compact-runtime.mjs";
 const SOURCE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const REPOSITORY_ROOT = resolve(SOURCE_ROOT, "../..");
 const COMPACT_TEMP_PREFIX = "gpt-codex-hwp-compact-";
 const TOOL_NAMES = [
   "hwp_detect_format",
@@ -34,6 +35,75 @@ const TOOL_NAMES = [
   "hwp_create_svg_asset",
   "hwp_insert_image",
 ];
+
+test("obsolete public-source references are absent from split release suites", async () => {
+  const splitSuites = [
+    "kordoc-core-runtime.test.ts",
+    "runtime-projection.test.ts",
+    "public-runtime-privacy.test.ts",
+    "release-metadata.test.ts",
+  ];
+  for (const suite of splitSuites) {
+    await access(join(SOURCE_ROOT, "tests", suite));
+  }
+
+  const forbiddenLiterals = [
+    ["build-", "distribution.mjs"].join(""),
+    ["release", "<version>", "hwp-korean-docs"].join("/"),
+    ["skills", "hwp-korean-docs"].join("/"),
+    ["C:", "Work", "boring"].join("\\"),
+    ["findAncestor", "Fixture"].join(""),
+  ];
+  const sourceFiles = await collectSourceFiles([
+    join(REPOSITORY_ROOT, "scripts"),
+    join(SOURCE_ROOT, "release-scripts"),
+    join(SOURCE_ROOT, "scripts"),
+    join(SOURCE_ROOT, "tests"),
+  ]);
+
+  for (const sourceFile of sourceFiles) {
+    const content = await readFile(sourceFile, "utf8");
+    for (const forbidden of forbiddenLiterals) {
+      assert.equal(content.includes(forbidden), false, `${sourceFile} contains ${forbidden}`);
+    }
+  }
+
+  const portableTestContracts = [
+    {
+      path: "mcp-smoke.test.ts",
+      forbidden: [["process", ".cwd()"].join("")],
+    },
+    {
+      path: "assets.test.ts",
+      forbidden: [["resolve(\"scripts", "hwpx-safe-edit"].join("/")],
+    },
+    {
+      path: "hwp-plugin.test.ts",
+      forbidden: [
+        ["resolve(\"", "tmp\")"].join(""),
+        ["resolve(\"tests", "fixtures"].join("/"),
+      ],
+    },
+    {
+      path: "rhwp-backend.test.ts",
+      forbidden: [["resolve(\"", "tmp\""].join("")],
+    },
+  ];
+  for (const contract of portableTestContracts) {
+    const content = await readFile(join(SOURCE_ROOT, "tests", contract.path), "utf8");
+    for (const forbidden of contract.forbidden) {
+      assert.equal(content.includes(forbidden), false, `${contract.path} contains ${forbidden}`);
+    }
+  }
+
+  const sourcePackage = JSON.parse(await readFile(join(SOURCE_ROOT, "package.json"), "utf8"));
+  const rootPackage = JSON.parse(await readFile(join(REPOSITORY_ROOT, "package.json"), "utf8"));
+  assert.equal(sourcePackage.scripts["test:python"], "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit");
+  assert.equal(rootPackage.scripts["test:repository"], "node --test tests/*.test.mjs");
+  assert.equal(rootPackage.scripts["test:source"], "npm --prefix packages/gpt-codex-hwp test");
+  assert.equal(rootPackage.scripts.test, "npm run test:repository && npm run test:source");
+  assert.equal(rootPackage.scripts["test:python"], "npm --prefix packages/gpt-codex-hwp run test:python");
+});
 
 test("compact runtime package exclusions handle scoped and ordinary paths", () => {
   assert.equal(Object.isFrozen(EXCLUDED_PACKAGES), true);
@@ -276,6 +346,21 @@ async function compactTemporaryDirectories(): Promise<string[]> {
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(COMPACT_TEMP_PREFIX))
     .map((entry) => entry.name)
     .sort();
+}
+
+async function collectSourceFiles(roots: string[]): Promise<string[]> {
+  const output: string[] = [];
+  for (const root of roots) {
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      const path = join(root, entry.name);
+      if (entry.isDirectory()) {
+        output.push(...await collectSourceFiles([path]));
+      } else if (entry.isFile() && /\.(?:js|mjs|py|ts)$/iu.test(entry.name)) {
+        output.push(path);
+      }
+    }
+  }
+  return output.sort();
 }
 
 function npmIsAvailable(): boolean {

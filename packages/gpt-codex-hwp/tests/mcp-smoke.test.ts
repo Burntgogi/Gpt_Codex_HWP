@@ -1,26 +1,30 @@
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import packageJson from "../package.json" with { type: "json" };
 
+const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+
 test("built MCP server initializes, lists tools, and exits without stderr", { timeout: 15_000 }, async () => {
-  const serverPath = resolve(
-    process.env.HWP_MCP_SERVER_PATH ?? "dist/mcp.js",
-  );
+  const configuredServerPath = process.env.HWP_MCP_SERVER_PATH?.trim();
+  const serverPath = configuredServerPath
+    ? resolve(configuredServerPath)
+    : join(SOURCE_ROOT, "dist", "mcp.js");
   await access(serverPath);
 
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverPath],
-    cwd: process.cwd(),
+    cwd: SOURCE_ROOT,
     stderr: "pipe",
   });
-  const client = new Client({ name: "hwp-korean-docs-smoke", version: "0.1.0" });
+  const client = new Client({ name: `${packageJson.name}-smoke`, version: packageJson.version });
   let stderr = "";
   transport.stderr?.setEncoding("utf8");
   transport.stderr?.on("data", (chunk: string) => {

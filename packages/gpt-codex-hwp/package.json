@@ -9,6 +9,7 @@
     "pretest": "npm run build",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:focused": "node --import tsx --test --test-concurrency=1",
+    "test:python": "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit",
     "verify:compact-runtime": "node release-scripts/verify-compact-runtime.mjs"
   },
   "dependencies": {

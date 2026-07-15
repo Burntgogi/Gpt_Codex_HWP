@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import {
   access,
   mkdir,
+  mkdtemp,
   readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { after, before } from "node:test";
 
@@ -27,10 +29,10 @@ import {
   type PreviewDependencies,
 } from "../src/tools/preview.js";
 
-const tmpRoot = resolve("tmp", `rhwp-backend-${process.pid}`);
+let tmpRoot = "";
 
 before(async () => {
-  await mkdir(tmpRoot, { recursive: true });
+  tmpRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-rhwp-backend-"));
 });
 
 after(async () => {

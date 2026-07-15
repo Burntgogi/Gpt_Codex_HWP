@@ -12,9 +12,10 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import JSZip from "jszip";
 import {
@@ -33,6 +34,8 @@ import {
 } from "../src/tools/assets.js";
 
 const execFileAsync = promisify(execFile);
+const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+const HWPX_SAFE_EDIT_ROOT = join(SOURCE_ROOT, "scripts", "hwpx-safe-edit");
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 type XmlEncoding = "utf8" | "utf16le" | "utf16be";
 
@@ -66,7 +69,7 @@ test("Python XML policy rejects encoded DTDs and protection manifests", async (t
   const root = await mkdtemp(join(tmpdir(), "hwp-python-xml-policy-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const script = join(root, "xml_policy_regression.py");
-  const helperDirectory = resolve("scripts/hwpx-safe-edit");
+  const helperDirectory = HWPX_SAFE_EDIT_ROOT;
   await writeFile(
     script,
     `import io\nimport json\nimport sys\nimport zipfile\nsys.path.insert(0, sys.argv[1])\nimport hwpxlib as H\nimport insert_image as I\n\ndef encoded(text, encoding):\n    if encoding == "utf8":\n        return b"\\xef\\xbb\\xbf" + text.encode("utf-8")\n    if encoding == "utf16le":\n        return b"\\xff\\xfe" + text.encode("utf-16le")\n    return b"\\xfe\\xff" + text.encode("utf-16be")\n\ndef dtd_rejected(encoding):\n    declaration = "UTF-8" if encoding == "utf8" else "UTF-16"\n    xml = f'<?xml version="1.0" encoding="{declaration}"?><!DOCTYPE root [<!ENTITY benign "ok">]><root>&benign;</root>'\n    try:\n        H.parse_xml(encoded(xml, encoding))\n    except ValueError:\n        return True\n    return False\n\ndef protection_rejected(encoding):\n    declaration = "UTF-8" if encoding == "utf8" else "UTF-16"\n    xml = f'<?xml version="1.0" encoding="{declaration}"?><manifest><distribution/></manifest>'\n    archive = io.BytesIO()\n    with zipfile.ZipFile(archive, "w") as zipped:\n        zipped.writestr("META-INF/manifest.xml", encoded(xml, encoding))\n    archive.seek(0)\n    with zipfile.ZipFile(archive) as zipped:\n        try:\n            I.guard_protected_package(zipped)\n        except I.ProtectedDocumentError as error:\n            return error.code\n    return None\n\nencodings = ("utf8", "utf16le", "utf16be")\nprint(json.dumps({\n    "dtd": {encoding: dtd_rejected(encoding) for encoding in encodings},\n    "protection": {encoding: protection_rejected(encoding) for encoding in encodings},\n}))\n`,
@@ -842,7 +845,7 @@ async function assertImageTriplet(zip: JSZip, section: string, entry: string): P
 }
 
 async function runVerifier(edited: string, original: string): Promise<{ stdout: string; stderr: string }> {
-  const script = resolve("scripts/hwpx-safe-edit/verify.py");
+  const script = join(HWPX_SAFE_EDIT_ROOT, "verify.py");
   const args = [
     "-X", "utf8", script, edited, "--orig", original,
     "--allow-changed", "Contents/content.hpf",

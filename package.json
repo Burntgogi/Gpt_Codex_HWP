@@ -23,6 +23,6 @@
     "test:repository": "node --test tests/*.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
     "test": "npm run test:repository && npm run test:source",
-    "test:python": "python -m unittest packages/gpt-codex-hwp/scripts/hwpx-safe-edit/test_hwpx_safe_edit.py"
+    "test:python": "npm --prefix packages/gpt-codex-hwp run test:python"
   }
 }
