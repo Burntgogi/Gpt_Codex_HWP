@@ -33,6 +33,16 @@ test("source package declares only approved direct dependencies", async () => {
   assert.deepEqual(sourcePackage.optionalDependencies, { "@rhwp/core": "0.7.17" });
 });
 
+test("source lock contains no root-repository link from prefixed installs", async () => {
+  const sourceLock = JSON.parse(await readFile(join(SOURCE, "package-lock.json"), "utf8"));
+  const packageKeys = Object.keys(sourceLock.packages ?? {});
+
+  assert.deepEqual(packageKeys.filter((path) => path === ".." || path.startsWith("../")), []);
+  assert.doesNotMatch(JSON.stringify(sourceLock), /gpt-codex-hwp-repository|file:\.\.\/\.\./u);
+  assert.equal(sourceLock.packages?.[""]?.dependencies?.kordoc, "file:vendor/kordoc-core");
+  assert.equal(sourceLock.packages?.["node_modules/kordoc"]?.resolved, "vendor/kordoc-core");
+});
+
 test("public source contains no private planning or user-document paths", async () => {
   const files = await regularFiles(ROOT);
   const allowedFixture = "packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp";
