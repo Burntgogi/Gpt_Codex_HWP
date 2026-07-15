@@ -455,6 +455,102 @@ class SafeEditTests(unittest.TestCase):
         self.assertNotEqual(duplicate_failure.returncode, 0, duplicate_failure.stdout)
         self.assertIn("duplicate", duplicate_failure.stdout.lower())
 
+    def test_descriptor_control_is_one_strict_bounded_frame_with_exact_scalar_keys(self) -> None:
+        payload = {
+            "sourceSize": len(self.source.read_bytes()),
+            "imageSize": len(self.image.read_bytes()),
+            "anchorText": "대상",
+            "occurrence": 1,
+            "widthMm": 25.4,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        frame = struct.pack(">I", len(encoded)) + encoded
+        self.assertEqual(I.read_descriptor_control(io.BytesIO(frame)), payload)
+
+        class ChunkedStream(io.BytesIO):
+            def read(self, size: int = -1) -> bytes:
+                return super().read(1 if size > 1 else size)
+
+        self.assertEqual(I.read_descriptor_control(ChunkedStream(frame)), payload)
+
+        duplicate = b'{"sourceSize":1,"sourceSize":2,"imageSize":1,"anchorText":"a","occurrence":0}'
+        invalid_frames = [
+            struct.pack(">I", I.MAX_DESCRIPTOR_CONTROL_BYTES + 1),
+            struct.pack(">I", 2) + b"\xff}",
+            struct.pack(">I", len(duplicate)) + duplicate,
+            frame + b"trailing",
+            struct.pack(">I", 1) + b"{",
+        ]
+        for invalid in invalid_frames:
+            with self.subTest(invalid=invalid[:20]):
+                with self.assertRaises(ValueError):
+                    I.read_descriptor_control(io.BytesIO(invalid))
+
+    def test_invalid_descriptor_control_is_rejected_before_any_data_descriptor_io(self) -> None:
+        malformed = struct.pack(">I", 1) + b"{"
+        with (
+            mock.patch.object(I, "read_exact_descriptor") as read_data,
+            mock.patch.object(I, "write_descriptor") as write_data,
+        ):
+            with self.assertRaises(ValueError):
+                I.run_descriptor_mode(io.BytesIO(malformed))
+        read_data.assert_not_called()
+        write_data.assert_not_called()
+
+    def test_path_cli_rejects_oversized_inputs_before_any_full_read_or_byte_transform(self) -> None:
+        oversized_source = self.root / "oversized-source.hwpx"
+        with oversized_source.open("wb") as stream:
+            stream.truncate(H.MAX_ARCHIVE_BYTES + 1)
+        oversized_image = self.root / "oversized-image.png"
+        with oversized_image.open("wb") as stream:
+            stream.truncate(I.MAX_IMAGE_BYTES + 1)
+
+        cases = [
+            (oversized_source, self.image, H.UnsafeZipError),
+            (self.source, oversized_image, I.InvalidImageError),
+        ]
+        for index, (source, image, expected) in enumerate(cases):
+            with self.subTest(source=source.name, image=image.name):
+                output = self.root / f"oversized-{index}.hwpx"
+                with (
+                    mock.patch.object(Path, "read_bytes", side_effect=AssertionError("full read")),
+                    mock.patch.object(I, "insert_image_bytes") as transform,
+                ):
+                    with self.assertRaises(expected):
+                        I.insert_image(
+                            source,
+                            output,
+                            image_path=image,
+                            anchor_text="대상",
+                        )
+                transform.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_oversized_synthetic_output_is_rejected_before_descriptor_or_path_write(self) -> None:
+        class OversizedResult:
+            def __len__(self) -> int:
+                return H.MAX_ARCHIVE_BYTES + 1
+
+        oversized = OversizedResult()
+        with mock.patch.object(I.os, "write") as descriptor_write:
+            with self.assertRaises(H.UnsafeZipError):
+                I.write_descriptor(5, oversized)  # type: ignore[arg-type]
+        descriptor_write.assert_not_called()
+
+        output = self.root / "oversized-output.hwpx"
+        with (
+            mock.patch.object(I, "insert_image_bytes", return_value=(oversized, {})),
+            mock.patch.object(H, "write_exclusive") as path_write,
+        ):
+            with self.assertRaises(H.UnsafeZipError):
+                I.insert_image(
+                    self.source,
+                    output,
+                    image_path=self.image,
+                    anchor_text="대상",
+                )
+        path_write.assert_not_called()
+
 
 def make_hwpx() -> bytes:
     manifest = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>

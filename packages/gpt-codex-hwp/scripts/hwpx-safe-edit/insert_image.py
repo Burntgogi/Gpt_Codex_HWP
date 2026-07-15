@@ -23,6 +23,9 @@ HU_PER_MM = 7200 / 25.4
 DEFAULT_MAX_WIDTH_HU = round(150 * HU_PER_MM)
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_DESCRIPTOR_CONTROL_BYTES = 64 * 1024
+MAX_ANCHOR_CHARACTERS = 10_000
+MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 class ImageInsertionError(ValueError):
@@ -82,8 +85,20 @@ def insert_image(
     image_file = H.safe_existing_input_path(image_path)
     if os.path.samefile(source_path, image_file):
         raise H.UnsafePathError("Source document and image path must be different files.")
-    source_bytes = source_path.read_bytes()
-    image_bytes = image_file.read_bytes()
+    source_stat = preflight_path_size(source_path, H.MAX_ARCHIVE_BYTES, "source")
+    image_stat = preflight_path_size(image_file, MAX_IMAGE_BYTES, "image")
+    source_bytes = read_stable_bounded_path(
+        source_path,
+        source_stat,
+        H.MAX_ARCHIVE_BYTES,
+        "source",
+    )
+    image_bytes = read_stable_bounded_path(
+        image_file,
+        image_stat,
+        MAX_IMAGE_BYTES,
+        "image",
+    )
     output_bytes, result = insert_image_bytes(
         source_bytes,
         image_bytes,
@@ -91,6 +106,7 @@ def insert_image(
         occurrence=occurrence,
         width_mm=width_mm,
     )
+    require_bounded_output(output_bytes)
     H.write_exclusive(output_path, output_bytes)
     return result
 
@@ -220,6 +236,7 @@ def insert_image_bytes(
         changed,
         {image_entry: image_bytes},
     )
+    require_bounded_output(output_bytes)
     validate_result_bytes(output_bytes, image_entry=image_entry, item_id=item_id)
     return output_bytes, {
         "ok": True,
@@ -624,35 +641,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("output", nargs="?", help="new .hwpx path (must not exist)")
     parser.add_argument("--image", help="PNG file to embed")
     parser.add_argument("--descriptor-mode", action="store_true")
-    parser.add_argument("--source-size", type=int)
-    parser.add_argument("--image-size", type=int)
-    parser.add_argument("--anchor-text", required=True, help="body/table paragraph substring")
-    parser.add_argument("--occurrence", type=int, default=0, help="zero-based eligible paragraph match")
+    parser.add_argument("--anchor-text", help="body/table paragraph substring")
+    parser.add_argument("--occurrence", type=int, help="zero-based eligible paragraph match")
     parser.add_argument("--width-mm", type=float, help="requested display width in millimetres")
     args = parser.parse_args(argv)
     try:
         if args.descriptor_mode:
-            if args.source is not None or args.output is not None or args.image is not None:
-                raise H.UnsafePathError("Descriptor mode does not accept path arguments.")
-            source_bytes = read_exact_descriptor(3, args.source_size, H.MAX_ARCHIVE_BYTES)
-            image_bytes = read_exact_descriptor(4, args.image_size, MAX_IMAGE_BYTES)
-            output_bytes, result = insert_image_bytes(
-                source_bytes,
-                image_bytes,
-                anchor_text=args.anchor_text,
-                occurrence=args.occurrence,
-                width_mm=args.width_mm,
-            )
-            write_descriptor(5, output_bytes)
+            if any(value is not None for value in (
+                args.source,
+                args.output,
+                args.image,
+                args.anchor_text,
+                args.occurrence,
+                args.width_mm,
+            )):
+                raise H.UnsafePathError(
+                    "Descriptor mode accepts control only through its framed stdin."
+                )
+            result = run_descriptor_mode(sys.stdin.buffer)
         else:
-            if args.source is None or args.output is None or args.image is None:
-                parser.error("source, output, and --image are required outside descriptor mode")
+            if (
+                args.source is None
+                or args.output is None
+                or args.image is None
+                or args.anchor_text is None
+            ):
+                parser.error(
+                    "source, output, --image, and --anchor-text are required outside descriptor mode"
+                )
             result = insert_image(
                 args.source,
                 args.output,
                 image_path=args.image,
                 anchor_text=args.anchor_text,
-                occurrence=args.occurrence,
+                occurrence=0 if args.occurrence is None else args.occurrence,
                 width_mm=args.width_mm,
             )
     except Exception as error:  # noqa: BLE001 - CLI converts all failures to JSON
@@ -667,6 +689,189 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(json.dumps(result, ensure_ascii=False))
     return 0
+
+
+def preflight_path_size(
+    path: Path,
+    maximum: int,
+    kind: str,
+) -> os.stat_result:
+    stat = path.stat()
+    if stat.st_size > maximum:
+        if kind == "image":
+            raise InvalidImageError(
+                f"Image exceeds the {maximum}-byte safety limit."
+            )
+        raise H.UnsafeZipError(
+            f"HWPX archive exceeds the {maximum}-byte safety limit."
+        )
+    return stat
+
+
+def read_stable_bounded_path(
+    path: Path,
+    expected: os.stat_result,
+    maximum: int,
+    kind: str,
+) -> bytes:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not same_file_snapshot(expected, before) or before.st_size > maximum:
+            raise H.UnsafePathError(f"The {kind} changed before it could be read.")
+        result = bytearray()
+        while len(result) < before.st_size:
+            chunk = os.read(
+                descriptor,
+                min(1024 * 1024, before.st_size - len(result)),
+            )
+            if not chunk:
+                raise H.UnsafePathError(f"The {kind} was truncated while being read.")
+            result.extend(chunk)
+        if os.read(descriptor, 1):
+            raise H.UnsafePathError(f"The {kind} grew while being read.")
+        after = os.fstat(descriptor)
+        current = path.stat()
+        if (
+            not same_file_snapshot(before, after)
+            or not same_file_snapshot(after, current)
+        ):
+            raise H.UnsafePathError(f"The {kind} changed while being read.")
+        return bytes(result)
+    finally:
+        os.close(descriptor)
+
+
+def same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        left.st_dev == right.st_dev
+        and left.st_ino == right.st_ino
+        and left.st_size == right.st_size
+        and left.st_mtime_ns == right.st_mtime_ns
+        and left.st_ctime_ns == right.st_ctime_ns
+    )
+
+
+def read_descriptor_control(stream: Any) -> dict[str, Any]:
+    prefix = read_exact_stream(stream, 4)
+    if prefix is None:
+        raise ValueError("Descriptor control frame is missing its length prefix.")
+    length = struct.unpack(">I", prefix)[0]
+    if length <= 0 or length > MAX_DESCRIPTOR_CONTROL_BYTES:
+        raise ValueError("Descriptor control frame exceeds its safety limit.")
+    encoded = read_exact_stream(stream, length)
+    if encoded is None or stream.read(1):
+        raise ValueError("Descriptor control must contain exactly one complete frame.")
+    try:
+        text = encoded.decode("utf-8", errors="strict")
+        value = json.loads(text, object_pairs_hook=unique_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Descriptor control is not strict UTF-8 JSON.") from error
+    return validate_descriptor_control(value)
+
+
+def read_exact_stream(stream: Any, size: int) -> bytes | None:
+    result = bytearray()
+    while len(result) < size:
+        chunk = stream.read(size - len(result))
+        if not chunk:
+            return None
+        result.extend(chunk)
+    return bytes(result)
+
+
+def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Descriptor control contains a duplicate key.")
+        result[key] = value
+    return result
+
+
+def validate_descriptor_control(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("Descriptor control must be an object.")
+    required = {"sourceSize", "imageSize", "anchorText", "occurrence"}
+    allowed = required | {"widthMm"}
+    if set(value) - allowed or not required.issubset(value):
+        raise ValueError("Descriptor control has unexpected or missing keys.")
+    source_size = exact_bounded_integer(
+        value["sourceSize"], 1, H.MAX_ARCHIVE_BYTES, "sourceSize"
+    )
+    image_size = exact_bounded_integer(
+        value["imageSize"], 1, MAX_IMAGE_BYTES, "imageSize"
+    )
+    anchor = value["anchorText"]
+    if (
+        not isinstance(anchor, str)
+        or not anchor
+        or anchor != anchor.strip()
+        or len(anchor.encode("utf-16-le")) // 2 > MAX_ANCHOR_CHARACTERS
+    ):
+        raise ValueError("Descriptor anchorText is invalid.")
+    occurrence = exact_bounded_integer(
+        value["occurrence"], 0, MAX_SAFE_INTEGER, "occurrence"
+    )
+    result: dict[str, Any] = {
+        "sourceSize": source_size,
+        "imageSize": image_size,
+        "anchorText": anchor,
+        "occurrence": occurrence,
+    }
+    if "widthMm" in value:
+        width = value["widthMm"]
+        if (
+            isinstance(width, bool)
+            or not isinstance(width, (int, float))
+            or not math.isfinite(width)
+            or width < 1
+            or width > 200
+        ):
+            raise ValueError("Descriptor widthMm is invalid.")
+        result["widthMm"] = width
+    return result
+
+
+def exact_bounded_integer(value: Any, minimum: int, maximum: int, name: str) -> int:
+    if type(value) is not int or value < minimum or value > maximum:
+        raise ValueError(f"Descriptor {name} is invalid.")
+    return value
+
+
+def run_descriptor_mode(stream: Any) -> dict[str, Any]:
+    control = read_descriptor_control(stream)
+    source_bytes = read_exact_descriptor(
+        3,
+        control["sourceSize"],
+        H.MAX_ARCHIVE_BYTES,
+    )
+    image_bytes = read_exact_descriptor(
+        4,
+        control["imageSize"],
+        MAX_IMAGE_BYTES,
+    )
+    output_bytes, result = insert_image_bytes(
+        source_bytes,
+        image_bytes,
+        anchor_text=control["anchorText"],
+        occurrence=control["occurrence"],
+        width_mm=control.get("widthMm"),
+    )
+    require_bounded_output(output_bytes)
+    write_descriptor(5, output_bytes)
+    return result
+
+
+def require_bounded_output(data: Any) -> None:
+    size = len(data)
+    if size <= 0 or size > H.MAX_ARCHIVE_BYTES:
+        raise H.UnsafeZipError(
+            f"Generated HWPX must be between 1 and {H.MAX_ARCHIVE_BYTES} bytes."
+        )
 
 
 def read_exact_descriptor(fd: int, size: int | None, maximum: int) -> bytes:
@@ -684,6 +889,7 @@ def read_exact_descriptor(fd: int, size: int | None, maximum: int) -> bytes:
 
 
 def write_descriptor(fd: int, data: bytes) -> None:
+    require_bounded_output(data)
     view = memoryview(data)
     while view:
         written = os.write(fd, view)

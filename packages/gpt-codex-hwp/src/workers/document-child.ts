@@ -35,6 +35,7 @@ import {
 
 const CONTROL_DESCRIPTOR = 6;
 const OUTPUT_DESCRIPTOR = 5;
+const IMAGE_HELPER_CONTROL_BYTES = 64 * 1024;
 
 void run();
 
@@ -119,20 +120,22 @@ async function runImageHelper(
     ...(process.platform === "win32" ? ["-3"] : []),
     script,
     "--descriptor-mode",
-    "--source-size", String(sourceSize),
-    "--image-size", String(imageSize),
-    "--anchor-text", request.input.anchorText,
-    "--occurrence", String(request.options.anchorOccurrence ?? 0),
-    ...(request.options.sizeMm === undefined
-      ? []
-      : ["--width-mm", String(request.options.sizeMm)]),
   ];
+  const control = encodeBoundedJsonFrame({
+    sourceSize,
+    imageSize,
+    anchorText: request.input.anchorText,
+    occurrence: request.options.anchorOccurrence ?? 0,
+    ...(request.options.sizeMm === undefined
+      ? {}
+      : { widthMm: request.options.sizeMm }),
+  }, IMAGE_HELPER_CONTROL_BYTES);
   await new Promise<void>((resolvePromise, rejectPromise) => {
     const helper = spawn(command, args, {
       shell: false,
       windowsHide: true,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe", 3, 4, 5],
+      stdio: ["pipe", "pipe", "pipe", 3, 4, 5],
     });
     let outputBytes = 0;
     let errorBytes = 0;
@@ -144,6 +147,8 @@ async function runImageHelper(
       errorBytes += chunk.byteLength;
       if (errorBytes > 64 * 1024) helper.kill();
     });
+    helper.stdin?.on("error", () => undefined);
+    helper.stdin?.end(control);
     helper.once("error", rejectPromise);
     helper.once("exit", (code) => {
       if (code === 0 && outputBytes <= 64 * 1024 && errorBytes <= 64 * 1024) {

@@ -324,14 +324,17 @@ test("Python insert-image descriptor mode directly consumes fd3/fd4 and writes f
       ...(process.platform === "win32" ? ["-3"] : []),
       INSERT_IMAGE_HELPER,
       "--descriptor-mode",
-      "--source-size", String(generated.bytes.byteLength),
-      "--image-size", String(ONE_PIXEL_PNG.byteLength),
-      "--anchor-text", "(인)",
     ], {
       shell: false,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe", sourceFd, imageFd, outputFd],
+      stdio: ["pipe", "pipe", "pipe", sourceFd, imageFd, outputFd],
     });
+    child.stdin.end(encodeBoundedJsonFrame({
+      sourceSize: generated.bytes.byteLength,
+      imageSize: ONE_PIXEL_PNG.byteLength,
+      anchorText: "(인)",
+      occurrence: 0,
+    }, 64 * 1024));
     const stderr: Buffer[] = [];
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     const [code] = await once(child, "exit");
@@ -351,6 +354,66 @@ test("Python insert-image descriptor mode directly consumes fd3/fd4 and writes f
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("descriptor helper command line never contains a distinctive document anchor", {
+  timeout: 120_000,
+  skip: process.platform !== "win32" ? "Windows process command lines are required." : false,
+}, async () => {
+  const anchor = "PRIVATE-ANCHOR-79f4d6c1-DO-NOT-EXPOSE";
+  const worker = createBuiltWorkerClient();
+  const generated = await worker.run(request("generateHwpx", {
+    input: { markdown: `# Privacy\n\n${anchor}\n` },
+  }), undefined);
+  const image = Buffer.allocUnsafe(9 * 1024 * 1024);
+  ONE_PIXEL_PNG.copy(image, 0);
+  randomFillSync(image.subarray(ONE_PIXEL_PNG.byteLength));
+
+  const monitor = spawn("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    [
+      "$deadline=(Get-Date).AddSeconds(15)",
+      "while ((Get-Date) -lt $deadline) {",
+      "$p=Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(py|python|python3)\\.exe$' -and $_.CommandLine -like '*insert_image.py*' } | Select-Object -First 1",
+      "if ($null -ne $p) { $p.CommandLine; exit 0 }",
+      "Start-Sleep -Milliseconds 10",
+      "}",
+      "exit 2",
+    ].join("; "),
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  const monitorOutput: Buffer[] = [];
+  const monitorError: Buffer[] = [];
+  monitor.stdout.on("data", (chunk: Buffer) => monitorOutput.push(chunk));
+  monitor.stderr.on("data", (chunk: Buffer) => monitorError.push(chunk));
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+
+  const insertion = runBuiltChildInsert(
+    generated.bytes,
+    image,
+    { mode: "after-paragraph", anchorOccurrence: 0, sizeMm: 17 },
+    anchor,
+  ).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  const [monitorCode] = await once(monitor, "exit");
+  assert.equal(monitorCode, 0, Buffer.concat(monitorError).toString("utf8"));
+  const observed = Buffer.concat(monitorOutput).toString("utf8").trim();
+  assert.ok(observed, "the deliberately slow helper was never observed");
+  assert.doesNotMatch(observed, new RegExp(anchor, "u"));
+  assert.doesNotMatch(observed, new RegExp(String(generated.bytes.byteLength), "u"));
+  assert.doesNotMatch(observed, new RegExp(String(image.byteLength), "u"));
+  assert.doesNotMatch(observed, /(?:^|\s)0(?:\s|$)|(?:^|\s)17(?:\s|$)/u);
+  assert.doesNotMatch(
+    observed,
+    /--(?:source-size|image-size|anchor-text|occurrence|width-mm)\b/u,
+  );
+  const outcome = await insertion;
+  if ("error" in outcome) throw outcome.error;
+  const inserted = outcome.value;
+  assert.ok(inserted.bytes.byteLength > 0);
 });
 
 test("compiled child streams and decodes a validated after-paragraph result larger than 8 MiB", { timeout: 120_000 }, async () => {
@@ -504,6 +567,7 @@ async function runBuiltChildInsert(
   document: ArrayBuffer,
   image: Uint8Array,
   options: Record<string, unknown>,
+  anchorText = "(인)",
 ): Promise<DocumentResultPayload<"insertImage">> {
   const sourceOwned = spoolSnapshot(new Uint8Array(document));
   const imageOwned = spoolSnapshot(image);
@@ -523,7 +587,7 @@ async function runBuiltChildInsert(
     });
     const result = await childClient.run(
       request("insertImage", {
-        input: { anchorText: "(인)" },
+        input: { anchorText },
         options,
       }),
       sourceOwned.snapshot,
