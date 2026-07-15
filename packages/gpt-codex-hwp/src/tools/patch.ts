@@ -24,6 +24,10 @@ import {
 import { z } from "zod";
 
 import { writeFilesExclusively } from "../shared/output.js";
+import {
+  HwpxOutputRequiredError,
+  assertHwpxOutputPath,
+} from "../shared/document-contract.js";
 import { readFileBounded } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { inspectExactDocumentProtection } from "../shared/protection.js";
@@ -122,19 +126,20 @@ export async function handleHwpPatchDocument(
   input: HwpPatchDocumentInput,
   dependencyOverrides: Partial<PatchDependencies> = {},
 ): Promise<CallToolResult> {
-  if (input.verify === false) {
-    return toolError("Semantic patch verification is mandatory.", {
-      code: "VERIFICATION_REQUIRED",
-      file_path: safeResolvedPath(input.file_path),
-      output_path: safeResolvedPath(input.output_path),
-    });
-  }
   let filePath: string | undefined;
   let outputPath: string | undefined;
 
   try {
     filePath = resolveLocalPath(input.file_path, "file_path");
     outputPath = resolveLocalPath(input.output_path, "output_path");
+    assertHwpxOutputPath(outputPath);
+    if (input.verify === false) {
+      return toolError("Semantic patch verification is mandatory.", {
+        code: "VERIFICATION_REQUIRED",
+        file_path: filePath,
+        output_path: outputPath,
+      });
+    }
     if (input.edited_markdown.length > MAX_TEXT_INPUT_CHARACTERS) {
       return toolError("edited_markdown exceeds the safe input limit.", {
         code: "INPUT_TOO_LARGE",
@@ -259,6 +264,12 @@ export async function handleHwpPatchDocument(
     );
   } catch (error: unknown) {
     const message = errorMessage(error);
+    if (error instanceof HwpxOutputRequiredError) {
+      return toolError("HWPX output is required.", {
+        code: error.code,
+        error: message,
+      });
+    }
     return toolError(`Could not patch the document: ${message}`, {
       code: errorCode(error, "PATCH_ERROR"),
       error: message,
@@ -278,6 +289,7 @@ export async function handleHwpFillForm(
   try {
     filePath = resolveLocalPath(input.file_path, "file_path");
     outputPath = resolveLocalPath(input.output_path, "output_path");
+    assertHwpxOutputPath(outputPath);
     try {
       assertFillValueBudget(input.fields);
     } catch (error: unknown) {
@@ -454,6 +466,12 @@ export async function handleHwpFillForm(
     });
   } catch (error: unknown) {
     const message = redactFieldValues(errorMessage(error), input.fields);
+    if (error instanceof HwpxOutputRequiredError) {
+      return toolError("HWPX output is required.", {
+        code: error.code,
+        error: message,
+      });
+    }
     return toolError(`Could not fill the HWPX form: ${message}`, {
       code: safeFillErrorCode(errorCode(error, "FILL_ERROR"), "FILL_ERROR", input.fields),
       error: message,

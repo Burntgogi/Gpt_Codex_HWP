@@ -44,6 +44,10 @@ import {
   writeFilesExclusively,
 } from "../shared/output.js";
 import {
+  HwpxOutputRequiredError,
+  assertHwpxOutputPath,
+} from "../shared/document-contract.js";
+import {
   MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES,
   readFileBounded,
 } from "../shared/files.js";
@@ -194,10 +198,11 @@ export async function handleHwpInsertImage(
   let workDirectoryIdentity: FileSystemIdentity | undefined;
 
   try {
-    const dependencies = { ...defaultImageDependencies, ...dependencyOverrides };
     filePath = resolveLocalPath(input.file_path, "file_path");
     imagePath = resolveLocalPath(input.image_path, "image_path");
     outputPath = resolveLocalPath(input.output_path, "output_path");
+    assertHwpxOutputPath(outputPath);
+    const dependencies = { ...defaultImageDependencies, ...dependencyOverrides };
     if (input.anchor_text.trim().length === 0) {
       throw new AssetError("ANCHOR_REQUIRED", "anchor_text must not be empty.");
     }
@@ -362,6 +367,12 @@ export async function handleHwpInsertImage(
     });
   } catch (error: unknown) {
     const message = errorMessage(error);
+    if (error instanceof HwpxOutputRequiredError) {
+      return toolError("HWPX output is required.", {
+        code: error.code,
+        error: message,
+      });
+    }
     const extra = error instanceof AssetError && error.details !== undefined
       ? { details: error.details }
       : {};

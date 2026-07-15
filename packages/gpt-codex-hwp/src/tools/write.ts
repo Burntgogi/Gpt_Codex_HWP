@@ -19,6 +19,10 @@ import {
   type FontNormalizationResult,
   type FontReferenceInspection,
 } from "../shared/hwpx-font-integrity.js";
+import {
+  HwpxOutputRequiredError,
+  assertHwpxOutputPath,
+} from "../shared/document-contract.js";
 import { writeFilesExclusively } from "../shared/output.js";
 import { readFileBounded } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
@@ -89,6 +93,7 @@ export async function handleHwpGenerateHwpx(
 
   try {
     outputPath = resolveLocalPath(input.output_path, "output_path");
+    assertHwpxOutputPath(outputPath);
     previewPath =
       input.preview_svg_path === undefined
         ? undefined
@@ -175,6 +180,12 @@ export async function handleHwpGenerateHwpx(
     return toolSuccess("Generated HWPX document.", details);
   } catch (error: unknown) {
     const message = errorMessage(error);
+    if (error instanceof HwpxOutputRequiredError) {
+      return toolError("HWPX output is required.", {
+        code: error.code,
+        error: message,
+      });
+    }
     if (error instanceof HwpxFontReferenceError) {
       return toolError(`Could not normalize HWPX font references: ${message}`, {
         code: error.code,

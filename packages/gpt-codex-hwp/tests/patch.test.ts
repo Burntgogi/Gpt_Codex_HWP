@@ -185,7 +185,7 @@ test("hwp_patch_document rejects binary HWP before parsing or patching", async (
   const root = await mkdtemp(join(tmpdir(), "hwp-read-only-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwp");
-  const outputPath = join(root, "patched.hwp");
+  const outputPath = join(root, "patched.hwpx");
   await writeFile(sourcePath, syntheticHwpWithFlags(0));
   let unexpectedCalls = 0;
   const unexpected = async () => {
@@ -794,7 +794,7 @@ test("hwp_patch_document returns HWP_READ_ONLY for protected binary HWP before p
   const root = await mkdtemp(join(tmpdir(), "hwp-signed-binary-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "signed.hwp");
-  const outputPath = join(root, "patched.hwp");
+  const outputPath = join(root, "patched.hwpx");
   await writeFile(sourcePath, syntheticHwpWithFlags(0x80));
   let parseCalls = 0;
 
