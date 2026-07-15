@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    env:
+      HWP_REQUIRE_RHWP: "1"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Assert Windows x64 runtime
+        run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
+      - name: Fresh source dependency install
+        run: npm ci --prefix packages/gpt-codex-hwp
+      - name: Fresh runtime dependency install
+        run: npm ci --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Verify metadata and dependency ownership
+        run: |
+          npm run check:metadata
+          npm run verify:dependencies
+      - name: Run Node tests
+        run: npm test
+      - name: Run Python tests
+        run: npm run test:python
+      - name: Verify real HWP read-only path
+        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="rhwp fixture integrity|real external HWP" tests/hwp-fixture-integrity.test.ts tests/rhwp-backend.test.ts
+      - name: Verify HWPX generation round trip
+        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="hwp_generate_hwpx creates a valid, readable document and forced-reflow SVG preview" tests/hwp-plugin.test.ts
+      - name: Verify compact runtime and nine MCP tools
+        run: npm run verify:compact-runtime
+      - name: Verify projected runtime is current
+        run: npm run runtime:check
+      - name: Reject generated repository changes
+        run: git diff --exit-code -- .
+
+  macos:
+    name: macOS arm64
+    runs-on: macos-15
+    permissions:
+      contents: read
+    env:
+      HWP_REQUIRE_RHWP: "1"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Assert macOS arm64 runtime
+        run: node -e "if (process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
+      - name: Fresh source dependency install
+        run: npm ci --prefix packages/gpt-codex-hwp
+      - name: Fresh runtime dependency install
+        run: npm ci --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Verify metadata and dependency ownership
+        run: |
+          npm run check:metadata
+          npm run verify:dependencies
+      - name: Run Node tests
+        run: npm test
+      - name: Run Python tests
+        run: npm run test:python
+      - name: Verify real HWP read-only path
+        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="rhwp fixture integrity|real external HWP" tests/hwp-fixture-integrity.test.ts tests/rhwp-backend.test.ts
+      - name: Verify HWPX generation round trip
+        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="hwp_generate_hwpx creates a valid, readable document and forced-reflow SVG preview" tests/hwp-plugin.test.ts
+      - name: Verify compact runtime and nine MCP tools
+        run: npm run verify:compact-runtime
+      - name: Verify projected runtime is current
+        run: npm run runtime:check
+      - name: Reject generated repository changes
+        run: git diff --exit-code -- .
