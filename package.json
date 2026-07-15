@@ -1,0 +1,24 @@
+{
+  "name": "gpt-codex-hwp-repository",
+  "version": "0.1.4",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "packageManager": "npm@10.9.7",
+  "engines": { "node": ">=22" },
+  "config": {
+    "productId": "gpt-codex-hwp",
+    "displayName": "Gpt_Codex_HWP",
+    "developerName": "Gpt_Codex_HWP contributors",
+    "marketplaceName": "gpt-codex-hwp-local",
+    "legacyUninstallSelector": "hwp-korean-docs@hwp-local",
+    "codexBuildId": "20260713023606"
+  },
+  "scripts": {
+    "build": "npm --prefix packages/gpt-codex-hwp run build",
+    "test:repository": "node --test tests/*.test.mjs",
+    "test:source": "npm --prefix packages/gpt-codex-hwp test",
+    "test": "npm run test:repository && npm run test:source",
+    "test:python": "python -m unittest packages/gpt-codex-hwp/scripts/hwpx-safe-edit/test_hwpx_safe_edit.py"
+  }
+}

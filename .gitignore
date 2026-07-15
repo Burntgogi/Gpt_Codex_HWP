@@ -1,5 +1,17 @@
 node_modules/
+/dist/
+/packages/gpt-codex-hwp/dist/
 __pycache__/
 *.pyc
 .DS_Store
+.env*
+*.key
+*.pem
+*.p12
+*.pfx
+*.cer
+*.crt
+.superpowers/
+release-receipts/
+benchmark-output/
 .worktrees/

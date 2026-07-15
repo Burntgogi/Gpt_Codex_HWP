@@ -1,0 +1,33 @@
+import { pathToFileURL } from "node:url";
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+import { registerTools } from "./tools/index.js";
+
+const SERVER_NAME = "hwp-korean-docs";
+const SERVER_VERSION = "0.1.4";
+
+export function createMcpServer(): McpServer {
+  const server = new McpServer({
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
+  });
+  registerTools(server);
+  return server;
+}
+
+export async function runMcpServer(): Promise<void> {
+  const server = createMcpServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+const entryPoint = process.argv[1];
+if (entryPoint !== undefined && import.meta.url === pathToFileURL(entryPoint).href) {
+  runMcpServer().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Failed to start ${SERVER_NAME}: ${message}\n`);
+    process.exitCode = 1;
+  });
+}
