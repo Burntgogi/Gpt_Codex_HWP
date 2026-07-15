@@ -1,0 +1,17 @@
+{
+  "project": "rhwp",
+  "repository": "https://github.com/edwardkim/rhwp",
+  "release": "v0.7.17",
+  "revision": "03351190ec35436e58cbfee0aa9278a8fdc04a59",
+  "additionRevision": "a200cfd93d100a6f20f29bb0b836b4bc6faa37fd",
+  "path": "samples/re-01-hangul-only-hancom.hwp",
+  "gitBlobSha1": "408e850375cede568ee23c91f6ff5b6d011faba3",
+  "bytes": 8704,
+  "sha256": "61538931d2e2cf38f35050618ce7698960823938884d0d8977812c94587e85fd",
+  "license": "MIT",
+  "licensePath": "LICENSE",
+  "licenseUrl": "https://raw.githubusercontent.com/edwardkim/rhwp/03351190ec35436e58cbfee0aa9278a8fdc04a59/LICENSE",
+  "licenseBytes": 1072,
+  "licenseSha256": "1c3a7d5643b163a3ead4965e1bea33b832caee5bfca265efe42afcd7bc696b5b",
+  "copyright": "Copyright (c) 2025-2026 Edward Kim"
+}
