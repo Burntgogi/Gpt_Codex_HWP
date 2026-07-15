@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import CFB from "cfb";
 import JSZip from "jszip";
 
 import { encodeBoundedJsonFrame } from "../src/workers/bounded-frame.js";
@@ -200,6 +201,81 @@ test("document worker operations read and render the pinned HWP but reject every
     ),
     hasEngineCode("ENGINE_PROTOCOL_ERROR"),
   );
+});
+
+test("real worker and child refuse protected HWPX and HWP before parse or render dispatch", { timeout: 120_000 }, async () => {
+  const worker = createBuiltWorkerClient();
+  const child = createBuiltChildClient();
+  const generated = await worker.run(request("generateHwpx", {
+    input: { markdown: "# Protected isolate fixture\n" },
+  }), undefined);
+  const cases = [
+    {
+      name: "signed HWPX",
+      bytes: await protectedHwpx(generated.bytes, "signed"),
+      code: "SIGNED_DOCUMENT",
+      message: "The document is digitally signed and cannot be processed.",
+    },
+    {
+      name: "encrypted HWPX",
+      bytes: await protectedHwpx(generated.bytes, "encrypted"),
+      code: "ENCRYPTED",
+      message: "The document is encrypted and cannot be processed.",
+    },
+    {
+      name: "DRM HWPX",
+      bytes: await protectedHwpx(generated.bytes, "drm"),
+      code: "DRM_PROTECTED",
+      message: "The document is DRM or distribution protected and cannot be processed.",
+    },
+    {
+      name: "invalid HWPX protection metadata",
+      bytes: await invalidProtectionHwpx(generated.bytes),
+      code: "INVALID_HWPX_PROTECTION_METADATA",
+      message: "The HWPX protection metadata is invalid and cannot be processed.",
+    },
+    {
+      name: "signed HWP",
+      bytes: syntheticHwpWithFlags(1 << 7),
+      code: "SIGNED_DOCUMENT",
+      message: "The document is digitally signed and cannot be processed.",
+    },
+    {
+      name: "encrypted HWP",
+      bytes: syntheticHwpWithFlags(1 << 1),
+      code: "ENCRYPTED",
+      message: "The document is encrypted and cannot be processed.",
+    },
+    {
+      name: "DRM HWP",
+      bytes: syntheticHwpWithFlags(1 << 4),
+      code: "DRM_PROTECTED",
+      message: "The document is DRM or distribution protected and cannot be processed.",
+    },
+    {
+      name: "invalid HWP FileHeader",
+      bytes: syntheticHwpWithFlags(0, 39),
+      code: "INVALID_HWP_FILE_HEADER",
+      message: "The HWP file header is invalid and cannot be processed.",
+    },
+  ] as const;
+
+  for (const transport of ["worker", "child"] as const) {
+    for (const fixture of cases) {
+      for (const operation of ["parse", "render"] as const) {
+        const run = transport === "worker"
+          ? worker.run(request(operation), workerSnapshot(exactArrayBuffer(fixture.bytes)))
+          : runChildReadOnly(child, operation, fixture.bytes);
+        await assert.rejects(run, (error: unknown) => {
+          assert.equal((error as { code?: string }).code, fixture.code,
+            `${transport} ${operation} ${fixture.name}`);
+          assert.equal((error as Error).message, fixture.message,
+            `${transport} ${operation} ${fixture.name}`);
+          return true;
+        });
+      }
+    }
+  }
 });
 
 test("worker reaches ready and completes non-HWP-render operations without loading unavailable or slow rhwp", { timeout: 30_000 }, async () => {
@@ -476,6 +552,75 @@ test("document worker operations spool decoder rejects hash-valid but semantical
   }
 });
 
+test("render spool uses a versioned bounded metadata header before exact SVG bytes", async () => {
+  const { encodeDocumentResultSpool } = await import(
+    "../src/workers/document-compute-backend.js"
+  );
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>metadata</text></svg>';
+  const metadata = {
+    backend: "kordoc",
+    pageCount: 2,
+    width: 612,
+    height: 792,
+    warnings: ["bounded"],
+    stats: { paragraphs: 3 },
+  };
+
+  const encoded = encodeDocumentResultSpool("render", { svg, metadata });
+  const buffer = Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+  const headerBytes = buffer.readUInt32BE(0);
+  assert.ok(headerBytes > 0 && headerBytes <= 8 * 1024 * 1024);
+  const header = JSON.parse(buffer.subarray(4, 4 + headerBytes).toString("utf8"));
+  assert.deepEqual(header, {
+    version: 1,
+    svgBytes: Buffer.byteLength(svg, "utf8"),
+    metadata,
+  });
+  assert.equal(buffer.subarray(4 + headerBytes).toString("utf8"), svg);
+});
+
+test("worker backend rejects active or networked SVG output before transport", async () => {
+  const { encodeDocumentResultSpool } = await import(
+    "../src/workers/document-compute-backend.js"
+  );
+  for (const unsafe of [
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><svg:script/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><x:foreignObject/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><x:style/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><text onclick="run()">x</text></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:run()">x</a></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.test/x.png"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.test/a>rest.png"/></svg>',
+  ]) {
+    assert.throws(
+      () => encodeDocumentResultSpool("render", { svg: unsafe }),
+      hasEngineCode("ENGINE_PROTOCOL_ERROR"),
+    );
+  }
+});
+
+test("incremental SVG policy rejects split active tokens and quoted tag terminators", async () => {
+  const { IncrementalSvgPolicyValidator } = await import(
+    "../src/shared/svg-policy.js"
+  );
+  for (const unsafe of [
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><text onload="x">x</text></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:x">x</a></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.test/x"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><path style="fill:url(https://evil.test/x)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.test/a>rest"/></svg>',
+  ]) {
+    const validator = new IncrementalSvgPolicyValidator();
+    assert.throws(() => {
+      for (const character of unsafe) validator.push(character);
+      validator.finish();
+    }, undefined, unsafe);
+  }
+});
+
 test("document worker operations parse spool header uses fatal UTF-8 and cleans its one-shot handle", { timeout: 30_000 }, async () => {
   const { decodeDocumentResultSpool } = await import(
     "../src/workers/document-compute-backend.js"
@@ -735,6 +880,51 @@ function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const exact = new Uint8Array(bytes.byteLength);
   exact.set(bytes);
   return exact.buffer;
+}
+
+async function protectedHwpx(
+  source: ArrayBuffer,
+  protection: "signed" | "encrypted" | "drm",
+): Promise<Uint8Array> {
+  const archive = await JSZip.loadAsync(source);
+  if (protection === "signed") {
+    archive.file("_xmlsignatures/sig1.xml", "<Signature/>");
+  } else {
+    const element = protection === "encrypted" ? "encryption-data" : "drm";
+    archive.file("META-INF/manifest.xml", `<manifest><${element}/></manifest>`);
+  }
+  return archive.generateAsync({ type: "uint8array" });
+}
+
+async function invalidProtectionHwpx(source: ArrayBuffer): Promise<Uint8Array> {
+  const archive = await JSZip.loadAsync(source);
+  archive.file("META-INF/manifest.xml", "<manifest/>");
+  archive.file("meta-inf/MANIFEST.XML", "<manifest/>");
+  return archive.generateAsync({ type: "uint8array" });
+}
+
+function syntheticHwpWithFlags(flags: number, headerLength = 256): Uint8Array {
+  const container = CFB.utils.cfb_new();
+  const header = Buffer.alloc(headerLength);
+  if (headerLength >= 17) header.write("HWP Document File", 0, "ascii");
+  if (headerLength >= 36) header.writeUInt32LE(0x05000302, 32);
+  if (headerLength >= 40) header.writeUInt32LE(flags, 36);
+  CFB.utils.cfb_add(container, "FileHeader", header);
+  return Uint8Array.from(CFB.write(container, { type: "buffer" }) as Buffer);
+}
+
+async function runChildReadOnly(
+  child: ReturnType<typeof createBuiltChildClient>,
+  operation: "parse" | "render",
+  bytes: Uint8Array,
+): Promise<DocumentResultPayload<"parse"> | DocumentResultPayload<"render">> {
+  const owned = spoolSnapshot(bytes);
+  try {
+    return await child.run(request(operation), owned.snapshot) as
+      DocumentResultPayload<"parse"> | DocumentResultPayload<"render">;
+  } finally {
+    owned.cleanup();
+  }
 }
 
 function hasEngineCode(code: string): (error: unknown) => boolean {

@@ -7,6 +7,12 @@ export const DOCUMENT_ENGINE_ERROR_CODES = [
   "ENGINE_TERMINATION_FAILED",
   "REQUEST_CANCELLED",
   "ENGINE_PROTOCOL_ERROR",
+  "UNSUPPORTED_FORMAT",
+  "ENCRYPTED",
+  "DRM_PROTECTED",
+  "SIGNED_DOCUMENT",
+  "INVALID_HWP_FILE_HEADER",
+  "INVALID_HWPX_PROTECTION_METADATA",
 ] as const;
 
 export type DocumentEngineErrorCode =
@@ -23,6 +29,13 @@ export const DOCUMENT_ENGINE_ERROR_MESSAGES: Readonly<
   ENGINE_TERMINATION_FAILED: "The document engine process tree could not be terminated safely.",
   REQUEST_CANCELLED: "The document engine request was cancelled.",
   ENGINE_PROTOCOL_ERROR: "The document engine returned an invalid protocol message.",
+  UNSUPPORTED_FORMAT: "The document is not a supported HWP or HWPX file.",
+  ENCRYPTED: "The document is encrypted and cannot be processed.",
+  DRM_PROTECTED: "The document is DRM or distribution protected and cannot be processed.",
+  SIGNED_DOCUMENT: "The document is digitally signed and cannot be processed.",
+  INVALID_HWP_FILE_HEADER: "The HWP file header is invalid and cannot be processed.",
+  INVALID_HWPX_PROTECTION_METADATA:
+    "The HWPX protection metadata is invalid and cannot be processed.",
 };
 
 export const DOCUMENT_ENGINE_STAGES = [

@@ -6,6 +6,7 @@ import {
   stat,
   type FileHandle,
 } from "node:fs/promises";
+import { read as readFd } from "node:fs";
 import { dirname, join, parse as parsePath } from "node:path";
 
 import { resolveLocalPath } from "./paths.js";
@@ -17,6 +18,12 @@ export interface ExclusiveOutputFile {
 
 export interface ExclusiveOutputOptions {
   sourcePaths?: readonly string[];
+}
+
+export interface ExclusiveInputRange {
+  readonly fd: number;
+  readonly offset: number;
+  readonly sizeBytes: number;
 }
 
 interface FileIdentity {
@@ -156,6 +163,74 @@ export async function writeFilesExclusively(
     // is safer than deleting a concurrent replacement owned by another actor.
     throw error;
   }
+}
+
+export async function writeFileRangeExclusively(
+  outputPath: string,
+  input: ExclusiveInputRange,
+  options: ExclusiveOutputOptions = {},
+): Promise<string> {
+  if (!Number.isSafeInteger(input.fd) || input.fd < 0 ||
+    !Number.isSafeInteger(input.offset) || input.offset < 0 ||
+    !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0) {
+    throw new Error("Exclusive input range is invalid.");
+  }
+  const resolvedOutput = resolveLocalPath(outputPath, "output_path");
+  const resolvedSources = (options.sourcePaths ?? []).map((path) =>
+    resolveLocalPath(path, "source_path")
+  );
+  assertNoLexicalSourceAliases([resolvedOutput], resolvedSources);
+  const sourceIdentities = await existingSourceIdentities(resolvedSources);
+  await rejectExistingTarget(resolvedOutput, sourceIdentities);
+  const directory = await prepareCanonicalDirectory(dirname(resolvedOutput));
+  await assertDirectoryIdentity(directory);
+
+  let handle: FileHandle;
+  try {
+    handle = await open(resolvedOutput, "wx");
+  } catch (error: unknown) {
+    if (errorCode(error, "") === "EEXIST") {
+      await rejectExistingTarget(resolvedOutput, sourceIdentities);
+      throw new OutputConflictError(resolvedOutput);
+    }
+    throw error;
+  }
+  try {
+    const buffer = Buffer.allocUnsafeSlow(1024 * 1024);
+    let copied = 0;
+    while (copied < input.sizeBytes) {
+      const requested = Math.min(buffer.byteLength, input.sizeBytes - copied);
+      const count = await readPositionally(
+        input.fd,
+        buffer,
+        requested,
+        input.offset + copied,
+      );
+      if (count === 0) throw new Error("Exclusive input range is truncated.");
+      await handle.write(buffer, 0, count, copied);
+      copied += count;
+    }
+    await handle.close();
+    return resolvedOutput;
+  } catch (error: unknown) {
+    await handle.close().catch(() => undefined);
+    // Match writeFilesExclusively: never pathname-delete a possibly replaced file.
+    throw error;
+  }
+}
+
+function readPositionally(
+  fd: number,
+  buffer: Buffer,
+  length: number,
+  position: number,
+): Promise<number> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    readFd(fd, buffer, 0, length, position, (error, bytesRead) => {
+      if (error === null) resolvePromise(bytesRead);
+      else rejectPromise(error);
+    });
+  });
 }
 
 function assertDistinctOutputPaths(paths: readonly string[]): void {

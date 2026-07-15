@@ -9,6 +9,8 @@ import type {
   ValidateResult,
 } from "kordoc";
 
+import { assertSafeSvgString } from "../shared/svg-policy.js";
+
 import { isIntegrityVerifiedResultSpool } from "./document-child-client.js";
 import {
   createDocumentEngineRunError,
@@ -29,7 +31,8 @@ import {
 
 const PARSE_SPOOL_VERSION = 1;
 const PARSE_SPOOL_PREFIX_BYTES = 4;
-const SVG_PREFIX_PATTERN = /^\s*<svg\b/iu;
+const RENDER_SPOOL_VERSION = 1;
+const RENDER_SPOOL_PREFIX_BYTES = 4;
 
 type KordocModule = typeof import("kordoc");
 type RhwpLoadResult = Awaited<ReturnType<
@@ -133,6 +136,7 @@ async function executeOperation(
     case "parse": {
       const source = requireDocument(inputs);
       const format = await requireReadableFormat(kordoc, source);
+      await requireUnprotected(source, format);
       const parsed = await kordoc.parse(copyArrayBuffer(source), {
         ...(request.options.pages === undefined
           ? {}
@@ -144,6 +148,7 @@ async function executeOperation(
     case "render": {
       const source = requireDocument(inputs);
       const format = await requireReadableFormat(kordoc, source);
+      await requireUnprotected(source, format);
       if (format === "hwp") {
         return renderHwpWithRhwp(dependencies, source);
       }
@@ -317,8 +322,26 @@ async function requireReadableFormat(
   source: ArrayBuffer,
 ): Promise<"hwp" | "hwpx"> {
   const format = await detectSupportedFormat(kordoc, source);
-  if (format === "unknown") throw protocolError();
+  if (format === "unknown") {
+    throw createDocumentEngineRunError("UNSUPPORTED_FORMAT");
+  }
   return format;
+}
+
+async function requireUnprotected(
+  source: ArrayBuffer,
+  format: "hwp" | "hwpx",
+): Promise<void> {
+  const { inspectExactDocumentProtection } = await import(
+    "../shared/protection.js"
+  );
+  const protection = await inspectExactDocumentProtection(
+    new Uint8Array(source),
+    format,
+  );
+  if (protection !== undefined) {
+    throw createDocumentEngineRunError(protection.code);
+  }
 }
 
 async function requireMutableHwpx(
@@ -496,10 +519,7 @@ export function encodeDocumentResultSpool(
       encoded = encodeParseSpool(payload as DocumentResultPayload<"parse">);
       break;
     case "render":
-      encoded = Buffer.from(
-        (payload as DocumentResultPayload<"render">).svg,
-        "utf8",
-      );
+      encoded = encodeRenderSpool(payload as DocumentResultPayload<"render">);
       break;
     case "generateHwpx":
     case "patchHwpx":
@@ -537,14 +557,7 @@ export async function decodeDocumentResultSpool<
         payload = decodeParseSpool(bytes);
         break;
       case "render": {
-        let svg: string;
-        try {
-          svg = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        } catch {
-          throw protocolError();
-        }
-        assertSvg(svg);
-        payload = { svg };
+        payload = decodeRenderSpool(bytes);
         break;
       }
       case "generateHwpx":
@@ -604,6 +617,64 @@ function encodeParseSpool(payload: DocumentResultPayload<"parse">): Uint8Array {
     offset += image.bytes.byteLength;
   }
   return encoded;
+}
+
+function encodeRenderSpool(payload: DocumentResultPayload<"render">): Uint8Array {
+  const svg = Buffer.from(payload.svg, "utf8");
+  const header = Buffer.from(JSON.stringify({
+    version: RENDER_SPOOL_VERSION,
+    svgBytes: svg.byteLength,
+    ...(payload.metadata === undefined ? {} : { metadata: payload.metadata }),
+  }), "utf8");
+  if (header.byteLength === 0 || header.byteLength > MAX_SAFE_JSON_BYTES) {
+    throw protocolError();
+  }
+  const total = RENDER_SPOOL_PREFIX_BYTES + header.byteLength + svg.byteLength;
+  if (!Number.isSafeInteger(total) || total > MAX_DOCUMENT_ENGINE_RESULT_BYTES) {
+    throw protocolError();
+  }
+  const encoded = Buffer.allocUnsafeSlow(total);
+  encoded.writeUInt32BE(header.byteLength, 0);
+  header.copy(encoded, RENDER_SPOOL_PREFIX_BYTES);
+  svg.copy(encoded, RENDER_SPOOL_PREFIX_BYTES + header.byteLength);
+  return encoded;
+}
+
+function decodeRenderSpool(bytes: Uint8Array): DocumentResultPayload<"render"> {
+  if (bytes.byteLength <= RENDER_SPOOL_PREFIX_BYTES) throw protocolError();
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const headerBytes = buffer.readUInt32BE(0);
+  if (headerBytes === 0 || headerBytes > MAX_SAFE_JSON_BYTES ||
+    headerBytes > bytes.byteLength - RENDER_SPOOL_PREFIX_BYTES) {
+    throw protocolError();
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(RENDER_SPOOL_PREFIX_BYTES, RENDER_SPOOL_PREFIX_BYTES + headerBytes),
+    ));
+  } catch {
+    throw protocolError();
+  }
+  if (!isRecord(raw) || raw.version !== RENDER_SPOOL_VERSION ||
+    !Number.isSafeInteger(raw.svgBytes) || Number(raw.svgBytes) <= 0) {
+    throw protocolError();
+  }
+  const offset = RENDER_SPOOL_PREFIX_BYTES + headerBytes;
+  const end = checkedOffset(offset, Number(raw.svgBytes), bytes.byteLength);
+  if (end !== bytes.byteLength) throw protocolError();
+  let svg: string;
+  try {
+    svg = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(offset, end));
+  } catch {
+    throw protocolError();
+  }
+  const payload = {
+    svg,
+    ...(Object.hasOwn(raw, "metadata") ? { metadata: raw.metadata } : {}),
+  };
+  validateResultPayload("render", payload);
+  return payload as DocumentResultPayload<"render">;
 }
 
 function decodeParseSpool(bytes: Uint8Array): DocumentResultPayload<"parse"> {
@@ -686,8 +757,11 @@ function validateResultPayload(
 }
 
 function assertSvg(svg: unknown): asserts svg is string {
-  if (typeof svg !== "string" || !SVG_PREFIX_PATTERN.test(svg) ||
-    !/<\/svg\s*>\s*$/iu.test(svg)) throw protocolError();
+  try {
+    assertSafeSvgString(svg);
+  } catch {
+    throw protocolError();
+  }
 }
 
 async function readExactFd(fd: number, sizeBytes: number): Promise<Uint8Array> {

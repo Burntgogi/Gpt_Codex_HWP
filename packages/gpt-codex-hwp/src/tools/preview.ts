@@ -5,16 +5,14 @@ import { z } from "zod";
 import {
   defaultDocumentEngineFacade,
   type DocumentEngineFacade,
+  writeDocumentRenderResultExclusively,
 } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
-import { writeFilesExclusively } from "../shared/output.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
 import {
   MAX_HIGHLIGHT_TERMS,
-  MAX_PREVIEW_SVG_BYTES,
   assertHighlightBudget,
-  assertUtf8Budget,
 } from "../shared/resource-limits.js";
 
 export const HWP_RENDER_PREVIEW_TOOL_NAME = "hwp_render_preview";
@@ -64,19 +62,11 @@ export async function handleHwpRenderPreview(
         ? {}
         : { highlights: [...input.highlight] }),
     });
-    assertValidSvg(rendered.payload.svg);
-    assertUtf8Budget(
-      rendered.payload.svg,
-      MAX_PREVIEW_SVG_BYTES,
-      "SVG preview",
-      "PREVIEW_TOO_LARGE",
-    );
-    await writeFilesExclusively(
-      [{ path: outputPath, data: rendered.payload.svg }],
+    const metadata = safeRecord(await writeDocumentRenderResultExclusively(
+      rendered,
+      outputPath,
       { sourcePaths: [filePath] },
-    );
-
-    const metadata = safeRecord(rendered.payload.metadata);
+    ));
     if (metadata?.backend === "rhwp") {
       const warnings = [
         "rhwp uses a Unicode-width heuristic in Node; font metrics and line wrapping may differ from Hancom.",
@@ -115,8 +105,21 @@ export async function handleHwpRenderPreview(
     });
   } catch (error: unknown) {
     const message = errorMessage(error);
+    const code = errorCode(error, "HWPX_PREVIEW_ERROR");
+    if (code === "UNSUPPORTED_FORMAT") {
+      return toolError(
+        "Preview supports only precise HWP or HWPX input (detected: unknown).",
+        {
+          code: "UNSUPPORTED_PREVIEW_FORMAT",
+          error: message,
+          file_path: filePath ?? safeResolvedPath(input.file_path),
+          output_svg_path: outputPath ?? safeResolvedPath(input.output_svg_path),
+          format: "unknown",
+        },
+      );
+    }
     return toolError(`Could not render the HWPX preview: ${message}`, {
-      code: errorCode(error, "HWPX_PREVIEW_ERROR"),
+      code,
       error: message,
       file_path: filePath ?? safeResolvedPath(input.file_path),
       output_svg_path: outputPath ?? safeResolvedPath(input.output_svg_path),
@@ -153,20 +156,6 @@ export function registerHwpRenderPreview(server: McpServer): void {
     },
     (args) => handleHwpRenderPreview(args),
   );
-}
-
-function assertValidSvg(svg: unknown): asserts svg is string {
-  if (
-    typeof svg !== "string" ||
-    !/^\s*<svg\b/iu.test(svg) ||
-    !/(?:<\/svg\s*>|\/>)\s*$/iu.test(svg)
-  ) {
-    const error = new Error("The isolated renderer returned an invalid SVG.") as Error & {
-      code: string;
-    };
-    error.code = "ENGINE_PROTOCOL_ERROR";
-    throw error;
-  }
 }
 
 function safeRecord(value: unknown): Record<string, unknown> | undefined {

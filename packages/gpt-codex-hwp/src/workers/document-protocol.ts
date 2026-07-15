@@ -277,7 +277,7 @@ export interface DocumentFailureEvent extends EventBase<"failure"> {
 }
 export type DocumentResultSpoolEncoding =
   | "document-result-v1"
-  | "utf8"
+  | "render-result-v1"
   | "binary";
 export type DocumentSpoolEligibleOperation = Exclude<
   DocumentEngineOperation,
@@ -726,7 +726,7 @@ export function resultSpoolEncoding(
     case "parse":
       return "document-result-v1";
     case "render":
-      return "utf8";
+      return "render-result-v1";
     case "generateHwpx":
     case "patchHwpx":
     case "fillHwpx":

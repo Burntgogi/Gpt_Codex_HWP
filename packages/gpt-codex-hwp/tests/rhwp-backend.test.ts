@@ -574,6 +574,7 @@ function previewFacade(dependencies: Partial<PreviewDependencies>): object {
               },
             },
             snapshotMetadata: snapshot.metadata,
+            verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
           };
         } catch (primaryError: unknown) {
           const parsed = await (dependencies.parseDocument ??
@@ -607,6 +608,7 @@ function previewFacade(dependencies: Partial<PreviewDependencies>): object {
               },
             },
             snapshotMetadata: snapshot.metadata,
+            verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
           };
         }
       } finally {

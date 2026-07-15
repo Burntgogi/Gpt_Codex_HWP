@@ -115,6 +115,24 @@ readRequest().then((request) => {
     sendSpoolResult(request, Buffer.from(process.argv[3] ?? "", "base64"));
     return;
   }
+  if (mode === "render-spool") {
+    const svgBytes = Number.isInteger(delayMs) && delayMs > 0
+      ? delayMs
+      : 9 * 1024 * 1024;
+    const prefix = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><text>');
+    const suffix = Buffer.from("</text></svg>");
+    const svg = Buffer.alloc(svgBytes, 0x41);
+    prefix.copy(svg, 0);
+    suffix.copy(svg, svg.byteLength - suffix.byteLength);
+    const metadata = { backend: "kordoc", pageCount: 3, width: 612, height: 792 };
+    const header = Buffer.from(JSON.stringify({ version: 1, svgBytes, metadata }));
+    const encoded = Buffer.alloc(4 + header.byteLength + svg.byteLength);
+    encoded.writeUInt32BE(header.byteLength, 0);
+    header.copy(encoded, 4);
+    svg.copy(encoded, 4 + header.byteLength);
+    sendSpoolResult(request, encoded);
+    return;
+  }
   if (mode === "ignore-abort") {
     const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       stdio: "ignore",
@@ -258,7 +276,7 @@ function sendSpoolResult(request, bytes, tamperMode = "spool-result") {
 
 function spoolEncoding(operation) {
   if (operation === "parse") return "document-result-v1";
-  if (operation === "render") return "utf8";
+  if (operation === "render") return "render-result-v1";
   return "binary";
 }
 

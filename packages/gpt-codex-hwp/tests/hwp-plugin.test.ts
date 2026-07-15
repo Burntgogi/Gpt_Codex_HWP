@@ -322,6 +322,7 @@ function testPreviewFacade(renderDocument: RenderDocument): object {
           },
         },
         snapshotMetadata: snapshot.metadata,
+        verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
       };
     },
   };
@@ -454,6 +455,7 @@ test("hwp_detect_format treats unknown as a valid result and reads only the requ
   assert.deepEqual(details.details, {
     file_path: requestedPath,
     file_size_bytes: (await stat(requestedPath)).size,
+    detection_warning: "The OLE2 container is not a supported HWP document.",
   });
 });
 

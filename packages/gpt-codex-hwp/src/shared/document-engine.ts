@@ -7,6 +7,10 @@ import type {
   DocumentSnapshotMetadata,
 } from "./document-snapshot.js";
 import {
+  writeDocumentRenderResultExclusively,
+  type AuthorizedDocumentRenderResult,
+} from "./document-render-output.js";
+import {
   decodeDocumentResultSpool,
 } from "../workers/document-compute-backend.js";
 import {
@@ -38,6 +42,10 @@ export interface DocumentFacadeResult<Operation extends DocumentEngineOperation>
   readonly snapshotMetadata: Readonly<DocumentSnapshotMetadata>;
 }
 
+export interface DocumentFacadeRenderResult extends AuthorizedDocumentRenderResult {
+  readonly snapshotMetadata: Readonly<DocumentSnapshotMetadata>;
+}
+
 export interface DocumentEngineFacade {
   detect(
     snapshot: DocumentSnapshot,
@@ -52,7 +60,7 @@ export interface DocumentEngineFacade {
     snapshot: DocumentSnapshot,
     options?: Readonly<{ reflow?: boolean; highlights?: readonly string[] }>,
     context?: DocumentEngineExecutionContext,
-  ): Promise<DocumentFacadeResult<"render">>;
+  ): Promise<DocumentFacadeRenderResult>;
 }
 
 export interface DocumentEngineFacadeDependencies {
@@ -98,8 +106,8 @@ export function createDocumentEngineFacade(
         highlights?: readonly string[];
       }> = {},
       context: DocumentEngineExecutionContext = {},
-    ): Promise<DocumentFacadeResult<"render">> {
-      return run("render", snapshot, {}, {
+    ): Promise<DocumentFacadeRenderResult> {
+      return runRender(snapshot, {
         ...(options.reflow === undefined ? {} : { reflow: options.reflow }),
         ...(options.highlights === undefined
           ? {}
@@ -108,7 +116,7 @@ export function createDocumentEngineFacade(
     },
   });
 
-  async function run<Operation extends "detect" | "parse" | "render">(
+  async function run<Operation extends "detect" | "parse">(
     operation: Operation,
     snapshot: DocumentSnapshot,
     input: Record<string, never>,
@@ -136,11 +144,41 @@ export function createDocumentEngineFacade(
     await snapshot.verifySourceUnchanged();
     return { payload, snapshotMetadata: snapshot.metadata };
   }
+
+  async function runRender(
+    snapshot: DocumentSnapshot,
+    options: Record<string, unknown>,
+    context: DocumentEngineExecutionContext,
+  ): Promise<DocumentFacadeRenderResult> {
+    const request: Extract<LogicalDocumentRequest, { operation: "render" }> = {
+      protocolVersion: DOCUMENT_PROTOCOL_VERSION,
+      requestId: requestIdFactory(),
+      operation: "render",
+      input: {},
+      options,
+    } as Extract<LogicalDocumentRequest, { operation: "render" }>;
+    const result = await isolatedEngine.run(
+      request,
+      snapshot,
+      toRunOptions(context),
+    );
+    try {
+      await snapshot.verifySourceUnchanged();
+    } catch (error: unknown) {
+      if (isIntegrityVerifiedResultSpool(result)) await result.cleanup();
+      throw error;
+    }
+    return {
+      payload: result,
+      snapshotMetadata: snapshot.metadata,
+      verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
+    };
+  }
 }
 
 export const defaultDocumentEngineFacade = createDocumentEngineFacade();
 
-async function decodeResult<Operation extends "detect" | "parse" | "render">(
+async function decodeResult<Operation extends "detect" | "parse">(
   operation: Operation,
   result: IsolatedDocumentResult<Operation>,
 ): Promise<DocumentResultPayload<Operation>> {
@@ -153,6 +191,8 @@ async function decodeResult<Operation extends "detect" | "parse" | "render">(
   }
   return decodeDocumentResultSpool(result) as Promise<DocumentResultPayload<Operation>>;
 }
+
+export { writeDocumentRenderResultExclusively };
 
 function toRunOptions(
   context: DocumentEngineExecutionContext,

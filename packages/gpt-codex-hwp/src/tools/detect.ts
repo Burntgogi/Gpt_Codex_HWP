@@ -42,6 +42,11 @@ export async function handleHwpDetectFormat(
     if (container === "zip" || container === "ole2") {
       details.container_format = container;
     }
+    if (detected.payload.format === "unknown" && container !== undefined) {
+      details.detection_warning = container === "zip"
+        ? "The ZIP container is not a supported HWPX document."
+        : "The OLE2 container is not a supported HWP document.";
+    }
 
     return toolSuccess(`Detected ${detected.payload.format} document format.`, {
       format: detected.payload.format,
