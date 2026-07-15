@@ -269,6 +269,21 @@ test("atomic projection refuses pre-existing unowned stage and backup paths", as
   assert.equal((await lstat(backup)).isDirectory(), true);
 });
 
+test("successful atomic projection removes its owned stage and backup", async () => {
+  const output = join(temporaryRoot, "successful-swap-output");
+  const stage = join(temporaryRoot, ".successful-swap-output.stage-successful-swap");
+  const backup = join(temporaryRoot, ".successful-swap-output.backup-successful-swap");
+  await mkdir(output);
+  await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
+
+  await buildRuntime({ root: ROOT, outputRoot: output, swapId: "successful-swap" });
+
+  assert.equal((await lstat(join(output, "dist", "mcp.js"))).isFile(), true);
+  await assert.rejects(lstat(join(output, "old.txt")), { code: "ENOENT" });
+  await assert.rejects(lstat(stage), { code: "ENOENT" });
+  await assert.rejects(lstat(backup), { code: "ENOENT" });
+});
+
 test("atomic projection restores the prior runtime when promotion fails", async () => {
   const output = join(temporaryRoot, "rollback-output");
   await mkdir(output);
@@ -294,6 +309,87 @@ test("atomic projection restores the prior runtime when promotion fails", async 
     (await readdir(temporaryRoot)).filter((name) => name.startsWith(".rollback-output.")),
     [],
   );
+});
+
+test("atomic projection restores the prior runtime when backup cleanup fails", async () => {
+  const output = join(temporaryRoot, "cleanup-rollback-output");
+  await mkdir(output);
+  await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
+  let rejectedBackupCleanup = false;
+  const injectedRm = async (path, options) => {
+    if (!rejectedBackupCleanup && path.includes(".cleanup-rollback-output.backup-")) {
+      rejectedBackupCleanup = true;
+      const error = new Error("injected backup cleanup failure");
+      error.code = "EIO";
+      throw error;
+    }
+    await rm(path, options);
+  };
+
+  await assert.rejects(
+    buildRuntime({ root: ROOT, outputRoot: output, fileSystem: { rm: injectedRm } }),
+    (error) => {
+      assert.equal(error?.code, "RUNTIME_BACKUP_CLEANUP_FAILED");
+      assert.equal(error?.message, "RUNTIME_BACKUP_CLEANUP_FAILED: prior runtime restored");
+      return true;
+    },
+  );
+  assert.equal(rejectedBackupCleanup, true);
+  assert.equal(await readFile(join(output, "old.txt"), "utf8"), "old runtime\n");
+  await assert.rejects(lstat(join(output, "dist")), { code: "ENOENT" });
+  assert.deepEqual(
+    (await readdir(temporaryRoot)).filter((name) => name.startsWith(".cleanup-rollback-output.")),
+    [],
+  );
+});
+
+test("failed cleanup rollback preserves the live runtime and old backup evidence", async () => {
+  const output = join(temporaryRoot, "cleanup-rollback-failure-output");
+  const stage = join(temporaryRoot, ".cleanup-rollback-failure-output.stage-rollback-evidence");
+  const backup = join(temporaryRoot, ".cleanup-rollback-failure-output.backup-rollback-evidence");
+  await mkdir(output);
+  await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
+  const injectedRm = async (path, options) => {
+    if (path === backup) {
+      const error = new Error("injected backup cleanup failure");
+      error.code = "EIO";
+      throw error;
+    }
+    await rm(path, options);
+  };
+  const injectedRename = async (source, destination) => {
+    if (source === output && destination === stage) {
+      const error = new Error("injected cleanup rollback failure");
+      error.code = "EIO";
+      throw error;
+    }
+    await rename(source, destination);
+  };
+
+  try {
+    await assert.rejects(
+      buildRuntime({
+        root: ROOT,
+        outputRoot: output,
+        swapId: "rollback-evidence",
+        fileSystem: { rename: injectedRename, rm: injectedRm },
+      }),
+      (error) => {
+        assert.equal(error?.code, "RUNTIME_ROLLBACK_FAILED");
+        assert.equal(
+          error?.message,
+          "RUNTIME_ROLLBACK_FAILED: backup cleanup failed and rollback could not move the new runtime; live runtime and backup evidence preserved",
+        );
+        assert.equal(error.message.includes(temporaryRoot), false);
+        return true;
+      },
+    );
+    assert.equal((await lstat(join(output, "dist", "mcp.js"))).isFile(), true);
+    assert.equal(await readFile(join(backup, "old.txt"), "utf8"), "old runtime\n");
+    await assert.rejects(lstat(stage), { code: "ENOENT" });
+  } finally {
+    await rm(backup, { recursive: true, force: true });
+  }
 });
 
 async function prefixedFiles(root, prefix) {

@@ -8,7 +8,7 @@ import {
   readFile,
   readdir,
   rename as nativeRename,
-  rm,
+  rm as nativeRm,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
@@ -64,7 +64,9 @@ export async function buildRuntime({ root, outputRoot, swapId = randomUUID(), fi
   const projectRoot = resolveRequiredPath(root, "root");
   const output = resolveRequiredPath(outputRoot, "outputRoot");
   const rename = fileSystem.rename ?? nativeRename;
+  const removeOwnedPath = fileSystem.rm ?? nativeRm;
   if (typeof rename !== "function") throw runtimeBuildError("fileSystem.rename must be a function");
+  if (typeof removeOwnedPath !== "function") throw runtimeBuildError("fileSystem.rm must be a function");
   if (!SWAP_ID_PATTERN.test(swapId)) throw runtimeBuildError("swapId is invalid");
 
   const outputParent = dirname(output);
@@ -81,55 +83,92 @@ export async function buildRuntime({ root, outputRoot, swapId = randomUUID(), fi
   const outputState = await directoryState(output, "Runtime output");
 
   let ownsStage = false;
-  let movedOldRuntime = false;
-  let promoted = false;
+  let ownsBackup = false;
+  let preserveRollbackEvidence = false;
   try {
     await mkdir(stage, { recursive: false });
     ownsStage = true;
-    await stageRuntime({ projectRoot, stage });
+    const files = await stageRuntime({ projectRoot, stage });
 
     if (outputState === "directory") {
       await rename(output, backup);
-      movedOldRuntime = true;
+      ownsBackup = true;
     }
     try {
       await rename(stage, output);
       ownsStage = false;
-      promoted = true;
     } catch (promotionError) {
-      if (movedOldRuntime) {
+      if (ownsBackup) {
         try {
           await rename(backup, output);
-          movedOldRuntime = false;
+          ownsBackup = false;
         } catch (rollbackError) {
-          throw runtimeBuildError("Runtime promotion failed and rollback also failed", {
-            cause: new AggregateError([promotionError, rollbackError]),
-          });
+          preserveRollbackEvidence = true;
+          throw runtimeRollbackError("promotion failed and the prior runtime could not be restored", [
+            promotionError,
+            rollbackError,
+          ]);
         }
       }
       throw promotionError;
     }
 
-    if (movedOldRuntime) {
-      await rm(backup, { recursive: true, force: false });
-      movedOldRuntime = false;
-    }
-    const files = await fileRecords(output);
-    return Object.freeze({ root: projectRoot, outputRoot: output, files: Object.freeze(files) });
-  } catch (error) {
-    if (!promoted && movedOldRuntime && !(await pathExists(output))) {
+    if (ownsBackup) {
       try {
-        await rename(backup, output);
-        movedOldRuntime = false;
-      } catch (rollbackError) {
-        throw runtimeBuildError("Runtime build failed and rollback also failed", {
-          cause: new AggregateError([error, rollbackError]),
-        });
+        await removeOwnedPath(backup, { recursive: true, force: false });
+        ownsBackup = false;
+      } catch (backupCleanupError) {
+        try {
+          await rename(output, stage);
+          ownsStage = true;
+        } catch (rollbackError) {
+          preserveRollbackEvidence = true;
+          throw runtimeRollbackError("backup cleanup failed and rollback could not move the new runtime", [
+            backupCleanupError,
+            rollbackError,
+          ]);
+        }
+
+        try {
+          await rename(backup, output);
+          ownsBackup = false;
+        } catch (rollbackError) {
+          try {
+            await rename(stage, output);
+            ownsStage = false;
+          } catch (liveRuntimeRecoveryError) {
+            preserveRollbackEvidence = true;
+            throw runtimeRollbackError("backup cleanup failed and no projection could be returned to the live path", [
+              backupCleanupError,
+              rollbackError,
+              liveRuntimeRecoveryError,
+            ]);
+          }
+          preserveRollbackEvidence = true;
+          throw runtimeRollbackError("backup cleanup failed and the prior runtime could not be restored", [
+            backupCleanupError,
+            rollbackError,
+          ]);
+        }
+
+        try {
+          await removeOwnedPath(stage, { recursive: true, force: false });
+          ownsStage = false;
+        } catch (rollbackCleanupError) {
+          preserveRollbackEvidence = true;
+          throw runtimeRollbackError("the prior runtime was restored but new-runtime cleanup failed", [
+            backupCleanupError,
+            rollbackCleanupError,
+          ]);
+        }
+        throw runtimeBackupCleanupError(backupCleanupError);
       }
     }
-    throw error;
+    return Object.freeze({ root: projectRoot, outputRoot: output, files: Object.freeze(files) });
   } finally {
-    if (ownsStage) await rm(stage, { recursive: true, force: true });
+    if (ownsStage && !preserveRollbackEvidence) {
+      await removeOwnedPath(stage, { recursive: true, force: true });
+    }
   }
 }
 
@@ -196,9 +235,10 @@ async function stageRuntime({ projectRoot, stage }) {
   await writeJsonExclusive(join(stage, "package.json"), runtimePackage);
   await writeJsonExclusive(join(stage, "package-lock.json"), renderRuntimeLock(metadata, rootPackage.license, sourceLock));
 
-  await assertRuntimeContract(stage, metadata, runtimePackage);
+  const files = await assertRuntimeContract(stage, metadata, runtimePackage);
   await verifyKordocCoreRuntime(join(stage, "vendor", "kordoc-core"));
   await assertPublicRuntimePrivacy(stage);
+  return files;
 }
 
 async function compileFreshTypeScript(sourceRoot, outputRoot) {
@@ -339,6 +379,7 @@ async function assertRuntimeContract(runtimeRoot, metadata, runtimePackage) {
   if (JSON.stringify(tools) !== JSON.stringify(TOOL_NAMES)) {
     throw runtimeBuildError("Runtime skill does not document exactly the nine supported MCP tools");
   }
+  return records;
 }
 
 async function copyTree(source, destination, relativePath) {
@@ -478,6 +519,20 @@ function runtimeDrift(path, expectedHash, actualHash) {
   return error;
 }
 
+function runtimeBackupCleanupError(cause) {
+  const error = new Error("RUNTIME_BACKUP_CLEANUP_FAILED: prior runtime restored", { cause });
+  error.code = "RUNTIME_BACKUP_CLEANUP_FAILED";
+  return error;
+}
+
+function runtimeRollbackError(detail, causes) {
+  const error = new Error(`RUNTIME_ROLLBACK_FAILED: ${detail}; live runtime and backup evidence preserved`, {
+    cause: new AggregateError(causes),
+  });
+  error.code = "RUNTIME_ROLLBACK_FAILED";
+  return error;
+}
+
 function runtimeBuildError(message, options = undefined) {
   const error = new Error(`RUNTIME_BUILD_FAILED: ${message}`, options);
   error.code = "RUNTIME_BUILD_FAILED";
@@ -502,12 +557,14 @@ async function main() {
   }
 
   const expectedRoot = join(dirname(outputRoot), `.gpt-codex-hwp.expected-${randomUUID()}`);
+  let ownsExpectedRoot = false;
   try {
     await buildRuntime({ root, outputRoot: expectedRoot });
+    ownsExpectedRoot = true;
     const result = await compareRuntime({ expectedRoot, actualRoot: outputRoot });
     process.stdout.write(`Runtime projection matches (${result.files} files).\n`);
   } finally {
-    await rm(expectedRoot, { recursive: true, force: true });
+    if (ownsExpectedRoot) await nativeRm(expectedRoot, { recursive: true, force: true });
   }
 }
 
