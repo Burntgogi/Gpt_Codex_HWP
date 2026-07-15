@@ -96,6 +96,7 @@ export interface DocumentSnapshotTestHooks {
 
 export interface OpenDocumentSnapshotOptions {
   workerInputMaxBytes?: number;
+  maximumBytes?: number;
   allocationObserver?: (allocatedBytes: number) => void;
   testHooks?: DocumentSnapshotTestHooks;
 }
@@ -120,6 +121,7 @@ export class DocumentSnapshotError extends Error {
 
 interface NormalizedSnapshotOptions {
   readonly workerInputMaxBytes: number;
+  readonly maximumBytes: number;
   readonly allocationObserver?: (allocatedBytes: number) => void;
   readonly testHooks?: DocumentSnapshotTestHooks;
   readonly spoolRoot: string;
@@ -188,9 +190,9 @@ export async function openDocumentSnapshot(
       if (!initialHandleStatus.isFile()) {
         throw openFailedError();
       }
-      if (initialHandleStatus.size > BigInt(MAX_DOCUMENT_BYTES)) {
+      if (initialHandleStatus.size > BigInt(normalized.maximumBytes)) {
         throw new FileLimitError(
-          `Source document exceeds the ${MAX_DOCUMENT_BYTES}-byte safety limit.`,
+          `Source file exceeds the ${normalized.maximumBytes}-byte safety limit.`,
         );
       }
 
@@ -828,11 +830,16 @@ function validateOptions(
     throw optionsInvalidError();
   }
   const threshold = rawOptions.workerInputMaxBytes ?? WORKER_INPUT_MAX_BYTES;
+  const maximumBytes = rawOptions.maximumBytes ?? MAX_DOCUMENT_BYTES;
   if (
     !Number.isSafeInteger(threshold) ||
     threshold < 0 ||
     threshold > WORKER_INPUT_MAX_BYTES
   ) {
+    throw optionsInvalidError();
+  }
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 ||
+    maximumBytes > MAX_DOCUMENT_BYTES) {
     throw optionsInvalidError();
   }
   if (
@@ -867,6 +874,7 @@ function validateOptions(
 
   return {
     workerInputMaxBytes: threshold,
+    maximumBytes,
     ...(rawOptions.allocationObserver === undefined
       ? {}
       : { allocationObserver: rawOptions.allocationObserver }),

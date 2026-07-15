@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
   access,
   link,
@@ -29,41 +30,47 @@ import sharp from "sharp";
 import {
   handleHwpCreateSvgAsset,
   handleHwpInsertImage,
-  pythonCommandCandidates,
-  runPython,
 } from "../src/tools/assets.js";
+import type { DocumentSnapshot } from "../src/shared/document-snapshot.js";
+import { normalizeGeneratedFontReferences } from "../src/shared/hwpx-font-integrity.js";
+
+test("image snapshot acquisition cleans a document snapshot when the image open fails", async () => {
+  const module = await import("../src/tools/assets.js") as unknown as {
+    openImageInsertionSnapshots?: (
+      documentPath: string,
+      imagePath: string,
+      opener: (path: string, options: unknown) => Promise<DocumentSnapshot>,
+    ) => Promise<readonly [DocumentSnapshot, DocumentSnapshot]>;
+  };
+  assert.equal(typeof module.openImageInsertionSnapshots, "function");
+  let documentCleanupCalls = 0;
+  const documentSnapshot = {
+    async cleanup() {
+      documentCleanupCalls += 1;
+    },
+  } as unknown as DocumentSnapshot;
+
+  await assert.rejects(
+    module.openImageInsertionSnapshots!(
+      "document.hwpx",
+      "missing.png",
+      async (path) => {
+        if (path === "document.hwpx") return documentSnapshot;
+        throw Object.assign(new Error("image open failed"), { code: "SNAPSHOT_OPEN_FAILED" });
+      },
+    ),
+    (error: unknown) =>
+      typeof error === "object" && error !== null &&
+      "code" in error && error.code === "SNAPSHOT_OPEN_FAILED",
+  );
+  assert.equal(documentCleanupCalls, 1);
+});
 
 const execFileAsync = promisify(execFile);
 const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const HWPX_SAFE_EDIT_ROOT = join(SOURCE_ROOT, "scripts", "hwpx-safe-edit");
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 type XmlEncoding = "utf8" | "utf16le" | "utf16be";
-
-test("Python candidates are platform-specific", () => {
-  assert.deepEqual(pythonCommandCandidates("win32"), [
-    { command: "python", argsPrefix: ["-X", "utf8"] },
-    { command: "py", argsPrefix: ["-3", "-X", "utf8"] },
-  ]);
-  assert.deepEqual(pythonCommandCandidates("darwin"), [
-    { command: "python3", argsPrefix: ["-X", "utf8"] },
-    { command: "python", argsPrefix: ["-X", "utf8"] },
-  ]);
-});
-
-test("runPython reports PYTHON_NOT_FOUND after every candidate is missing", async () => {
-  const calls: string[] = [];
-  await assert.rejects(
-    runPython("helper.py", ["input.hwpx"], "darwin", async (command) => {
-      calls.push(command);
-      throw Object.assign(new Error("missing"), { code: "ENOENT" });
-    }),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, "PYTHON_NOT_FOUND");
-      return true;
-    },
-  );
-  assert.deepEqual(calls, ["python3", "python"]);
-});
 
 test("Python XML policy rejects encoded DTDs and protection manifests", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-python-xml-policy-"));
@@ -76,7 +83,7 @@ test("Python XML policy rejects encoded DTDs and protection manifests", async (t
     "utf8",
   );
 
-  const executed = await runPython(script, [helperDirectory]);
+  const executed = await runTestPython(script, [helperDirectory]);
   const result = JSON.parse(executed.stdout) as {
     dtd: Record<XmlEncoding, boolean>;
     protection: Record<XmlEncoding, string | null>;
@@ -87,36 +94,6 @@ test("Python XML policy rejects encoded DTDs and protection manifests", async (t
     utf16le: "ENCRYPTED",
     utf16be: "ENCRYPTED",
   });
-});
-
-test("image insertion uses the bounded ZIP loader seam", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-bounded-zip-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
-  const sourcePath = join(root, "source.hwpx");
-  const imagePath = join(root, "image.png");
-  const outputPath = join(root, "output.hwpx");
-  await writeFile(sourcePath, Buffer.from(await markdownToHwpx("본문")));
-  await writeFile(imagePath, await testPng());
-  let loadCalls = 0;
-
-  const result = await handleHwpInsertImage(
-    {
-      file_path: sourcePath,
-      image_path: imagePath,
-      output_path: outputPath,
-      anchor_text: "없는 앵커",
-    },
-    {
-      loadZip: async (bytes) => {
-        loadCalls += 1;
-        return await JSZip.loadAsync(bytes);
-      },
-    },
-  );
-
-  assert.equal(resultCode(result), "ANCHOR_NOT_FOUND");
-  assert.equal(loadCalls, 1);
-  await assertMissing(outputPath);
 });
 
 test("hwp_create_svg_asset escapes a structured spec and renders a real PNG", async (t) => {
@@ -291,7 +268,7 @@ test("after-paragraph inserts a normalized PNG after a body anchor and passes st
   const imagePath = join(root, "원본 시각자료.svg");
   const outputPath = join(root, "삽입 결과.hwpx");
   const source = await withStaleLineSeg(
-    await markdownToHwpx("앞 문단\n\n여기에 그림\n\n뒤 문단"),
+    await validHwpx("앞 문단\n\n여기에 그림\n\n뒤 문단"),
   );
   await writeFile(sourcePath, source);
   await writeFile(
@@ -352,7 +329,7 @@ test("after-paragraph inserts inside the same table-cell subList", { timeout: 30
   const outputPath = join(root, "output.hwpx");
   await writeFile(
     sourcePath,
-    Buffer.from(await markdownToHwpx("| 구분 | 내용 |\n| --- | --- |\n| 그림 | 표 안 앵커 |")),
+    Buffer.from(await validHwpx("| 구분 | 내용 |\n| --- | --- |\n| 그림 | 표 안 앵커 |")),
   );
   await writeFile(imagePath, await testPng());
 
@@ -379,7 +356,7 @@ test("after-paragraph ignores a hidden-comment anchor before the eligible body a
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
   const outputPath = join(root, "output.hwpx");
-  const zip = await JSZip.loadAsync(await markdownToHwpx("본문 앵커"));
+  const zip = await JSZip.loadAsync(await validHwpx("본문 앵커"));
   let section = await zip.file("Contents/section0.xml")!.async("text");
   const bodyStart = section.indexOf("<hp:p");
   section = `${section.slice(0, bodyStart)}<hp:hiddenComment><hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>본문 앵커</hp:t></hp:run></hp:p></hp:hiddenComment>${section.slice(bodyStart)}`;
@@ -403,51 +380,54 @@ test("after-paragraph ignores a hidden-comment anchor before the eligible body a
   assert.ok(hiddenEnd >= 0 && picture > hiddenEnd, outputSection);
 });
 
-test("after-paragraph edits the immutable source snapshot even if the source path is swapped and restored", { timeout: 30_000 }, async (t) => {
+test("image insertion rejects a source path swapped and restored after snapshot capture", { timeout: 30_000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-image-source-snapshot-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
   const outputPath = join(root, "output.hwpx");
   const original = Uint8Array.from(
-    new Uint8Array(await markdownToHwpx("원본 표식\n\n공통 앵커")),
+    new Uint8Array(await validHwpx("원본 표식\n\n공통 앵커")),
   );
   const replacement = Uint8Array.from(
-    new Uint8Array(await markdownToHwpx("교체 표식\n\n공통 앵커")),
+    new Uint8Array(await validHwpx("교체 표식\n\n공통 앵커")),
   );
   await writeFile(sourcePath, original);
   await writeFile(imagePath, await testPng());
-  let parseCalls = 0;
-
-  const result = await handleHwpInsertImage(
-    {
-      file_path: sourcePath,
-      image_path: imagePath,
-      output_path: outputPath,
-      anchor_text: "공통 앵커",
-      mode: "after-paragraph",
-    },
-    {
-      parseDocument: async (input, options) => {
-        parseCalls += 1;
-        if (parseCalls === 1) {
-          const parsed = await parse(input, options);
-          await writeFile(sourcePath, replacement);
-          return parsed;
-        }
+  const facade = {
+    async insertImage(
+      documentSnapshot: DocumentSnapshot,
+      imageSnapshot: DocumentSnapshot,
+    ): Promise<never> {
+      try {
+        assert.equal(documentSnapshot.transport, "spool");
+        assert.equal(imageSnapshot.transport, "spool");
+        if (documentSnapshot.transport !== "spool") assert.fail("expected spool");
+        const handle = documentSnapshot.takeSpoolHandle();
+        assert.deepEqual(readFileSync(handle.fd), Buffer.from(original));
+        await writeFile(sourcePath, replacement);
         await writeFile(sourcePath, original);
-        return parse(input, options);
-      },
+        await documentSnapshot.verifySourceUnchanged();
+        assert.fail("restored source-path mutation must be detected");
+      } finally {
+        await Promise.allSettled([
+          documentSnapshot.cleanup(),
+          imageSnapshot.cleanup(),
+        ]);
+      }
     },
-  );
+  };
 
-  assert.equal(result.isError, false, JSON.stringify(result));
-  const parsed = await parse(await readFile(outputPath));
-  assert.equal(parsed.success, true);
-  if (parsed.success) {
-    assert.match(parsed.markdown, /원본 표식/u);
-    assert.doesNotMatch(parsed.markdown, /교체 표식/u);
-  }
+  const result = await handleHwpInsertImage({
+    file_path: sourcePath,
+    image_path: imagePath,
+    output_path: outputPath,
+    anchor_text: "공통 앵커",
+    mode: "after-paragraph",
+  }, facade as never);
+
+  assert.equal(resultCode(result), "SOURCE_CHANGED", JSON.stringify(result));
+  await assertMissing(outputPath);
   assert.deepEqual(await readFile(sourcePath), Buffer.from(original));
 });
 
@@ -457,7 +437,7 @@ test("seal-anchor calls the real Kordoc placement path and preserves placement m
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "seal.png");
   const outputPath = join(root, "sealed.hwpx");
-  await writeFile(sourcePath, Buffer.from(await markdownToHwpx("결재: (인)")));
+  await writeFile(sourcePath, Buffer.from(await validHwpx("결재: (인)")));
   await writeFile(imagePath, await testPng());
 
   const result = await handleHwpInsertImage({
@@ -484,7 +464,7 @@ test("image insertion rejects missing and ambiguous anchors before creating outp
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
-  await writeFile(sourcePath, Buffer.from(await markdownToHwpx("같은 문단 중복, 다시 중복")));
+  await writeFile(sourcePath, Buffer.from(await validHwpx("같은 문단 중복, 다시 중복")));
   await writeFile(imagePath, await testPng());
 
   const ambiguousPath = join(root, "ambiguous.hwpx");
@@ -518,107 +498,12 @@ test("image insertion rejects missing and ambiguous anchors before creating outp
   await assertMissing(missingPath);
 });
 
-test("ambiguous anchor detection stops after the second match", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-anchor-stream-ambiguous-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
-  const sourcePath = join(root, "source.hwpx");
-  const imagePath = join(root, "image.png");
-  const outputPath = join(root, "output.hwpx");
-  const zip = await JSZip.loadAsync(await markdownToHwpx("앵커 앵커"));
-  zip.file("Contents/section999.xml", "not XML");
-  const sourceBytes = await zip.generateAsync({ type: "uint8array" });
-  await writeFile(sourcePath, sourceBytes);
-  await writeFile(imagePath, await testPng());
-  let lateSectionReads = 0;
-
-  const result = await handleHwpInsertImage(
-    {
-      file_path: sourcePath,
-      image_path: imagePath,
-      output_path: outputPath,
-      anchor_text: "앵커",
-    },
-    {
-      validateDocument: async () => ({ ok: true, issues: [], entryCount: 1 }),
-      parseDocument: async () => ({
-        success: true,
-        fileType: "hwpx",
-        markdown: "앵커 앵커",
-        blocks: [],
-      }),
-      loadZip: async () => {
-        const loaded = await JSZip.loadAsync(sourceBytes);
-        const late = loaded.file("Contents/section999.xml")!;
-        late.async = (async () => {
-          lateSectionReads += 1;
-          throw new Error("late section must not be read");
-        }) as typeof late.async;
-        return loaded;
-      },
-    },
-  );
-  assert.equal(resultCode(result), "AMBIGUOUS_ANCHOR");
-  assert.equal(lateSectionReads, 0);
-  await assertMissing(outputPath);
-});
-
-test("requested anchor occurrence returns before scanning later sections", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-anchor-stream-selected-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
-  const sourcePath = join(root, "source.hwpx");
-  const imagePath = join(root, "image.png");
-  const outputPath = join(root, "output.hwpx");
-  const zip = await JSZip.loadAsync(await markdownToHwpx("앵커"));
-  zip.file("Contents/section999.xml", "not XML");
-  const sourceBytes = await zip.generateAsync({ type: "uint8array" });
-  await writeFile(sourcePath, sourceBytes);
-  await writeFile(imagePath, await testPng());
-  let placementCalls = 0;
-  let lateSectionReads = 0;
-
-  await handleHwpInsertImage(
-    {
-      file_path: sourcePath,
-      image_path: imagePath,
-      output_path: outputPath,
-      anchor_text: "앵커",
-      anchor_occurrence: 0,
-      mode: "seal-anchor",
-    },
-    {
-      validateDocument: async () => ({ ok: true, issues: [], entryCount: 1 }),
-      parseDocument: async () => ({
-        success: true,
-        fileType: "hwpx",
-        markdown: "앵커",
-        blocks: [],
-      }),
-      placeSeal: async () => {
-        placementCalls += 1;
-        throw new Error("stop after anchor selection");
-      },
-      loadZip: async () => {
-        const loaded = await JSZip.loadAsync(sourceBytes);
-        const late = loaded.file("Contents/section999.xml")!;
-        late.async = (async () => {
-          lateSectionReads += 1;
-          throw new Error("late section must not be read");
-        }) as typeof late.async;
-        return loaded;
-      },
-    },
-  );
-  assert.equal(lateSectionReads, 0);
-  assert.equal(placementCalls, 1);
-  await assertMissing(outputPath);
-});
-
 test("image insertion rejects non-HWPX, bad images, existing output, and source/image aliases", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-image-errors-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
-  await writeFile(sourcePath, Buffer.from(await markdownToHwpx("앵커")));
+  await writeFile(sourcePath, Buffer.from(await validHwpx("앵커")));
   await writeFile(imagePath, await testPng());
 
   const badDocument = join(root, "not-hwpx.zip");
@@ -682,7 +567,7 @@ test("image insertion rejects encrypted and signed HWPX packages", async (t) => 
   await writeFile(imagePath, await testPng());
 
   const encryptedPath = join(root, "encrypted.hwpx");
-  const encryptedZip = await JSZip.loadAsync(await markdownToHwpx("앵커"));
+  const encryptedZip = await JSZip.loadAsync(await validHwpx("앵커"));
   encryptedZip.file(
     "META-INF/manifest.xml",
     '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:encryption-data/></manifest:manifest>',
@@ -700,7 +585,7 @@ test("image insertion rejects encrypted and signed HWPX packages", async (t) => 
   await assertMissing(encryptedOutput);
 
   const signedPath = join(root, "signed.hwpx");
-  const signedZip = await JSZip.loadAsync(await markdownToHwpx("앵커"));
+  const signedZip = await JSZip.loadAsync(await validHwpx("앵커"));
   signedZip.file("_xmlsignatures/sig1.xml", "<signature/>");
   signedZip.file("mimetype", "application/hwp+zip", { compression: "STORE" });
   await writeFile(signedPath, await signedZip.generateAsync({ type: "uint8array", compression: "DEFLATE" }));
@@ -715,7 +600,7 @@ test("image insertion rejects encrypted and signed HWPX packages", async (t) => 
   await assertMissing(signedOutput);
 
   const drmPath = join(root, "drm.hwpx");
-  const drmZip = await JSZip.loadAsync(await markdownToHwpx("앵커"));
+  const drmZip = await JSZip.loadAsync(await validHwpx("앵커"));
   drmZip.file(
     "META-INF/manifest.xml",
     '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:drm/></manifest:manifest>',
@@ -742,7 +627,7 @@ test("image insertion rejects case-equivalent duplicate protection manifests", a
   const outputPath = join(root, "output.hwpx");
   await writeFile(imagePath, await testPng());
 
-  const zip = await JSZip.loadAsync(await markdownToHwpx("앵커"));
+  const zip = await JSZip.loadAsync(await validHwpx("앵커"));
   zip.file("meta-inf/MANIFEST.XML", "<manifest/>");
   zip.file("META-INF/manifest.xml", "<manifest><encryption-data/></manifest>");
   await writeFile(sourcePath, await zip.generateAsync({ type: "uint8array" }));
@@ -764,7 +649,7 @@ test("image insertion sanitizes SVG inputs even when XML comments precede the ro
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.svg");
   const outputPath = join(root, "output.hwpx");
-  await writeFile(sourcePath, Buffer.from(await markdownToHwpx("앵커")));
+  await writeFile(sourcePath, Buffer.from(await validHwpx("앵커")));
   await writeFile(
     imagePath,
     '<!--leading--><svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg" width="10" height="10"><s:script>alert(1)</s:script><rect width="10" height="10"/></svg>',
@@ -786,7 +671,7 @@ test("image insertion rejects a dangling manifest href before editing", async (t
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
   const outputPath = join(root, "output.hwpx");
-  const zip = await JSZip.loadAsync(await markdownToHwpx("앵커"));
+  const zip = await JSZip.loadAsync(await validHwpx("앵커"));
   let manifest = await zip.file("Contents/content.hpf")!.async("text");
   manifest = manifest.replace(
     "</opf:manifest>",
@@ -807,7 +692,15 @@ test("image insertion rejects a dangling manifest href before editing", async (t
   await assertMissing(outputPath);
 });
 
-async function withStaleLineSeg(input: ArrayBuffer): Promise<Uint8Array> {
+async function validHwpx(markdown: string): Promise<Uint8Array> {
+  return (await normalizeGeneratedFontReferences(
+    await markdownToHwpx(markdown),
+  )).bytes;
+}
+
+async function withStaleLineSeg(
+  input: ArrayBuffer | Uint8Array,
+): Promise<Uint8Array> {
   const zip = await JSZip.loadAsync(input);
   let section = await zip.file("Contents/section0.xml")!.async("text");
   section = section.replace(
@@ -842,6 +735,39 @@ async function assertImageTriplet(zip: JSZip, section: string, entry: string): P
   assert.match(section, new RegExp(`binaryItemIDRef="${item[1]}"`, "u"));
   const image = await zip.file(entry)!.async("nodebuffer");
   assert.deepEqual(image.subarray(0, 8), PNG_MAGIC);
+}
+
+async function runTestPython(
+  script: string,
+  args: readonly string[],
+): Promise<{ stdout: string; stderr: string }> {
+  const candidates = process.platform === "win32"
+    ? [
+        { command: "python", prefix: ["-X", "utf8"] },
+        { command: "py", prefix: ["-3", "-X", "utf8"] },
+      ]
+    : [
+        { command: "python3", prefix: ["-X", "utf8"] },
+        { command: "python", prefix: ["-X", "utf8"] },
+      ];
+  for (const candidate of candidates) {
+    try {
+      return await execFileAsync(
+        candidate.command,
+        [...candidate.prefix, script, ...args],
+        {
+          windowsHide: true,
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  throw Object.assign(new Error("Python was not found for the test."), {
+    code: "PYTHON_NOT_FOUND",
+  });
 }
 
 async function runVerifier(edited: string, original: string): Promise<{ stdout: string; stderr: string }> {

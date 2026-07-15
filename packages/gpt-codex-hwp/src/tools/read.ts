@@ -24,6 +24,7 @@ import {
 } from "../shared/markdown-output.js";
 import { writeFilesExclusively } from "../shared/output.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 import {
   MAX_MCP_RESPONSE_BYTES,
   serializedBytes,
@@ -57,7 +58,15 @@ export async function handleHwpRead(
 
   try {
     filePath = resolveLocalPath(input.file_path, "file_path");
-    const snapshot = await openDocumentSnapshot(filePath);
+    const parseOptions = {
+      ...(input.pages === undefined ? {} : { pages: input.pages }),
+    };
+    const snapshot = await openDocumentSnapshot(filePath, {
+      workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+        input: {},
+        options: parseOptions,
+      }),
+    });
     if (snapshot.metadata.shallowFormat.candidate === "unknown") {
       try {
         await snapshot.verifySourceUnchanged();
@@ -71,9 +80,7 @@ export async function handleHwpRead(
         await snapshot.cleanup();
       }
     }
-    const engineResult = await documentEngine.parse(snapshot, {
-      ...(input.pages === undefined ? {} : { pages: input.pages }),
-    });
+    const engineResult = await documentEngine.parse(snapshot, parseOptions);
     const parsed = engineResult.payload;
     let delivery: MarkdownDeliveryPlan;
     try {

@@ -17,6 +17,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import CFB from "cfb";
 import JSZip from "jszip";
+import { markdownToHwpx } from "kordoc";
+import sharp from "sharp";
 
 import { encodeBoundedJsonFrame } from "../src/workers/bounded-frame.js";
 
@@ -52,9 +54,10 @@ const HWP_FIXTURE = join(
   "re-01-hangul-only-hancom.hwp",
 );
 const ONE_PIXEL_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9WlDkAAAAASUVORK5CYII=",
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
+let largeNoisePngPromise: Promise<Buffer> | undefined;
 
 test("document worker operations use only bytes for HWPX generation, parse, render, patch, fill, validation, and image placement", { timeout: 60_000 }, async () => {
   const client = createBuiltWorkerClient();
@@ -153,6 +156,19 @@ test("document worker operations use only bytes for HWPX generation, parse, rend
     hasEngineCode("ENGINE_PROTOCOL_ERROR"),
     "after-paragraph must fail closed before Kordoc placement dispatch",
   );
+});
+
+test("validateHwpx reports font-integrity issues when structural validation has no issues", async () => {
+  const client = createBuiltWorkerClient();
+  const unnormalized = await markdownToHwpx("결재: (인)");
+
+  const checked = await client.run(
+    request("validateHwpx"),
+    workerSnapshot(unnormalized.slice(0)),
+  );
+
+  assert.equal(checked.ok, false);
+  assert.ok(checked.issues.some((issue) => /font ID/iu.test(issue.message)));
 });
 
 test("document worker operations read and render the pinned HWP but reject every HWP mutation before mutation dispatch", { timeout: 60_000 }, async () => {
@@ -441,9 +457,7 @@ test("descriptor helper command line never contains a distinctive document ancho
   const generated = await worker.run(request("generateHwpx", {
     input: { markdown: `# Privacy\n\n${anchor}\n` },
   }), undefined);
-  const image = Buffer.allocUnsafe(9 * 1024 * 1024);
-  ONE_PIXEL_PNG.copy(image, 0);
-  randomFillSync(image.subarray(ONE_PIXEL_PNG.byteLength));
+  const image = await largeNoisePng();
 
   const monitor = spawn("powershell.exe", [
     "-NoProfile",
@@ -497,9 +511,7 @@ test("compiled child streams and decodes a validated after-paragraph result larg
   const generated = await worker.run(request("generateHwpx", {
     input: { markdown: "# Large placement\n\nApproval anchor: (인)\n" },
   }), undefined);
-  const image = Buffer.allocUnsafe(9 * 1024 * 1024);
-  ONE_PIXEL_PNG.copy(image, 0);
-  randomFillSync(image.subarray(ONE_PIXEL_PNG.byteLength));
+  const image = await largeNoisePng();
   const inserted = await runBuiltChildInsert(generated.bytes, image, {});
   assert.ok(inserted.bytes.byteLength > 8 * 1024 * 1024);
   const validation = await worker.run(
@@ -908,7 +920,15 @@ async function runBuiltChildInsert(
     );
     if (image.byteLength > 8 * 1024 * 1024) {
       assert.equal(compiledClient.isIntegrityVerifiedResultSpool(result), true);
-      assert.equal((result as IntegrityVerifiedResultSpool<"insertImage">).metadata.encoding, "binary");
+      assert.equal(
+        (result as IntegrityVerifiedResultSpool<"insertImage">).metadata.encoding,
+        "hwpx-result-v1",
+      );
+      assert.equal(
+        ((result as IntegrityVerifiedResultSpool<"insertImage">).metadata
+          .resultMetadata as { mode?: string } | undefined)?.mode,
+        "after-paragraph",
+      );
       assert.ok((result as IntegrityVerifiedResultSpool<"insertImage">).metadata.sizeBytes > 8 * 1024 * 1024);
     }
     if (!compiledClient.isIntegrityVerifiedResultSpool(result)) return result;
@@ -1042,6 +1062,22 @@ function spoolSnapshot(bytes: Uint8Array): {
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+function largeNoisePng(): Promise<Buffer> {
+  largeNoisePngPromise ??= (async () => {
+    const width = 2_048;
+    const height = 1_536;
+    const pixels = Buffer.allocUnsafe(width * height * 4);
+    randomFillSync(pixels);
+    const png = await sharp(pixels, {
+      raw: { width, height, channels: 4 },
+    }).png().toBuffer();
+    assert.ok(png.byteLength > 8 * 1024 * 1024);
+    assert.ok(png.byteLength < 25 * 1024 * 1024);
+    return png;
+  })();
+  return largeNoisePngPromise;
 }
 
 function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {

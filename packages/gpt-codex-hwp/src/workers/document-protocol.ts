@@ -12,6 +12,7 @@ export const DOCUMENT_PROTOCOL_VERSION = 1 as const;
 export const MAX_DOCUMENT_ENGINE_INPUT_BYTES = 512 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_IMAGE_BYTES = 25 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_RESULT_BYTES = 512 * 1024 * 1024;
+export const MAX_WORKER_INLINE_HWPX_RESULT_BYTES = 64 * 1024 * 1024;
 export const MAX_CHILD_INLINE_RESULT_BYTES = 8 * 1024 * 1024;
 export const MAX_CHILD_REQUEST_FRAME_BYTES = 32 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_TEXT_CHARACTERS = 5_000_000;
@@ -27,6 +28,7 @@ export const MAX_SAFE_JSON_DEPTH = 16;
 export const MAX_SAFE_JSON_NODES = 10_000;
 export const MAX_SAFE_JSON_STRING_CHARACTERS = 1_000_000;
 export const MAX_SAFE_JSON_BYTES = 8 * 1024 * 1024;
+export const MAX_DOCUMENT_VALIDATION_ISSUES = 10_000;
 
 const MAX_FILL_VALUES = 10_000;
 const MAX_FILL_FIELD_KEY_CHARACTERS = 10_000;
@@ -38,7 +40,6 @@ const MAX_PARSE_WARNINGS = 1_000;
 const MAX_PARSE_IMAGES = 256;
 const MAX_PARSE_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_PARSE_IMAGE_AGGREGATE_BYTES = 128 * 1024 * 1024;
-const MAX_VALIDATION_ISSUES = 10_000;
 const MAX_VALIDATION_MESSAGE_CHARACTERS = 10_000;
 const MAX_VALIDATION_ENTRY_CHARACTERS = 4_096;
 const MAX_VALIDATION_ENTRY_COUNT = 1_000_000;
@@ -104,6 +105,15 @@ interface RenderOptions {
 interface ParseOptions {
   readonly pages?: string;
 }
+export type GongmunPreset =
+  | "official"
+  | "report"
+  | "plan"
+  | "notice"
+  | "minutes";
+interface GenerateOptions {
+  readonly preset?: GongmunPreset;
+}
 interface FillOptions {
   readonly formats?: Readonly<Record<string, string>>;
   readonly requireUnique?: boolean;
@@ -124,7 +134,7 @@ export type LogicalDocumentRequest =
   | RequestBase<"detect", EmptyRecord, EmptyRecord>
   | RequestBase<"parse", EmptyRecord, ParseOptions>
   | RequestBase<"render", EmptyRecord, RenderOptions>
-  | RequestBase<"generateHwpx", { readonly markdown: string }, EmptyRecord>
+  | RequestBase<"generateHwpx", { readonly markdown: string }, GenerateOptions>
   | RequestBase<"patchHwpx", { readonly markdown: string }, EmptyRecord>
   | RequestBase<"fillHwpx", { readonly fields: FillFields }, FillOptions>
   | RequestBase<"validateHwpx", EmptyRecord, ValidateOptions>
@@ -146,7 +156,7 @@ export type WireDocumentRequest =
       { readonly document: DocumentInputTransport },
       RenderOptions
     >
-  | RequestBase<"generateHwpx", { readonly markdown: string }, EmptyRecord>
+  | RequestBase<"generateHwpx", { readonly markdown: string }, GenerateOptions>
   | RequestBase<
       "patchHwpx",
       { readonly document: DocumentInputTransport; readonly markdown: string },
@@ -192,6 +202,7 @@ export type SafeJsonValue =
   | { readonly [key: string]: SafeJsonValue };
 
 export interface ValidationIssueResult {
+  readonly code?: string;
   readonly message: string;
   readonly entry?: string;
 }
@@ -278,7 +289,7 @@ export interface DocumentFailureEvent extends EventBase<"failure"> {
 export type DocumentResultSpoolEncoding =
   | "document-result-v1"
   | "render-result-v1"
-  | "binary";
+  | "hwpx-result-v1";
 export type DocumentSpoolEligibleOperation = Exclude<
   DocumentEngineOperation,
   "detect" | "validateHwpx"
@@ -291,6 +302,7 @@ export interface DocumentResultSpoolReceipt<
   readonly encoding: DocumentResultSpoolEncoding;
   readonly sizeBytes: number;
   readonly sha256: string;
+  readonly metadata?: SafeJsonValue;
 }
 export interface DocumentSpoolResultEvent<
   Operation extends DocumentEngineOperation = DocumentEngineOperation,
@@ -537,7 +549,7 @@ function validateRequestPayload(
     case "generateHwpx":
       requireKeys(input, ["markdown"]);
       requireBoundedString(input.markdown, MAX_DOCUMENT_ENGINE_TEXT_CHARACTERS);
-      requireKeys(options, []);
+      validateGenerateOptions(options);
       break;
     case "patchHwpx":
       requireKeys(input, [...documentKey, "markdown"]);
@@ -664,7 +676,7 @@ function parseEvent<Operation extends DocumentEngineOperation>(
         0,
         childMode
           ? MAX_CHILD_INLINE_RESULT_BYTES
-          : MAX_DOCUMENT_ENGINE_RESULT_BYTES,
+          : maximumWorkerInlineResultBytes(expectedOperation),
       );
       const measured = measureResultInternal(expectedOperation, event.payload);
       if (measured !== event.outputByteLength) protocolFailure();
@@ -697,13 +709,18 @@ function validateSpoolResultReceipt<Operation extends DocumentEngineOperation>(
   if (expectedOperation === "detect" || expectedOperation === "validateHwpx") {
     protocolFailure();
   }
-  const receipt = exactRecord(value, [
-    "descriptor",
-    "operation",
-    "encoding",
-    "sizeBytes",
-    "sha256",
-  ]);
+  const isHwpxResult = isHwpxResultOperation(expectedOperation);
+  const receipt = exactRecord(
+    value,
+    [
+      "descriptor",
+      "operation",
+      "encoding",
+      "sizeBytes",
+      "sha256",
+      ...(isHwpxResult ? ["metadata"] : []),
+    ],
+  );
   if (receipt.descriptor !== 5 || receipt.operation !== expectedOperation) {
     protocolFailure();
   }
@@ -716,6 +733,9 @@ function validateSpoolResultReceipt<Operation extends DocumentEngineOperation>(
     !/^[0-9a-f]{64}$/u.test(receipt.sha256)
   ) {
     protocolFailure();
+  }
+  if (isHwpxResult) {
+    validateHwpxResultMetadata(expectedOperation, receipt.metadata);
   }
 }
 
@@ -731,8 +751,188 @@ export function resultSpoolEncoding(
     case "patchHwpx":
     case "fillHwpx":
     case "insertImage":
-      return "binary";
+      return "hwpx-result-v1";
   }
+}
+
+export function validateDocumentResultSpoolMetadata(
+  operation: "generateHwpx" | "patchHwpx" | "fillHwpx" | "insertImage",
+  metadata: unknown,
+): SafeJsonValue {
+  return protocolBoundary(() => {
+    validateHwpxResultMetadata(operation, metadata);
+    return metadata as SafeJsonValue;
+  });
+}
+
+function isHwpxResultOperation(
+  operation: DocumentEngineOperation,
+): operation is "generateHwpx" | "patchHwpx" | "fillHwpx" | "insertImage" {
+  return operation === "generateHwpx" || operation === "patchHwpx" ||
+    operation === "fillHwpx" || operation === "insertImage";
+}
+
+export function maximumWorkerInlineResultBytes(
+  operation: DocumentEngineOperation,
+): number {
+  return isHwpxResultOperation(operation)
+    ? MAX_WORKER_INLINE_HWPX_RESULT_BYTES
+    : MAX_DOCUMENT_ENGINE_RESULT_BYTES;
+}
+
+function validateHwpxResultMetadata(
+  operation: DocumentEngineOperation,
+  value: unknown,
+): void {
+  if (!isHwpxResultOperation(operation)) protocolFailure();
+  const metadata = readRecord(value);
+  if (metadata.operation !== operation) protocolFailure();
+  switch (operation) {
+    case "generateHwpx": {
+      requireKeys(metadata, ["operation", "fontNormalization"]);
+      const normalization = exactRecord(
+        metadata.fontNormalization,
+        ["changed", "changedReferenceCount"],
+      );
+      if (typeof normalization.changed !== "boolean") protocolFailure();
+      requireIntegerInRange(
+        normalization.changedReferenceCount,
+        0,
+        Number.MAX_SAFE_INTEGER,
+      );
+      break;
+    }
+    case "patchHwpx": {
+      requireKeys(
+        metadata,
+        ["operation", "applied", "skipped", "verification"],
+      );
+      requireIntegerInRange(metadata.applied, 0, Number.MAX_SAFE_INTEGER);
+      const skipped = readArray(metadata.skipped);
+      if (skipped.length > MAX_FILL_VALUES) protocolFailure();
+      for (const value of skipped) {
+        const item = exactRecord(
+          value,
+          ["reason"],
+          ["before", "after", "partial"],
+        );
+        requireSafeText(item.reason, 10_000);
+        for (const key of ["before", "after"] as const) {
+          if (Object.hasOwn(item, key)) requireSafeText(item[key], 10_000);
+        }
+        if (Object.hasOwn(item, "partial") && typeof item.partial !== "boolean") {
+          protocolFailure();
+        }
+      }
+      if (metadata.verification !== null) {
+        const verification = exactRecord(
+          metadata.verification,
+          ["stats", "diffs"],
+        );
+        validateDiffStats(verification.stats);
+        if (!Array.isArray(verification.diffs)) protocolFailure();
+      }
+      break;
+    }
+    case "fillHwpx": {
+      requireKeys(
+        metadata,
+        ["operation", "filled", "unmatched", "rejected"],
+      );
+      const filled = readArray(metadata.filled);
+      if (filled.length > MAX_FILL_VALUES) protocolFailure();
+      for (const value of filled) {
+        const field = exactRecord(
+          value,
+          ["label", "value", "row", "col"],
+          ["key"],
+        );
+        requireSafeText(field.label, MAX_FILL_FIELD_KEY_CHARACTERS);
+        requireBoundedString(field.value, MAX_DOCUMENT_ENGINE_TEXT_CHARACTERS);
+        requireIntegerInRange(field.row, 0, Number.MAX_SAFE_INTEGER);
+        requireIntegerInRange(field.col, 0, Number.MAX_SAFE_INTEGER);
+        if (Object.hasOwn(field, "key")) {
+          requireSafeText(field.key, MAX_FILL_FIELD_KEY_CHARACTERS);
+        }
+      }
+      validateBoundedStringList(metadata.unmatched, MAX_FILL_VALUES);
+      validateBoundedStringList(metadata.rejected, MAX_FILL_VALUES);
+      break;
+    }
+    case "insertImage":
+      validateImageResultMetadata(metadata);
+      break;
+  }
+  safeJsonBytes(value);
+}
+
+function validateDiffStats(value: unknown): void {
+  const stats = exactRecord(
+    value,
+    ["added", "removed", "modified", "unchanged"],
+  );
+  for (const key of ["added", "removed", "modified", "unchanged"] as const) {
+    requireIntegerInRange(stats[key], 0, Number.MAX_SAFE_INTEGER);
+  }
+}
+
+function validateBoundedStringList(value: unknown, maximum: number): void {
+  const list = readArray(value);
+  if (list.length > maximum) protocolFailure();
+  for (const item of list) requireSafeText(item, MAX_FILL_FIELD_KEY_CHARACTERS);
+}
+
+function validateImageResultMetadata(metadata: RecordSnapshot): void {
+  if (metadata.mode === "seal-anchor") {
+    requireKeys(metadata, ["operation", "mode", "placed"]);
+    const placed = readArray(metadata.placed);
+    if (placed.length === 0 || placed.length > MAX_FILL_VALUES) protocolFailure();
+    for (const value of placed) {
+      const placement = exactRecord(value, [
+        "anchor",
+        "occurrence",
+        "sectionIndex",
+        "mode",
+        "posXMm",
+        "posYMm",
+        "sizeMm",
+        "entry",
+        "warnings",
+      ]);
+      requireSafeText(placement.anchor, 10_000);
+      requireIntegerInRange(placement.occurrence, 0, Number.MAX_SAFE_INTEGER);
+      requireIntegerInRange(placement.sectionIndex, 0, Number.MAX_SAFE_INTEGER);
+      if (placement.mode !== "overlap" && placement.mode !== "right") {
+        protocolFailure();
+      }
+      for (const key of ["posXMm", "posYMm", "sizeMm"] as const) {
+        requireNumberInRange(placement[key], -1_000_000, 1_000_000);
+      }
+      requireSafeText(placement.entry, MAX_VALIDATION_ENTRY_CHARACTERS);
+      if (isAbsoluteOrTraversingPath(placement.entry as string)) protocolFailure();
+      validateBoundedStringList(placement.warnings, MAX_PARSE_WARNINGS);
+    }
+    return;
+  }
+  if (metadata.mode !== "after-paragraph") protocolFailure();
+  requireKeys(metadata, ["operation", "mode", "placement"]);
+  const placement = exactRecord(metadata.placement, [
+    "imageEntry",
+    "itemId",
+    "sectionIndex",
+    "removedLinesegarray",
+    "displayWidthHu",
+    "displayHeightHu",
+    "warnings",
+  ]);
+  requireSafeText(placement.imageEntry, MAX_VALIDATION_ENTRY_CHARACTERS);
+  if (isAbsoluteOrTraversingPath(placement.imageEntry as string)) protocolFailure();
+  requireSafeText(placement.itemId, MAX_VALIDATION_ENTRY_CHARACTERS);
+  requireIntegerInRange(placement.sectionIndex, 0, Number.MAX_SAFE_INTEGER);
+  requireIntegerInRange(placement.removedLinesegarray, 0, Number.MAX_SAFE_INTEGER);
+  requireIntegerInRange(placement.displayWidthHu, 1, Number.MAX_SAFE_INTEGER);
+  requireIntegerInRange(placement.displayHeightHu, 1, Number.MAX_SAFE_INTEGER);
+  validateBoundedStringList(placement.warnings, MAX_PARSE_WARNINGS);
 }
 
 function measureResultInternal(
@@ -911,10 +1111,11 @@ function validateValidationResult(payload: RecordSnapshot): void {
   if (typeof payload.ok !== "boolean") protocolFailure();
   requireIntegerInRange(payload.entryCount, 0, MAX_VALIDATION_ENTRY_COUNT);
   const issues = readArray(payload.issues);
-  if (issues.length > MAX_VALIDATION_ISSUES) protocolFailure();
+  if (issues.length > MAX_DOCUMENT_VALIDATION_ISSUES) protocolFailure();
   if ((payload.entryCount as number) < issues.length) protocolFailure();
   for (const issueValue of issues) {
-    const issue = exactRecord(issueValue, ["message"], ["entry"]);
+    const issue = exactRecord(issueValue, ["message"], ["code", "entry"]);
+    if (Object.hasOwn(issue, "code")) requireSafeCode(issue.code, 128);
     requireTrimmedString(issue.message, MAX_VALIDATION_MESSAGE_CHARACTERS);
     if (Object.hasOwn(issue, "entry")) {
       requireTrimmedString(issue.entry, MAX_VALIDATION_ENTRY_CHARACTERS);
@@ -987,6 +1188,18 @@ function validateRenderOptions(options: RecordSnapshot): void {
       total += highlight.length;
       if (total > MAX_HIGHLIGHT_CHARACTERS) protocolFailure();
     }
+  }
+}
+
+function validateGenerateOptions(options: RecordSnapshot): void {
+  requireKeys(options, [], ["preset"]);
+  if (Object.hasOwn(options, "preset") &&
+    options.preset !== "official" &&
+    options.preset !== "report" &&
+    options.preset !== "plan" &&
+    options.preset !== "notice" &&
+    options.preset !== "minutes") {
+    protocolFailure();
   }
 }
 

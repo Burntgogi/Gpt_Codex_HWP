@@ -17,6 +17,8 @@ import CFB from "cfb";
 import { markdownToHwpx, parse, validateHwpx } from "kordoc";
 import JSZip from "jszip";
 
+import { normalizeGeneratedFontReferences } from "../src/shared/hwpx-font-integrity.js";
+import { createDocumentEngineRunError } from "../src/workers/document-errors.js";
 import {
   handleHwpFillForm,
   handleHwpPatchDocument,
@@ -44,9 +46,7 @@ test("hwp_patch_document patches a real HWPX without mutating the source", async
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "patched.hwpx");
-  const source = new Uint8Array(
-    await markdownToHwpx("# 제목\n\n첫 번째 문단입니다."),
-  );
+  const source = await validHwpx("# 제목\n\n첫 번째 문단입니다.");
   await writeFile(sourcePath, source);
   const sourceHash = sha256(source);
 
@@ -111,12 +111,7 @@ test("hwp_patch_document rejects verify false before file access", async (t) => 
       output_path: outputPath,
       verify: false,
     },
-    {
-      detectDocumentFormat: unexpected,
-      parseDocument: unexpected,
-      patchHwpxDocument: unexpected,
-      validateHwpxDocument: unexpected,
-    },
+    { patch: unexpected } as never,
   );
 
   assert.equal(details(result).code, "VERIFICATION_REQUIRED");
@@ -125,42 +120,14 @@ test("hwp_patch_document rejects verify false before file access", async (t) => 
   await assertMissing(outputPath);
 });
 
-test("hwp_patch_document always requests verification and requires its stats", async (t) => {
+test("hwp_patch_document requires complete isolated verification metadata", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-patch-verify-stats-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
-  const verifiedOutput = join(root, "verified.hwpx");
   const missingStatsOutput = join(root, "missing-stats.hwpx");
-  const source = new Uint8Array(await markdownToHwpx("원문"));
+  const source = await validHwpx("원문");
   await writeFile(sourcePath, source);
-  let receivedVerify: boolean | undefined;
-
-  const verified = await handleHwpPatchDocument(
-    {
-      file_path: sourcePath,
-      edited_markdown: "수정",
-      output_path: verifiedOutput,
-    },
-    {
-      patchHwpxDocument: async (_bytes, _markdown, options) => {
-        receivedVerify = options?.verify;
-        return {
-          success: true,
-          data: source,
-          applied: 1,
-          skipped: [],
-          verification: {
-            stats: { added: 0, removed: 0, modified: 0, unchanged: 1 },
-            diffs: [],
-          },
-        };
-      },
-      validateHwpxDocument: async () => ({ ok: true, issues: [], entryCount: 1 }),
-    },
-  );
-  assert.equal(verified.isError, false);
-  assert.equal(receivedVerify, true);
-  await access(verifiedOutput);
+  let writeCalls = 0;
 
   const missingStats = await handleHwpPatchDocument(
     {
@@ -169,15 +136,24 @@ test("hwp_patch_document always requests verification and requires its stats", a
       output_path: missingStatsOutput,
     },
     {
-      patchHwpxDocument: async () => ({
-        success: true,
-        data: source,
-        applied: 1,
-        skipped: [],
-      }),
-    },
+      async patch(snapshot: SnapshotLike) {
+        await snapshot.cleanup();
+        return fakeMutationResult(
+          source,
+          {
+            operation: "patchHwpx",
+            applied: 1,
+            skipped: [],
+            verification: null,
+          },
+          { ok: true, issues: [], entryCount: 1 },
+          () => { writeCalls += 1; },
+        );
+      },
+    } as never,
   );
   assert.equal(details(missingStats).code, "PATCH_INCOMPLETE");
+  assert.equal(writeCalls, 0);
   await assertMissing(missingStatsOutput);
 });
 
@@ -199,12 +175,7 @@ test("hwp_patch_document rejects binary HWP before parsing or patching", async (
       edited_markdown: "수정",
       output_path: outputPath,
     },
-    {
-      detectDocumentFormat: async () => "hwp",
-      parseDocument: unexpected,
-      patchHwpxDocument: unexpected,
-      validateHwpxDocument: unexpected,
-    },
+    { patch: unexpected } as never,
   );
 
   assert.equal(result.isError, true);
@@ -238,7 +209,7 @@ test("hwp_patch_document rejects a DOCX-like ZIP before patching", async (t) => 
 
   assert.equal(result.isError, true);
   assert.equal(details(result).code, "UNSUPPORTED_PATCH_FORMAT");
-  assert.equal(details(result).format, "docx");
+  assert.equal(details(result).format, "unknown");
   await assertMissing(outputPath);
 });
 
@@ -247,7 +218,7 @@ test("hwp_patch_document rejects a real partial patch without writing an artifac
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "partial.hwpx");
-  const source = new Uint8Array(await markdownToHwpx("기존 문단"));
+  const source = await validHwpx("기존 문단");
   await writeFile(sourcePath, source);
   const parsed = await parse(source);
   assert.equal(parsed.success, true);
@@ -274,48 +245,34 @@ test("hwp_patch_document rejects a real partial patch without writing an artifac
   await assertMissing(outputPath);
 });
 
-test("hwp_patch_document does not write PATCH_FAILED or missing-data results", async (t) => {
+test("hwp_patch_document does not write a typed PATCH_FAILED result", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-patch-failure-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   await writeFile(
     sourcePath,
-    new Uint8Array(await markdownToHwpx("원문")),
+    await validHwpx("원문"),
   );
 
-  const cases = [
+  const outputPath = join(root, "failure.hwpx");
+  const result = await handleHwpPatchDocument(
     {
-      name: "explicit failure",
-      result: {
-        success: false,
-        applied: 0,
-        skipped: [],
-        error: "패치 거부",
+      file_path: sourcePath,
+      edited_markdown: "수정",
+      output_path: outputPath,
+    },
+    {
+      async patch(snapshot: SnapshotLike) {
+        await snapshot.cleanup();
+        throw createDocumentEngineRunError("PATCH_FAILED");
       },
-    },
-    {
-      name: "missing data",
-      result: { success: true, applied: 1, skipped: [] },
-    },
-  ] as const;
+    } as never,
+  );
 
-  for (const [index, item] of cases.entries()) {
-    await t.test(item.name, async () => {
-      const outputPath = join(root, `failure-${index}.hwpx`);
-      const result = await handleHwpPatchDocument(
-        {
-          file_path: sourcePath,
-          edited_markdown: "수정",
-          output_path: outputPath,
-        },
-        { patchHwpxDocument: async () => item.result },
-      );
-
-      assert.equal(result.isError, true);
-      assert.equal(details(result).code, "PATCH_FAILED");
-      await assertMissing(outputPath);
-    });
-  }
+  assert.equal(result.isError, true);
+  assert.equal(details(result).code, "PATCH_FAILED");
+  assert.doesNotMatch(JSON.stringify(result), /private detail/iu);
+  await assertMissing(outputPath);
 });
 
 test("hwp_fill_form fills a real HWPX form and validates it without mutating the source", async (t) => {
@@ -323,10 +280,8 @@ test("hwp_fill_form fills a real HWPX form and validates it without mutating the
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "filled.hwpx");
-  const source = new Uint8Array(
-    await markdownToHwpx(
-      "| 성명 | ( ) | 연락처 | ( ) |\n| --- | --- | --- | --- |",
-    ),
+  const source = await validHwpx(
+    "| 성명 | ( ) | 연락처 | ( ) |\n| --- | --- | --- | --- |",
   );
   await writeFile(sourcePath, source);
   const sourceHash = sha256(source);
@@ -381,11 +336,11 @@ test("hwp_fill_form rejects total array values above the budget before file acce
       output_path: outputPath,
     },
     {
-      detectDocumentFormat: async () => {
+      fill: async () => {
         dependencyCalls += 1;
-        return "hwpx";
+        throw new Error("fill must not run");
       },
-    },
+    } as never,
   );
   assert.equal(details(result).code, "INPUT_TOO_LARGE");
   assert.equal(dependencyCalls, 0);
@@ -400,11 +355,7 @@ test("hwp_fill_form applies per-field formats and surfaces unmatched labels", as
   const outputPath = join(root, "filled.hwpx");
   await writeFile(
     sourcePath,
-    new Uint8Array(
-      await markdownToHwpx(
-        "| 생년월일 | ( ) |\n| --- | --- |",
-      ),
-    ),
+    await validHwpx("| 생년월일 | ( ) |\n| --- | --- |"),
   );
 
   const result = await handleHwpFillForm({
@@ -434,11 +385,7 @@ test("hwp_fill_form require_unique rejects repeated scalar labels", async (t) =>
   const outputPath = join(root, "filled.hwpx");
   await writeFile(
     sourcePath,
-    new Uint8Array(
-      await markdownToHwpx(
-        "| 성명 | ( ) |\n| --- | --- |\n| 성명 | ( ) |",
-      ),
-    ),
+    await validHwpx("| 성명 | ( ) |\n| --- | --- |\n| 성명 | ( ) |"),
   );
 
   const result = await handleHwpFillForm({
@@ -465,11 +412,7 @@ test("hwp_fill_form require_unique allows array values for repeated labels", asy
   const outputPath = join(root, "filled.hwpx");
   await writeFile(
     sourcePath,
-    new Uint8Array(
-      await markdownToHwpx(
-        "| 성명 | ( ) |\n| --- | --- |\n| 성명 | ( ) |",
-      ),
-    ),
+    await validHwpx("| 성명 | ( ) |\n| --- | --- |\n| 성명 | ( ) |"),
   );
 
   const result = await handleHwpFillForm({
@@ -505,9 +448,7 @@ test("hwp_fill_form masks filled values by default from every result channel", a
   const secret = "비밀값-Ω-4937";
   await writeFile(
     sourcePath,
-    new Uint8Array(
-      await markdownToHwpx("| 성명 | ( ) |\n| --- | --- |"),
-    ),
+    await validHwpx("| 성명 | ( ) |\n| --- | --- |"),
   );
 
   const result = await handleHwpFillForm({
@@ -528,7 +469,7 @@ test("hwp_fill_form masks filled values by default from every result channel", a
   if (reparsed.success) assert.match(reparsed.markdown, new RegExp(secret, "u"));
 });
 
-test("hwp_fill_form rejects an encrypted-marker HWPX before any fill call", async (t) => {
+test("hwp_fill_form rejects an exact encrypted-marker HWPX", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-fill-encrypted-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "encrypted.hwpx");
@@ -553,25 +494,14 @@ test("hwp_fill_form rejects an encrypted-marker HWPX before any fill call", asyn
   assert.equal(parserResult.success, false);
   if (!parserResult.success) assert.equal(parserResult.code, "ENCRYPTED");
   await writeFile(sourcePath, encryptedBytes);
-  let fillCalls = 0;
-
-  const result = await handleHwpFillForm(
-    {
-      file_path: sourcePath,
-      fields: { 성명: "절대기록금지-90210" },
-      output_path: outputPath,
-    },
-    {
-      fillFormDocument: async () => {
-        fillCalls += 1;
-        throw new Error("fill must not run");
-      },
-    },
-  );
+  const result = await handleHwpFillForm({
+    file_path: sourcePath,
+    fields: { 성명: "절대기록금지-90210" },
+    output_path: outputPath,
+  });
 
   assert.equal(result.isError, true);
   assert.equal(details(result).code, "ENCRYPTED");
-  assert.equal(fillCalls, 0);
   await assertMissing(outputPath);
 });
 
@@ -589,14 +519,10 @@ test("hwp_fill_form gives actionable preserve guidance for binary HWP", async (t
       output_path: outputPath,
     },
     {
-      detectDocumentFormat: async () => "hwp",
-      parseDocument: async () => {
-        throw new Error("unsupported HWP fill must not parse or use COM");
-      },
-      fillFormDocument: async () => {
+      fill: async () => {
         throw new Error("unsupported HWP fill must not execute");
       },
-    },
+    } as never,
   );
 
   assert.equal(result.isError, true);
@@ -612,8 +538,9 @@ test("hwp_patch_document validates HWPX bytes before writing", async (t) => {
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "patched.hwpx");
-  const source = new Uint8Array(await markdownToHwpx("원문"));
+  const source = await validHwpx("원문");
   await writeFile(sourcePath, source);
+  let writeCalls = 0;
 
   const result = await handleHwpPatchDocument(
     {
@@ -622,32 +549,33 @@ test("hwp_patch_document validates HWPX bytes before writing", async (t) => {
       output_path: outputPath,
     },
     {
-      patchHwpxDocument: async () => ({
-        success: true,
-        data: source,
-        applied: 1,
-        skipped: [],
-        verification: {
-          stats: { added: 0, removed: 0, modified: 0, unchanged: 1 },
-          diffs: [],
-        },
-      }),
-      validateHwpxDocument: async () => ({
-        ok: false,
-        issues: [
+      async patch(snapshot: SnapshotLike) {
+        await snapshot.cleanup();
+        return fakeMutationResult(
+          source,
           {
-            severity: "error",
-            code: "TEST_INVALID",
-            message: "invalid test output",
+            operation: "patchHwpx",
+            applied: 1,
+            skipped: [],
+            verification: {
+              stats: { added: 0, removed: 0, modified: 0, unchanged: 1 },
+              diffs: [],
+            },
           },
-        ],
-        entryCount: 0,
-      }),
-    },
+          {
+            ok: false,
+            issues: [{ message: "invalid test output" }],
+            entryCount: 0,
+          },
+          () => { writeCalls += 1; },
+        );
+      },
+    } as never,
   );
 
   assert.equal(result.isError, true);
   assert.equal(details(result).code, "HWPX_VALIDATION_FAILED");
+  assert.equal(writeCalls, 0);
   await assertMissing(outputPath);
 });
 
@@ -655,7 +583,7 @@ test("hwp_patch_document never overwrites its source, aliases, or existing outpu
   const root = await mkdtemp(join(tmpdir(), "hwp-patch-output-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
-  const source = new Uint8Array(await markdownToHwpx("원문"));
+  const source = await validHwpx("원문");
   await writeFile(sourcePath, source);
   const sourceHash = sha256(source);
 
@@ -700,38 +628,30 @@ test("hwp_patch_document never overwrites its source, aliases, or existing outpu
   });
 });
 
-test("hwp_patch_document propagates protected parse failures before patching", async (t) => {
+test("hwp_patch_document rejects an exact DRM-protected HWPX", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-patch-protected-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "patched.hwpx");
-  await writeFile(sourcePath, new Uint8Array(await markdownToHwpx("원문")));
-  let patchCalls = 0;
-
-  const result = await handleHwpPatchDocument(
-    {
-      file_path: sourcePath,
-      edited_markdown: "수정",
-      output_path: outputPath,
-    },
-    {
-      detectDocumentFormat: async () => "hwpx",
-      parseDocument: async () => ({
-        success: false,
-        fileType: "hwpx",
-        code: "DRM_PROTECTED",
-        error: "protected document",
-      }),
-      patchHwpxDocument: async () => {
-        patchCalls += 1;
-        return { success: true, data: new Uint8Array(), applied: 0, skipped: [] };
-      },
-    },
+  const protectedZip = await JSZip.loadAsync(await validHwpx("원문"));
+  protectedZip.file(
+    "META-INF/manifest.xml",
+    '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:drm/></manifest:manifest>',
   );
+  protectedZip.file("mimetype", "application/hwp+zip", { compression: "STORE" });
+  await writeFile(
+    sourcePath,
+    await protectedZip.generateAsync({ type: "uint8array", compression: "DEFLATE" }),
+  );
+
+  const result = await handleHwpPatchDocument({
+    file_path: sourcePath,
+    edited_markdown: "수정",
+    output_path: outputPath,
+  });
 
   assert.equal(result.isError, true);
   assert.equal(details(result).code, "DRM_PROTECTED");
-  assert.equal(patchCalls, 0);
   await assertMissing(outputPath);
 });
 
@@ -740,7 +660,7 @@ test("patch and fill reject exact signed HWPX bytes before mutation", async (t) 
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "signed.hwpx");
   const signed = await JSZip.loadAsync(
-    await markdownToHwpx("| 성명 | ( ) |\n| --- | --- |\n\n수정 전"),
+    await validHwpx("| 성명 | ( ) |\n| --- | --- |\n\n수정 전"),
   );
   signed.file("_xmlsignatures/sig1.xml", "<Signature/>");
   signed.file("mimetype", "application/hwp+zip", { compression: "STORE" });
@@ -749,44 +669,24 @@ test("patch and fill reject exact signed HWPX bytes before mutation", async (t) 
     await signed.generateAsync({ type: "uint8array", compression: "DEFLATE" }),
   );
 
-  let patchCalls = 0;
   const patchOutput = join(root, "patched.hwpx");
-  const patched = await handleHwpPatchDocument(
-    {
-      file_path: sourcePath,
-      edited_markdown: "수정 후",
-      output_path: patchOutput,
-    },
-    {
-      patchHwpxDocument: async () => {
-        patchCalls += 1;
-        return { success: false, applied: 0, skipped: [], error: "must not run" };
-      },
-    },
-  );
+  const patched = await handleHwpPatchDocument({
+    file_path: sourcePath,
+    edited_markdown: "수정 후",
+    output_path: patchOutput,
+  });
   assert.equal(patched.isError, true);
   assert.equal(details(patched).code, "SIGNED_DOCUMENT");
-  assert.equal(patchCalls, 0);
   await assertMissing(patchOutput);
 
-  let fillCalls = 0;
   const fillOutput = join(root, "filled.hwpx");
-  const filled = await handleHwpFillForm(
-    {
-      file_path: sourcePath,
-      fields: { 성명: "홍길동" },
-      output_path: fillOutput,
-    },
-    {
-      fillFormDocument: async () => {
-        fillCalls += 1;
-        throw new Error("must not run");
-      },
-    },
-  );
+  const filled = await handleHwpFillForm({
+    file_path: sourcePath,
+    fields: { 성명: "홍길동" },
+    output_path: fillOutput,
+  });
   assert.equal(filled.isError, true);
   assert.equal(details(filled).code, "SIGNED_DOCUMENT");
-  assert.equal(fillCalls, 0);
   await assertMissing(fillOutput);
 });
 
@@ -805,12 +705,11 @@ test("hwp_patch_document returns HWP_READ_ONLY for protected binary HWP before p
       output_path: outputPath,
     },
     {
-      detectDocumentFormat: async () => "hwp",
-      parseDocument: async () => {
+      patch: async () => {
         parseCalls += 1;
-        return { success: true, fileType: "hwp", markdown: "원문", blocks: [] };
+        throw new Error("patch must not run");
       },
-    },
+    } as never,
   );
 
   assert.equal(result.isError, true);
@@ -825,13 +724,12 @@ test("hwp_fill_form refuses invalid or unreadable generated HWPX before writing"
   const sourcePath = join(root, "form.hwpx");
   await writeFile(
     sourcePath,
-    new Uint8Array(
-      await markdownToHwpx("| 성명 | ( ) |\n| --- | --- |"),
-    ),
+    await validHwpx("| 성명 | ( ) |\n| --- | --- |"),
   );
 
   await t.test("structural validation failure", async () => {
     const outputPath = join(root, "invalid.hwpx");
+    let writeCalls = 0;
     const result = await handleHwpFillForm(
       {
         file_path: sourcePath,
@@ -839,27 +737,34 @@ test("hwp_fill_form refuses invalid or unreadable generated HWPX before writing"
         output_path: outputPath,
       },
       {
-        validateHwpxDocument: async () => ({
-          ok: false,
-          issues: [
+        async fill(snapshot: SnapshotLike) {
+          await snapshot.cleanup();
+          return fakeMutationResult(
+            await validHwpx("| 성명 | 홍길동 |\n| --- | --- |"),
             {
-              severity: "error",
-              code: "TEST_INVALID",
-              message: "invalid test output",
+              operation: "fillHwpx",
+              filled: [{ label: "성명", value: "홍길동" }],
+              unmatched: [],
+              rejected: [],
             },
-          ],
-          entryCount: 0,
-        }),
-      },
+            {
+              ok: false,
+              issues: [{ message: "invalid test output" }],
+              entryCount: 0,
+            },
+            () => { writeCalls += 1; },
+          );
+        },
+      } as never,
     );
     assert.equal(result.isError, true);
     assert.equal(details(result).code, "HWPX_VALIDATION_FAILED");
+    assert.equal(writeCalls, 0);
     await assertMissing(outputPath);
   });
 
   await t.test("post-fill parse failure", async () => {
     const outputPath = join(root, "unreadable.hwpx");
-    let parseCalls = 0;
     const result = await handleHwpFillForm(
       {
         file_path: sourcePath,
@@ -867,21 +772,14 @@ test("hwp_fill_form refuses invalid or unreadable generated HWPX before writing"
         output_path: outputPath,
       },
       {
-        parseDocument: async (input, options) => {
-          parseCalls += 1;
-          if (parseCalls === 1) return parse(input, options);
-          return {
-            success: false,
-            fileType: "hwpx",
-            code: "CORRUPTED",
-            error: "post-fill parse failed",
-          };
+        async fill(snapshot: SnapshotLike) {
+          await snapshot.cleanup();
+          throw createDocumentEngineRunError("FILL_VERIFICATION_FAILED");
         },
-      },
+      } as never,
     );
     assert.equal(result.isError, true);
     assert.equal(details(result).code, "FILL_VERIFICATION_FAILED");
-    assert.equal(parseCalls, 2);
     await assertMissing(outputPath);
   });
 });
@@ -891,9 +789,7 @@ test("hwp_fill_form does not overwrite an existing destination", async (t) => {
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "existing.hwpx");
-  const source = new Uint8Array(
-    await markdownToHwpx("| 성명 | ( ) |\n| --- | --- |"),
-  );
+  const source = await validHwpx("| 성명 | ( ) |\n| --- | --- |");
   const sentinel = Buffer.from("fill-output-sentinel");
   await writeFile(sourcePath, source);
   await writeFile(outputPath, sentinel);
@@ -917,13 +813,12 @@ test("hwp_fill_form masks submitted values from post-fill error results", async 
   const secret = "오류에도-숨길값-77881";
   await writeFile(
     sourcePath,
-    new Uint8Array(
-      await markdownToHwpx("| 성명 | ( ) |\n| --- | --- |"),
-    ),
+    await validHwpx("| 성명 | ( ) |\n| --- | --- |"),
   );
 
   await t.test("validation issue", async () => {
     const outputPath = join(root, "validation-error.hwpx");
+    let writeCalls = 0;
     const result = await handleHwpFillForm(
       {
         file_path: sourcePath,
@@ -932,28 +827,39 @@ test("hwp_fill_form masks submitted values from post-fill error results", async 
         mask_values: true,
       },
       {
-        validateHwpxDocument: async () => ({
-          ok: false,
-          issues: [
+        async fill(snapshot: SnapshotLike) {
+          await snapshot.cleanup();
+          return fakeMutationResult(
+            await validHwpx("| 성명 | 값 |\n| --- | --- |"),
             {
-              severity: "error",
-              code: "TEST_SECRET",
-              message: `invalid value ${secret}`,
+              operation: "fillHwpx",
+              filled: [{ label: "성명", value: secret }],
+              unmatched: [],
+              rejected: [],
             },
-          ],
-          entryCount: 0,
-        }),
-      },
+            {
+              ok: false,
+              issues: [{
+                message: `invalid value ${secret}`,
+                entry: `Contents/${secret}.xml`,
+              }],
+              entryCount: 1,
+            },
+            () => { writeCalls += 1; },
+          );
+        },
+      } as never,
     );
 
     assert.equal(result.isError, true);
+    assert.equal(details(result).code, "HWPX_VALIDATION_FAILED");
     assert.doesNotMatch(JSON.stringify(result), new RegExp(secret, "u"));
+    assert.equal(writeCalls, 0);
     await assertMissing(outputPath);
   });
 
   await t.test("post-fill parse error", async () => {
     const outputPath = join(root, "parse-error.hwpx");
-    let parseCalls = 0;
     const result = await handleHwpFillForm(
       {
         file_path: sourcePath,
@@ -962,20 +868,17 @@ test("hwp_fill_form masks submitted values from post-fill error results", async 
         mask_values: true,
       },
       {
-        parseDocument: async (input, options) => {
-          parseCalls += 1;
-          if (parseCalls === 1) return parse(input, options);
-          return {
-            success: false,
-            fileType: "hwpx",
-            code: "CORRUPTED",
-            error: `cannot parse ${secret}`,
-          };
+        async fill(snapshot: SnapshotLike) {
+          await snapshot.cleanup();
+          const error = new Error(`cannot parse ${secret}`);
+          Object.assign(error, { code: `PRIVATE_${secret}` });
+          throw error;
         },
-      },
+      } as never,
     );
 
     assert.equal(result.isError, true);
+    assert.equal(details(result).code, "FILL_ERROR");
     assert.doesNotMatch(JSON.stringify(result), new RegExp(secret, "u"));
     await assertMissing(outputPath);
   });
@@ -989,4 +892,49 @@ function syntheticHwpWithFlags(flags: number): Uint8Array {
   header.writeUInt32LE(flags, 36);
   CFB.utils.cfb_add(container, "FileHeader", header);
   return Uint8Array.from(CFB.write(container, { type: "buffer" }) as Buffer);
+}
+
+async function validHwpx(markdown: string): Promise<Uint8Array> {
+  return (await normalizeGeneratedFontReferences(
+    await markdownToHwpx(markdown),
+  )).bytes;
+}
+
+interface SnapshotLike {
+  readonly metadata?: unknown;
+  cleanup(): Promise<void>;
+}
+
+function fakeMutationResult(
+  bytes: Uint8Array,
+  resultMetadata: Record<string, unknown>,
+  validation: Readonly<{
+    ok: boolean;
+    issues: readonly Readonly<{ message: string; entry?: string }>[];
+    entryCount: number;
+  }>,
+  onWrite: () => void,
+) {
+  return {
+    payload: {
+      bytes: exactArrayBuffer(bytes),
+      metadata: resultMetadata,
+    },
+    resultMetadata,
+    validation,
+    async verifySourceUnchanged() {},
+    async writeOutputExclusively(path: string) {
+      onWrite();
+      await writeFile(path, bytes, { flag: "wx" });
+      return [path];
+    },
+    async cleanup() {},
+  };
+}
+
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
 }

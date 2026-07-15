@@ -14,6 +14,7 @@ import {
   MAX_HIGHLIGHT_TERMS,
   assertHighlightBudget,
 } from "../shared/resource-limits.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 
 export const HWP_RENDER_PREVIEW_TOOL_NAME = "hwp_render_preview";
 
@@ -37,8 +38,19 @@ export async function handleHwpRenderPreview(
     }
     filePath = resolveLocalPath(input.file_path, "file_path");
     outputPath = resolveLocalPath(input.output_svg_path, "output_svg_path");
+    const renderOptions = {
+      ...(input.reflow === undefined ? {} : { reflow: input.reflow }),
+      ...(input.highlight === undefined
+        ? {}
+        : { highlights: [...input.highlight] }),
+    };
 
-    const snapshot = await openDocumentSnapshot(filePath);
+    const snapshot = await openDocumentSnapshot(filePath, {
+      workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+        input: {},
+        options: renderOptions,
+      }),
+    });
     if (snapshot.metadata.shallowFormat.candidate === "unknown") {
       try {
         await snapshot.verifySourceUnchanged();
@@ -56,12 +68,7 @@ export async function handleHwpRenderPreview(
       }
     }
 
-    const rendered = await documentEngine.render(snapshot, {
-      ...(input.reflow === undefined ? {} : { reflow: input.reflow }),
-      ...(input.highlight === undefined
-        ? {}
-        : { highlights: [...input.highlight] }),
-    });
+    const rendered = await documentEngine.render(snapshot, renderOptions);
     const metadata = safeRecord(await writeDocumentRenderResultExclusively(
       rendered,
       outputPath,

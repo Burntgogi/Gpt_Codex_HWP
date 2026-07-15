@@ -9,6 +9,7 @@ import {
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 
 export const HWP_DETECT_FORMAT_TOOL_NAME = "hwp_detect_format";
 
@@ -31,7 +32,12 @@ export async function handleHwpDetectFormat(
 
   try {
     filePath = resolveLocalPath(input.file_path, "file_path");
-    const snapshot = await openDocumentSnapshot(filePath);
+    const snapshot = await openDocumentSnapshot(filePath, {
+      workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+        input: {},
+        options: {},
+      }),
+    });
     const detected = await documentEngine.detect(snapshot);
     const details: FormatDetails = {
       file_path: filePath,

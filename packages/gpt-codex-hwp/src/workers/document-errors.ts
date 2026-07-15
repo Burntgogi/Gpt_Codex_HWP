@@ -13,6 +13,14 @@ export const DOCUMENT_ENGINE_ERROR_CODES = [
   "SIGNED_DOCUMENT",
   "INVALID_HWP_FILE_HEADER",
   "INVALID_HWPX_PROTECTION_METADATA",
+  "SOURCE_HWPX_INVALID",
+  "PATCH_FAILED",
+  "FILL_VERIFICATION_FAILED",
+  "HWPX_VALIDATION_FAILED",
+  "ANCHOR_NOT_FOUND",
+  "AMBIGUOUS_ANCHOR",
+  "INVALID_IMAGE",
+  "UNSAFE_SVG",
 ] as const;
 
 export type DocumentEngineErrorCode =
@@ -36,6 +44,18 @@ export const DOCUMENT_ENGINE_ERROR_MESSAGES: Readonly<
   INVALID_HWP_FILE_HEADER: "The HWP file header is invalid and cannot be processed.",
   INVALID_HWPX_PROTECTION_METADATA:
     "The HWPX protection metadata is invalid and cannot be processed.",
+  SOURCE_HWPX_INVALID:
+    "The source HWPX failed structural validation and cannot be edited.",
+  PATCH_FAILED: "The document engine could not apply the requested patch.",
+  FILL_VERIFICATION_FAILED:
+    "The filled HWPX could not be verified as readable.",
+  HWPX_VALIDATION_FAILED:
+    "The generated HWPX candidate failed validation.",
+  ANCHOR_NOT_FOUND: "The requested image anchor was not found.",
+  AMBIGUOUS_ANCHOR:
+    "The image anchor is ambiguous; specify a zero-based occurrence.",
+  INVALID_IMAGE: "The image could not be decoded safely.",
+  UNSAFE_SVG: "The SVG image contains unsupported or unsafe content.",
 };
 
 export const DOCUMENT_ENGINE_STAGES = [

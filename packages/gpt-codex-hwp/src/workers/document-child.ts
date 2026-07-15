@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { BoundedFrameDecoder, encodeBoundedJsonFrame, parseBoundedJsonFrame } from "./bounded-frame.js";
 import {
   encodeDocumentResultSpool,
+  documentResultSpoolMetadata,
   initializeDocumentComputeBackend,
   isRhwpCapabilityError,
   type DocumentComputeProgress,
@@ -26,6 +27,7 @@ import {
   createInlineDocumentResultEvent,
   measureDocumentResultByteLength,
   resultSpoolEncoding,
+  validateDocumentResultSpoolMetadata,
   type DocumentEngineOperation,
   type DocumentResultPayload,
   type DocumentSpoolEligibleOperation,
@@ -81,25 +83,32 @@ async function runAfterParagraphInsert(
     request.input.image.transport !== "spool" ||
     request.input.image.descriptor !== 4) throw new Error("image inputs are not inherited");
   const source = readExact(3, request.input.document.sizeBytes);
-  await backend.assertMutableHwpx(source);
-  await runImageHelper(
+  const image = readExact(4, request.input.image.sizeBytes);
+  const prepared = await backend.prepareImageInsertion(
+    source,
+    image,
+    request.input.anchorText,
+    request.options.anchorOccurrence,
+  );
+  const metadata = await runImageHelper(
     request,
     request.input.document.sizeBytes,
-    request.input.image.sizeBytes,
+    prepared.image,
+    prepared.occurrence,
   );
   const sizeBytes = fstatSync(OUTPUT_DESCRIPTOR).size;
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 ||
     sizeBytes > MAX_DOCUMENT_ENGINE_RESULT_BYTES) throw new Error("result spool exceeds its limit");
-  const output = readExact(OUTPUT_DESCRIPTOR, sizeBytes);
-  await backend.validateExactHwpx(output);
+  const sha256 = hashDescriptor(OUTPUT_DESCRIPTOR, sizeBytes);
   sendControl({
     ...event(request, "spoolResult"),
     receipt: {
       descriptor: OUTPUT_DESCRIPTOR,
       operation: "insertImage",
-      encoding: "binary",
+      encoding: resultSpoolEncoding("insertImage"),
       sizeBytes,
-      sha256: createHash("sha256").update(new Uint8Array(output)).digest("hex"),
+      sha256,
+      metadata,
     },
   });
 }
@@ -107,8 +116,9 @@ async function runAfterParagraphInsert(
 async function runImageHelper(
   request: Extract<WireDocumentRequest, { operation: "insertImage" }>,
   sourceSize: number,
-  imageSize: number,
-): Promise<void> {
+  image: ArrayBuffer,
+  occurrence: number,
+): Promise<ReturnType<typeof afterParagraphMetadata>> {
   const script = fileURLToPath(new URL(
     "../../scripts/hwpx-safe-edit/insert_image.py",
     import.meta.url,
@@ -123,25 +133,27 @@ async function runImageHelper(
   ];
   const control = encodeBoundedJsonFrame({
     sourceSize,
-    imageSize,
+    imageSize: image.byteLength,
     anchorText: request.input.anchorText,
-    occurrence: request.options.anchorOccurrence ?? 0,
+    occurrence,
     ...(request.options.sizeMm === undefined
       ? {}
       : { widthMm: request.options.sizeMm }),
   }, IMAGE_HELPER_CONTROL_BYTES);
-  await new Promise<void>((resolvePromise, rejectPromise) => {
+  return new Promise((resolvePromise, rejectPromise) => {
     const helper = spawn(command, args, {
       shell: false,
       windowsHide: true,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe", 3, 4, 5],
+      env: minimalPythonEnvironment(),
+      stdio: ["pipe", "pipe", "pipe", 3, "pipe", 5],
     });
     let outputBytes = 0;
     let errorBytes = 0;
+    const outputChunks: Buffer[] = [];
     helper.stdout?.on("data", (chunk: Buffer) => {
       outputBytes += chunk.byteLength;
       if (outputBytes > 64 * 1024) helper.kill();
+      else outputChunks.push(Buffer.from(chunk));
     });
     helper.stderr?.on("data", (chunk: Buffer) => {
       errorBytes += chunk.byteLength;
@@ -149,14 +161,69 @@ async function runImageHelper(
     });
     helper.stdin?.on("error", () => undefined);
     helper.stdin?.end(control);
+    const imageInput = (
+      helper.stdio as unknown as Array<NodeJS.WritableStream | null>
+    )[4];
+    if (imageInput === null) {
+      helper.kill();
+      rejectPromise(createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR"));
+      return;
+    }
+    imageInput.on("error", () => undefined);
+    imageInput.end(Buffer.from(image));
     helper.once("error", rejectPromise);
     helper.once("exit", (code) => {
       if (code === 0 && outputBytes <= 64 * 1024 && errorBytes <= 64 * 1024) {
-        resolvePromise();
+        try {
+          resolvePromise(afterParagraphMetadata(Buffer.concat(outputChunks)));
+        } catch (error: unknown) {
+          rejectPromise(error);
+        }
       } else {
         rejectPromise(createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR"));
       }
     });
+  });
+}
+
+function afterParagraphMetadata(encoded: Uint8Array) {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded));
+  } catch {
+    throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+  }
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "ok",
+    "image_entry",
+    "item_id",
+    "section_index",
+    "removed_linesegarray",
+    "display_width_hu",
+    "display_height_hu",
+    "warnings",
+  ]) || value.ok !== true || typeof value.image_entry !== "string" ||
+    typeof value.item_id !== "string" ||
+    !isSafeNonNegativeInteger(value.section_index) ||
+    !isSafeNonNegativeInteger(value.removed_linesegarray) ||
+    !isSafePositiveInteger(value.display_width_hu) ||
+    !isSafePositiveInteger(value.display_height_hu) ||
+    !Array.isArray(value.warnings) ||
+    !value.warnings.every((warning) => typeof warning === "string")) {
+    throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+  }
+  return validateDocumentResultSpoolMetadata("insertImage", {
+    operation: "insertImage",
+    mode: "after-paragraph",
+    placement: {
+      imageEntry: value.image_entry,
+      itemId: value.item_id,
+      sectionIndex: value.section_index,
+      removedLinesegarray: value.removed_linesegarray,
+      displayWidthHu: value.display_width_hu,
+      displayHeightHu: value.display_height_hu,
+      warnings: [...value.warnings],
+    },
   });
 }
 
@@ -198,6 +265,17 @@ async function sendResult(
       encoding: resultSpoolEncoding(operation),
       sizeBytes: encoded.byteLength,
       sha256: createHash("sha256").update(encoded).digest("hex"),
+      ...(operation === "generateHwpx" || operation === "patchHwpx" ||
+          operation === "fillHwpx" || operation === "insertImage"
+        ? {
+            metadata: documentResultSpoolMetadata(
+              operation,
+              payload as DocumentResultPayload<
+                "generateHwpx" | "patchHwpx" | "fillHwpx" | "insertImage"
+              >,
+            ),
+          }
+        : {}),
     },
   });
 }
@@ -234,6 +312,62 @@ function readExact(fd: number, sizeBytes: number): ArrayBuffer {
   const exact = new Uint8Array(sizeBytes);
   exact.set(bytes);
   return exact.buffer;
+}
+
+function hashDescriptor(fd: number, sizeBytes: number): string {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafeSlow(Math.min(1024 * 1024, sizeBytes));
+  let position = 0;
+  while (position < sizeBytes) {
+    const requested = Math.min(buffer.byteLength, sizeBytes - position);
+    const count = readSync(fd, buffer, 0, requested, position);
+    if (count === 0) throw new Error("result spool is truncated");
+    hash.update(buffer.subarray(0, count));
+    position += count;
+  }
+  return hash.digest("hex");
+}
+
+function minimalPythonEnvironment(): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+  };
+  for (const key of [
+    "SystemRoot",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+  ]) {
+    const value = process.env[key];
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  const sorted = [...expected].sort();
+  return actual.length === sorted.length &&
+    actual.every((key, index) => key === sorted[index]);
+}
+
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSafePositiveInteger(value: unknown): value is number {
+  return isSafeNonNegativeInteger(value) && value > 0;
 }
 
 function readRequest(): Promise<unknown> {

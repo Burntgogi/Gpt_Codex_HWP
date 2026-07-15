@@ -13,6 +13,7 @@ import {
   type DocumentResultPayload,
   type DocumentSpoolEligibleOperation,
   type LogicalDocumentRequest,
+  type SafeJsonValue,
 } from "./document-protocol.js";
 
 export const WORKER_INPUT_MAX_BYTES = 64 * 1024 * 1024;
@@ -29,6 +30,35 @@ export interface DocumentExecutionSelection {
   readonly logicalBytes?: number;
   readonly estimatedWorkingSetBytes: number;
   readonly executionClass: DocumentExecutionClass;
+}
+
+export interface DocumentLogicalRequestContent {
+  readonly input: unknown;
+  readonly options: unknown;
+}
+
+export function documentLogicalRequestBytes(
+  request: DocumentLogicalRequestContent,
+): number {
+  try {
+    return Buffer.byteLength(JSON.stringify({
+      input: request.input,
+      options: request.options,
+    }), "utf8");
+  } catch {
+    throw resourceLimitError();
+  }
+}
+
+export function maxWorkerSnapshotBytesForRequest(
+  request: DocumentLogicalRequestContent,
+  imageBytes = 0,
+): number {
+  const reservedBytes = checkedByteSum(
+    documentLogicalRequestBytes(request),
+    imageBytes,
+  );
+  return Math.max(0, WORKER_INPUT_MAX_BYTES - reservedBytes);
 }
 
 export interface DocumentEngineRunOptions {
@@ -52,6 +82,7 @@ export interface IntegrityVerifiedResultSpool<
     encoding: DocumentResultSpoolEncoding;
     sizeBytes: number;
     sha256: string;
+    resultMetadata?: SafeJsonValue;
   }>;
   takeHandle(): Readonly<{ fd: number; sizeBytes: number }>;
   cleanup(): Promise<void>;
@@ -169,10 +200,7 @@ export function createIsolatedDocumentEngine(
       let estimatedWorkingSetBytes: number;
       let selected: DocumentExecutionTransport;
       try {
-        logicalBytes = Buffer.byteLength(JSON.stringify({
-          input: request.input,
-          options: request.options,
-        }), "utf8");
+        logicalBytes = documentLogicalRequestBytes(request);
         aggregateInputBytes = checkedByteSum(
           inputBytes,
           imageBytes,

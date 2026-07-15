@@ -22,7 +22,6 @@ import {
   parse,
   placeSealHwpx,
   validateHwpx,
-  type MarkdownToHwpxOptions,
   type ParseOptions,
   type ParseResult,
   type RenderSvgOptions,
@@ -31,11 +30,8 @@ import {
 } from "kordoc";
 
 import {
-  HwpxFontReferenceError,
   inspectHwpxFontReferences,
   normalizeGeneratedFontReferences,
-  type FontReferenceInspection,
-  type FontNormalizationResult,
 } from "../src/shared/hwpx-font-integrity.js";
 import { writeFilesExclusively } from "../src/shared/output.js";
 import {
@@ -81,35 +77,34 @@ interface ReadToolModule {
   ): Promise<CallToolResult>;
 }
 
-type GenerateHwpx = (
-  markdown: string,
-  options?: MarkdownToHwpxOptions,
-) => Promise<ArrayBuffer>;
-
-type ValidateDocument = (
-  input: ArrayBuffer | Uint8Array,
-) => Promise<ValidateResult>;
-
 type RenderDocument = (
   input: ArrayBuffer | Uint8Array,
   options?: RenderSvgOptions,
 ) => Promise<RenderSvgResult>;
 
-type NormalizeFonts = (
-  input: ArrayBuffer | Uint8Array,
-) => Promise<FontNormalizationResult>;
-
-type InspectFonts = (
-  input: ArrayBuffer | Uint8Array,
-) => Promise<FontReferenceInspection>;
-
-interface GenerationDependencies {
-  markdownToHwpx: GenerateHwpx;
-  normalizeGeneratedFontReferences: NormalizeFonts;
-  inspectHwpxFontReferences: InspectFonts;
-  validateHwpx: ValidateDocument;
-  renderHwpxToSvg: RenderDocument;
+interface GenerationFacadeOptions {
+  readonly preset?: "official" | "report" | "plan" | "notice" | "minutes";
+  readonly renderPreview?: boolean;
 }
+
+interface GenerationFacadeFixture {
+  readonly bytes: Uint8Array;
+  readonly validation?: Readonly<{
+    ok: boolean;
+    issues: readonly Readonly<{ code?: string; message: string; entry?: string }>[];
+    entryCount: number;
+  }>;
+  readonly resultMetadata?: Readonly<Record<string, unknown>>;
+  readonly preview?: Readonly<{
+    svg: string;
+    metadata: Readonly<Record<string, unknown>>;
+  }>;
+}
+
+type GenerateThroughFacade = (
+  markdown: string,
+  options: GenerationFacadeOptions,
+) => Promise<GenerationFacadeFixture>;
 
 interface WriteToolModule {
   handleHwpGenerateHwpx(
@@ -120,12 +115,11 @@ interface WriteToolModule {
       validate?: boolean;
       preview_svg_path?: string;
     },
-    dependencies?: Partial<GenerationDependencies>,
+    facade?: object,
   ): Promise<CallToolResult>;
   handleHwpValidate(
     input: { file_path: string },
-    validateDocument?: ValidateDocument,
-    inspectFontReferences?: InspectFonts,
+    facade?: object,
   ): Promise<CallToolResult>;
 }
 
@@ -393,16 +387,75 @@ function renderedSvg(svg = '<svg xmlns="http://www.w3.org/2000/svg"/>'): RenderS
   };
 }
 
-const passThroughFontNormalization: NormalizeFonts = async (input) => ({
-  bytes: input instanceof ArrayBuffer
-    ? new Uint8Array(input)
-    : Uint8Array.from(input),
-  changed: false,
-  changed_reference_count: 0,
-  changes: [],
-});
+function renderedDocumentPreview(
+  svg = '<svg xmlns="http://www.w3.org/2000/svg"/>',
+): Readonly<{ svg: string; metadata: Readonly<Record<string, unknown>> }> {
+  const rendered = renderedSvg(svg);
+  return {
+    svg: rendered.svg,
+    metadata: {
+      backend: "kordoc",
+      pageCount: rendered.pageCount,
+      width: rendered.width,
+      height: rendered.height,
+      warnings: [...rendered.warnings],
+      stats: { ...rendered.stats },
+    },
+  };
+}
 
-const acceptFontReferences: InspectFonts = async () => ({ issues: [] });
+function testGenerationFacade(generate: GenerateThroughFacade): object {
+  return {
+    async generate(markdown: string, options: GenerationFacadeOptions) {
+      const fixture = await generate(markdown, options);
+      const bytes = Uint8Array.from(fixture.bytes);
+      const resultMetadata = fixture.resultMetadata ?? {
+        operation: "generateHwpx",
+        fontNormalization: {
+          changed: false,
+          changedReferenceCount: 0,
+        },
+      };
+      let cleaned = false;
+      return {
+        payload: {
+          bytes: Uint8Array.from(bytes).buffer,
+          metadata: resultMetadata,
+        },
+        validation: fixture.validation ?? {
+          ok: true,
+          issues: [],
+          entryCount: 1,
+        },
+        resultMetadata,
+        ...(fixture.preview === undefined ? {} : { preview: fixture.preview }),
+        async verifySourceUnchanged() {},
+        async writeOutputExclusively(
+          outputPath: string,
+          outputOptions: Readonly<{
+            companionFiles?: readonly Readonly<{
+              path: string;
+              data: string | Uint8Array;
+            }>[];
+          }> = {},
+        ) {
+          assert.equal(cleaned, false);
+          return writeFilesExclusively([
+            { path: outputPath, data: bytes },
+            ...(outputOptions.companionFiles ?? []),
+          ]);
+        },
+        async cleanup() {
+          cleaned = true;
+        },
+      };
+    },
+  };
+}
+
+function codedError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code });
+}
 
 before(async () => {
   tmpRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-source-tests-"));
@@ -1188,17 +1241,17 @@ test("hwp_generate_hwpx normalizes real report font references before writing", 
   );
 });
 
-test("hwp_generate_hwpx validates, inspects, renders, and writes normalized bytes", async () => {
+test("hwp_generate_hwpx writes the facade-authorized normalized bytes and preview", async () => {
   const { handleHwpGenerateHwpx } = await loadWriteTool();
   const testRoot = join(tmpRoot, "generation-normalized-byte-flow");
   const outputPath = join(testRoot, "normalized.hwpx");
   const previewPath = join(testRoot, "normalized.svg");
-  const raw = Uint8Array.from([1, 2, 3]);
   const normalized = Uint8Array.from([9, 8, 7, 6]);
   generatedPaths.add(testRoot);
-  let validationCalls = 0;
-  let inspectionCalls = 0;
-  let renderCalls = 0;
+  const calls: Array<{
+    markdown: string;
+    options: GenerationFacadeOptions;
+  }> = [];
 
   const result = await handleHwpGenerateHwpx(
     {
@@ -1206,47 +1259,37 @@ test("hwp_generate_hwpx validates, inspects, renders, and writes normalized byte
       output_path: outputPath,
       preview_svg_path: previewPath,
     },
-    {
-      markdownToHwpx: async () => raw.buffer,
-      normalizeGeneratedFontReferences: async (input) => {
-        assert.deepEqual(new Uint8Array(input), raw);
-        return {
-          bytes: normalized,
-          changed: true,
-          changed_reference_count: 5,
-          changes: [],
-        };
-      },
-      inspectHwpxFontReferences: async (input) => {
-        inspectionCalls += 1;
-        assert.deepEqual(new Uint8Array(input), normalized);
-        return { issues: [] };
-      },
-      validateHwpx: async (input) => {
-        validationCalls += 1;
-        assert.deepEqual(new Uint8Array(input), normalized);
-        return { ok: true, issues: [], entryCount: 4 };
-      },
-      renderHwpxToSvg: async (input) => {
-        renderCalls += 1;
-        assert.deepEqual(new Uint8Array(input), normalized);
-        return renderedSvg();
-      },
-    },
+    testGenerationFacade(async (markdown, options) => {
+      calls.push({ markdown, options });
+      return {
+        bytes: normalized,
+        validation: { ok: true, issues: [], entryCount: 4 },
+        resultMetadata: {
+          operation: "generateHwpx",
+          fontNormalization: {
+            changed: true,
+            changedReferenceCount: 5,
+          },
+        },
+        preview: renderedDocumentPreview(),
+      };
+    }),
   );
 
   assert.equal(result.isError, false);
-  assert.equal(validationCalls, 1);
-  assert.equal(inspectionCalls, 1);
-  assert.equal(renderCalls, 1);
+  assert.deepEqual(calls, [{
+    markdown: "normalized flow",
+    options: { renderPreview: true },
+  }]);
   assert.deepEqual(Uint8Array.from(await readFile(outputPath)), normalized);
+  assert.equal(await readFile(previewPath, "utf8"), renderedSvg().svg);
   assert.deepEqual(structuredDetails(result).font_normalization, {
     changed: true,
     changed_reference_count: 5,
   });
 });
 
-test("hwp_generate_hwpx returns font normalization failures without artifacts", async () => {
+test("hwp_generate_hwpx preserves a typed isolated font-normalization failure", async () => {
   const { handleHwpGenerateHwpx } = await loadWriteTool();
   const testRoot = join(tmpRoot, "generation-font-normalization-failure");
   const outputPath = join(testRoot, "failed.hwpx");
@@ -1259,25 +1302,17 @@ test("hwp_generate_hwpx returns font normalization failures without artifacts", 
       output_path: outputPath,
       preview_svg_path: previewPath,
     },
-    {
-      markdownToHwpx: async () => arrayBufferOf(1, 2, 3),
-      normalizeGeneratedFontReferences: async () => {
-        throw new HwpxFontReferenceError("bad font table", [{
-          code: "FONT_ID_ZERO_MISSING",
-          path: "Contents/header.xml",
-          message: "fallback zero missing",
-        }]);
-      },
-      inspectHwpxFontReferences: acceptFontReferences,
-      validateHwpx: async () => ({ ok: true, issues: [], entryCount: 1 }),
-      renderHwpxToSvg: async () => renderedSvg(),
-    },
+    testGenerationFacade(async () => {
+      throw codedError(
+        "HWPX_FONT_REFERENCE_ERROR",
+        "Generated HWPX has invalid font references.",
+      );
+    }),
   );
   const details = structuredDetails(result);
 
   assert.equal(result.isError, true);
   assert.equal(details.code, "HWPX_FONT_REFERENCE_ERROR");
-  assert.ok(Array.isArray(details.issues));
   assert.equal(await pathExists(outputPath), false);
   assert.equal(await pathExists(previewPath), false);
 });
@@ -1296,56 +1331,43 @@ test("hwp_generate_hwpx maps every preset exactly and passes undefined when omit
 
   for (const preset of presets) {
     await t.test(preset, async () => {
-      const calls: Array<MarkdownToHwpxOptions | undefined> = [];
+      const calls: GenerationFacadeOptions[] = [];
       const outputPath = join(testRoot, `${preset}.hwpx`);
       const result = await handleHwpGenerateHwpx(
         { markdown: "# 테스트", output_path: outputPath, preset },
-        {
-          markdownToHwpx: async (_markdown, options) => {
-            calls.push(options);
-            return arrayBufferOf(1, 2, 3);
-          },
-          normalizeGeneratedFontReferences: passThroughFontNormalization,
-          inspectHwpxFontReferences: acceptFontReferences,
-          validateHwpx: async () => ({ ok: true, issues: [], entryCount: 3 }),
-          renderHwpxToSvg: async () => renderedSvg(),
-        },
+        testGenerationFacade(async (_markdown, options) => {
+          calls.push(options);
+          return { bytes: Uint8Array.from([1, 2, 3]) };
+        }),
       );
 
       assert.equal(result.isError, false);
-      assert.deepEqual(calls, [{ gongmun: { preset } }]);
+      assert.deepEqual(calls, [{ preset }]);
     });
   }
 
   await t.test("no preset", async () => {
-    const calls: Array<MarkdownToHwpxOptions | undefined> = [];
+    const calls: GenerationFacadeOptions[] = [];
     const outputPath = join(testRoot, "default.hwpx");
     const result = await handleHwpGenerateHwpx(
       { markdown: "# 테스트", output_path: outputPath },
-      {
-        markdownToHwpx: async (_markdown, options) => {
-          calls.push(options);
-          return arrayBufferOf(4, 5, 6);
-        },
-        normalizeGeneratedFontReferences: passThroughFontNormalization,
-        inspectHwpxFontReferences: acceptFontReferences,
-        validateHwpx: async () => ({ ok: true, issues: [], entryCount: 3 }),
-        renderHwpxToSvg: async () => renderedSvg(),
-      },
+      testGenerationFacade(async (_markdown, options) => {
+        calls.push(options);
+        return { bytes: Uint8Array.from([4, 5, 6]) };
+      }),
     );
 
     assert.equal(result.isError, false);
-    assert.deepEqual(calls, [undefined]);
+    assert.deepEqual(calls, [{}]);
   });
 });
 
-test("hwp_generate_hwpx rejects invalid generated bytes before rendering or writing", async () => {
+test("hwp_generate_hwpx rejects a facade-invalid candidate before writing", async () => {
   const { handleHwpGenerateHwpx } = await loadWriteTool();
   const testRoot = join(tmpRoot, "generation-invalid");
   const outputPath = join(testRoot, "invalid.hwpx");
   const previewPath = join(testRoot, "invalid.svg");
   generatedPaths.add(testRoot);
-  let renderCalls = 0;
 
   const result = await handleHwpGenerateHwpx(
     {
@@ -1353,26 +1375,22 @@ test("hwp_generate_hwpx rejects invalid generated bytes before rendering or writ
       output_path: outputPath,
       preview_svg_path: previewPath,
     },
-    {
-      markdownToHwpx: async () => arrayBufferOf(9, 8, 7),
-      normalizeGeneratedFontReferences: passThroughFontNormalization,
-      inspectHwpxFontReferences: acceptFontReferences,
-      validateHwpx: async () => ({
+    testGenerationFacade(async (_markdown, options) => {
+      assert.deepEqual(options, { renderPreview: true });
+      return {
+        bytes: Uint8Array.from([9, 8, 7]),
+        validation: {
         ok: false,
-        issues: [{ path: "Contents/section0.xml", message: "broken XML" }],
+          issues: [{ entry: "Contents/section0.xml", message: "broken XML" }],
         entryCount: 2,
-      }),
-      renderHwpxToSvg: async () => {
-        renderCalls += 1;
-        return renderedSvg();
-      },
-    },
+        },
+      };
+    }),
   );
   const details = structuredDetails(result);
 
   assert.equal(result.isError, true);
   assert.equal(details.code, "HWPX_VALIDATION_FAILED");
-  assert.equal(renderCalls, 0);
   assert.equal(await pathExists(outputPath), false);
   assert.equal(await pathExists(previewPath), false);
 });
@@ -1382,9 +1400,7 @@ test("hwp_generate_hwpx rejects validate false before generation", async () => {
   const testRoot = join(tmpRoot, "generation-skip-validation");
   const outputPath = join(testRoot, "unchecked.hwpx");
   generatedPaths.add(testRoot);
-  let validationCalls = 0;
-  let normalizationCalls = 0;
-  let inspectionCalls = 0;
+  let generateCalls = 0;
 
   const result = await handleHwpGenerateHwpx(
     {
@@ -1392,30 +1408,16 @@ test("hwp_generate_hwpx rejects validate false before generation", async () => {
       output_path: outputPath,
       validate: false,
     },
-    {
-      markdownToHwpx: async () => arrayBufferOf(11, 12, 13),
-      normalizeGeneratedFontReferences: async (input) => {
-        normalizationCalls += 1;
-        return passThroughFontNormalization(input);
-      },
-      inspectHwpxFontReferences: async (input) => {
-        inspectionCalls += 1;
-        return acceptFontReferences(input);
-      },
-      validateHwpx: async () => {
-        validationCalls += 1;
-        return { ok: false, issues: [{ message: "must not run" }], entryCount: 0 };
-      },
-      renderHwpxToSvg: async () => renderedSvg(),
-    },
+    testGenerationFacade(async () => {
+      generateCalls += 1;
+      return { bytes: Uint8Array.from([11, 12, 13]) };
+    }),
   );
   const details = structuredDetails(result);
 
   assert.equal(result.isError, true);
   assert.equal(details.code, "VALIDATION_REQUIRED");
-  assert.equal(validationCalls, 0);
-  assert.equal(normalizationCalls, 0);
-  assert.equal(inspectionCalls, 0);
+  assert.equal(generateCalls, 0);
   assert.equal(await pathExists(outputPath), false);
 });
 
@@ -1424,16 +1426,13 @@ test("hwp_generate_hwpx preserves pre-existing output and preview files", async 
   const testRoot = join(tmpRoot, "generation-conflicts");
   generatedPaths.add(testRoot);
   await mkdir(testRoot, { recursive: true });
-  const dependencies: Partial<GenerationDependencies> = {
-    markdownToHwpx: async () => arrayBufferOf(21, 22, 23),
-    normalizeGeneratedFontReferences: passThroughFontNormalization,
-    inspectHwpxFontReferences: acceptFontReferences,
-    validateHwpx: async () => ({ ok: true, issues: [], entryCount: 4 }),
-    renderHwpxToSvg: async (_input, options) => {
-      assert.deepEqual(options, { reflow: true });
-      return renderedSvg();
-    },
-  };
+  const facade = testGenerationFacade(async (_markdown, options) => ({
+    bytes: Uint8Array.from([21, 22, 23]),
+    validation: { ok: true, issues: [], entryCount: 4 },
+    ...(options.renderPreview === true
+      ? { preview: renderedDocumentPreview() }
+      : {}),
+  }));
 
   await t.test("main output conflict", async () => {
     const outputPath = join(testRoot, "existing.hwpx");
@@ -1442,7 +1441,7 @@ test("hwp_generate_hwpx preserves pre-existing output and preview files", async 
 
     const result = await handleHwpGenerateHwpx(
       { markdown: "test", output_path: outputPath },
-      dependencies,
+      facade,
     );
 
     assert.equal(result.isError, true);
@@ -1462,7 +1461,7 @@ test("hwp_generate_hwpx preserves pre-existing output and preview files", async 
         output_path: outputPath,
         preview_svg_path: previewPath,
       },
-      dependencies,
+      facade,
     );
 
     assert.equal(result.isError, true);
@@ -1472,14 +1471,13 @@ test("hwp_generate_hwpx preserves pre-existing output and preview files", async 
   });
 });
 
-test("hwp_generate_hwpx renders the same generated bytes with reflow before creating outputs", async () => {
+test("hwp_generate_hwpx requests an isolated preview before creating outputs", async () => {
   const { handleHwpGenerateHwpx } = await loadWriteTool();
   const testRoot = join(tmpRoot, "generation-preview-failure");
   const outputPath = join(testRoot, "not-created.hwpx");
   const previewPath = join(testRoot, "not-created.svg");
   generatedPaths.add(testRoot);
-  const generatedBytes = arrayBufferOf(31, 32, 33, 34);
-  let received: Uint8Array | undefined;
+  const calls: GenerationFacadeOptions[] = [];
 
   const result = await handleHwpGenerateHwpx(
     {
@@ -1487,25 +1485,15 @@ test("hwp_generate_hwpx renders the same generated bytes with reflow before crea
       output_path: outputPath,
       preview_svg_path: previewPath,
     },
-    {
-      markdownToHwpx: async () => generatedBytes,
-      normalizeGeneratedFontReferences: passThroughFontNormalization,
-      inspectHwpxFontReferences: acceptFontReferences,
-      validateHwpx: async () => ({ ok: true, issues: [], entryCount: 4 }),
-      renderHwpxToSvg: async (input, options) => {
-        received = new Uint8Array(
-          input instanceof ArrayBuffer ? input : input.buffer,
-          input instanceof ArrayBuffer ? 0 : input.byteOffset,
-          input instanceof ArrayBuffer ? input.byteLength : input.byteLength,
-        );
-        assert.deepEqual(options, { reflow: true });
-        throw new Error("preview failed before write");
-      },
-    },
+    testGenerationFacade(async (_markdown, options) => {
+      calls.push(options);
+      throw codedError("HWPX_RENDER_FAILED", "Preview rendering failed.");
+    }),
   );
 
   assert.equal(result.isError, true);
-  assert.deepEqual(received, new Uint8Array(generatedBytes));
+  assert.deepEqual(calls, [{ renderPreview: true }]);
+  assert.equal(structuredDetails(result).code, "HWPX_RENDER_FAILED");
   assert.equal(await pathExists(outputPath), false);
   assert.equal(await pathExists(previewPath), false);
 });
@@ -1579,29 +1567,30 @@ test("hwp_validate reports invalid font references and accepts normalized refere
   });
 });
 
-test("hwp_validate skips font inspection for a structurally invalid non-HWPX input", async () => {
+test("hwp_validate returns a normal invalid result for shallow unknown bytes without facade dispatch", async () => {
   const { handleHwpValidate } = await loadWriteTool();
   const invalidPath = join(tmpRoot, "font-inspection-skip.bin");
   generatedPaths.add(invalidPath);
   await writeFile(invalidPath, "not a HWPX package");
-  let inspectionCalls = 0;
+  let facadeCalls = 0;
 
   const result = await handleHwpValidate(
     { file_path: invalidPath },
-    async () => ({
-      ok: false,
-      issues: [{ path: "mimetype", message: "not HWPX" }],
-      entryCount: 0,
-    }),
-    async () => {
-      inspectionCalls += 1;
-      return { issues: [] };
+    {
+      async validate() {
+        facadeCalls += 1;
+        throw new Error("shallow unknown input must not reach the facade");
+      },
     },
   );
 
   assert.equal(result.isError, false);
   assert.equal(structuredDetails(result).ok, false);
-  assert.equal(inspectionCalls, 0);
+  assert.equal(facadeCalls, 0);
+  assert.deepEqual(structuredDetails(result).issues, [{
+    code: "UNSUPPORTED_FORMAT",
+    message: "The document is not a valid HWPX package.",
+  }]);
 });
 
 test("hwp_validate reports a missing exact path as a tool error", async () => {
@@ -1612,7 +1601,7 @@ test("hwp_validate reports a missing exact path as a tool error", async () => {
   const details = structuredDetails(result);
 
   assert.equal(result.isError, true);
-  assert.equal(details.code, "ENOENT");
+  assert.equal(details.code, "SNAPSHOT_OPEN_FAILED");
   assert.equal(details.file_path, missingPath);
 });
 

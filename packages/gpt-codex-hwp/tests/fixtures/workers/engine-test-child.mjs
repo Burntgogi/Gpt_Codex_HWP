@@ -270,6 +270,9 @@ function sendSpoolResult(request, bytes, tamperMode = "spool-result") {
       sha256: tamperMode === "spool-hash-tamper"
         ? "0".repeat(64)
         : createHash("sha256").update(bytes).digest("hex"),
+      ...(spoolMetadata(request.operation) === undefined
+        ? {}
+        : { metadata: spoolMetadata(request.operation) }),
     },
   });
 }
@@ -277,7 +280,47 @@ function sendSpoolResult(request, bytes, tamperMode = "spool-result") {
 function spoolEncoding(operation) {
   if (operation === "parse") return "document-result-v1";
   if (operation === "render") return "render-result-v1";
-  return "binary";
+  return "hwpx-result-v1";
+}
+
+function spoolMetadata(operation) {
+  switch (operation) {
+    case "generateHwpx":
+      return {
+        operation,
+        fontNormalization: { changed: false, changedReferenceCount: 0 },
+      };
+    case "patchHwpx":
+      return {
+        operation,
+        applied: 1,
+        skipped: [],
+        verification: {
+          stats: { added: 0, removed: 0, modified: 0, unchanged: 1 },
+          diffs: [],
+        },
+      };
+    case "fillHwpx":
+      return { operation, filled: [], unmatched: [], rejected: [] };
+    case "insertImage":
+      return {
+        operation,
+        mode: "seal-anchor",
+        placed: [{
+          anchor: "anchor",
+          occurrence: 0,
+          sectionIndex: 0,
+          mode: "overlap",
+          posXMm: 0,
+          posYMm: 0,
+          sizeMm: 10,
+          entry: "BinData/image1.png",
+          warnings: [],
+        }],
+      };
+    default:
+      return undefined;
+  }
 }
 
 function sendControl(value) {

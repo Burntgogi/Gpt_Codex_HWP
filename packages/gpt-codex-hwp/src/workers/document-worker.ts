@@ -5,6 +5,7 @@ import {
 
 import {
   DOCUMENT_ENGINE_ERROR_MESSAGES,
+  createDocumentEngineRunError,
   isDocumentEngineRunError,
   normalizeDocumentEngineError,
   type DocumentEnginePublicError,
@@ -16,6 +17,7 @@ import {
 } from "./document-compute-backend.js";
 import {
   DOCUMENT_PROTOCOL_VERSION,
+  maximumWorkerInlineResultBytes,
   measureDocumentResultByteLength,
   type DocumentEngineOperation,
   type DocumentResultPayload,
@@ -57,6 +59,12 @@ async function run(value: unknown): Promise<void> {
       request.operation,
       payload,
     );
+    if (outputByteLength > maximumWorkerInlineResultBytes(request.operation)) {
+      throw createDocumentEngineRunError("ENGINE_RESOURCE_LIMIT", {
+        stage: request.operation,
+        remediation: "reduce_input",
+      });
+    }
     port.postMessage(
       {
         ...event(request, "result"),

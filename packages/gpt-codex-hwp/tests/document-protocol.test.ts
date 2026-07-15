@@ -12,6 +12,8 @@ interface ProtocolApi {
   readonly MAX_INLINE_MARKDOWN_CHARACTERS: number;
   readonly MAX_DOCUMENT_PARSE_MARKDOWN_BYTES: number;
   readonly MAX_DOCUMENT_RENDER_SVG_BYTES: number;
+  readonly MAX_DOCUMENT_ENGINE_RESULT_BYTES: number;
+  readonly MAX_WORKER_INLINE_HWPX_RESULT_BYTES: number;
   readonly MAX_CHILD_INLINE_RESULT_BYTES: number;
   validateLogicalDocumentRequest(value: unknown): Readonly<Record<string, unknown>>;
   validateWireDocumentRequest(value: unknown): Readonly<Record<string, unknown>>;
@@ -33,6 +35,7 @@ interface ProtocolApi {
     payload: unknown,
   ): Readonly<Record<string, unknown>>;
   measureDocumentResultByteLength(operation: string, payload: unknown): number;
+  maximumWorkerInlineResultBytes(operation: string): number;
 }
 
 const protocol = protocolModule as unknown as ProtocolApi;
@@ -198,9 +201,21 @@ test("document engine protocol preserves render reflow and highlight limits", ()
   }
 });
 
-test("document engine protocol removes invented generation and patch options", () => {
+test("document engine protocol preserves presets and removes invented generation and patch options", () => {
+  for (const preset of [
+    "official",
+    "report",
+    "plan",
+    "notice",
+    "minutes",
+  ]) {
+    assert.doesNotThrow(() => protocol.validateLogicalDocumentRequest(
+      request("generateHwpx", { markdown: "# ok" }, { preset }),
+    ));
+  }
   for (const logical of [
     request("generateHwpx", { markdown: "# ok" }, { compressionLevel: 6 }),
+    request("generateHwpx", { markdown: "# ok" }, { preset: "unknown" }),
     request("patchHwpx", { markdown: "changed" }, { compressionLevel: 6 }),
     request("patchHwpx", { markdown: "changed" }, { verify: false }),
   ]) {
@@ -410,6 +425,53 @@ test("document child protocol validates exact fd 5 spool receipts by operation",
     { ...event.receipt, path: "C:\\private\\output.hwpx" },
   ]) {
     const rejected = protocol.createChildDocumentEventValidator(requestId, "render");
+    rejected.accept(readyEvent());
+    assertProtocolError(() => rejected.accept({ ...event, receipt }));
+  }
+});
+
+test("document child protocol preserves bounded versioned HWPX mutation metadata", () => {
+  const metadata = {
+    operation: "patchHwpx",
+    applied: 2,
+    skipped: [],
+    verification: {
+      stats: { added: 0, removed: 0, modified: 0, unchanged: 3 },
+      diffs: [],
+    },
+  };
+  const event = {
+    protocolVersion: 1,
+    requestId,
+    type: "spoolResult",
+    receipt: {
+      descriptor: 5,
+      operation: "patchHwpx",
+      encoding: "hwpx-result-v1",
+      sizeBytes: 9 * 1024 * 1024,
+      sha256: "b".repeat(64),
+      metadata,
+    },
+  };
+  const accepted = protocol.createChildDocumentEventValidator(
+    requestId,
+    "patchHwpx",
+  );
+  accepted.accept(readyEvent());
+  assert.deepEqual(accepted.accept(event), event);
+
+  for (const receipt of [
+    { ...event.receipt, encoding: "binary" },
+    { ...event.receipt, metadata: { ...metadata, unexpected: true } },
+    { ...event.receipt, metadata: { ...metadata, operation: "fillHwpx" } },
+    { ...event.receipt, metadata: { ...metadata, applied: -1 } },
+    { ...event.receipt, metadata: { ...metadata, skipped: "none" } },
+    { ...event.receipt, metadata: { ...metadata, verification: { stats: {} } } },
+  ]) {
+    const rejected = protocol.createChildDocumentEventValidator(
+      requestId,
+      "patchHwpx",
+    );
     rejected.accept(readyEvent());
     assertProtocolError(() => rejected.accept({ ...event, receipt }));
   }
@@ -766,11 +828,43 @@ test("document engine protocol keeps parse and render delivery ceilings distinct
   );
 });
 
+test("worker inline HWPX results have a separate bounded ceiling before parent transfer", () => {
+  assert.equal(protocol.MAX_WORKER_INLINE_HWPX_RESULT_BYTES, 64 * 1024 * 1024);
+  for (const operation of [
+    "generateHwpx",
+    "patchHwpx",
+    "fillHwpx",
+    "insertImage",
+  ]) {
+    assert.equal(
+      protocol.maximumWorkerInlineResultBytes(operation),
+      protocol.MAX_WORKER_INLINE_HWPX_RESULT_BYTES,
+    );
+  }
+  assert.equal(
+    protocol.maximumWorkerInlineResultBytes("parse"),
+    protocol.MAX_DOCUMENT_ENGINE_RESULT_BYTES,
+  );
+
+  const validator = protocol.createDocumentEventValidator(requestId, "generateHwpx");
+  validator.accept(readyEvent());
+  assertProtocolError(() => validator.accept(resultEvent(
+    { bytes: new ArrayBuffer(1) },
+    protocol.MAX_WORKER_INLINE_HWPX_RESULT_BYTES + 1,
+  )));
+});
+
 test("document engine protocol validates exact validation results", () => {
+  assert.doesNotThrow(() => resultFor("validateHwpx", {
+    ok: false,
+    issues: [{ code: "FONT_REF_INVALID", message: "invalid font", entry: "Contents/header.xml" }],
+    entryCount: 1,
+  }));
   for (const payload of [
     { ok: true, issues: [], entryCount: 0, path: "C:\\private\\source.hwpx" },
     { ok: true, issues: [{ message: "x", path: "secret" }], entryCount: 1 },
     { ok: true, issues: [{ message: "x", entry: "C:\\private\\a.xml" }], entryCount: 1 },
+    { ok: true, issues: [{ code: "invalid code", message: "x" }], entryCount: 1 },
     { ok: true, issues: [], entryCount: -1 },
   ]) {
     assertProtocolError(() => resultFor("validateHwpx", payload));

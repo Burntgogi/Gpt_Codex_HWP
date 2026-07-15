@@ -1,42 +1,23 @@
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   lstat,
-  mkdtemp,
-  readFile,
-  rm,
   stat,
-  writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { DOMParser, type Element as XmlElement } from "@xmldom/xmldom";
-import JSZip from "jszip";
-import {
-  detectFormat,
-  detectZipFormat,
-  parse,
-  placeSealHwpx,
-  renderHwpxToSvg,
-  scanSectionXml,
-  validateHwpx,
-  type ParseOptions,
-  type ParseResult,
-  type IRBlock,
-  type PlaceSealResult,
-  type RenderSvgOptions,
-  type RenderSvgResult,
-  type ScanParagraph,
-  type ScanTable,
-  type ValidateResult,
-} from "kordoc";
 import sharp from "sharp";
 import { z } from "zod";
 
+import {
+  defaultDocumentEngineFacade,
+  type DocumentEngineFacade,
+} from "../shared/document-engine.js";
+import {
+  openDocumentSnapshot,
+  type DocumentSnapshot,
+  type OpenDocumentSnapshotOptions,
+} from "../shared/document-snapshot.js";
 import {
   OutputConflictError,
   PathAliasError,
@@ -49,31 +30,20 @@ import {
 } from "../shared/document-contract.js";
 import {
   MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES,
-  readFileBounded,
 } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { inspectExactDocumentProtection } from "../shared/protection.js";
 import { toolError, toolSuccess } from "../shared/result.js";
-import {
-  loadBoundedHwpxZip,
-  type BoundedZipLoader,
-} from "../shared/zip-preflight.js";
+import type { DocumentResultPayload, SafeJsonValue } from "../workers/document-protocol.js";
 
 export const HWP_CREATE_SVG_ASSET_TOOL_NAME = "hwp_create_svg_asset";
 export const HWP_INSERT_IMAGE_TOOL_NAME = "hwp_insert_image";
 
 const MAX_SVG_BYTES = 1_000_000;
 const MAX_SVG_DIMENSION = 4_096;
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGE_DIMENSION = 10_000;
 const MAX_IMAGE_PIXELS = 40_000_000;
 const MAX_ANCHOR_CHARACTERS = 10_000;
 const PNG_MAGIC = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-interface FileSystemIdentity {
-  device: bigint;
-  inode: bigint;
-}
 
 export interface HwpCreateSvgAssetInput {
   prompt_or_spec: string;
@@ -96,13 +66,6 @@ export interface SvgAssetDependencies {
   renderSvgToPng: (svg: string) => Promise<Uint8Array>;
 }
 
-export interface ImageAssetDependencies {
-  parseDocument: (input: string | ArrayBuffer | Buffer, options?: ParseOptions) => Promise<ParseResult>;
-  placeSeal: typeof placeSealHwpx;
-  validateDocument: (input: ArrayBuffer | Uint8Array) => Promise<ValidateResult>;
-  renderDocument: (input: ArrayBuffer | Uint8Array, options?: RenderSvgOptions) => Promise<RenderSvgResult>;
-  loadZip: BoundedZipLoader;
-}
 
 const defaultSvgDependencies: SvgAssetDependencies = {
   validateSvg: async (svg) => {
@@ -116,13 +79,6 @@ const defaultSvgDependencies: SvgAssetDependencies = {
       .toBuffer(),
 };
 
-const defaultImageDependencies: ImageAssetDependencies = {
-  parseDocument: parse,
-  placeSeal: placeSealHwpx,
-  validateDocument: validateHwpx,
-  renderDocument: renderHwpxToSvg,
-  loadZip: async (bytes) => await JSZip.loadAsync(bytes),
-};
 
 export async function handleHwpCreateSvgAsset(
   input: HwpCreateSvgAssetInput,
@@ -189,20 +145,17 @@ export async function handleHwpCreateSvgAsset(
 
 export async function handleHwpInsertImage(
   input: HwpInsertImageInput,
-  dependencyOverrides: Partial<ImageAssetDependencies> = {},
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
   let imagePath: string | undefined;
   let outputPath: string | undefined;
-  let workDirectory: string | undefined;
-  let workDirectoryIdentity: FileSystemIdentity | undefined;
 
   try {
     filePath = resolveLocalPath(input.file_path, "file_path");
     imagePath = resolveLocalPath(input.image_path, "image_path");
     outputPath = resolveLocalPath(input.output_path, "output_path");
     assertHwpxOutputPath(outputPath);
-    const dependencies = { ...defaultImageDependencies, ...dependencyOverrides };
     if (input.anchor_text.trim().length === 0) {
       throw new AssetError("ANCHOR_REQUIRED", "anchor_text must not be empty.");
     }
@@ -218,153 +171,83 @@ export async function handleHwpInsertImage(
     if (input.size_mm !== undefined && (!Number.isFinite(input.size_mm) || input.size_mm < 1 || input.size_mm > 200)) {
       throw new AssetError("INVALID_IMAGE_SIZE", "size_mm must be between 1 and 200.");
     }
-
-    const [sourceBytes, originalImageBytes] = await Promise.all([
-      readFileBounded(filePath, "source document"),
-      readFileBounded(imagePath, "source image", MAX_IMAGE_FILE_BYTES),
-    ]);
-    const sourceHash = sha256(sourceBytes);
-    await preflightOutputPath(outputPath, [filePath, imagePath]);
-    const sourceBuffer = exactArrayBuffer(sourceBytes);
-    await assertEditableHwpx(sourceBuffer);
-    const zip = await loadBoundedHwpxZip(sourceBytes, dependencies.loadZip);
-    const protection = await inspectExactDocumentProtection(sourceBytes, "hwpx");
-    if (protection !== undefined) {
-      throw new AssetError(protection.code, protection.error);
-    }
-
-    workDirectory = await mkdtemp(join(tmpdir(), "hwp-image-insert-"));
-    workDirectoryIdentity = await fileSystemIdentity(workDirectory);
-    const sourceSnapshotPath = join(workDirectory, "source-snapshot.hwpx");
-    await writeFile(sourceSnapshotPath, sourceBytes, { flag: "wx" });
-
-    const sourceValidation = await dependencies.validateDocument(sourceBuffer);
-    if (!sourceValidation.ok) {
-      throw new AssetError(
-        "SOURCE_HWPX_INVALID",
-        "Source HWPX failed structural validation and was not edited.",
-        validationDetails(sourceValidation),
-      );
-    }
-    const preflight = await dependencies.parseDocument(sourceBuffer);
-    if (!preflight.success) {
-      throw new AssetError(preflight.code ?? "PARSE_ERROR", preflight.error);
-    }
-    const anchor = await selectAnchor(
-      zip,
-      input.anchor_text,
-      input.anchor_occurrence,
-    );
-    const normalized = await normalizeImage(originalImageBytes);
     const mode = input.mode ?? "after-paragraph";
-    const normalizedImagePath = join(workDirectory, "normalized.png");
-    const candidatePath = join(workDirectory, "candidate.hwpx");
-    await writeFile(normalizedImagePath, normalized.bytes, { flag: "wx" });
-
-    let candidate: Uint8Array;
-    let imageEntry: string;
-    let changedSectionEntry: string | undefined;
-    let placement: Record<string, unknown> | undefined;
-    const warnings: string[] = [];
-
-    if (mode === "seal-anchor") {
-      const placed = await dependencies.placeSeal(sourceBuffer, [{
-        anchor: input.anchor_text,
-        occurrence: anchor.occurrence,
-        image: normalized.bytes,
-        ext: "png",
-        sizeMm: input.size_mm,
-      }]);
-      const firstPlacement = placed.placed[0];
-      if (firstPlacement === undefined) {
-        throw new AssetError("IMAGE_INSERTION_FAILED", "Kordoc returned no seal placement.");
-      }
-      candidate = new Uint8Array(placed.buffer);
-      imageEntry = firstPlacement.entry;
-      placement = { ...firstPlacement };
-      warnings.push(...(firstPlacement.warnings ?? []));
-      await writeFile(candidatePath, candidate, { flag: "wx" });
-    } else if (mode === "after-paragraph") {
-      const script = helperScriptPath("insert_image.py");
-      const args = [
-        sourceSnapshotPath,
-        candidatePath,
-        "--image",
-        normalizedImagePath,
-        "--anchor-text",
-        input.anchor_text,
-        "--occurrence",
-        String(anchor.occurrence),
-      ];
-      if (input.size_mm !== undefined) {
-        args.push("--width-mm", String(input.size_mm));
-      }
-      const inserted = await runPython(script, args);
-      const metadata = parseHelperJson(inserted.stdout);
-      if (metadata.ok !== true || typeof metadata.image_entry !== "string") {
-        throw new AssetError("IMAGE_INSERTION_FAILED", "Image helper returned incomplete metadata.");
-      }
-      imageEntry = metadata.image_entry;
-      if (!Number.isSafeInteger(metadata.section_index) || Number(metadata.section_index) < 0) {
-        throw new AssetError("IMAGE_INSERTION_FAILED", "Image helper returned an invalid section index.");
-      }
-      changedSectionEntry = `Contents/section${String(metadata.section_index)}.xml`;
-      if (Array.isArray(metadata.warnings)) {
-        warnings.push(...metadata.warnings.filter((value): value is string => typeof value === "string"));
-      }
-      candidate = await readFile(candidatePath);
-    } else {
-      throw new AssetError("INVALID_IMAGE_MODE", `Unsupported image insertion mode: ${String(mode)}`);
-    }
-
-    if (mode === "after-paragraph") {
-      await runVerifier(candidatePath, sourceSnapshotPath, {
-        changed: ["Contents/content.hpf", changedSectionEntry!],
-        added: [imageEntry],
-      });
-    } else {
-      await runVerifier(candidatePath);
-    }
-    const validation = await dependencies.validateDocument(candidate);
-    if (!validation.ok) {
-      throw new AssetError("HWPX_VALIDATION_FAILED", "Inserted HWPX failed structural validation.", validation);
-    }
-    const reparsed = await dependencies.parseDocument(exactArrayBuffer(candidate));
-    if (!reparsed.success) {
-      throw new AssetError(reparsed.code ?? "PARSE_ERROR", reparsed.error);
-    }
-    const beforeImages = countImages(preflight.blocks);
-    const afterImages = countImages(reparsed.blocks);
-    if (afterImages !== beforeImages + 1) {
+    if (mode !== "after-paragraph" && mode !== "seal-anchor") {
       throw new AssetError(
-        "IMAGE_COUNT_MISMATCH",
-        `Expected one inserted image, but image count changed from ${beforeImages} to ${afterImages}.`,
+        "INVALID_IMAGE_MODE",
+        `Unsupported image insertion mode: ${String(mode)}`,
       );
     }
-    const preview = await dependencies.renderDocument(candidate, { reflow: true });
-    if (preview.svg.trim().length === 0) {
-      throw new AssetError("PREVIEW_VALIDATION_FAILED", "Inserted HWPX rendered an empty SVG preview.");
-    }
-    warnings.push(...preview.warnings);
-
-    if (
-      sha256(await readFileBounded(filePath, "source document")) !== sourceHash
-    ) {
-      throw new AssetError("SOURCE_CHANGED", "The source document changed during image insertion.");
-    }
-    await writeFilesExclusively(
-      [{ path: outputPath, data: candidate }],
-      { sourcePaths: [filePath, imagePath] },
+    await preflightOutputPath(outputPath, [filePath, imagePath]);
+    const [documentSnapshot, imageSnapshot] = await openImageInsertionSnapshots(
+      filePath,
+      imagePath,
     );
+    if (documentSnapshot.metadata.shallowFormat.candidate !== "hwpx") {
+      await Promise.allSettled([
+        documentSnapshot.verifySourceUnchanged(),
+        imageSnapshot.verifySourceUnchanged(),
+      ]);
+      await Promise.allSettled([
+        documentSnapshot.cleanup(),
+        imageSnapshot.cleanup(),
+      ]);
+      throw new AssetError(
+        "UNSUPPORTED_IMAGE_DOCUMENT_FORMAT",
+        "Image insertion supports only a valid HWPX package.",
+      );
+    }
 
-    return toolSuccess("Inserted a PNG image into a structurally validated HWPX document.", {
-      output_path: outputPath,
-      mode,
-      image_entry: imageEntry,
-      ...(placement === undefined ? {} : { placement }),
-      warnings,
-      validation: validationDetails(validation),
-    });
+    let inserted;
+    try {
+      inserted = await facade.insertImage(
+        documentSnapshot,
+        imageSnapshot,
+        input.anchor_text,
+        {
+          mode,
+          ...(input.size_mm === undefined ? {} : { sizeMm: input.size_mm }),
+          ...(input.anchor_occurrence === undefined
+            ? {}
+            : { anchorOccurrence: input.anchor_occurrence }),
+        },
+      );
+    } catch (error: unknown) {
+      await Promise.allSettled([
+        documentSnapshot.cleanup(),
+        imageSnapshot.cleanup(),
+      ]);
+      throw error;
+    }
+
+    try {
+      const metadata = readImageInsertionMetadata(inserted.resultMetadata, mode);
+      if (!inserted.validation.ok) {
+        throw new AssetError(
+          "HWPX_VALIDATION_FAILED",
+          "Inserted HWPX failed structural validation.",
+          validationDetails(inserted.validation),
+        );
+      }
+      await inserted.writeOutputExclusively(outputPath, {
+        sourcePaths: [filePath, imagePath],
+      });
+      return toolSuccess(
+        "Inserted a PNG image into a structurally validated HWPX document.",
+        {
+          output_path: outputPath,
+          mode,
+          image_entry: metadata.imageEntry,
+          ...(metadata.placement === undefined
+            ? {}
+            : { placement: metadata.placement }),
+          warnings: metadata.warnings,
+          validation: validationDetails(inserted.validation),
+        },
+      );
+    } finally {
+      await inserted.cleanup();
+    }
   } catch (error: unknown) {
     const message = errorMessage(error);
     if (error instanceof HwpxOutputRequiredError) {
@@ -384,13 +267,29 @@ export async function handleHwpInsertImage(
       output_path: outputPath ?? safeResolvedPath(input.output_path),
       ...extra,
     });
-  } finally {
-    if (workDirectory !== undefined && workDirectoryIdentity !== undefined) {
-      await removeOwnedTemporaryDirectory(
-        workDirectory,
-        workDirectoryIdentity,
-      ).catch(() => undefined);
-    }
+  }
+}
+
+type SnapshotOpener = (
+  path: string,
+  options?: OpenDocumentSnapshotOptions,
+) => Promise<DocumentSnapshot>;
+
+export async function openImageInsertionSnapshots(
+  documentPath: string,
+  imagePath: string,
+  opener: SnapshotOpener = openDocumentSnapshot,
+): Promise<readonly [DocumentSnapshot, DocumentSnapshot]> {
+  const documentSnapshot = await opener(documentPath, { workerInputMaxBytes: 0 });
+  try {
+    const imageSnapshot = await opener(imagePath, {
+      workerInputMaxBytes: 0,
+      maximumBytes: MAX_IMAGE_FILE_BYTES,
+    });
+    return [documentSnapshot, imageSnapshot];
+  } catch (error: unknown) {
+    await documentSnapshot.cleanup();
+    throw error;
   }
 }
 
@@ -438,149 +337,6 @@ export function registerHwpInsertImage(server: McpServer): void {
     },
     (args) => handleHwpInsertImage(args),
   );
-}
-
-interface NormalizedImage {
-  bytes: Uint8Array;
-  width: number;
-  height: number;
-}
-
-async function normalizeImage(input: Uint8Array): Promise<NormalizedImage> {
-  if (input.byteLength === 0 || input.byteLength > MAX_IMAGE_BYTES) {
-    throw new AssetError("INVALID_IMAGE", `Image input must be between 1 and ${MAX_IMAGE_BYTES} bytes.`);
-  }
-  let source = input;
-  const prefix = input.subarray(0, Math.min(input.byteLength, MAX_SVG_BYTES + 1));
-  if (
-    (prefix[0] === 0xff && prefix[1] === 0xfe) ||
-    (prefix[0] === 0xfe && prefix[1] === 0xff) ||
-    (prefix[0] === 0x00 && prefix[1] === 0x3c) ||
-    (prefix[0] === 0x3c && prefix[1] === 0x00)
-  ) {
-    throw new AssetError("UNSAFE_SVG", "UTF-16 XML/SVG image input is not supported safely.");
-  }
-  const decoded = Buffer.from(input).toString("utf8").replace(/^\uFEFF/u, "");
-  if (decoded.trimStart().startsWith("<")) {
-    source = Buffer.from(sanitizeInlineSvg(decoded));
-  }
-
-  try {
-    const image = sharp(source, { failOn: "error", limitInputPixels: MAX_IMAGE_PIXELS });
-    const metadata = await image.metadata();
-    const width = metadata.width ?? 0;
-    const height = metadata.height ?? 0;
-    if (
-      width < 1 ||
-      height < 1 ||
-      width > MAX_IMAGE_DIMENSION ||
-      height > MAX_IMAGE_DIMENSION ||
-      width * height > MAX_IMAGE_PIXELS ||
-      (metadata.pages ?? 1) !== 1
-    ) {
-      throw new Error("unsafe image dimensions or animation");
-    }
-    const rendered = await image
-      .rotate()
-      .png({ compressionLevel: 9, adaptiveFiltering: false, palette: false })
-      .toBuffer({ resolveWithObject: true });
-    if (rendered.data.byteLength > MAX_IMAGE_BYTES) {
-      throw new Error("normalized PNG exceeds the size limit");
-    }
-    assertPngBytes(rendered.data);
-    return {
-      bytes: rendered.data,
-      width: rendered.info.width,
-      height: rendered.info.height,
-    };
-  } catch (error: unknown) {
-    if (error instanceof AssetError) throw error;
-    throw new AssetError("INVALID_IMAGE", `Image could not be decoded safely: ${errorMessage(error)}`);
-  }
-}
-
-async function assertEditableHwpx(buffer: ArrayBuffer): Promise<void> {
-  try {
-    if (detectFormat(buffer) !== "hwpx" || (await detectZipFormat(buffer)) !== "hwpx") {
-      throw new Error("not an HWPX package");
-    }
-  } catch (error: unknown) {
-    throw new AssetError(
-      "UNSUPPORTED_IMAGE_DOCUMENT_FORMAT",
-      `Image insertion supports only a valid HWPX package: ${errorMessage(error)}`,
-    );
-  }
-}
-
-interface SelectedAnchor {
-  occurrence: number;
-}
-
-async function selectAnchor(
-  zip: JSZip,
-  anchorText: string,
-  requestedOccurrence: number | undefined,
-): Promise<SelectedAnchor> {
-  const sectionNames = Object.keys(zip.files)
-    .filter((name) => /(?:^|\/)section\d+\.xml$/iu.test(name))
-    .sort((a, b) => sectionNumber(a) - sectionNumber(b));
-  let matchCount = 0;
-  for (const [index, name] of sectionNames.entries()) {
-    const xml = await zip.file(name)!.async("text");
-    const scan = scanSectionXml(xml, index);
-    const paragraphs = eligibleParagraphs(scan.bodyParagraphs, scan.tables);
-    for (const paragraph of paragraphs) {
-      let from = 0;
-      while (from <= paragraph.text.length) {
-        const found = paragraph.text.indexOf(anchorText, from);
-        if (found < 0) break;
-        if (requestedOccurrence === matchCount) {
-          return { occurrence: matchCount };
-        }
-        matchCount += 1;
-        if (requestedOccurrence === undefined && matchCount > 1) {
-          throw new AssetError(
-            "AMBIGUOUS_ANCHOR",
-            "Anchor text occurs more than once; set anchor_occurrence to a 0-based occurrence.",
-            { anchor_count_at_least: 2 },
-          );
-        }
-        from = found + Math.max(1, anchorText.length);
-      }
-    }
-  }
-  if (matchCount === 0) {
-    throw new AssetError("ANCHOR_NOT_FOUND", `Anchor text was not found: ${anchorText}`);
-  }
-  const occurrence = requestedOccurrence ?? 0;
-  if (occurrence >= matchCount) {
-    throw new AssetError(
-      "ANCHOR_NOT_FOUND",
-      `anchor_occurrence ${occurrence} is outside 0..${matchCount - 1}.`,
-      { anchor_count: matchCount },
-    );
-  }
-  return { occurrence };
-}
-
-function eligibleParagraphs(body: ScanParagraph[], tables: ScanTable[]): ScanParagraph[] {
-  const paragraphs = [...body];
-  const walk = (nestedTables: ScanTable[]): void => {
-    for (const table of nestedTables) {
-      for (const row of table.rows) {
-        for (const cell of row) {
-          paragraphs.push(...cell.paragraphs);
-          walk(cell.tables);
-        }
-      }
-    }
-  };
-  walk(tables);
-  const byStart = new Map<number, ScanParagraph>();
-  for (const paragraph of paragraphs) {
-    if (paragraph.kind !== "excluded") byStart.set(paragraph.start, paragraph);
-  }
-  return [...byStart.values()].sort((a, b) => a.start - b.start);
 }
 
 function buildSafeSvg(input: string): string {
@@ -868,137 +624,70 @@ async function preflightOutputPath(outputPath: string, sourcePaths: string[]): P
   throw new OutputConflictError(outputPath);
 }
 
-async function runVerifier(
-  editedPath: string,
-  originalPath?: string,
-  allowlist: { changed: string[]; added: string[] } = {
-    changed: [],
-    added: [],
-  },
-): Promise<void> {
-  const script = helperScriptPath("verify.py");
-  const args = [editedPath];
-  if (originalPath !== undefined) {
-    args.push("--orig", originalPath);
-  }
-  for (const entry of allowlist.changed) {
-    args.push("--allow-changed", entry);
-  }
-  for (const entry of allowlist.added) {
-    args.push("--allow-added", entry);
-  }
-  await runPython(script, args);
-}
-
-function helperScriptPath(name: string): string {
-  return fileURLToPath(new URL(`../../scripts/hwpx-safe-edit/${name}`, import.meta.url));
-}
-
-export interface PythonCommandCandidate {
-  command: string;
-  argsPrefix: string[];
-}
-
-export type PythonExecutor = (
-  command: string,
-  args: string[],
-  script: string,
-) => Promise<{ stdout: string; stderr: string }>;
-
-export function pythonCommandCandidates(
-  platform: NodeJS.Platform = process.platform,
-): PythonCommandCandidate[] {
-  return platform === "win32"
-    ? [
-        { command: "python", argsPrefix: ["-X", "utf8"] },
-        { command: "py", argsPrefix: ["-3", "-X", "utf8"] },
-      ]
-    : [
-        { command: "python3", argsPrefix: ["-X", "utf8"] },
-        { command: "python", argsPrefix: ["-X", "utf8"] },
-      ];
-}
-
-export async function runPython(
-  script: string,
-  args: string[],
-  platform: NodeJS.Platform = process.platform,
-  execute: PythonExecutor = execFilePromise,
-): Promise<{ stdout: string; stderr: string }> {
-  for (const candidate of pythonCommandCandidates(platform)) {
-    try {
-      return await execute(
-        candidate.command,
-        [...candidate.argsPrefix, script, ...args],
-        script,
-      );
-    } catch (error: unknown) {
-      if (errorCode(error, "") !== "ENOENT") {
-        throw helperFailure(error);
-      }
-    }
-  }
-  throw new AssetError(
-    "PYTHON_NOT_FOUND",
-    "Python 3.10 or newer was not found on PATH.",
-  );
-}
-
-function execFilePromise(command: string, args: string[], script: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    execFile(
-      command,
-      args,
-      {
-        cwd: dirname(script),
-        windowsHide: true,
-        shell: false,
-        timeout: 20_000,
-        maxBuffer: 1_000_000,
-        encoding: "utf8",
-        env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
-      },
-      (error, stdout, stderr) => {
-        if (error !== null) {
-          Object.assign(error, { stdout, stderr });
-          rejectPromise(error);
-        } else {
-          resolvePromise({ stdout, stderr });
-        }
-      },
-    );
-  });
-}
-
-function helperFailure(error: unknown): Error {
-  const stderr = typeof error === "object" && error !== null && "stderr" in error && typeof error.stderr === "string"
-    ? error.stderr.trim()
-    : "";
-  const failure = new AssetError(
-    "HWPX_SAFE_EDIT_FAILED",
-    stderr.length > 0 ? stderr : errorMessage(error),
-  );
-  return failure;
-}
-
-function parseHelperJson(stdout: string): Record<string, unknown> {
-  const lines = stdout.trim().split(/\r?\n/u).filter(Boolean);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    try {
-      const parsed: unknown = JSON.parse(lines[index]!);
-      if (isRecord(parsed)) return parsed;
-    } catch {
-      // Keep scanning in case the helper emitted diagnostics before JSON.
-    }
-  }
-  throw new AssetError("HWPX_SAFE_EDIT_FAILED", "Image helper did not return JSON metadata.");
-}
-
-function validationDetails(validation: ValidateResult): Record<string, unknown> {
+function validationDetails(
+  validation: DocumentResultPayload<"validateHwpx">,
+): Record<string, unknown> {
   return {
     ok: validation.ok,
     issues: validation.issues.map((issue) => ({ ...issue })),
     entry_count: validation.entryCount,
+  };
+}
+
+interface PresentedImageInsertionMetadata {
+  readonly imageEntry: string;
+  readonly warnings: readonly string[];
+  readonly placement?: Readonly<Record<string, unknown>>;
+}
+
+function readImageInsertionMetadata(
+  value: SafeJsonValue,
+  expectedMode: "after-paragraph" | "seal-anchor",
+): PresentedImageInsertionMetadata {
+  if (!isRecord(value) || value.operation !== "insertImage" ||
+    value.mode !== expectedMode) {
+    throw new AssetError(
+      "ENGINE_PROTOCOL_ERROR",
+      "The isolated image engine returned invalid result metadata.",
+    );
+  }
+
+  if (expectedMode === "seal-anchor") {
+    if (!Array.isArray(value.placed) || value.placed.length === 0 ||
+      !isRecord(value.placed[0])) {
+      throw new AssetError(
+        "ENGINE_PROTOCOL_ERROR",
+        "The isolated image engine returned invalid placement metadata.",
+      );
+    }
+    const placement = value.placed[0];
+    if (typeof placement.entry !== "string" ||
+      !Array.isArray(placement.warnings) ||
+      !placement.warnings.every((warning) => typeof warning === "string")) {
+      throw new AssetError(
+        "ENGINE_PROTOCOL_ERROR",
+        "The isolated image engine returned invalid placement metadata.",
+      );
+    }
+    return {
+      imageEntry: placement.entry,
+      warnings: [...placement.warnings],
+      placement: { ...placement },
+    };
+  }
+
+  if (!isRecord(value.placement) ||
+    typeof value.placement.imageEntry !== "string" ||
+    !Array.isArray(value.placement.warnings) ||
+    !value.placement.warnings.every((warning) => typeof warning === "string")) {
+    throw new AssetError(
+      "ENGINE_PROTOCOL_ERROR",
+      "The isolated image engine returned invalid placement metadata.",
+    );
+  }
+  return {
+    imageEntry: value.placement.imageEntry,
+    warnings: [...value.placement.warnings],
   };
 }
 
@@ -1062,36 +751,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
-}
-
-function countImages(blocks: readonly IRBlock[]): number {
-  let count = 0;
-  for (const block of blocks) {
-    if (block.type === "image") count += 1;
-    if (block.children !== undefined) count += countImages(block.children);
-    if (block.table !== undefined) {
-      for (const row of block.table.cells) {
-        for (const cell of row) {
-          if (cell.blocks !== undefined) count += countImages(cell.blocks);
-        }
-      }
-    }
-  }
-  return count;
-}
-
-function sectionNumber(path: string): number {
-  return Number(path.match(/section(\d+)\.xml$/iu)?.[1] ?? 0);
-}
-
-function sha256(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 function comparablePath(path: string): string {
   return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
 }
@@ -1108,38 +767,6 @@ function isOutputSafetyError(error: unknown): boolean {
   return error instanceof OutputConflictError ||
     error instanceof PathAliasError ||
     error instanceof UnsafeOutputPathError;
-}
-
-async function fileSystemIdentity(path: string): Promise<FileSystemIdentity> {
-  const stats = await lstat(path, { bigint: true });
-  if (!stats.isDirectory() || stats.isSymbolicLink()) {
-    throw new UnsafeOutputPathError(
-      `Temporary workspace is not an owned directory: ${path}`,
-    );
-  }
-  return { device: stats.dev, inode: stats.ino };
-}
-
-async function removeOwnedTemporaryDirectory(
-  path: string,
-  identity: FileSystemIdentity,
-): Promise<void> {
-  let current;
-  try {
-    current = await lstat(path, { bigint: true });
-  } catch (error: unknown) {
-    if (errorCode(error, "") === "ENOENT") return;
-    throw error;
-  }
-  if (
-    !current.isDirectory() ||
-    current.isSymbolicLink() ||
-    current.dev !== identity.device ||
-    current.ino !== identity.inode
-  ) {
-    return;
-  }
-  await rm(path, { recursive: true, force: true });
 }
 
 function errorMessage(error: unknown): string {

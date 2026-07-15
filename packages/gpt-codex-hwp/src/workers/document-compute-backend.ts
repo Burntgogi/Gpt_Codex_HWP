@@ -10,6 +10,10 @@ import type {
 } from "kordoc";
 
 import { assertSafeSvgString } from "../shared/svg-policy.js";
+import {
+  HwpxAnchorResolutionError,
+  resolveHwpxAnchorOccurrence,
+} from "../shared/hwpx-anchor.js";
 
 import { isIntegrityVerifiedResultSpool } from "./document-child-client.js";
 import {
@@ -19,9 +23,11 @@ import {
 import type { IntegrityVerifiedResultSpool } from "./document-execution-policy.js";
 import {
   MAX_DOCUMENT_ENGINE_RESULT_BYTES,
+  MAX_DOCUMENT_VALIDATION_ISSUES,
   MAX_SAFE_JSON_BYTES,
   measureDocumentResultByteLength,
   resultSpoolEncoding,
+  validateDocumentResultSpoolMetadata,
   type DocumentEngineOperation,
   type DocumentResultPayload,
   type DocumentSpoolEligibleOperation,
@@ -39,7 +45,7 @@ type RhwpLoadResult = Awaited<ReturnType<
   typeof import("../tools/rhwp-backend.js")["loadRhwpBackend"]
 >>;
 
-interface ComputeDependencies {
+export interface DocumentComputeBackendDependencies {
   readonly kordoc: KordocModule;
   readonly loadRhwp: () => Promise<RhwpLoadResult>;
 }
@@ -57,6 +63,12 @@ export type DocumentComputeProgressHandler = (
 export interface DocumentComputeBackend {
   assertMutableHwpx(source: ArrayBuffer): Promise<void>;
   validateExactHwpx(source: ArrayBuffer): Promise<void>;
+  prepareImageInsertion(
+    source: ArrayBuffer,
+    image: ArrayBuffer,
+    anchorText: string,
+    requestedOccurrence: number | undefined,
+  ): Promise<Readonly<{ image: ArrayBuffer; occurrence: number }>>;
   execute<Operation extends DocumentEngineOperation>(
     request: Extract<WireDocumentRequest, { operation: Operation }>,
     inputs: Readonly<{ document?: ArrayBuffer; image?: ArrayBuffer }>,
@@ -89,22 +101,44 @@ export function initializeDocumentComputeBackend(): Promise<DocumentComputeBacke
 
 async function initializeBackend(): Promise<DocumentComputeBackend> {
   const kordoc = await import("kordoc");
-  requireKordocApi(kordoc);
   let rhwp: Promise<RhwpLoadResult> | undefined;
-  const dependencies: ComputeDependencies = {
+  return createDocumentComputeBackend({
     kordoc,
     loadRhwp: () => rhwp ??= import("../tools/rhwp-backend.js")
       .then((module) => module.loadRhwpBackend()),
-  };
+  });
+}
+
+export function createDocumentComputeBackend(
+  dependencies: DocumentComputeBackendDependencies,
+): DocumentComputeBackend {
+  const { kordoc } = dependencies;
+  requireKordocApi(kordoc);
   return Object.freeze({
     async assertMutableHwpx(source: ArrayBuffer): Promise<void> {
-      await requireMutableHwpx(kordoc, source);
+      await requireValidMutableSourceHwpx(kordoc, source);
     },
     async validateExactHwpx(source: ArrayBuffer): Promise<void> {
       await requireMutableHwpx(kordoc, source);
       await requireSuccessfulParse(kordoc, source);
       const validation = await kordoc.validateHwpx(source.slice(0));
       if (!validation.ok) throw protocolError();
+      await requireValidFontReferences(source);
+    },
+    async prepareImageInsertion(
+      source: ArrayBuffer,
+      image: ArrayBuffer,
+      anchorText: string,
+      requestedOccurrence: number | undefined,
+    ): Promise<Readonly<{ image: ArrayBuffer; occurrence: number }>> {
+      await requireValidMutableSourceHwpx(kordoc, source);
+      return prepareImageInsertion(
+        kordoc,
+        source,
+        image,
+        anchorText,
+        requestedOccurrence,
+      );
     },
     async execute<Operation extends DocumentEngineOperation>(
       request: Extract<WireDocumentRequest, { operation: Operation }>,
@@ -124,7 +158,7 @@ async function initializeBackend(): Promise<DocumentComputeBackend> {
 }
 
 async function executeOperation(
-  dependencies: ComputeDependencies,
+  dependencies: DocumentComputeBackendDependencies,
   request: WireDocumentRequest,
   inputs: Readonly<{ document?: ArrayBuffer; image?: ArrayBuffer }>,
   onProgress?: DocumentComputeProgressHandler,
@@ -174,34 +208,50 @@ async function executeOperation(
       };
     }
     case "generateHwpx": {
-      const generated = await kordoc.markdownToHwpx(request.input.markdown);
-      return validatedBinaryPayload(kordoc, generated, {
+      const generated = await kordoc.markdownToHwpx(
+        request.input.markdown,
+        request.options.preset === undefined
+          ? undefined
+          : { gongmun: { preset: request.options.preset } },
+      );
+      const { normalizeGeneratedFontReferences } = await import(
+        "../shared/hwpx-font-integrity.js"
+      );
+      const normalized = await normalizeGeneratedFontReferences(generated);
+      return validatedBinaryPayload(kordoc, normalized.bytes, {
         operation: "generateHwpx",
+        fontNormalization: {
+          changed: normalized.changed,
+          changedReferenceCount: normalized.changed_reference_count,
+        },
       });
     }
     case "patchHwpx": {
       const source = requireDocument(inputs);
-      await requireMutableHwpx(kordoc, source);
-      await requireSuccessfulParse(kordoc, source);
+      await requireValidMutableSourceHwpx(kordoc, source);
       const patched = await kordoc.patchHwpx(
         new Uint8Array(copyArrayBuffer(source)),
         request.input.markdown,
         { verify: true },
       );
-      if (!patched.success || patched.data === undefined || !patchIsComplete(patched)) {
-        throw protocolError();
+      if (!patched.success || patched.data === undefined) {
+        throw createDocumentEngineRunError("PATCH_FAILED");
       }
       return validatedBinaryPayload(kordoc, patched.data, {
         operation: "patchHwpx",
         applied: patched.applied,
-        skipped: patched.skipped.length,
-        verification: patched.verification?.stats ?? null,
+        skipped: patched.skipped.map((item) => ({ ...item })),
+        verification: patched.verification === undefined
+          ? null
+          : {
+              stats: { ...patched.verification.stats },
+              diffs: safeJsonCopy(patched.verification.diffs),
+            },
       });
     }
     case "fillHwpx": {
       const source = requireDocument(inputs);
-      await requireMutableHwpx(kordoc, source);
-      await requireSuccessfulParse(kordoc, source);
+      await requireValidMutableSourceHwpx(kordoc, source);
       const values = buildFillInputs(request.input.fields, request.options.formats);
       let buffer: ArrayBuffer;
       let filled: FormField[];
@@ -224,10 +274,14 @@ async function executeOperation(
         unmatched = result.unmatched;
         rejected = [];
       }
-      await requireSuccessfulParse(kordoc, buffer);
+      try {
+        await requireSuccessfulParse(kordoc, buffer);
+      } catch {
+        throw createDocumentEngineRunError("FILL_VERIFICATION_FAILED");
+      }
       return validatedBinaryPayload(kordoc, buffer, {
         operation: "fillHwpx",
-        filled: filled.length,
+        filled: filled.map((field) => ({ ...field })),
         unmatched: [...unmatched],
         rejected: [...rejected],
       });
@@ -236,22 +290,53 @@ async function executeOperation(
       const source = requireDocument(inputs);
       await requireMutableHwpx(kordoc, source);
       const validation = await kordoc.validateHwpx(copyArrayBuffer(source));
-      const limit = request.options.maxIssues ?? validation.issues.length;
-      return validationPayload(validation, limit);
+      const limit = request.options.maxIssues ?? MAX_DOCUMENT_VALIDATION_ISSUES;
+      const payload = validationPayload(validation, limit);
+      let fontIssueCount = 0;
+      let fontIssues: Array<{ code: string; message: string; entry?: string }>;
+      try {
+        const fontInspection = await inspectFontReferences(source);
+        fontIssueCount = fontInspection.issues.length;
+        fontIssues = fontInspection.issues.slice(
+          0,
+          Math.max(0, limit - payload.issues.length),
+        ).map((issue) => ({
+          code: issue.code,
+          message: issue.message,
+          entry: issue.path,
+        }));
+      } catch {
+        fontIssueCount = 1;
+        fontIssues = payload.issues.length < limit
+          ? [{
+              code: "HWPX_FONT_INSPECTION_FAILED",
+              message: "HWPX font and character-shape references could not be inspected.",
+            }]
+          : [];
+      }
+      return {
+        ok: payload.ok && fontIssueCount === 0,
+        issues: [...payload.issues, ...fontIssues],
+        entryCount: payload.entryCount + fontIssueCount,
+      };
     }
     case "insertImage": {
       if (request.options.mode !== "seal-anchor") throw protocolError();
       const source = requireDocument(inputs);
       const image = requireImage(inputs);
-      await requireMutableHwpx(kordoc, source);
-      await requireSuccessfulParse(kordoc, source);
+      await requireValidMutableSourceHwpx(kordoc, source);
+      const prepared = await prepareImageInsertion(
+        kordoc,
+        source,
+        image,
+        request.input.anchorText,
+        request.options.anchorOccurrence,
+      );
       const placed = await kordoc.placeSealHwpx(copyArrayBuffer(source), [{
         anchor: request.input.anchorText,
-        ...(request.options.anchorOccurrence === undefined
-          ? {}
-          : { occurrence: request.options.anchorOccurrence }),
-        image: new Uint8Array(copyArrayBuffer(image)),
-        ext: imageExtension(image),
+        occurrence: prepared.occurrence,
+        image: new Uint8Array(copyArrayBuffer(prepared.image)),
+        ext: "png",
         ...(request.options.sizeMm === undefined
           ? {}
           : { sizeMm: request.options.sizeMm }),
@@ -264,7 +349,7 @@ async function executeOperation(
 }
 
 async function renderHwpWithRhwp(
-  dependencies: ComputeDependencies,
+  dependencies: DocumentComputeBackendDependencies,
   source: ArrayBuffer,
 ): Promise<DocumentResultPayload<"render">> {
   await requireSuccessfulParse(dependencies.kordoc, source);
@@ -348,7 +433,42 @@ async function requireMutableHwpx(
   kordoc: KordocModule,
   source: ArrayBuffer,
 ): Promise<void> {
-  if (await detectSupportedFormat(kordoc, source) !== "hwpx") {
+  const format = await detectSupportedFormat(kordoc, source);
+  if (format === "hwp") {
+    throw protocolError();
+  }
+  if (format !== "hwpx") {
+    throw createDocumentEngineRunError("UNSUPPORTED_FORMAT");
+  }
+  await requireUnprotected(source, "hwpx");
+}
+
+async function requireValidMutableSourceHwpx(
+  kordoc: KordocModule,
+  source: ArrayBuffer,
+): Promise<void> {
+  await requireMutableHwpx(kordoc, source);
+  try {
+    await requireSuccessfulParse(kordoc, source);
+    const validation = await kordoc.validateHwpx(copyArrayBuffer(source));
+    if (!validation.ok) {
+      throw createDocumentEngineRunError("SOURCE_HWPX_INVALID");
+    }
+    await requireValidFontReferences(source);
+  } catch {
+    throw createDocumentEngineRunError("SOURCE_HWPX_INVALID");
+  }
+}
+
+async function inspectFontReferences(source: ArrayBuffer) {
+  const { inspectHwpxFontReferences } = await import(
+    "../shared/hwpx-font-integrity.js"
+  );
+  return inspectHwpxFontReferences(source);
+}
+
+async function requireValidFontReferences(source: ArrayBuffer): Promise<void> {
+  if ((await inspectFontReferences(source)).issues.length > 0) {
     throw protocolError();
   }
 }
@@ -392,8 +512,17 @@ async function validatedBinaryPayload(
   const bytes = source instanceof ArrayBuffer
     ? source.slice(0)
     : copyArrayBuffer(source);
-  const validation = await kordoc.validateHwpx(bytes.slice(0));
-  if (!validation.ok) throw protocolError();
+  try {
+    await requireMutableHwpx(kordoc, bytes);
+    await requireSuccessfulParse(kordoc, bytes);
+    const validation = await kordoc.validateHwpx(bytes.slice(0));
+    if (!validation.ok) {
+      throw createDocumentEngineRunError("HWPX_VALIDATION_FAILED");
+    }
+    await requireValidFontReferences(bytes);
+  } catch {
+    throw createDocumentEngineRunError("HWPX_VALIDATION_FAILED");
+  }
   return { bytes, metadata };
 }
 
@@ -422,17 +551,62 @@ function buildFillInputs(
   }));
 }
 
-function patchIsComplete(
-  result: Awaited<ReturnType<KordocModule["patchHwpx"]>>,
-): boolean {
-  const stats = result.verification?.stats;
-  return result.skipped.length === 0 && stats !== undefined &&
-    stats.added === 0 && stats.removed === 0 && stats.modified === 0;
+async function prepareImageInsertion(
+  kordoc: KordocModule,
+  source: ArrayBuffer,
+  image: ArrayBuffer,
+  anchorText: string,
+  requestedOccurrence: number | undefined,
+): Promise<Readonly<{ image: ArrayBuffer; occurrence: number }>> {
+  const { ImageNormalizationError, normalizeImageBytes } = await import(
+    "../shared/image-normalization.js"
+  );
+  let normalized;
+  try {
+    normalized = await normalizeImageBytes(image);
+  } catch (error: unknown) {
+    if (error instanceof ImageNormalizationError) {
+      throw createDocumentEngineRunError(error.code);
+    }
+    throw error;
+  }
+  const occurrence = await resolveAnchorOccurrence(
+    kordoc,
+    source,
+    anchorText,
+    requestedOccurrence,
+  );
+  return {
+    image: copyArrayBuffer(normalized.bytes),
+    occurrence,
+  };
+}
+
+async function resolveAnchorOccurrence(
+  kordoc: KordocModule,
+  source: ArrayBuffer,
+  anchorText: string,
+  requestedOccurrence: number | undefined,
+): Promise<number> {
+  try {
+    return await resolveHwpxAnchorOccurrence(
+      source,
+      anchorText,
+      requestedOccurrence,
+      kordoc.scanSectionXml,
+    );
+  } catch (error: unknown) {
+    if (error instanceof HwpxAnchorResolutionError) {
+      throw createDocumentEngineRunError(error.code);
+    }
+    throw error;
+  }
 }
 
 function placementMetadata(result: PlaceSealResult): SafeJsonValue {
   return {
     operation: "insertImage",
+    mode: "seal-anchor",
     placed: result.placed.map((placement) => ({
       anchor: placement.anchor,
       occurrence: placement.occurrence,
@@ -445,19 +619,6 @@ function placementMetadata(result: PlaceSealResult): SafeJsonValue {
       warnings: [...(placement.warnings ?? [])],
     })),
   };
-}
-
-function imageExtension(source: ArrayBuffer): "png" | "jpg" | "bmp" | "gif" {
-  const bytes = new Uint8Array(source);
-  if (bytes.byteLength >= 8 &&
-    [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-      .every((byte, index) => bytes[index] === byte)) return "png";
-  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "jpg";
-  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return "bmp";
-  if (bytes.byteLength >= 6 &&
-    (Buffer.from(bytes.subarray(0, 6)).toString("ascii") === "GIF87a" ||
-      Buffer.from(bytes.subarray(0, 6)).toString("ascii") === "GIF89a")) return "gif";
-  throw protocolError();
 }
 
 function requireDocument(
@@ -503,6 +664,7 @@ function requireKordocApi(value: KordocModule): void {
     "fillWithUniqueGuard",
     "validateHwpx",
     "placeSealHwpx",
+    "scanSectionXml",
   ] as const) {
     if (typeof value[name] !== "function") throw new Error(`Kordoc is missing ${name}().`);
   }
@@ -536,6 +698,15 @@ export function encodeDocumentResultSpool(
   return encoded;
 }
 
+export function documentResultSpoolMetadata(
+  operation: "generateHwpx" | "patchHwpx" | "fillHwpx" | "insertImage",
+  payload: DocumentResultPayload<
+    "generateHwpx" | "patchHwpx" | "fillHwpx" | "insertImage"
+  >,
+): SafeJsonValue {
+  return validateDocumentResultSpoolMetadata(operation, payload.metadata);
+}
+
 export async function decodeDocumentResultSpool<
   Operation extends DocumentSpoolEligibleOperation,
 >(
@@ -564,7 +735,13 @@ export async function decodeDocumentResultSpool<
       case "patchHwpx":
       case "fillHwpx":
       case "insertImage":
-        payload = { bytes: copyArrayBuffer(bytes) };
+        payload = {
+          bytes: copyArrayBuffer(bytes),
+          metadata: validateDocumentResultSpoolMetadata(
+            operation,
+            spool.metadata.resultMetadata,
+          ),
+        };
         break;
     }
     validateResultPayload(operation, payload);
@@ -804,6 +981,12 @@ function copyArrayBuffer(bytes: ArrayBuffer | Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy.buffer;
+}
+
+function safeJsonCopy(value: unknown): SafeJsonValue {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw protocolError();
+  return JSON.parse(serialized) as SafeJsonValue;
 }
 
 function protocolError(): DocumentEngineRunError {

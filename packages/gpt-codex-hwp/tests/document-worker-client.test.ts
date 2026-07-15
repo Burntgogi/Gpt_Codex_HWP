@@ -13,6 +13,7 @@ import {
   defaultDocumentDeadlineMs,
   selectDocumentExecution,
 } from "../src/workers/document-execution-policy.js";
+import * as executionPolicyModule from "../src/workers/document-execution-policy.js";
 import type { WorkerDocumentSnapshot } from "../src/shared/document-snapshot.js";
 
 const fixtureUrl = new URL("./fixtures/workers/engine-test-worker.mjs", import.meta.url);
@@ -430,6 +431,44 @@ test("document execution policy has fixed deadlines, thresholds, and pre-dispatc
       executionClass: "worker-safe",
     } as never),
     (error: unknown) => safeCode(error) === "ENGINE_RESOURCE_LIMIT",
+  );
+});
+
+test("logical request bytes are reserved before choosing worker or child snapshot transport", () => {
+  const policy = executionPolicyModule as unknown as {
+    documentLogicalRequestBytes?: (request: { input: unknown; options: unknown }) => number;
+    maxWorkerSnapshotBytesForRequest?: (
+      request: { input: unknown; options: unknown },
+      imageBytes?: number,
+    ) => number;
+  };
+  assert.equal(typeof policy.documentLogicalRequestBytes, "function");
+  assert.equal(typeof policy.maxWorkerSnapshotBytesForRequest, "function");
+  const logicalRequest = { input: { markdown: "patch" }, options: {} };
+  const logicalBytes = policy.documentLogicalRequestBytes!(logicalRequest);
+  const snapshotBudget = policy.maxWorkerSnapshotBytesForRequest!(logicalRequest);
+  assert.equal(snapshotBudget + logicalBytes, 64 * 1024 * 1024);
+  assert.equal(
+    selectDocumentExecution({
+      operation: "patchHwpx",
+      executionClass: "worker-safe",
+      snapshotTransport: "worker",
+      inputBytes: snapshotBudget,
+      logicalBytes,
+      estimatedWorkingSetBytes: (snapshotBudget + logicalBytes) * 3,
+    }),
+    "worker",
+  );
+  assert.equal(
+    selectDocumentExecution({
+      operation: "patchHwpx",
+      executionClass: "worker-safe",
+      snapshotTransport: "spool",
+      inputBytes: snapshotBudget + 1,
+      logicalBytes,
+      estimatedWorkingSetBytes: (snapshotBudget + logicalBytes + 1) * 3,
+    }),
+    "child",
   );
 });
 

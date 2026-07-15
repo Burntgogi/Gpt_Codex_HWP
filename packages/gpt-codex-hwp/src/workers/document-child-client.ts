@@ -1282,6 +1282,9 @@ async function verifyOutputSpool<Operation extends DocumentEngineOperation>(
     encoding: receipt.encoding,
     sizeBytes: receipt.sizeBytes,
     sha256: receipt.sha256,
+    ...(receipt.metadata === undefined
+      ? {}
+      : { resultMetadata: receipt.metadata }),
   });
   const result: IntegrityVerifiedResultSpool<Operation> = Object.freeze({
     transport: "spool" as const,

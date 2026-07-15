@@ -18,6 +18,7 @@ export interface ExclusiveOutputFile {
 
 export interface ExclusiveOutputOptions {
   sourcePaths?: readonly string[];
+  beforeOpen?: () => void | Promise<void>;
 }
 
 export interface ExclusiveInputRange {
@@ -110,6 +111,7 @@ export async function writeFilesExclusively(
 
   const reservations: ReservedOutput[] = [];
   try {
+    await options.beforeOpen?.();
     for (const file of resolvedFiles) {
       const directory = directories.get(comparablePath(dirname(file.path)));
       if (directory === undefined) {
@@ -184,6 +186,7 @@ export async function writeFileRangeExclusively(
   await rejectExistingTarget(resolvedOutput, sourceIdentities);
   const directory = await prepareCanonicalDirectory(dirname(resolvedOutput));
   await assertDirectoryIdentity(directory);
+  await options.beforeOpen?.();
 
   let handle: FileHandle;
   try {
@@ -207,7 +210,7 @@ export async function writeFileRangeExclusively(
         input.offset + copied,
       );
       if (count === 0) throw new Error("Exclusive input range is truncated.");
-      await handle.write(buffer, 0, count, copied);
+      await writeChunkFully(handle, buffer, count, copied);
       copied += count;
     }
     await handle.close();
@@ -216,6 +219,142 @@ export async function writeFileRangeExclusively(
     await handle.close().catch(() => undefined);
     // Match writeFilesExclusively: never pathname-delete a possibly replaced file.
     throw error;
+  }
+}
+
+export async function writeFileRangeAndFilesExclusively(
+  outputPath: string,
+  input: ExclusiveInputRange,
+  companionFiles: readonly ExclusiveOutputFile[],
+  options: ExclusiveOutputOptions = {},
+): Promise<string[]> {
+  assertValidInputRange(input);
+  const resolvedFiles = [
+    { path: resolveLocalPath(outputPath, "output_path"), range: input },
+    ...companionFiles.map((file) => ({
+      path: resolveLocalPath(file.path, "output_path"),
+      data: file.data,
+    })),
+  ];
+  const resolvedSources = (options.sourcePaths ?? []).map((path) =>
+    resolveLocalPath(path, "source_path")
+  );
+  assertDistinctOutputPaths(resolvedFiles.map((file) => file.path));
+  assertNoLexicalSourceAliases(
+    resolvedFiles.map((file) => file.path),
+    resolvedSources,
+  );
+  const sourceIdentities = await existingSourceIdentities(resolvedSources);
+  for (const file of resolvedFiles) {
+    await rejectExistingTarget(file.path, sourceIdentities);
+  }
+
+  const directories = new Map<string, DirectoryIdentity>();
+  for (const file of resolvedFiles) {
+    const parentPath = dirname(file.path);
+    const key = comparablePath(parentPath);
+    if (!directories.has(key)) {
+      directories.set(key, await prepareCanonicalDirectory(parentPath));
+    }
+  }
+
+  const reservations: ReservedOutput[] = [];
+  try {
+    await options.beforeOpen?.();
+    for (const file of resolvedFiles) {
+      const directory = directories.get(comparablePath(dirname(file.path)));
+      if (directory === undefined) {
+        throw new Error("Output directory reservation is missing.");
+      }
+      await assertDirectoryIdentity(directory);
+      let handle: FileHandle;
+      try {
+        handle = await open(file.path, "wx");
+      } catch (error: unknown) {
+        if (errorCode(error, "") === "EEXIST") {
+          await rejectExistingTarget(file.path, sourceIdentities);
+          throw new OutputConflictError(file.path);
+        }
+        throw error;
+      }
+      try {
+        const created = await handle.stat({ bigint: true });
+        reservations.push({
+          path: file.path,
+          handle,
+          device: created.dev,
+          inode: created.ino,
+        });
+      } catch (error: unknown) {
+        await handle.close().catch(() => undefined);
+        throw error;
+      }
+    }
+
+    await copyRangeToHandle(reservations[0]!.handle, input);
+    for (let index = 1; index < reservations.length; index += 1) {
+      await reservations[index]!.handle.writeFile(
+        (resolvedFiles[index] as { data: string | Uint8Array }).data,
+      );
+    }
+    for (const reservation of reservations) await reservation.handle.close();
+    return resolvedFiles.map((file) => file.path);
+  } catch (error: unknown) {
+    await Promise.all(
+      reservations.map((reservation) =>
+        reservation.handle.close().catch(() => undefined)
+      ),
+    );
+    throw error;
+  }
+}
+
+function assertValidInputRange(input: ExclusiveInputRange): void {
+  if (!Number.isSafeInteger(input.fd) || input.fd < 0 ||
+    !Number.isSafeInteger(input.offset) || input.offset < 0 ||
+    !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0) {
+    throw new Error("Exclusive input range is invalid.");
+  }
+}
+
+async function copyRangeToHandle(
+  handle: FileHandle,
+  input: ExclusiveInputRange,
+): Promise<void> {
+  const buffer = Buffer.allocUnsafeSlow(1024 * 1024);
+  let copied = 0;
+  while (copied < input.sizeBytes) {
+    const requested = Math.min(buffer.byteLength, input.sizeBytes - copied);
+    const count = await readPositionally(
+      input.fd,
+      buffer,
+      requested,
+      input.offset + copied,
+    );
+    if (count === 0) throw new Error("Exclusive input range is truncated.");
+    await writeChunkFully(handle, buffer, count, copied);
+    copied += count;
+  }
+}
+
+async function writeChunkFully(
+  handle: FileHandle,
+  buffer: Buffer,
+  length: number,
+  position: number,
+): Promise<void> {
+  let written = 0;
+  while (written < length) {
+    const result = await handle.write(
+      buffer,
+      written,
+      length - written,
+      position + written,
+    );
+    if (result.bytesWritten === 0) {
+      throw new Error("Exclusive output write made no progress.");
+    }
+    written += result.bytesWritten;
   }
 }
 

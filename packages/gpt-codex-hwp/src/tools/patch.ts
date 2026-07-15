@@ -1,36 +1,17 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import {
-  detectFormat,
-  detectOle2Format,
-  detectZipFormat,
-  fillForm,
-  fillHwpx,
-  fillWithUniqueGuard,
-  parse,
-  patchHwpx,
-  validateHwpx,
-  type FileType,
-  type FillFormOutput,
-  type FillInput,
-  type FormField,
-  type HwpxFillResult,
-  type ParseOptions,
-  type ParseResult,
-  type PatchOptions,
-  type PatchResult,
-  type ValidateResult,
-} from "kordoc";
 import { z } from "zod";
 
-import { writeFilesExclusively } from "../shared/output.js";
 import {
   HwpxOutputRequiredError,
   assertHwpxOutputPath,
 } from "../shared/document-contract.js";
-import { readFileBounded } from "../shared/files.js";
+import {
+  defaultDocumentEngineFacade,
+  type DocumentEngineFacade,
+} from "../shared/document-engine.js";
+import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { inspectExactDocumentProtection } from "../shared/protection.js";
 import { toolError, toolSuccess } from "../shared/result.js";
 import {
   MAX_FILL_VALUES,
@@ -38,6 +19,11 @@ import {
   assertFillValueBudget,
   sumStringCharacters,
 } from "../shared/resource-limits.js";
+import type {
+  DocumentResultPayload,
+  SafeJsonValue,
+} from "../workers/document-protocol.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 
 export const HWP_PATCH_DOCUMENT_TOOL_NAME = "hwp_patch_document";
 export const HWP_FILL_FORM_TOOL_NAME = "hwp_fill_form";
@@ -59,72 +45,9 @@ export interface HwpFillFormInput {
   mask_values?: boolean;
 }
 
-export type DetectDocumentFormat = (
-  input: ArrayBuffer,
-) => Promise<FileType>;
-
-export type ParseDocument = (
-  input: string | ArrayBuffer | Buffer,
-  options?: ParseOptions,
-) => Promise<ParseResult>;
-
-export type PatchDocument = (
-  original: Uint8Array,
-  editedMarkdown: string,
-  options?: PatchOptions,
-) => Promise<PatchResult>;
-
-export type ValidateHwpxDocument = (
-  input: ArrayBuffer | Uint8Array,
-) => Promise<ValidateResult>;
-
-export interface PatchDependencies {
-  detectDocumentFormat: DetectDocumentFormat;
-  parseDocument: ParseDocument;
-  patchHwpxDocument: PatchDocument;
-  validateHwpxDocument: ValidateHwpxDocument;
-}
-
-export type FillFormDocument = (
-  input: string | ArrayBuffer | Buffer,
-  values: Record<string, FillInput>,
-  outputFormat?: "markdown" | "hwpx" | "hwpx-preserve",
-) => Promise<FillFormOutput>;
-
-export type FillHwpxDocument = (
-  input: ArrayBuffer,
-  values: Record<string, FillInput>,
-  blockedLabels?: Set<string>,
-) => Promise<HwpxFillResult>;
-
-export interface FillDependencies {
-  detectDocumentFormat: DetectDocumentFormat;
-  parseDocument: ParseDocument;
-  fillFormDocument: FillFormDocument;
-  fillHwpxDocument: FillHwpxDocument;
-  fillWithUniqueGuard: typeof fillWithUniqueGuard;
-  validateHwpxDocument: ValidateHwpxDocument;
-}
-
-const defaultPatchDependencies: PatchDependencies = {
-  detectDocumentFormat: detectPreciseDocumentFormat,
-  parseDocument: parse,
-  patchHwpxDocument: patchHwpx,
-  validateHwpxDocument: validateHwpx,
-};
-
-const defaultFillDependencies: FillDependencies = {
-  detectDocumentFormat: detectPreciseDocumentFormat,
-  parseDocument: parse,
-  fillFormDocument: fillForm,
-  fillHwpxDocument: fillHwpx,
-  fillWithUniqueGuard,
-  validateHwpxDocument: validateHwpx,
-};
-
 export async function handleHwpPatchDocument(
   input: HwpPatchDocumentInput,
-  dependencyOverrides: Partial<PatchDependencies> = {},
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
   let outputPath: string | undefined;
@@ -147,15 +70,16 @@ export async function handleHwpPatchDocument(
         actual_characters: input.edited_markdown.length,
       });
     }
-    const dependencies = {
-      ...defaultPatchDependencies,
-      ...dependencyOverrides,
-    };
-    const sourceBytes = await readFileBounded(filePath, "source document");
-    const exactBuffer = toExactArrayBuffer(sourceBytes);
-    const format = await dependencies.detectDocumentFormat(exactBuffer);
+    const snapshot = await openDocumentSnapshot(filePath, {
+      workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+        input: { markdown: input.edited_markdown },
+        options: {},
+      }),
+    });
+    const format = snapshot.metadata.shallowFormat.candidate;
 
     if (format === "hwp") {
+      await closeUnconsumedSnapshot(snapshot);
       return toolError(
         "Binary HWP is read-only in hwp_patch_document. Read the source and create or edit an HWPX document instead.",
         {
@@ -167,6 +91,7 @@ export async function handleHwpPatchDocument(
       );
     }
     if (format !== "hwpx") {
+      await closeUnconsumedSnapshot(snapshot);
       return toolError(
         `Document patching supports only HWPX files (detected: ${format}).`,
         {
@@ -178,90 +103,58 @@ export async function handleHwpPatchDocument(
       );
     }
 
-    const exactProtection = await inspectExactDocumentProtection(
-      sourceBytes,
-      format,
-    );
-    if (exactProtection !== undefined) {
-      return toolError(
-        `Cannot patch the protected document: ${exactProtection.error}`,
-        {
-          code: exactProtection.code,
-          error: exactProtection.error,
-          file_path: filePath,
-          output_path: outputPath,
-          format,
-        },
-      );
-    }
+    const patchResult = await facade.patch(snapshot, input.edited_markdown);
+    try {
+      const metadata = readPatchMetadata(patchResult.resultMetadata);
+      const complete = patchIsComplete(metadata);
+      if (!complete) {
+        return toolError(
+          `Patch was incomplete because edits were skipped or remained after verification; no output was written.`,
+          {
+            code: "PATCH_INCOMPLETE",
+            file_path: filePath,
+            output_path: outputPath,
+            format,
+            applied: metadata.applied,
+            skipped: metadata.skipped,
+            verification: metadata.verification,
+            complete: false,
+          },
+        );
+      }
 
-    const preflight = await dependencies.parseDocument(exactBuffer);
-    if (!preflight.success) {
-      return toolError(`Cannot patch the document: ${preflight.error}`, {
-        code: preflight.code ?? "PARSE_ERROR",
-        error: preflight.error,
-        file_path: filePath,
-        output_path: outputPath,
-        format,
+      const validation = patchResult.validation;
+      if (!validation.ok) {
+        return toolError(
+          "Patched HWPX failed structural validation; no output was written.",
+          {
+            code: "HWPX_VALIDATION_FAILED",
+            file_path: filePath,
+            output_path: outputPath,
+            format,
+            validation,
+          },
+        );
+      }
+
+      await patchResult.writeOutputExclusively(outputPath, {
+        sourcePaths: [filePath],
       });
-    }
 
-    const patchResult = await dependencies.patchHwpxDocument(new Uint8Array(exactBuffer), input.edited_markdown, {
-      verify: true,
-    });
-    if (!patchResult.success || patchResult.data === undefined) {
-      return patchFailure(patchResult, filePath, outputPath, format);
-    }
-
-    const complete = patchIsComplete(patchResult);
-    if (!complete) {
-      return toolError(
-        `Patch was incomplete because edits were skipped or remained after verification; no output was written.`,
+      return toolSuccess(
+        "Patched and semantically verified the HWPX document.",
         {
-          code: "PATCH_INCOMPLETE",
-          file_path: filePath,
           output_path: outputPath,
           format,
-          applied: patchResult.applied,
-          skipped: patchResult.skipped,
-          verification: patchResult.verification ?? null,
-          complete: false,
+          applied: metadata.applied,
+          skipped: metadata.skipped,
+          verification: metadata.verification,
+          complete,
         },
       );
+    } finally {
+      await patchResult.cleanup();
     }
-
-    const validation = await dependencies.validateHwpxDocument(
-      patchResult.data,
-    );
-    if (!validation.ok) {
-      return toolError(
-        "Patched HWPX failed structural validation; no output was written.",
-        {
-          code: "HWPX_VALIDATION_FAILED",
-          file_path: filePath,
-          output_path: outputPath,
-          format,
-          validation,
-        },
-      );
-    }
-
-    await writeFilesExclusively(
-      [{ path: outputPath, data: patchResult.data }],
-      { sourcePaths: [filePath] },
-    );
-
-    return toolSuccess(
-      "Patched and semantically verified the HWPX document.",
-      {
-        output_path: outputPath,
-        format,
-        applied: patchResult.applied,
-        skipped: patchResult.skipped,
-        verification: patchResult.verification ?? null,
-        complete,
-      },
-    );
   } catch (error: unknown) {
     const message = errorMessage(error);
     if (error instanceof HwpxOutputRequiredError) {
@@ -269,6 +162,17 @@ export async function handleHwpPatchDocument(
         code: error.code,
         error: message,
       });
+    }
+    if (errorCode(error, "PATCH_ERROR") === "UNSUPPORTED_FORMAT") {
+      return toolError(
+        "Document patching supports only HWPX files (detected: unknown).",
+        {
+          code: "UNSUPPORTED_PATCH_FORMAT",
+          file_path: filePath ?? safeResolvedPath(input.file_path),
+          output_path: outputPath ?? safeResolvedPath(input.output_path),
+          format: "unknown",
+        },
+      );
     }
     return toolError(`Could not patch the document: ${message}`, {
       code: errorCode(error, "PATCH_ERROR"),
@@ -281,7 +185,7 @@ export async function handleHwpPatchDocument(
 
 export async function handleHwpFillForm(
   input: HwpFillFormInput,
-  dependencyOverrides: Partial<FillDependencies> = {},
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
   let outputPath: string | undefined;
@@ -316,34 +220,22 @@ export async function handleHwpFillForm(
         maximum_characters: MAX_TEXT_INPUT_CHARACTERS,
       });
     }
-    const dependencies = {
-      ...defaultFillDependencies,
-      ...dependencyOverrides,
+    const fillOptions = {
+      ...(input.formats === undefined ? {} : { formats: input.formats }),
+      ...(input.require_unique === undefined
+        ? {}
+        : { requireUnique: input.require_unique }),
     };
-    const sourceBytes = await readFileBounded(filePath, "source document");
-    const exactBuffer = toExactArrayBuffer(sourceBytes);
-    const format = await dependencies.detectDocumentFormat(exactBuffer);
-
-    if (format === "hwpx" || format === "hwp") {
-      const exactProtection = await inspectExactDocumentProtection(
-        sourceBytes,
-        format,
-      );
-      if (exactProtection !== undefined) {
-        return toolError(
-          `Cannot fill the protected document: ${exactProtection.error}`,
-          {
-            code: exactProtection.code,
-            error: exactProtection.error,
-            file_path: filePath,
-            output_path: outputPath,
-            format,
-          },
-        );
-      }
-    }
+    const snapshot = await openDocumentSnapshot(filePath, {
+      workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+        input: { fields: input.fields },
+        options: fillOptions,
+      }),
+    });
+    const format = snapshot.metadata.shallowFormat.candidate;
 
     if (format === "hwp") {
+      await closeUnconsumedSnapshot(snapshot);
       return toolError(
         "Preserve-form filling is not supported for binary HWP. Read the source and create or edit an HWPX document instead.",
         {
@@ -355,6 +247,7 @@ export async function handleHwpFillForm(
       );
     }
     if (format !== "hwpx") {
+      await closeUnconsumedSnapshot(snapshot);
       return toolError(
         `Preserve-form filling supports only HWPX files (detected: ${format}).`,
         {
@@ -366,104 +259,43 @@ export async function handleHwpFillForm(
       );
     }
 
-    const preflight = await dependencies.parseDocument(exactBuffer);
-    if (!preflight.success) {
-      const safeError = redactFieldValues(preflight.error, input.fields);
-      return toolError(`Cannot fill the document: ${safeError}`, {
-        code: safeFillErrorCode(preflight.code, "PARSE_ERROR", input.fields),
-        error: safeError,
-        file_path: filePath,
-        output_path: outputPath,
-        format,
-      });
-    }
-
-    const inputs = buildFillInputs(input.fields, input.formats);
-    let filled: FormField[];
-    let unmatched: string[];
-    let rejected: string[];
-    let filledBuffer: ArrayBuffer;
-    if (input.require_unique === true) {
-      const guarded = await dependencies.fillWithUniqueGuard(
-        inputs,
-        (values, blockedLabels) =>
-          dependencies.fillHwpxDocument(
-            exactBuffer,
-            values,
-            blockedLabels,
-          ),
-      );
-      filled = guarded.filled;
-      unmatched = guarded.unmatched;
-      rejected = guarded.rejected;
-      filledBuffer = guarded.buffer;
-    } else {
-      const fillResult = await dependencies.fillFormDocument(
-        exactBuffer,
-        inputs,
-        "hwpx-preserve",
-      );
-      if (
-        fillResult.format !== "hwpx-preserve" ||
-        typeof fillResult.output === "string"
-      ) {
+    const fillResult = await facade.fill(
+      snapshot,
+      input.fields,
+      fillOptions,
+    );
+    try {
+      const metadata = readFillMetadata(fillResult.resultMetadata);
+      const { filled, unmatched, rejected } = metadata;
+      const validation = fillResult.validation;
+      const presentedValidation = redactValidation(validation, input.fields);
+      if (!validation.ok) {
         return toolError(
-          "Preserve-form fill returned an unexpected output format; no output was written.",
+          "Filled HWPX failed structural validation; no output was written.",
           {
-            code: "FILL_OUTPUT_INVALID",
+            code: "HWPX_VALIDATION_FAILED",
             file_path: filePath,
             output_path: outputPath,
-            format: fillResult.format,
+            validation: presentedValidation,
           },
         );
       }
-      filled = fillResult.fill.filled;
-      unmatched = fillResult.fill.unmatched;
-      rejected = [];
-      filledBuffer = fillResult.output;
-    }
 
-    const validation = await dependencies.validateHwpxDocument(
-      filledBuffer,
-    );
-    const presentedValidation = redactValidation(validation, input.fields);
-    if (!validation.ok) {
-      return toolError(
-        "Filled HWPX failed structural validation; no output was written.",
-        {
-          code: "HWPX_VALIDATION_FAILED",
-          file_path: filePath,
-          output_path: outputPath,
-          validation: presentedValidation,
-        },
-      );
-    }
-    const reparsed = await dependencies.parseDocument(filledBuffer);
-    if (!reparsed.success) {
-      const safeError = redactFieldValues(reparsed.error, input.fields);
-      return toolError(
-        `Filled HWPX could not be reparsed; no output was written: ${safeError}`,
-        {
-          code: "FILL_VERIFICATION_FAILED",
-          error: safeError,
-          file_path: filePath,
-          output_path: outputPath,
-        },
-      );
-    }
+      await fillResult.writeOutputExclusively(outputPath, {
+        sourcePaths: [filePath],
+      });
 
-    await writeFilesExclusively(
-      [{ path: outputPath, data: new Uint8Array(filledBuffer) }],
-      { sourcePaths: [filePath] },
-    );
-
-    return toolSuccess(`Filled ${filled.length} HWPX fields.`, {
-      output_path: outputPath,
-      filled: presentFilledFields(filled, input.mask_values !== false),
-      unmatched,
-      rejected,
-      validation: presentedValidation,
-    });
+      return toolSuccess(`Filled ${filled.length} HWPX fields.`, {
+        output_path: outputPath,
+        filled_count: filled.length,
+        filled: presentFilledFields(filled, input.mask_values !== false),
+        unmatched,
+        rejected,
+        validation: presentedValidation,
+      });
+    } finally {
+      await fillResult.cleanup();
+    }
   } catch (error: unknown) {
     const message = redactFieldValues(errorMessage(error), input.fields);
     if (error instanceof HwpxOutputRequiredError) {
@@ -471,6 +303,17 @@ export async function handleHwpFillForm(
         code: error.code,
         error: message,
       });
+    }
+    if (errorCode(error, "FILL_ERROR") === "UNSUPPORTED_FORMAT") {
+      return toolError(
+        "Preserve-form filling supports only HWPX files (detected: unknown).",
+        {
+          code: "UNSUPPORTED_FILL_FORMAT",
+          file_path: filePath ?? safeResolvedPath(input.file_path),
+          output_path: outputPath ?? safeResolvedPath(input.output_path),
+          format: "unknown",
+        },
+      );
     }
     return toolError(`Could not fill the HWPX form: ${message}`, {
       code: safeFillErrorCode(errorCode(error, "FILL_ERROR"), "FILL_ERROR", input.fields),
@@ -529,34 +372,21 @@ export function registerHwpFillForm(server: McpServer): void {
   );
 }
 
-function patchFailure(
-  result: PatchResult,
-  filePath: string,
-  outputPath: string,
-  format: string,
-): CallToolResult {
-  return toolError(`Document patch failed: ${result.error ?? "unknown error"}`, {
-    code: "PATCH_FAILED",
-    error: result.error ?? "unknown error",
-    file_path: filePath,
-    output_path: outputPath,
-    format,
-    applied: result.applied,
-    skipped: result.skipped,
-    verification: result.verification ?? null,
-  });
+interface PatchMetadata {
+  readonly applied: number;
+  readonly skipped: readonly SafeJsonValue[];
+  readonly verification: SafeJsonValue | null;
 }
 
-function buildFillInputs(
-  fields: Record<string, string | string[]>,
-  formats?: Record<string, string>,
-): Record<string, FillInput> {
-  return Object.fromEntries(
-    Object.entries(fields).map(([label, value]) => {
-      const format = formats?.[label];
-      return [label, format === undefined ? value : { value, format }];
-    }),
-  );
+interface FilledField extends Readonly<Record<string, SafeJsonValue>> {
+  readonly label: string;
+  readonly value: string;
+}
+
+interface FillMetadata {
+  readonly filled: readonly FilledField[];
+  readonly unmatched: readonly string[];
+  readonly rejected: readonly string[];
 }
 
 function redactFieldValues(
@@ -585,17 +415,17 @@ function* fieldStringValues(
 }
 
 function redactValidation(
-  validation: ValidateResult,
+  validation: DocumentResultPayload<"validateHwpx">,
   fields: Record<string, string | string[]>,
-): ValidateResult {
+): DocumentResultPayload<"validateHwpx"> {
   return {
     ...validation,
     issues: validation.issues.map((issue) => ({
       ...issue,
-      path:
-        issue.path === undefined
+      entry:
+        issue.entry === undefined
           ? undefined
-          : redactFieldValues(issue.path, fields),
+          : redactFieldValues(issue.entry, fields),
       message: redactFieldValues(issue.message, fields),
     })),
   };
@@ -614,11 +444,11 @@ function safeFillErrorCode(
 }
 
 function presentFilledFields(
-  filled: FormField[],
+  filled: readonly FilledField[],
   maskValues: boolean,
-): Array<FormField | Omit<FormField, "value"> & { value_length: number }> {
+): Array<FilledField | (Omit<FilledField, "value"> & { value_length: number })> {
   if (!maskValues) {
-    return filled;
+    return [...filled];
   }
   return filled.map(({ value, ...field }) => ({
     ...field,
@@ -626,21 +456,11 @@ function presentFilledFields(
   }));
 }
 
-async function detectPreciseDocumentFormat(
-  buffer: ArrayBuffer,
-): Promise<FileType> {
-  const initialFormat = detectFormat(buffer);
-  if (initialFormat === "hwpx") {
-    return detectZipFormat(buffer);
-  }
-  if (initialFormat === "hwp") {
-    return detectOle2Format(buffer);
-  }
-  return initialFormat;
-}
-
-function patchIsComplete(result: PatchResult): boolean {
-  const stats = result.verification?.stats;
+function patchIsComplete(result: PatchMetadata): boolean {
+  const verification = result.verification;
+  const stats = isRecord(verification) && isRecord(verification.stats)
+    ? verification.stats
+    : undefined;
   return (
     result.skipped.length === 0 &&
     stats !== undefined &&
@@ -650,10 +470,72 @@ function patchIsComplete(result: PatchResult): boolean {
   );
 }
 
-function toExactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
+function readPatchMetadata(metadata: SafeJsonValue | undefined): PatchMetadata {
+  if (
+    !isRecord(metadata) ||
+    metadata.operation !== "patchHwpx" ||
+    !Number.isSafeInteger(metadata.applied) ||
+    Number(metadata.applied) < 0 ||
+    !Array.isArray(metadata.skipped)
+  ) {
+    throw protocolError();
+  }
+  return {
+    applied: Number(metadata.applied),
+    skipped: [...metadata.skipped] as SafeJsonValue[],
+    verification: metadata.verification ?? null,
+  };
+}
+
+function readFillMetadata(metadata: SafeJsonValue | undefined): FillMetadata {
+  if (
+    !isRecord(metadata) ||
+    metadata.operation !== "fillHwpx" ||
+    !Array.isArray(metadata.filled) ||
+    !isStringArray(metadata.unmatched) ||
+    !isStringArray(metadata.rejected)
+  ) {
+    throw protocolError();
+  }
+  const filled = metadata.filled.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.label !== "string" ||
+      typeof entry.value !== "string"
+    ) {
+      throw protocolError();
+    }
+    return { ...entry, label: entry.label, value: entry.value } as FilledField;
+  });
+  return {
+    filled,
+    unmatched: [...metadata.unmatched],
+    rejected: [...metadata.rejected],
+  };
+}
+
+async function closeUnconsumedSnapshot(
+  snapshot: Awaited<ReturnType<typeof openDocumentSnapshot>>,
+): Promise<void> {
+  try {
+    await snapshot.verifySourceUnchanged();
+  } finally {
+    await snapshot.cleanup();
+  }
+}
+
+function protocolError(): Error {
+  const error = new Error("The isolated engine returned an invalid HWPX result.");
+  Object.assign(error, { code: "ENGINE_PROTOCOL_ERROR" });
+  return error;
+}
+
+function isRecord(value: unknown): value is Record<string, SafeJsonValue> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function safeResolvedPath(path: unknown): string | undefined {

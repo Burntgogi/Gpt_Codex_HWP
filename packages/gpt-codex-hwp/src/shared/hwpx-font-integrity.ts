@@ -10,6 +10,7 @@ import {
   loadBoundedHwpxZip,
   type BoundedZipLoader,
 } from "./zip-preflight.js";
+import { parsePolicyXml } from "./xml-policy.js";
 
 export type HwpScript =
   | "hangul"
@@ -32,6 +33,7 @@ export type FontReferenceIssueCode =
   | "FONT_FACE_NAME_MISSING"
   | "CHAR_PR_ID_INVALID"
   | "CHAR_PR_ID_DUPLICATE"
+  | "CHAR_PR_REFERENCE_INVALID"
   | "FONT_REF_MISSING"
   | "FONT_REF_DUPLICATE"
   | "FONT_REF_ATTRIBUTE_MISSING"
@@ -40,7 +42,7 @@ export type FontReferenceIssueCode =
 
 export interface FontReferenceIssue {
   code: FontReferenceIssueCode;
-  path: "Contents/header.xml";
+  path: string;
   message: string;
   char_pr_id?: string;
   script?: HwpScript;
@@ -94,8 +96,10 @@ export async function inspectHwpxFontReferences(
   input: ArrayBuffer | Uint8Array,
   loadZip?: BoundedZipLoader,
 ): Promise<FontReferenceInspection> {
-  const { document } = await loadArchiveAndHeader(input, loadZip);
-  return inspectDocument(document);
+  const { zip, document } = await loadArchiveAndHeader(input, loadZip);
+  const inspection = inspectDocument(document);
+  await inspectCharacterShapeReferences(zip, document, inspection.issues);
+  return inspection;
 }
 
 export async function normalizeGeneratedFontReferences(
@@ -410,6 +414,40 @@ function inspectDocument(document: Document): FontReferenceInspection {
   }
 
   return { issues };
+}
+
+async function inspectCharacterShapeReferences(
+  zip: JSZip,
+  header: Document,
+  issues: FontReferenceIssue[],
+): Promise<void> {
+  const ids = new Set(
+    headerCharacterProperties(header)
+      .map((charPr) => charPr.getAttribute("id"))
+      .filter((id): id is string => id !== null && NON_NEGATIVE_INTEGER.test(id)),
+  );
+  const sectionNames = Object.keys(zip.files)
+    .filter((name) => /^Contents\/section[0-9]+\.xml$/iu.test(name))
+    .sort((left, right) => left.localeCompare(right, "en-US"));
+  for (const name of sectionNames) {
+    const entry = zip.file(name);
+    if (entry === null) continue;
+    const section = parsePolicyXml(await entry.async("uint8array"), name);
+    const elements = section.getElementsByTagName("*");
+    for (let index = 0; index < elements.length; index += 1) {
+      const element = elements.item(index);
+      if (element === null || !element.hasAttribute("charPrIDRef")) continue;
+      const reference = element.getAttribute("charPrIDRef") ?? "";
+      if (!NON_NEGATIVE_INTEGER.test(reference) || !ids.has(reference)) {
+        issues.push({
+          code: "CHAR_PR_REFERENCE_INVALID",
+          path: name,
+          message: `A document run references missing character shape ID ${reference || "(empty)"}.`,
+          char_pr_id: reference,
+        });
+      }
+    }
+  }
 }
 
 function headerCharacterProperties(document: Document): Element[] {
