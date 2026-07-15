@@ -21,7 +21,7 @@ export function resolveLocalPath(localPath: string, label = "path"): string {
   return resolved;
 }
 
-class UnsafeWindowsPathError extends Error {
+export class UnsafeWindowsPathError extends Error {
   readonly code: "UNSAFE_OUTPUT_PATH" | "UNSAFE_LOCAL_PATH";
 
   constructor(label: string, reason: string) {

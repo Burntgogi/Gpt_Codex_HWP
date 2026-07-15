@@ -656,7 +656,8 @@ function decodeRenderSpool(bytes: Uint8Array): DocumentResultPayload<"render"> {
   } catch {
     throw protocolError();
   }
-  if (!isRecord(raw) || raw.version !== RENDER_SPOOL_VERSION ||
+  if (!isRecord(raw) || !hasExactKeys(raw, ["version", "svgBytes"], ["metadata"]) ||
+    raw.version !== RENDER_SPOOL_VERSION ||
     !Number.isSafeInteger(raw.svgBytes) || Number(raw.svgBytes) <= 0) {
     throw protocolError();
   }
@@ -675,6 +676,16 @@ function decodeRenderSpool(bytes: Uint8Array): DocumentResultPayload<"render"> {
   };
   validateResultPayload("render", payload);
   return payload as DocumentResultPayload<"render">;
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key));
 }
 
 function decodeParseSpool(bytes: Uint8Array): DocumentResultPayload<"parse"> {

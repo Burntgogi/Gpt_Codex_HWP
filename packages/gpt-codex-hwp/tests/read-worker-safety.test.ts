@@ -516,6 +516,66 @@ test("render spool validation and cancellation create no output and always clean
       (error: unknown) => (error as { code?: string }).code === "ENGINE_PROTOCOL_ERROR",
     );
     await assertMissing(changedPath);
+
+    const coded = await fixtureRenderSpool(
+      sourcePath,
+      resultRoot,
+      ["spool-base64", safe.toString("base64")],
+      "task5-coded-render-error",
+    );
+    const codedPath = join(root, "coded.svg");
+    await assert.rejects(
+      writeRender({
+        payload: coded,
+        async verifySourceUnchanged() {
+          throw Object.assign(new Error("sensitive verifier detail"), {
+            code: "ATTACKER_CONTROLLED_CODE",
+          });
+        },
+      }, codedPath, { sourcePaths: [sourcePath] }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "ENGINE_PROTOCOL_ERROR");
+        assert.equal(
+          (error as Error).message,
+          "The document engine returned an invalid protocol message.",
+        );
+        assert.doesNotMatch(String(error), /sensitive|attacker/iu);
+        return true;
+      },
+    );
+    await assertMissing(codedPath);
+
+    const descriptorFailure = await fixtureRenderSpool(
+      sourcePath,
+      resultRoot,
+      ["spool-base64", safe.toString("base64")],
+      "task5-descriptor-read-error",
+    );
+    const descriptorPath = join(root, "descriptor.svg");
+    await assert.rejects(
+      writeRender({
+        payload: descriptorFailure,
+        async verifySourceUnchanged() { assert.fail("descriptor failed first"); },
+      }, descriptorPath, {
+        sourcePaths: [sourcePath],
+        async unitTestReadInto() {
+          throw Object.assign(new Error("sensitive fd C:\\private\\result.svg"), {
+            code: "EBADF",
+            path: "C:\\private\\result.svg",
+          });
+        },
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "ENGINE_PROTOCOL_ERROR");
+        assert.equal(
+          (error as Error).message,
+          "The document engine returned an invalid protocol message.",
+        );
+        assert.doesNotMatch(String(error), /EBADF|private|result\.svg/iu);
+        return true;
+      },
+    );
+    await assertMissing(descriptorPath);
     assert.deepEqual(await readdir(resultRoot), []);
   } finally {
     await rm(root, { recursive: true, force: true });

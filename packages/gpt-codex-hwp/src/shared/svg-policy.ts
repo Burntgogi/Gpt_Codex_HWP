@@ -1,61 +1,135 @@
 const MAX_SVG_TAG_CHARACTERS = 64 * 1024;
-const EDGE_CHARACTERS = 1024;
+const MAX_SVG_NESTING_DEPTH = 1024;
+const SAFE_DATA_IMAGE_PREFIXES = [
+  "data:image/png;base64,",
+  "data:image/jpeg;base64,",
+  "data:image/jpg;base64,",
+  "data:image/gif;base64,",
+  "data:image/webp;base64,",
+] as const;
+
+interface DataImageState {
+  characters: number;
+  padding: number;
+}
 
 export class IncrementalSvgPolicyValidator {
-  #leading = "";
-  #trailing = "";
   #tag = "";
   #quote: "\"" | "'" | undefined;
-  #tagCount = 0;
-  #rootSelfClosing = false;
-  #closedRoot = false;
+  #referenceCandidate: string | undefined;
+  #dataImage: DataImageState | undefined;
+  #elements: string[] = [];
+  #rootSeen = false;
+  #rootClosed = false;
 
   push(text: string): void {
-    if (text.length === 0) return;
-    if (this.#leading.length < EDGE_CHARACTERS) {
-      this.#leading = (this.#leading + text).slice(0, EDGE_CHARACTERS);
-    }
-    this.#trailing = (this.#trailing + text).slice(-EDGE_CHARACTERS);
-    let offset = 0;
-    while (offset < text.length) {
+    for (const character of text) {
       if (this.#tag.length === 0) {
-        const start = text.indexOf("<", offset);
-        if (start === -1) return;
-        this.#tag = "<";
-        offset = start + 1;
+        if (character === "<") {
+          this.#tag = "<";
+        } else if (this.#elements.length === 0 && /\S/u.test(character)) {
+          throw new Error("SVG content outside the root element is not allowed.");
+        }
+        continue;
       }
-      while (offset < text.length && this.#tag.length > 0) {
-        const character = text[offset++]!;
-        this.#appendTag(character);
-        if (this.#quote !== undefined) {
-          if (character === this.#quote) this.#quote = undefined;
-          continue;
-        }
-        if (character === "\"" || character === "'") {
-          this.#quote = character;
-          continue;
-        }
-        if (character === ">") {
-          inspectSvgTag(this.#tag);
-          if (this.#tagCount === 0 && /^<\s*svg\b[^<>]*\/\s*>$/iu.test(this.#tag)) {
-            this.#rootSelfClosing = true;
-          }
-          if (/^<\s*\/\s*svg\s*>$/iu.test(this.#tag)) this.#closedRoot = true;
-          this.#tagCount += 1;
-          this.#tag = "";
-        }
-      }
+      this.#pushTagCharacter(character);
     }
   }
 
   finish(): void {
-    const endsWithClosingRoot = /<\/svg\s*>\s*$/iu.test(this.#trailing);
-    const endsWithSelfClosingRoot = /\/\s*>\s*$/u.test(this.#trailing);
-    if (this.#tag.length !== 0 || !/^\s*<svg\b/iu.test(this.#leading) ||
-      (!(this.#closedRoot && endsWithClosingRoot) &&
-        !(this.#rootSelfClosing && this.#tagCount === 1 && endsWithSelfClosingRoot))) {
+    if (this.#tag.length !== 0 || this.#quote !== undefined ||
+      !this.#rootSeen || !this.#rootClosed || this.#elements.length !== 0) {
       throw new Error("SVG structure is invalid.");
     }
+  }
+
+  #pushTagCharacter(character: string): void {
+    if (this.#quote !== undefined) {
+      if (character === this.#quote) {
+        if (this.#dataImage !== undefined) {
+          assertCompleteBase64(this.#dataImage);
+          this.#appendTag("AAAA");
+        } else if (this.#referenceCandidate !== undefined) {
+          this.#appendTag(this.#referenceCandidate);
+        }
+        this.#dataImage = undefined;
+        this.#referenceCandidate = undefined;
+        this.#quote = undefined;
+        this.#appendTag(character);
+        return;
+      }
+      if (this.#dataImage !== undefined) {
+        pushBase64Character(this.#dataImage, character);
+        return;
+      }
+      if (this.#referenceCandidate !== undefined) {
+        this.#referenceCandidate += character;
+        const lower = this.#referenceCandidate.toLocaleLowerCase("en-US");
+        if (SAFE_DATA_IMAGE_PREFIXES.some((prefix) => prefix === lower)) {
+          this.#appendTag(this.#referenceCandidate);
+          this.#referenceCandidate = undefined;
+          this.#dataImage = { characters: 0, padding: 0 };
+        } else if (!SAFE_DATA_IMAGE_PREFIXES.some((prefix) => prefix.startsWith(lower))) {
+          this.#appendTag(this.#referenceCandidate);
+          this.#referenceCandidate = undefined;
+        }
+        return;
+      }
+      this.#appendTag(character);
+      return;
+    }
+
+    if (character === "<") throw new Error("SVG tag structure is invalid.");
+    if (character === "\"" || character === "'") {
+      const isReference = /(?:^|\s)(?:href|xlink:href|src)\s*=\s*$/iu.test(this.#tag);
+      this.#appendTag(character);
+      this.#quote = character;
+      if (isReference) this.#referenceCandidate = "";
+      return;
+    }
+    this.#appendTag(character);
+    if (character === ">") {
+      const tag = this.#tag;
+      this.#tag = "";
+      inspectSvgTag(tag);
+      this.#inspectStructure(tag);
+    }
+  }
+
+  #inspectStructure(tag: string): void {
+    const body = tag.slice(1, -1).trim();
+    if (body.startsWith("!") || body.startsWith("?")) {
+      throw new Error("SVG declarations are not allowed.");
+    }
+    const closing = /^\/\s*([a-z_][\w:.-]*)\s*$/iu.exec(body);
+    if (closing !== null) {
+      const expected = this.#elements.pop();
+      const actual = closing[1]!.toLocaleLowerCase("en-US");
+      if (expected === undefined || expected !== actual) {
+        throw new Error("SVG element nesting is invalid.");
+      }
+      if (this.#elements.length === 0) this.#rootClosed = true;
+      return;
+    }
+
+    const opening = /^([a-z_][\w:.-]*)\b/iu.exec(body);
+    if (opening === null) throw new Error("SVG tag structure is invalid.");
+    const name = opening[1]!.toLocaleLowerCase("en-US");
+    const selfClosing = /\/\s*$/u.test(body);
+    if (this.#elements.length === 0) {
+      if (this.#rootSeen || this.#rootClosed || name !== "svg") {
+        throw new Error("SVG must contain exactly one top-level root.");
+      }
+      this.#rootSeen = true;
+    }
+    if (selfClosing) {
+      if (this.#elements.length === 0) this.#rootClosed = true;
+      return;
+    }
+    if (this.#elements.length >= MAX_SVG_NESTING_DEPTH) {
+      throw new Error("SVG nesting exceeds the safety limit.");
+    }
+    this.#elements.push(name);
   }
 
   #appendTag(fragment: string): void {
@@ -73,21 +147,48 @@ export function assertSafeSvgString(svg: unknown): asserts svg is string {
   validator.finish();
 }
 
+function pushBase64Character(state: DataImageState, character: string): void {
+  if (character === "=") {
+    state.padding += 1;
+    if (state.padding > 2) throw new Error("SVG data image has invalid base64 padding.");
+    return;
+  }
+  if (!/[A-Za-z0-9+/]/u.test(character) || state.padding !== 0) {
+    throw new Error("SVG data image has an invalid base64 payload.");
+  }
+  state.characters += 1;
+}
+
+function assertCompleteBase64(state: DataImageState): void {
+  if (state.characters === 0 ||
+    (state.padding === 0 && state.characters % 4 !== 0) ||
+    (state.padding === 1 && state.characters % 4 !== 3) ||
+    (state.padding === 2 && state.characters % 4 !== 2)) {
+    throw new Error("SVG data image has an invalid base64 payload.");
+  }
+}
+
 function inspectSvgTag(tag: string): void {
-  const lower = tag.toLocaleLowerCase("en-US");
-  if (/^<\s*\/?\s*(?:[a-z_][\w.-]*:)?(?:script|foreignobject|style)\b/u.test(lower) ||
+  const decoded = decodeXmlEntities(tag);
+  const lower = decoded.toLocaleLowerCase("en-US");
+  if (lower.includes("\\") ||
+    /^<\s*\/?\s*(?:[a-z_][\w.-]*:)?(?:script|foreignobject|style|animate|set|animatetransform|animatemotion|mpath)\b/u.test(lower) ||
+    /\bstyle\s*=/u.test(lower) ||
     /\bon[a-z][\w:.-]*\s*=/u.test(lower) ||
     /j\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t\s*:/u.test(lower) ||
     /@import\b/u.test(lower)) {
     throw new Error("SVG active content is not allowed.");
   }
 
+  if (/\b(?:href|xlink:href|src)\s*=\s*(?!["'])/u.test(lower)) {
+    throw new Error("SVG reference attributes must be quoted.");
+  }
   for (const match of lower.matchAll(
     /\b(?:href|xlink:href|src)\s*=\s*(["'])(.*?)\1/gu,
   )) {
     const value = match[2]!.trim();
     if (value.length > 0 && !value.startsWith("#") &&
-      !/^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/u.test(value)) {
+      !/^data:image\/(?:png|jpeg|jpg|gif|webp);base64,[a-z0-9+/]+=*$/u.test(value)) {
       throw new Error("SVG external references are not allowed.");
     }
   }
@@ -96,4 +197,27 @@ function inspectSvgTag(tag: string): void {
       throw new Error("SVG external URL references are not allowed.");
     }
   }
+}
+
+function decodeXmlEntities(value: string): string {
+  const decoded = value.replace(
+    /&(?:#x([0-9a-f]{1,6})|#([0-9]{1,7})|(amp|lt|gt|quot|apos));/giu,
+    (entity, hex: string | undefined, decimal: string | undefined, named: string | undefined) => {
+      if (named !== undefined) {
+        return ({ amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" } as const)[
+          named.toLocaleLowerCase("en-US") as "amp" | "lt" | "gt" | "quot" | "apos"
+        ];
+      }
+      const codePoint = Number.parseInt(hex ?? decimal!, hex === undefined ? 10 : 16);
+      if (codePoint === 0 || codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        throw new Error("SVG contains an invalid XML entity.");
+      }
+      return String.fromCodePoint(codePoint);
+    },
+  );
+  if (/&(?:#|[a-z])/iu.test(decoded)) {
+    throw new Error("SVG contains an unsupported XML entity.");
+  }
+  return decoded;
 }

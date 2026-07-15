@@ -611,6 +611,10 @@ test("incremental SVG policy rejects split active tokens and quoted tag terminat
     '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:x">x</a></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.test/x"/></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><path style="fill:url(https://evil.test/x)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><path style="fill:u&#x72;l(https://evil.test/x)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><path fill="u\\72 l(https://evil.test/x)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><set href="#i" attributeName="href" to="https://evil.test/x"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><svg:set href="#i" attributeName="href" to="https://evil.test/x"/></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.test/a>rest"/></svg>',
   ]) {
     const validator = new IncrementalSvgPolicyValidator();
@@ -619,6 +623,92 @@ test("incremental SVG policy rejects split active tokens and quoted tag terminat
       validator.finish();
     }, undefined, unsafe);
   }
+});
+
+test("incremental SVG policy streams only bounded safe embedded image payloads", async () => {
+  const { IncrementalSvgPolicyValidator, assertSafeSvgString } = await import(
+    "../src/shared/svg-policy.js"
+  );
+  const payload = Buffer.alloc(331_169, 0xa5).toString("base64");
+  const safe = `<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g"/></defs><image href="data:image/png;base64,${payload}" x="1"/><path fill="url(#g)"/></svg>`;
+  const validator = new IncrementalSvgPolicyValidator();
+  for (const character of safe) validator.push(character);
+  assert.doesNotThrow(() => validator.finish());
+
+  for (const type of ["png", "jpeg", "jpg", "gif", "webp"]) {
+    assert.doesNotThrow(() => assertSafeSvgString(
+      `<svg><image src="data:image/${type};base64,AAAA"/></svg>`,
+    ));
+  }
+  for (const unsafe of [
+    '<svg><image href="data:image/png;base64,AAA"/></svg>',
+    '<svg><image href="data:image/png;base64,AA*A"/></svg>',
+    '<svg><image href="data:image/png;base64,AA=A"/></svg>',
+    '<svg><image href="data:image/png;base64,A==="/></svg>',
+    '<svg><image href="data:image/svg+xml;base64,AAAA"/></svg>',
+    '<svg><image href="https://evil.test/x.png"/></svg>',
+    '<svg><image href="data:image/png;base64,AAAA" onload="run()"/></svg>',
+    '<svg><image href="data:image/png;base64,AAAA',
+    '<svg><image href="data:image/png;base64,AAAA</svg>',
+    `<svg><path aria-label="${"x".repeat(64 * 1024)}"/></svg>`,
+  ]) {
+    const split = new IncrementalSvgPolicyValidator();
+    assert.throws(() => {
+      for (const character of unsafe) split.push(character);
+      split.finish();
+    }, undefined, unsafe);
+  }
+});
+
+test("incremental SVG policy rejects active encodings, dynamic URL mutation, and extra roots", async () => {
+  const { assertSafeSvgString } = await import("../src/shared/svg-policy.js");
+  for (const unsafe of [
+    '<svg><path fill="u&#x72;l(https://evil.test/x)"/></svg>',
+    '<svg><path fill="u\\72 l(https://evil.test/x)"/></svg>',
+    '<svg><animate/></svg>',
+    '<svg><x:set/></svg>',
+    '<svg><animateTransform/></svg>',
+    '<svg><x:animateMotion/></svg>',
+    '<svg><mpath/></svg>',
+    '<svg></svg><svg></svg>',
+    '<svg></svg>trailing',
+    '<svg></svg><text/>',
+  ]) {
+    assert.throws(() => assertSafeSvgString(unsafe), undefined, unsafe);
+  }
+  assert.doesNotThrow(() => assertSafeSvgString(
+    '<svg><defs><linearGradient id="g"/></defs><svg><path fill="url(#g)"/></svg></svg>',
+  ));
+});
+
+test("render spool decoder rejects unknown metadata header keys", async () => {
+  const { decodeDocumentResultSpool, encodeDocumentResultSpool } = await import(
+    "../src/workers/document-compute-backend.js"
+  );
+  const encoded = Buffer.from(encodeDocumentResultSpool("render", {
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+  }));
+  const headerBytes = encoded.readUInt32BE(0);
+  const header = JSON.parse(encoded.subarray(4, 4 + headerBytes).toString("utf8"));
+  const replacement = Buffer.from(JSON.stringify({ ...header, unexpected: "value" }), "utf8");
+  const malformed = Buffer.concat([
+    Buffer.from([
+      replacement.byteLength >>> 24,
+      replacement.byteLength >>> 16,
+      replacement.byteLength >>> 8,
+      replacement.byteLength,
+    ]),
+    replacement,
+    encoded.subarray(4 + headerBytes),
+  ]);
+  const owned = spoolSnapshot(Buffer.from("input"));
+  const client = createFixtureChildClient("spool-base64", malformed.toString("base64"));
+  const result = await client.run(request("render"), owned.snapshot);
+  await assert.rejects(
+    decodeDocumentResultSpool(result as IntegrityVerifiedResultSpool<"render">),
+    hasEngineCode("ENGINE_PROTOCOL_ERROR"),
+  );
+  owned.cleanup();
 });
 
 test("document worker operations parse spool header uses fatal UTF-8 and cleans its one-shot handle", { timeout: 30_000 }, async () => {

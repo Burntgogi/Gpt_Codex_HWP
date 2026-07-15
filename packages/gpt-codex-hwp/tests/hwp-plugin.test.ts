@@ -20,6 +20,7 @@ import JSZip from "jszip";
 import {
   markdownToHwpx,
   parse,
+  placeSealHwpx,
   validateHwpx,
   type MarkdownToHwpxOptions,
   type ParseOptions,
@@ -1642,6 +1643,41 @@ test("hwp_render_preview renders generated HWPX with explicit reflow", async () 
   const svg = await readFile(outputPath, "utf8");
   assert.match(svg, /^\s*<svg\b/);
   assert.ok(svg.length > 100);
+});
+
+test("hwp_render_preview accepts the real embedded icon after seal-anchor insertion", { timeout: 60_000 }, async () => {
+  const { handleHwpRenderPreview } = await loadPreviewTool();
+  const testRoot = join(tmpRoot, "preview-embedded-icon");
+  const sourcePath = join(testRoot, "sealed.hwpx");
+  const outputPath = join(testRoot, "sealed.svg");
+  generatedPaths.add(testRoot);
+  await mkdir(testRoot, { recursive: true });
+
+  const source = await markdownToHwpx("# Embedded icon regression\n\nApproval: (인)");
+  const icon = await readFile(join(SOURCE_ROOT, "assets", "gpt-codex-hwp-icon.png"));
+  assert.equal(icon.byteLength, 331_169);
+  const placed = await placeSealHwpx(source, [{
+    anchor: "(인)",
+    image: new Uint8Array(icon.buffer, icon.byteOffset, icon.byteLength),
+    ext: "png",
+    mode: "overlap",
+  }]);
+  await writeFile(sourcePath, new Uint8Array(placed.buffer));
+
+  const result = await handleHwpRenderPreview({
+    file_path: sourcePath,
+    output_svg_path: outputPath,
+    reflow: true,
+  });
+  const details = structuredDetails(result);
+
+  assert.equal(result.isError, false, JSON.stringify(details));
+  assert.equal(details.output_svg_path, outputPath);
+  const svg = await readFile(outputPath, "utf8");
+  assert.ok(Buffer.byteLength(svg, "utf8") > 400_000);
+  const embedded = svg.match(/data:image\/png;base64,([A-Za-z0-9+/]+=*)/u);
+  assert.ok(embedded);
+  assert.ok(embedded[1].length > 64 * 1024);
 });
 
 test("hwp_render_preview without reflow or with false fails clearly and creates no output", async (t) => {

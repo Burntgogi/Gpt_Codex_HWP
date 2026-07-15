@@ -16,10 +16,14 @@ import {
 } from "../workers/document-protocol.js";
 import { isIntegrityVerifiedResultSpool } from "../workers/document-child-client.js";
 import {
+  OutputConflictError,
+  PathAliasError,
+  UnsafeOutputPathError,
   writeFileRangeExclusively,
   writeFilesExclusively,
   type ExclusiveOutputOptions,
 } from "./output.js";
+import { UnsafeWindowsPathError } from "./paths.js";
 import {
   MAX_PREVIEW_SVG_BYTES,
   ResourceLimitError,
@@ -40,6 +44,13 @@ export interface AuthorizedDocumentRenderResult {
 
 export interface DocumentRenderOutputOptions extends ExclusiveOutputOptions {
   readonly signal?: AbortSignal;
+  /** Unit-test-only fault injection for exercising descriptor read failures. */
+  readonly unitTestReadInto?: (
+    fd: number,
+    buffer: Buffer,
+    length: number,
+    position: number,
+  ) => Promise<number>;
 }
 
 export async function writeDocumentRenderResultExclusively(
@@ -56,7 +67,7 @@ export async function writeDocumentRenderResultExclusively(
         throw previewTooLargeError(svgBytes);
       }
     } catch (error: unknown) {
-      if (hasPublicCode(error)) throw error;
+      if (isSafePublicError(error)) throw error;
       throw protocolError();
     }
     requireNotAborted(options.signal);
@@ -93,6 +104,7 @@ async function writeRenderSpool(
       handle.fd,
       handle.sizeBytes,
       options.signal,
+      options.unitTestReadInto ?? readInto,
     );
     requireNotAborted(options.signal);
     await rendered.verifySourceUnchanged();
@@ -104,7 +116,7 @@ async function writeRenderSpool(
     }, { sourcePaths: options.sourcePaths });
     return validated.metadata;
   } catch (error: unknown) {
-    if (error instanceof DocumentEngineRunError || hasPublicCode(error)) throw error;
+    if (isSafePublicError(error)) throw error;
     throw protocolError();
   } finally {
     try {
@@ -119,13 +131,14 @@ async function validateRenderSpool(
   fd: number,
   sizeBytes: number,
   signal: AbortSignal | undefined,
+  read: typeof readInto,
 ): Promise<{
   readonly svgOffset: number;
   readonly svgBytes: number;
   readonly metadata?: SafeJsonValue;
 }> {
   requireNotAborted(signal);
-  const prefix = await readExactRange(fd, 0, RENDER_SPOOL_PREFIX_BYTES);
+  const prefix = await readExactRange(fd, 0, RENDER_SPOOL_PREFIX_BYTES, read);
   const headerBytes = Buffer.from(prefix).readUInt32BE(0);
   if (headerBytes <= 0 || headerBytes > MAX_SAFE_JSON_BYTES ||
     headerBytes > sizeBytes - RENDER_SPOOL_PREFIX_BYTES) throw protocolError();
@@ -134,6 +147,7 @@ async function validateRenderSpool(
     fd,
     RENDER_SPOOL_PREFIX_BYTES,
     headerBytes,
+    read,
   );
   let raw: unknown;
   try {
@@ -164,7 +178,7 @@ async function validateRenderSpool(
     while (consumed < svgBytes) {
       requireNotAborted(signal);
       const requested = Math.min(buffer.byteLength, svgBytes - consumed);
-      const count = await readInto(fd, buffer, requested, svgOffset + consumed);
+      const count = await read(fd, buffer, requested, svgOffset + consumed);
       if (count === 0) throw protocolError();
       validator.push(decoder.decode(buffer.subarray(0, count), { stream: true }));
       consumed += count;
@@ -186,11 +200,12 @@ async function readExactRange(
   fd: number,
   position: number,
   sizeBytes: number,
+  read: typeof readInto,
 ): Promise<Uint8Array> {
   const result = Buffer.allocUnsafeSlow(sizeBytes);
   let offset = 0;
   while (offset < sizeBytes) {
-    const count = await readInto(fd, result.subarray(offset), sizeBytes - offset, position + offset);
+    const count = await read(fd, result.subarray(offset), sizeBytes - offset, position + offset);
     if (count === 0) throw protocolError();
     offset += count;
   }
@@ -230,9 +245,13 @@ function previewTooLargeError(actualAtLeast: number): ResourceLimitError {
   );
 }
 
-function hasPublicCode(value: unknown): boolean {
-  return typeof value === "object" && value !== null &&
-    "code" in value && typeof value.code === "string" && value.code.length > 0;
+function isSafePublicError(value: unknown): boolean {
+  return value instanceof DocumentEngineRunError ||
+    value instanceof ResourceLimitError ||
+    value instanceof OutputConflictError ||
+    value instanceof PathAliasError ||
+    value instanceof UnsafeOutputPathError ||
+    value instanceof UnsafeWindowsPathError;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
