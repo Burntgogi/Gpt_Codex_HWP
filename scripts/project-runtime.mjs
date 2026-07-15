@@ -84,7 +84,7 @@ export async function buildRuntime({ root, outputRoot, swapId = randomUUID(), fi
 
   let ownsStage = false;
   let ownsBackup = false;
-  let preserveRollbackEvidence = false;
+  let preserveStageEvidence = false;
   try {
     await mkdir(stage, { recursive: false });
     ownsStage = true;
@@ -103,7 +103,7 @@ export async function buildRuntime({ root, outputRoot, swapId = randomUUID(), fi
           await rename(backup, output);
           ownsBackup = false;
         } catch (rollbackError) {
-          preserveRollbackEvidence = true;
+          preserveStageEvidence = true;
           throw runtimeRollbackError("promotion failed and the prior runtime could not be restored", [
             promotionError,
             rollbackError,
@@ -118,55 +118,12 @@ export async function buildRuntime({ root, outputRoot, swapId = randomUUID(), fi
         await removeOwnedPath(backup, { recursive: true, force: false });
         ownsBackup = false;
       } catch (backupCleanupError) {
-        try {
-          await rename(output, stage);
-          ownsStage = true;
-        } catch (rollbackError) {
-          preserveRollbackEvidence = true;
-          throw runtimeRollbackError("backup cleanup failed and rollback could not move the new runtime", [
-            backupCleanupError,
-            rollbackError,
-          ]);
-        }
-
-        try {
-          await rename(backup, output);
-          ownsBackup = false;
-        } catch (rollbackError) {
-          try {
-            await rename(stage, output);
-            ownsStage = false;
-          } catch (liveRuntimeRecoveryError) {
-            preserveRollbackEvidence = true;
-            throw runtimeRollbackError("backup cleanup failed and no projection could be returned to the live path", [
-              backupCleanupError,
-              rollbackError,
-              liveRuntimeRecoveryError,
-            ]);
-          }
-          preserveRollbackEvidence = true;
-          throw runtimeRollbackError("backup cleanup failed and the prior runtime could not be restored", [
-            backupCleanupError,
-            rollbackError,
-          ]);
-        }
-
-        try {
-          await removeOwnedPath(stage, { recursive: true, force: false });
-          ownsStage = false;
-        } catch (rollbackCleanupError) {
-          preserveRollbackEvidence = true;
-          throw runtimeRollbackError("the prior runtime was restored but new-runtime cleanup failed", [
-            backupCleanupError,
-            rollbackCleanupError,
-          ]);
-        }
         throw runtimeBackupCleanupError(backupCleanupError);
       }
     }
     return Object.freeze({ root: projectRoot, outputRoot: output, files: Object.freeze(files) });
   } finally {
-    if (ownsStage && !preserveRollbackEvidence) {
+    if (ownsStage && !preserveStageEvidence) {
       await removeOwnedPath(stage, { recursive: true, force: true });
     }
   }
@@ -420,10 +377,15 @@ async function fileRecords(root, options = {}) {
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => comparePaths(left.name, right.name));
     for (const entry of entries) {
-      if (depth === 0 && ignoredTopLevel.has(entry.name)) continue;
       const absolute = join(directory, entry.name);
       const metadata = await lstat(absolute);
       const path = relative(root, absolute).split(sep).join("/");
+      if (depth === 0 && ignoredTopLevel.has(entry.name)) {
+        if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+          throw runtimeBuildError("Actual runtime node_modules must be a non-symbolic-link directory");
+        }
+        continue;
+      }
       if (metadata.isSymbolicLink()) throw runtimeBuildError(`Runtime entries must not be links: ${path}`);
       if (metadata.isDirectory()) await visit(absolute, depth + 1);
       else if (metadata.isFile()) {
@@ -520,13 +482,16 @@ function runtimeDrift(path, expectedHash, actualHash) {
 }
 
 function runtimeBackupCleanupError(cause) {
-  const error = new Error("RUNTIME_BACKUP_CLEANUP_FAILED: prior runtime restored", { cause });
+  const error = new Error(
+    "RUNTIME_BACKUP_CLEANUP_FAILED: new runtime remains live; remaining backup evidence left untouched",
+    { cause },
+  );
   error.code = "RUNTIME_BACKUP_CLEANUP_FAILED";
   return error;
 }
 
 function runtimeRollbackError(detail, causes) {
-  const error = new Error(`RUNTIME_ROLLBACK_FAILED: ${detail}; live runtime and backup evidence preserved`, {
+  const error = new Error(`RUNTIME_ROLLBACK_FAILED: ${detail}; staged runtime and backup evidence preserved`, {
     cause: new AggregateError(causes),
   });
   error.code = "RUNTIME_ROLLBACK_FAILED";

@@ -267,9 +267,14 @@ export async function buildKordocCoreRuntime({
   tarballPath,
   outputRoot,
   expectedSource = KORDOC_SOURCE,
+  fileSystem = {},
 }) {
   const tarball = resolve(tarballPath);
   const output = resolve(outputRoot);
+  const createOutput = fileSystem.createOutput ?? createOutputDirectory;
+  if (typeof createOutput !== "function") {
+    throw new Error("Kordoc fileSystem.createOutput must be a function.");
+  }
   try {
     await lstat(output);
     throw new Error(`Output already exists: ${output}`);
@@ -278,9 +283,11 @@ export async function buildKordocCoreRuntime({
   }
   const { archiveIntegrity, files, sourcePackage } = await validatedInputs(tarball, expectedSource);
 
+  let ownsOutput = false;
   try {
     await mkdir(dirname(output), { recursive: true });
-    await mkdir(output, { recursive: false });
+    await createOutput(output);
+    ownsOutput = true;
     for (const [path, bytes] of files) {
       if (path === "package.json") continue;
       const destination = join(output, ...path.split("/"));
@@ -299,9 +306,13 @@ export async function buildKordocCoreRuntime({
     await verifyKordocCoreRuntime(output, expectedSource);
     return provenance;
   } catch (error) {
-    await rm(output, { recursive: true, force: true });
+    if (ownsOutput) await rm(output, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function createOutputDirectory(path) {
+  await mkdir(path, { recursive: false });
 }
 
 export async function verifyKordocCoreRuntime(vendorRoot, expectedSource = KORDOC_SOURCE) {

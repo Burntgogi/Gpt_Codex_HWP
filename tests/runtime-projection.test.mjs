@@ -11,6 +11,7 @@ import {
   rename,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -195,6 +196,40 @@ test("comparison ignores only actual top-level node_modules", async () => {
   }
 });
 
+test("comparison rejects a regular file masquerading as top-level node_modules", async () => {
+  const nodeModules = join(actualRoot, "node_modules");
+  await writeFile(nodeModules, "not a dependency directory\n", "utf8");
+  try {
+    await assert.rejects(
+      compareRuntime({ expectedRoot, actualRoot }),
+      /Actual runtime node_modules must be a non-symbolic-link directory/u,
+    );
+  } finally {
+    await rm(nodeModules, { force: true });
+  }
+});
+
+test("comparison rejects a top-level node_modules symbolic link or junction", async (t) => {
+  const nodeModules = join(actualRoot, "node_modules");
+  try {
+    await symlink(expectedRoot, nodeModules, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+      t.skip(`node_modules link creation is unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+  try {
+    await assert.rejects(
+      compareRuntime({ expectedRoot, actualRoot }),
+      /Actual runtime node_modules must be a non-symbolic-link directory/u,
+    );
+  } finally {
+    await unlink(nodeModules);
+  }
+});
+
 test("Kordoc provenance rejects tampering, extra files, source maps, and links", async (t) => {
   const source = join(expectedRoot, "vendor", "kordoc-core");
   for (const scenario of ["tamper", "extra", "map"]) {
@@ -311,55 +346,15 @@ test("atomic projection restores the prior runtime when promotion fails", async 
   );
 });
 
-test("atomic projection restores the prior runtime when backup cleanup fails", async () => {
-  const output = join(temporaryRoot, "cleanup-rollback-output");
+test("failed promotion rollback preserves staged and backup projection evidence", async () => {
+  const output = join(temporaryRoot, "promotion-rollback-failure-output");
+  const stage = join(temporaryRoot, ".promotion-rollback-failure-output.stage-promotion-rollback");
+  const backup = join(temporaryRoot, ".promotion-rollback-failure-output.backup-promotion-rollback");
   await mkdir(output);
   await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
-  let rejectedBackupCleanup = false;
-  const injectedRm = async (path, options) => {
-    if (!rejectedBackupCleanup && path.includes(".cleanup-rollback-output.backup-")) {
-      rejectedBackupCleanup = true;
-      const error = new Error("injected backup cleanup failure");
-      error.code = "EIO";
-      throw error;
-    }
-    await rm(path, options);
-  };
-
-  await assert.rejects(
-    buildRuntime({ root: ROOT, outputRoot: output, fileSystem: { rm: injectedRm } }),
-    (error) => {
-      assert.equal(error?.code, "RUNTIME_BACKUP_CLEANUP_FAILED");
-      assert.equal(error?.message, "RUNTIME_BACKUP_CLEANUP_FAILED: prior runtime restored");
-      return true;
-    },
-  );
-  assert.equal(rejectedBackupCleanup, true);
-  assert.equal(await readFile(join(output, "old.txt"), "utf8"), "old runtime\n");
-  await assert.rejects(lstat(join(output, "dist")), { code: "ENOENT" });
-  assert.deepEqual(
-    (await readdir(temporaryRoot)).filter((name) => name.startsWith(".cleanup-rollback-output.")),
-    [],
-  );
-});
-
-test("failed cleanup rollback preserves the live runtime and old backup evidence", async () => {
-  const output = join(temporaryRoot, "cleanup-rollback-failure-output");
-  const stage = join(temporaryRoot, ".cleanup-rollback-failure-output.stage-rollback-evidence");
-  const backup = join(temporaryRoot, ".cleanup-rollback-failure-output.backup-rollback-evidence");
-  await mkdir(output);
-  await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
-  const injectedRm = async (path, options) => {
-    if (path === backup) {
-      const error = new Error("injected backup cleanup failure");
-      error.code = "EIO";
-      throw error;
-    }
-    await rm(path, options);
-  };
   const injectedRename = async (source, destination) => {
-    if (source === output && destination === stage) {
-      const error = new Error("injected cleanup rollback failure");
+    if ((source === stage && destination === output) || (source === backup && destination === output)) {
+      const error = new Error("injected rename failure");
       error.code = "EIO";
       throw error;
     }
@@ -371,21 +366,115 @@ test("failed cleanup rollback preserves the live runtime and old backup evidence
       buildRuntime({
         root: ROOT,
         outputRoot: output,
-        swapId: "rollback-evidence",
-        fileSystem: { rename: injectedRename, rm: injectedRm },
+        swapId: "promotion-rollback",
+        fileSystem: { rename: injectedRename },
       }),
       (error) => {
         assert.equal(error?.code, "RUNTIME_ROLLBACK_FAILED");
         assert.equal(
           error?.message,
-          "RUNTIME_ROLLBACK_FAILED: backup cleanup failed and rollback could not move the new runtime; live runtime and backup evidence preserved",
+          "RUNTIME_ROLLBACK_FAILED: promotion failed and the prior runtime could not be restored; staged runtime and backup evidence preserved",
+        );
+        assert.equal(error.message.includes(temporaryRoot), false);
+        return true;
+      },
+    );
+    await assert.rejects(lstat(output), { code: "ENOENT" });
+    assert.equal((await lstat(join(stage, "dist", "mcp.js"))).isFile(), true);
+    assert.equal(await readFile(join(backup, "old.txt"), "utf8"), "old runtime\n");
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+    await rm(backup, { recursive: true, force: true });
+  }
+});
+
+test("backup cleanup failure keeps the committed new runtime and old backup evidence", async () => {
+  const output = join(temporaryRoot, "cleanup-failure-output");
+  const stage = join(temporaryRoot, ".cleanup-failure-output.stage-cleanup-failure");
+  const backup = join(temporaryRoot, ".cleanup-failure-output.backup-cleanup-failure");
+  await mkdir(output);
+  await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
+  let rejectedBackupCleanup = false;
+  const injectedRm = async (path, options) => {
+    if (!rejectedBackupCleanup && path === backup) {
+      rejectedBackupCleanup = true;
+      const error = new Error("injected backup cleanup failure");
+      error.code = "EIO";
+      throw error;
+    }
+    await rm(path, options);
+  };
+
+  try {
+    await assert.rejects(
+      buildRuntime({
+        root: ROOT,
+        outputRoot: output,
+        swapId: "cleanup-failure",
+        fileSystem: { rm: injectedRm },
+      }),
+      (error) => {
+        assert.equal(error?.code, "RUNTIME_BACKUP_CLEANUP_FAILED");
+        assert.equal(
+          error?.message,
+          "RUNTIME_BACKUP_CLEANUP_FAILED: new runtime remains live; remaining backup evidence left untouched",
+        );
+        assert.equal(error.message.includes(temporaryRoot), false);
+        return true;
+      },
+    );
+    assert.equal(rejectedBackupCleanup, true);
+    assert.equal((await lstat(join(output, "dist", "mcp.js"))).isFile(), true);
+    await assert.rejects(lstat(join(output, "old.txt")), { code: "ENOENT" });
+    assert.equal(await readFile(join(backup, "old.txt"), "utf8"), "old runtime\n");
+    await assert.rejects(lstat(stage), { code: "ENOENT" });
+  } finally {
+    await rm(backup, { recursive: true, force: true });
+  }
+});
+
+test("partially deleted backup is never promoted after cleanup failure", async () => {
+  const output = join(temporaryRoot, "partial-cleanup-output");
+  const stage = join(temporaryRoot, ".partial-cleanup-output.stage-partial-cleanup");
+  const backup = join(temporaryRoot, ".partial-cleanup-output.backup-partial-cleanup");
+  await mkdir(output);
+  await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
+  await writeFile(join(output, "remaining-evidence.txt"), "old backup evidence\n", "utf8");
+  const injectedRm = async (path, options) => {
+    if (path === backup) {
+      await rm(join(path, "old.txt"), { force: true });
+      const error = new Error("injected partial backup cleanup failure");
+      error.code = "EIO";
+      throw error;
+    }
+    await rm(path, options);
+  };
+
+  try {
+    await assert.rejects(
+      buildRuntime({
+        root: ROOT,
+        outputRoot: output,
+        swapId: "partial-cleanup",
+        fileSystem: { rm: injectedRm },
+      }),
+      (error) => {
+        assert.equal(error?.code, "RUNTIME_BACKUP_CLEANUP_FAILED");
+        assert.equal(
+          error?.message,
+          "RUNTIME_BACKUP_CLEANUP_FAILED: new runtime remains live; remaining backup evidence left untouched",
         );
         assert.equal(error.message.includes(temporaryRoot), false);
         return true;
       },
     );
     assert.equal((await lstat(join(output, "dist", "mcp.js"))).isFile(), true);
-    assert.equal(await readFile(join(backup, "old.txt"), "utf8"), "old runtime\n");
+    await assert.rejects(lstat(join(output, "remaining-evidence.txt")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(backup, "old.txt")), { code: "ENOENT" });
+    assert.equal(
+      await readFile(join(backup, "remaining-evidence.txt"), "utf8"),
+      "old backup evidence\n",
+    );
     await assert.rejects(lstat(stage), { code: "ENOENT" });
   } finally {
     await rm(backup, { recursive: true, force: true });
