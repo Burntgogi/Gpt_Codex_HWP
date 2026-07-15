@@ -111,6 +111,10 @@ readRequest().then((request) => {
     sendSpoolResult(request, bytes, mode);
     return;
   }
+  if (mode === "spool-base64") {
+    sendSpoolResult(request, Buffer.from(process.argv[3] ?? "", "base64"));
+    return;
+  }
   if (mode === "ignore-abort") {
     const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       stdio: "ignore",

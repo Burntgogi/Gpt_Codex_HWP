@@ -82,6 +82,27 @@ def insert_image(
     image_file = H.safe_existing_input_path(image_path)
     if os.path.samefile(source_path, image_file):
         raise H.UnsafePathError("Source document and image path must be different files.")
+    source_bytes = source_path.read_bytes()
+    image_bytes = image_file.read_bytes()
+    output_bytes, result = insert_image_bytes(
+        source_bytes,
+        image_bytes,
+        anchor_text=anchor_text,
+        occurrence=occurrence,
+        width_mm=width_mm,
+    )
+    H.write_exclusive(output_path, output_bytes)
+    return result
+
+
+def insert_image_bytes(
+    source_bytes: bytes,
+    image_bytes: bytes,
+    *,
+    anchor_text: str,
+    occurrence: int = 0,
+    width_mm: float | None = None,
+) -> tuple[bytes, dict[str, Any]]:
     if not anchor_text:
         raise AnchorNotFoundError("anchor_text must not be empty", matches=0)
     if occurrence < 0:
@@ -91,17 +112,16 @@ def insert_image(
     ):
         raise InvalidImageError("width_mm must be a finite value between 0 and 1000")
 
-    if image_file.stat().st_size > MAX_IMAGE_BYTES:
+    if len(image_bytes) > MAX_IMAGE_BYTES:
         raise InvalidImageError(
             f"Image exceeds the {MAX_IMAGE_BYTES}-byte safety limit."
         )
-    archive = H.inspect_archive(source_path)
-    image_bytes = image_file.read_bytes()
+    archive = H.inspect_archive_bytes(source_bytes)
     native_width_px, native_height_px = png_dimensions(image_bytes)
     native_width_hu = native_width_px * 75
     native_height_hu = native_height_px * 75
 
-    with zipfile.ZipFile(source_path) as zipped:
+    with zipfile.ZipFile(io.BytesIO(source_bytes)) as zipped:
         guard_protected_package(zipped)
         names = set(zipped.namelist())
         sections = H.section_names(zipped)
@@ -195,15 +215,13 @@ def insert_image(
         section_name: H.serialize_xml(section_root),
         "Contents/content.hpf": H.serialize_xml(manifest_root),
     }
-    output_bytes = H.repack_preserve_bytes(
-        source_path,
+    output_bytes = H.repack_preserve_byte_data(
+        source_bytes,
         changed,
         {image_entry: image_bytes},
     )
     validate_result_bytes(output_bytes, image_entry=image_entry, item_id=item_id)
-    H.write_exclusive(output_path, output_bytes)
-
-    return {
+    return output_bytes, {
         "ok": True,
         "image_entry": image_entry,
         "item_id": item_id,
@@ -602,22 +620,41 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Insert a PNG in a new paragraph after an HWPX text anchor."
     )
-    parser.add_argument("source", help="source .hwpx path")
-    parser.add_argument("output", help="new .hwpx path (must not exist)")
-    parser.add_argument("--image", required=True, help="PNG file to embed")
+    parser.add_argument("source", nargs="?", help="source .hwpx path")
+    parser.add_argument("output", nargs="?", help="new .hwpx path (must not exist)")
+    parser.add_argument("--image", help="PNG file to embed")
+    parser.add_argument("--descriptor-mode", action="store_true")
+    parser.add_argument("--source-size", type=int)
+    parser.add_argument("--image-size", type=int)
     parser.add_argument("--anchor-text", required=True, help="body/table paragraph substring")
     parser.add_argument("--occurrence", type=int, default=0, help="zero-based eligible paragraph match")
     parser.add_argument("--width-mm", type=float, help="requested display width in millimetres")
     args = parser.parse_args(argv)
     try:
-        result = insert_image(
-            args.source,
-            args.output,
-            image_path=args.image,
-            anchor_text=args.anchor_text,
-            occurrence=args.occurrence,
-            width_mm=args.width_mm,
-        )
+        if args.descriptor_mode:
+            if args.source is not None or args.output is not None or args.image is not None:
+                raise H.UnsafePathError("Descriptor mode does not accept path arguments.")
+            source_bytes = read_exact_descriptor(3, args.source_size, H.MAX_ARCHIVE_BYTES)
+            image_bytes = read_exact_descriptor(4, args.image_size, MAX_IMAGE_BYTES)
+            output_bytes, result = insert_image_bytes(
+                source_bytes,
+                image_bytes,
+                anchor_text=args.anchor_text,
+                occurrence=args.occurrence,
+                width_mm=args.width_mm,
+            )
+            write_descriptor(5, output_bytes)
+        else:
+            if args.source is None or args.output is None or args.image is None:
+                parser.error("source, output, and --image are required outside descriptor mode")
+            result = insert_image(
+                args.source,
+                args.output,
+                image_path=args.image,
+                anchor_text=args.anchor_text,
+                occurrence=args.occurrence,
+                width_mm=args.width_mm,
+            )
     except Exception as error:  # noqa: BLE001 - CLI converts all failures to JSON
         payload: dict[str, Any] = {
             "ok": False,
@@ -630,6 +667,29 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(json.dumps(result, ensure_ascii=False))
     return 0
+
+
+def read_exact_descriptor(fd: int, size: int | None, maximum: int) -> bytes:
+    if size is None or size <= 0 or size > maximum:
+        raise ValueError("Invalid inherited descriptor size.")
+    result = bytearray()
+    while len(result) < size:
+        chunk = os.read(fd, min(1024 * 1024, size - len(result)))
+        if not chunk:
+            raise EOFError("Inherited descriptor is truncated.")
+        result.extend(chunk)
+    if os.read(fd, 1):
+        raise ValueError("Inherited descriptor is larger than declared.")
+    return bytes(result)
+
+
+def write_descriptor(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("Could not finish writing the output archive.")
+        view = view[written:]
 
 
 def error_code(error: Exception) -> str:

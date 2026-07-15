@@ -1,14 +1,19 @@
 import { createHash } from "node:crypto";
-import { readSync, writeSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fstatSync, readSync, writeSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { BoundedFrameDecoder, encodeBoundedJsonFrame, parseBoundedJsonFrame } from "./bounded-frame.js";
 import {
   encodeDocumentResultSpool,
   initializeDocumentComputeBackend,
+  isRhwpCapabilityError,
   type DocumentComputeProgress,
 } from "./document-compute-backend.js";
 import {
   DOCUMENT_ENGINE_ERROR_MESSAGES,
+  createDocumentEngineRunError,
   isDocumentEngineRunError,
   normalizeDocumentEngineError,
   type DocumentEnginePublicError,
@@ -47,6 +52,10 @@ async function run(): Promise<void> {
     const backend = await initializeDocumentComputeBackend();
     sendControl(event(request, "ready"));
     ready = true;
+    if (request.operation === "insertImage" && request.options.mode !== "seal-anchor") {
+      await runAfterParagraphInsert(request, backend);
+      return;
+    }
     const inputs = inheritedInputs(request);
     const payload = await backend.execute(
       request as never,
@@ -60,6 +69,90 @@ async function run(): Promise<void> {
       error: publicError(error, ready, request.operation),
     });
   }
+}
+
+async function runAfterParagraphInsert(
+  request: Extract<WireDocumentRequest, { operation: "insertImage" }>,
+  backend: Awaited<ReturnType<typeof initializeDocumentComputeBackend>>,
+): Promise<void> {
+  if (request.input.document.transport !== "spool" ||
+    request.input.document.descriptor !== 3 ||
+    request.input.image.transport !== "spool" ||
+    request.input.image.descriptor !== 4) throw new Error("image inputs are not inherited");
+  const source = readExact(3, request.input.document.sizeBytes);
+  await backend.assertMutableHwpx(source);
+  await runImageHelper(
+    request,
+    request.input.document.sizeBytes,
+    request.input.image.sizeBytes,
+  );
+  const sizeBytes = fstatSync(OUTPUT_DESCRIPTOR).size;
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 ||
+    sizeBytes > MAX_DOCUMENT_ENGINE_RESULT_BYTES) throw new Error("result spool exceeds its limit");
+  const output = readExact(OUTPUT_DESCRIPTOR, sizeBytes);
+  await backend.validateExactHwpx(output);
+  sendControl({
+    ...event(request, "spoolResult"),
+    receipt: {
+      descriptor: OUTPUT_DESCRIPTOR,
+      operation: "insertImage",
+      encoding: "binary",
+      sizeBytes,
+      sha256: createHash("sha256").update(new Uint8Array(output)).digest("hex"),
+    },
+  });
+}
+
+async function runImageHelper(
+  request: Extract<WireDocumentRequest, { operation: "insertImage" }>,
+  sourceSize: number,
+  imageSize: number,
+): Promise<void> {
+  const script = fileURLToPath(new URL(
+    "../../scripts/hwpx-safe-edit/insert_image.py",
+    import.meta.url,
+  ));
+  const command = process.platform === "win32"
+    ? join(process.env.SystemRoot ?? "C:\\Windows", "py.exe")
+    : "/usr/bin/python3";
+  const args = [
+    ...(process.platform === "win32" ? ["-3"] : []),
+    script,
+    "--descriptor-mode",
+    "--source-size", String(sourceSize),
+    "--image-size", String(imageSize),
+    "--anchor-text", request.input.anchorText,
+    "--occurrence", String(request.options.anchorOccurrence ?? 0),
+    ...(request.options.sizeMm === undefined
+      ? []
+      : ["--width-mm", String(request.options.sizeMm)]),
+  ];
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    const helper = spawn(command, args, {
+      shell: false,
+      windowsHide: true,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe", 3, 4, 5],
+    });
+    let outputBytes = 0;
+    let errorBytes = 0;
+    helper.stdout?.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > 64 * 1024) helper.kill();
+    });
+    helper.stderr?.on("data", (chunk: Buffer) => {
+      errorBytes += chunk.byteLength;
+      if (errorBytes > 64 * 1024) helper.kill();
+    });
+    helper.once("error", rejectPromise);
+    helper.once("exit", (code) => {
+      if (code === 0 && outputBytes <= 64 * 1024 && errorBytes <= 64 * 1024) {
+        resolvePromise();
+      } else {
+        rejectPromise(createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR"));
+      }
+    });
+  });
 }
 
 async function sendResult(
@@ -142,6 +235,7 @@ function readRequest(): Promise<unknown> {
   const decoder = new BoundedFrameDecoder(MAX_CHILD_REQUEST_FRAME_BYTES);
   return new Promise((resolvePromise, rejectPromise) => {
     let accepted = false;
+    let parsed: unknown;
     process.stdin.on("data", (chunk: Buffer) => {
       try {
         const frames = decoder.push(chunk);
@@ -150,7 +244,7 @@ function readRequest(): Promise<unknown> {
         }
         if (frames.length === 1) {
           accepted = true;
-          resolvePromise(parseBoundedJsonFrame(frames[0]!));
+          parsed = parseBoundedJsonFrame(frames[0]!);
         }
       } catch (error: unknown) {
         rejectPromise(error);
@@ -160,6 +254,7 @@ function readRequest(): Promise<unknown> {
       try {
         decoder.finish();
         if (!accepted) rejectPromise(new Error("missing request frame"));
+        else resolvePromise(parsed);
       } catch (error: unknown) {
         rejectPromise(error);
       }
@@ -213,6 +308,13 @@ function publicError(
   ready: boolean,
   operation: DocumentEngineOperation,
 ): DocumentEnginePublicError {
+  if (isRhwpCapabilityError(error)) {
+    return {
+      code: "ENGINE_INIT_FAILED",
+      message: DOCUMENT_ENGINE_ERROR_MESSAGES.ENGINE_INIT_FAILED,
+      details: { stage: "render", remediation: "check_installation" },
+    };
+  }
   if (isDocumentEngineRunError(error)) {
     return {
       code: error.code,

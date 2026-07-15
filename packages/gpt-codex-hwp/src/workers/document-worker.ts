@@ -11,6 +11,7 @@ import {
 } from "./document-errors.js";
 import {
   initializeDocumentComputeBackend,
+  isRhwpCapabilityError,
   type DocumentComputeProgress,
 } from "./document-compute-backend.js";
 import {
@@ -139,6 +140,13 @@ function publicError(
   ready: boolean,
   operation: DocumentEngineOperation,
 ): DocumentEnginePublicError {
+  if (isRhwpCapabilityError(error)) {
+    return {
+      code: "ENGINE_INIT_FAILED",
+      message: DOCUMENT_ENGINE_ERROR_MESSAGES.ENGINE_INIT_FAILED,
+      details: { stage: "render", remediation: "check_installation" },
+    };
+  }
   if (isDocumentEngineRunError(error)) {
     return {
       code: error.code,

@@ -38,7 +38,7 @@ type RhwpLoadResult = Awaited<ReturnType<
 
 interface ComputeDependencies {
   readonly kordoc: KordocModule;
-  readonly rhwp: RhwpLoadResult;
+  readonly loadRhwp: () => Promise<RhwpLoadResult>;
 }
 
 export interface DocumentComputeProgress {
@@ -52,6 +52,8 @@ export type DocumentComputeProgressHandler = (
 ) => void;
 
 export interface DocumentComputeBackend {
+  assertMutableHwpx(source: ArrayBuffer): Promise<void>;
+  validateExactHwpx(source: ArrayBuffer): Promise<void>;
   execute<Operation extends DocumentEngineOperation>(
     request: Extract<WireDocumentRequest, { operation: Operation }>,
     inputs: Readonly<{ document?: ArrayBuffer; image?: ArrayBuffer }>,
@@ -62,10 +64,17 @@ export interface DocumentComputeBackend {
 export class RhwpCapabilityError extends Error {
   readonly code = "MISSING_RHWP_BACKEND" as const;
 
-  constructor(reason: string) {
-    super(reason);
+  constructor() {
+    super("The optional HWP preview backend is unavailable.");
     this.name = "RhwpCapabilityError";
+    rhwpCapabilityErrors.add(this);
   }
+}
+
+const rhwpCapabilityErrors = new WeakSet<object>();
+
+export function isRhwpCapabilityError(value: unknown): value is RhwpCapabilityError {
+  return typeof value === "object" && value !== null && rhwpCapabilityErrors.has(value);
 }
 
 let initialization: Promise<DocumentComputeBackend> | undefined;
@@ -78,10 +87,22 @@ export function initializeDocumentComputeBackend(): Promise<DocumentComputeBacke
 async function initializeBackend(): Promise<DocumentComputeBackend> {
   const kordoc = await import("kordoc");
   requireKordocApi(kordoc);
-  const rhwpModule = await import("../tools/rhwp-backend.js");
-  const rhwp = await rhwpModule.loadRhwpBackend();
-  const dependencies: ComputeDependencies = { kordoc, rhwp };
+  let rhwp: Promise<RhwpLoadResult> | undefined;
+  const dependencies: ComputeDependencies = {
+    kordoc,
+    loadRhwp: () => rhwp ??= import("../tools/rhwp-backend.js")
+      .then((module) => module.loadRhwpBackend()),
+  };
   return Object.freeze({
+    async assertMutableHwpx(source: ArrayBuffer): Promise<void> {
+      await requireMutableHwpx(kordoc, source);
+    },
+    async validateExactHwpx(source: ArrayBuffer): Promise<void> {
+      await requireMutableHwpx(kordoc, source);
+      await requireSuccessfulParse(kordoc, source);
+      const validation = await kordoc.validateHwpx(source.slice(0));
+      if (!validation.ok) throw protocolError();
+    },
     async execute<Operation extends DocumentEngineOperation>(
       request: Extract<WireDocumentRequest, { operation: Operation }>,
       inputs: Readonly<{ document?: ArrayBuffer; image?: ArrayBuffer }>,
@@ -242,12 +263,13 @@ async function renderHwpWithRhwp(
   source: ArrayBuffer,
 ): Promise<DocumentResultPayload<"render">> {
   await requireSuccessfulParse(dependencies.kordoc, source);
-  if (!dependencies.rhwp.available) {
-    throw new RhwpCapabilityError(dependencies.rhwp.reason);
+  const rhwp = await dependencies.loadRhwp();
+  if (!rhwp.available) {
+    throw new RhwpCapabilityError();
   }
-  let document: ReturnType<typeof dependencies.rhwp.backend.createDocument> | undefined;
+  let document: ReturnType<typeof rhwp.backend.createDocument> | undefined;
   try {
-    document = dependencies.rhwp.backend.createDocument(
+    document = rhwp.backend.createDocument(
       new Uint8Array(copyArrayBuffer(source)),
     );
     const pageCount = document.pageCount();
@@ -258,7 +280,7 @@ async function renderHwpWithRhwp(
       svg,
       metadata: {
         backend: "rhwp",
-        version: dependencies.rhwp.backend.version,
+        version: rhwp.backend.version,
         pageCount,
         page: 1,
       },
@@ -592,10 +614,12 @@ function decodeParseSpool(bytes: Uint8Array): DocumentResultPayload<"parse"> {
     headerBytes > bytes.byteLength - PARSE_SPOOL_PREFIX_BYTES) throw protocolError();
   let raw: unknown;
   try {
-    raw = JSON.parse(buffer.subarray(
-      PARSE_SPOOL_PREFIX_BYTES,
-      PARSE_SPOOL_PREFIX_BYTES + headerBytes,
-    ).toString("utf8"));
+    raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(
+        PARSE_SPOOL_PREFIX_BYTES,
+        PARSE_SPOOL_PREFIX_BYTES + headerBytes,
+      ),
+    ));
   } catch {
     throw protocolError();
   }
