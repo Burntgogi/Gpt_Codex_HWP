@@ -640,11 +640,16 @@ test("incremental SVG policy streams only bounded safe embedded image payloads",
       `<svg><image src="data:image/${type};base64,AAAA"/></svg>`,
     ));
   }
+  assert.doesNotThrow(() => assertSafeSvgString(
+    '<svg><image href="data:image/png;base64,AA=="/><image href="data:image/png;base64,AAA="/></svg>',
+  ));
   for (const unsafe of [
     '<svg><image href="data:image/png;base64,AAA"/></svg>',
     '<svg><image href="data:image/png;base64,AA*A"/></svg>',
     '<svg><image href="data:image/png;base64,AA=A"/></svg>',
     '<svg><image href="data:image/png;base64,A==="/></svg>',
+    '<svg><image href="data:image/png;base64,AB=="/></svg>',
+    '<svg><image href="data:image/png;base64,AAB="/></svg>',
     '<svg><image href="data:image/svg+xml;base64,AAAA"/></svg>',
     '<svg><image href="https://evil.test/x.png"/></svg>',
     '<svg><image href="data:image/png;base64,AAAA" onload="run()"/></svg>',
@@ -670,6 +675,7 @@ test("incremental SVG policy rejects active encodings, dynamic URL mutation, and
     '<svg><animateTransform/></svg>',
     '<svg><x:animateMotion/></svg>',
     '<svg><mpath/></svg>',
+    '<svg><discard/></svg>',
     '<svg></svg><svg></svg>',
     '<svg></svg>trailing',
     '<svg></svg><text/>',
@@ -678,6 +684,78 @@ test("incremental SVG policy rejects active encodings, dynamic URL mutation, and
   }
   assert.doesNotThrow(() => assertSafeSvgString(
     '<svg><defs><linearGradient id="g"/></defs><svg><path fill="url(#g)"/></svg></svg>',
+  ));
+});
+
+test("incremental SVG policy rejects XML Base without matching inert base attributes", async () => {
+  const { IncrementalSvgPolicyValidator, assertSafeSvgString } = await import(
+    "../src/shared/svg-policy.js"
+  );
+  for (const unsafe of [
+    '<svg xml:base="https://evil.test/"><image href="#x"/></svg>',
+    '<svg><g xml:base="https://evil.test/"><image href="#x"/></g></svg>',
+    '<svg xml:base="h&#x74;tps://evil.test/"><image href="#x"/></svg>',
+  ]) {
+    const validator = new IncrementalSvgPolicyValidator();
+    assert.throws(() => {
+      for (const character of unsafe) validator.push(character);
+      validator.finish();
+    }, undefined, unsafe);
+  }
+  assert.doesNotThrow(() => assertSafeSvgString(
+    '<svg base="https://example.test/" data-base="https://example.test/"><image href="#x"/></svg>',
+  ));
+});
+
+test("incremental SVG policy rejects embedded navigation elements and srcdoc", async () => {
+  const { IncrementalSvgPolicyValidator, assertSafeSvgString } = await import(
+    "../src/shared/svg-policy.js"
+  );
+  for (const unsafe of [
+    '<svg xmlns:h="http://www.w3.org/1999/xhtml"><h:iframe srcdoc="&lt;script&gt;run()&lt;/script&gt;"/></svg>',
+    '<svg xmlns:h="http://www.w3.org/1999/xhtml"><g><h:meta http-equiv="refresh" content="0;url=https://evil.test/"/></g></svg>',
+    '<svg><g srcdoc="&lt;script&gt;run()&lt;/script&gt;"/></svg>',
+    '<svg><iframe/></svg>',
+    '<svg><object/></svg>',
+    '<svg><embed/></svg>',
+    '<svg><audio/></svg>',
+    '<svg><video/></svg>',
+    '<svg><canvas/></svg>',
+    '<svg><link/></svg>',
+    '<svg><meta/></svg>',
+    '<svg><base/></svg>',
+    '<svg xmlns:x="urn:test"><x:g/></svg>',
+  ]) {
+    const validator = new IncrementalSvgPolicyValidator();
+    assert.throws(() => {
+      for (const character of unsafe) validator.push(character);
+      validator.finish();
+    }, undefined, unsafe);
+  }
+  assert.doesNotThrow(() => assertSafeSvgString(
+    '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><g><image xlink:href="#x"/></g></svg>',
+  ));
+});
+
+test("incremental SVG policy accepts only the standard SVG and XLink namespace declarations", async () => {
+  const { IncrementalSvgPolicyValidator, assertSafeSvgString } = await import(
+    "../src/shared/svg-policy.js"
+  );
+  for (const unsafe of [
+    '<svg xmlns="http://www.w3.org/1999/xhtml"><form/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><form xmlns="http://www.w3.org/1999/xhtml"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><form xmlns="http://www.w3.org/1999/xht&#x6d;l"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml"/>',
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="https://evil.test/xlink"/>',
+  ]) {
+    const validator = new IncrementalSvgPolicyValidator();
+    assert.throws(() => {
+      for (const character of unsafe) validator.push(character);
+      validator.finish();
+    }, undefined, unsafe);
+  }
+  assert.doesNotThrow(() => assertSafeSvgString(
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="#x"/></svg>',
   ));
 });
 

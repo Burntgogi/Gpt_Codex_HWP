@@ -1,5 +1,7 @@
 const MAX_SVG_TAG_CHARACTERS = 64 * 1024;
 const MAX_SVG_NESTING_DEPTH = 1024;
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const XLINK_NAMESPACE = "http://www.w3.org/1999/xlink";
 const SAFE_DATA_IMAGE_PREFIXES = [
   "data:image/png;base64,",
   "data:image/jpeg;base64,",
@@ -11,6 +13,7 @@ const SAFE_DATA_IMAGE_PREFIXES = [
 interface DataImageState {
   characters: number;
   padding: number;
+  lastSextet: number;
 }
 
 export class IncrementalSvgPolicyValidator {
@@ -68,7 +71,7 @@ export class IncrementalSvgPolicyValidator {
         if (SAFE_DATA_IMAGE_PREFIXES.some((prefix) => prefix === lower)) {
           this.#appendTag(this.#referenceCandidate);
           this.#referenceCandidate = undefined;
-          this.#dataImage = { characters: 0, padding: 0 };
+          this.#dataImage = { characters: 0, padding: 0, lastSextet: 0 };
         } else if (!SAFE_DATA_IMAGE_PREFIXES.some((prefix) => prefix.startsWith(lower))) {
           this.#appendTag(this.#referenceCandidate);
           this.#referenceCandidate = undefined;
@@ -157,22 +160,37 @@ function pushBase64Character(state: DataImageState, character: string): void {
     throw new Error("SVG data image has an invalid base64 payload.");
   }
   state.characters += 1;
+  state.lastSextet = base64Sextet(character);
 }
 
 function assertCompleteBase64(state: DataImageState): void {
   if (state.characters === 0 ||
     (state.padding === 0 && state.characters % 4 !== 0) ||
-    (state.padding === 1 && state.characters % 4 !== 3) ||
-    (state.padding === 2 && state.characters % 4 !== 2)) {
+    (state.padding === 1 &&
+      (state.characters % 4 !== 3 || (state.lastSextet & 0b11) !== 0)) ||
+    (state.padding === 2 &&
+      (state.characters % 4 !== 2 || (state.lastSextet & 0b1111) !== 0))) {
     throw new Error("SVG data image has an invalid base64 payload.");
   }
+}
+
+function base64Sextet(character: string): number {
+  const code = character.charCodeAt(0);
+  if (code >= 0x41 && code <= 0x5a) return code - 0x41;
+  if (code >= 0x61 && code <= 0x7a) return code - 0x61 + 26;
+  if (code >= 0x30 && code <= 0x39) return code - 0x30 + 52;
+  return character === "+" ? 62 : 63;
 }
 
 function inspectSvgTag(tag: string): void {
   const decoded = decodeXmlEntities(tag);
   const lower = decoded.toLocaleLowerCase("en-US");
-  if (lower.includes("\\") ||
-    /^<\s*\/?\s*(?:[a-z_][\w.-]*:)?(?:script|foreignobject|style|animate|set|animatetransform|animatemotion|mpath)\b/u.test(lower) ||
+  const attributes = [...readSvgAttributes(tag), ...readSvgAttributes(decoded)];
+  if (attributes.some(({ name }) => name === "xml:base" || name === "srcdoc") ||
+    hasUnsafeNamespaceDeclaration(readSvgAttributes(decoded)) ||
+    lower.includes("\\") ||
+    /^<\s*\/?\s*[a-z_][\w.-]*:[a-z_][\w.-]*\b/u.test(lower) ||
+    /^<\s*\/?\s*(?:script|foreignobject|style|animate|set|animatetransform|animatemotion|mpath|discard|iframe|object|embed|audio|video|canvas|link|meta|base)\b/u.test(lower) ||
     /\bstyle\s*=/u.test(lower) ||
     /\bon[a-z][\w:.-]*\s*=/u.test(lower) ||
     /j\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t\s*:/u.test(lower) ||
@@ -197,6 +215,54 @@ function inspectSvgTag(tag: string): void {
       throw new Error("SVG external URL references are not allowed.");
     }
   }
+}
+
+interface SvgAttribute {
+  readonly name: string;
+  readonly value: string;
+}
+
+function readSvgAttributes(tag: string): SvgAttribute[] {
+  const attributes: SvgAttribute[] = [];
+  let offset = 1;
+  while (offset < tag.length && /\s/u.test(tag[offset]!)) offset += 1;
+  if (tag[offset] === "/") offset += 1;
+  while (offset < tag.length && !/[\s>]/u.test(tag[offset]!)) offset += 1;
+
+  while (offset < tag.length) {
+    while (offset < tag.length && /\s/u.test(tag[offset]!)) offset += 1;
+    if (tag[offset] === "/" || tag[offset] === ">" || offset >= tag.length) break;
+    const nameStart = offset;
+    while (offset < tag.length && !/[\s=/>]/u.test(tag[offset]!)) offset += 1;
+    const name = tag.slice(nameStart, offset).toLocaleLowerCase("en-US");
+    while (offset < tag.length && /\s/u.test(tag[offset]!)) offset += 1;
+    if (tag[offset] !== "=") continue;
+    offset += 1;
+    while (offset < tag.length && /\s/u.test(tag[offset]!)) offset += 1;
+    const quote = tag[offset];
+    let value: string;
+    if (quote === "\"" || quote === "'") {
+      offset += 1;
+      const valueStart = offset;
+      while (offset < tag.length && tag[offset] !== quote) offset += 1;
+      value = tag.slice(valueStart, offset);
+      if (offset < tag.length) offset += 1;
+    } else {
+      const valueStart = offset;
+      while (offset < tag.length && !/[\s>]/u.test(tag[offset]!)) offset += 1;
+      value = tag.slice(valueStart, offset);
+    }
+    attributes.push({ name, value });
+  }
+  return attributes;
+}
+
+function hasUnsafeNamespaceDeclaration(attributes: readonly SvgAttribute[]): boolean {
+  return attributes.some(({ name, value }) =>
+    (name === "xmlns" && value !== SVG_NAMESPACE) ||
+    (name.startsWith("xmlns:") &&
+      (name !== "xmlns:xlink" || value !== XLINK_NAMESPACE)),
+  );
 }
 
 function decodeXmlEntities(value: string): string {
