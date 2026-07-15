@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { buildGptCodexHwpRuntime } from "../../../scripts/build-gpt-codex-hwp-runtime.mjs";
+import { buildRuntime } from "../../../scripts/project-runtime.mjs";
 import { verifyKordocCoreRuntime } from "../../../scripts/kordoc-core-runtime.mjs";
 import {
   assertCompactBudgets,
@@ -234,8 +234,9 @@ async function verifyMcp(runtimeRoot) {
   try {
     await client.connect(transport);
     const version = client.getServerVersion()?.version;
+    const expectedVersion = JSON.parse(await readFile(join(runtimeRoot, "package.json"), "utf8")).version;
     const tools = (await client.listTools()).tools.map((tool) => tool.name);
-    if (version !== "0.1.4") throw new Error(`Unexpected MCP version: ${version}`);
+    if (version !== expectedVersion) throw new Error(`Unexpected MCP version: ${version}`);
     if (JSON.stringify(tools) !== JSON.stringify(TOOL_NAMES)) throw new Error(`Unexpected MCP tools: ${tools.join(", ")}`);
     return { version, tools, stderrBytes: Buffer.byteLength(stderr) };
   } finally {
@@ -316,13 +317,8 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-compact-"));
   let report;
   try {
-    const stage = join(temporaryRoot, "stage");
-    const built = await buildGptCodexHwpRuntime(
-      source,
-      stage,
-      (buildRoot) => runNpm(["run", "build"], buildRoot),
-    );
-    const runtimeRoot = built.runtimeRoot;
+    const runtimeRoot = join(temporaryRoot, "runtime");
+    await buildRuntime({ root: source, outputRoot: runtimeRoot });
     const provenanceRecord = await verifyKordocCoreRuntime(join(runtimeRoot, "vendor", "kordoc-core"));
     const provenance = {
       status: "passed",
@@ -400,7 +396,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify(await verifyTools(runtimeRoot, workRoot, sampleHwpPath))}\n`);
     return;
   }
-  const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
   const configuredFixture = process.env.HWP_TEST_FIXTURE?.trim();
   if (!configuredFixture) {
     process.stdout.write(`${JSON.stringify({

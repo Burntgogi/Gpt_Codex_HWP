@@ -7,13 +7,13 @@
     "start": "node dist/mcp.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@xmldom/xmldom": "^0.9.8",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@xmldom/xmldom": "0.9.10",
     "cfb": "1.2.2",
-    "jszip": "^3.10.1",
+    "jszip": "3.10.1",
     "kordoc": "file:vendor/kordoc-core",
-    "sharp": "^0.34.0",
-    "zod": "^3.25.0"
+    "sharp": "0.34.5",
+    "zod": "3.25.76"
   },
   "engines": {
     "node": ">=22"

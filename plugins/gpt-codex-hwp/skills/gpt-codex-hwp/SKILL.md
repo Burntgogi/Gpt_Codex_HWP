@@ -4,6 +4,7 @@ description: Read, create, edit, fill, validate, and preview Korean Hangul docum
 ---
 
 # Gpt_Codex_HWP
+
 Use the bundled `hwp_*` MCP tools for Korean Hangul document work.
 
 ## Core workflow

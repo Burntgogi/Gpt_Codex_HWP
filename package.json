@@ -16,6 +16,10 @@
   },
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",
+    "sync:metadata": "node scripts/sync-project-metadata.mjs --write",
+    "check:metadata": "node scripts/sync-project-metadata.mjs --check",
+    "runtime:write": "node scripts/project-runtime.mjs --write",
+    "runtime:check": "node scripts/project-runtime.mjs --check",
     "test:repository": "node --test tests/*.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
     "test": "npm run test:repository && npm run test:source",
