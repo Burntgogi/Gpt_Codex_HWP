@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   access,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -9,14 +10,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import test, { after, before } from "node:test";
+import { join } from "node:path";
+import test, { after, before, type TestContext } from "node:test";
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import CFB from "cfb";
 import JSZip from "jszip";
 import { markdownToHwpx } from "kordoc";
 
+import { resolveHwpFixture } from "../release-scripts/hwp-fixture.mjs";
 import {
   RhwpBackendLoader,
   checkRhwpBackend,
@@ -426,11 +428,7 @@ test("preview rejects exact signed HWPX bytes before renderer or backend", async
 });
 
 test("real @rhwp/core preview fallback works when installed", { timeout: 30_000 }, async (t) => {
-  const status = await checkRhwpBackend();
-  if (!status.available) {
-    t.skip(`optional @rhwp/core unavailable: ${status.reason}`);
-    return;
-  }
+  if (!await requireRhwpBackend(t)) return;
   const testRoot = join(tmpRoot, "real-core");
   const sourcePath = join(testRoot, "source.hwpx");
   const previewPath = join(testRoot, "preview.svg");
@@ -451,36 +449,40 @@ test("real @rhwp/core preview fallback works when installed", { timeout: 30_000 
 });
 
 test("real external HWP preview leaves the read-only sample unchanged", { timeout: 30_000 }, async (t) => {
-  const configuredFixture = process.env.HWP_TEST_FIXTURE?.trim();
-  if (!configuredFixture) {
-    t.skip("Optional external HWP preview smoke skipped: set HWP_TEST_FIXTURE to an explicit diagnostic fixture.");
-    return;
-  }
-  const samplePath = resolve(configuredFixture);
-  try {
-    await access(samplePath);
-  } catch {
-    t.skip("external rhwp HWP sample is unavailable");
-    return;
-  }
-  const status = await checkRhwpBackend();
-  if (!status.available) {
-    t.skip(`optional @rhwp/core unavailable: ${status.reason}`);
-    return;
-  }
-  const before = sha256(await readFile(samplePath));
+  const fixture = await resolveHwpFixture({ requireTracked: true });
+  if (!await requireRhwpBackend(t)) return;
+  assert.equal(sha256(await readFile(fixture.path)), fixture.sha256);
+  const ownedInputPath = join(tmpRoot, "external-hwp-owned-copy.hwp");
   const outputPath = join(tmpRoot, "external-hwp-preview.svg");
+  await copyFile(fixture.path, ownedInputPath);
+  assert.equal(sha256(await readFile(ownedInputPath)), fixture.sha256);
 
-  const result = await handleHwpRenderPreview(
-    { file_path: samplePath, output_svg_path: outputPath },
-    { renderDocument: async () => { throw new Error("forced HWP primary failure"); } },
-  );
+  let result: CallToolResult | undefined;
+  try {
+    result = await handleHwpRenderPreview(
+      { file_path: ownedInputPath, output_svg_path: outputPath },
+      { renderDocument: async () => { throw new Error("forced HWP primary failure"); } },
+    );
+  } finally {
+    assert.equal(sha256(await readFile(ownedInputPath)), fixture.sha256);
+    assert.equal(sha256(await readFile(fixture.path)), fixture.sha256);
+  }
 
+  assert.ok(result);
   assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
   assert.equal(details(result).backend, "rhwp");
   assert.match(await readFile(outputPath, "utf8"), /^\s*<svg\b/iu);
-  assert.equal(sha256(await readFile(samplePath)), before);
 });
+
+async function requireRhwpBackend(t: TestContext): Promise<boolean> {
+  const status = await checkRhwpBackend();
+  if (status.available) return true;
+  if (process.env.HWP_REQUIRE_RHWP === "1") {
+    assert.fail(`required @rhwp/core unavailable: ${status.reason}`);
+  }
+  t.skip(`optional @rhwp/core unavailable: ${status.reason}`);
+  return false;
+}
 
 function validRhwpModule(onInit: () => void): unknown {
   class MockDocument {

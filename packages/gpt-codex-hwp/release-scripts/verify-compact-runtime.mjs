@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { lstat, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdtemp, open, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,6 +15,7 @@ import {
   isExcludedPackagePath,
   summarizeInstalledEntries,
 } from "./compact-policy.mjs";
+import { assertHwpFixtureByteLimit, resolveHwpFixture } from "./hwp-fixture.mjs";
 
 const TOOL_NAMES = [
   "hwp_detect_format",
@@ -29,6 +30,14 @@ const TOOL_NAMES = [
 ];
 const COMMAND_TIMEOUT_MS = 180_000;
 const TOOL_SMOKE_TIMEOUT_MS = 120_000;
+const HWP_COPY_CHUNK_BYTES = 1024 * 1024;
+const PINNED_MARKDOWN_EVIDENCE = Object.freeze({
+  characters: 100,
+  bytes: 300,
+  sha256: "34ba9b31ab7f208d922763be29c72ee7f68c0e3300285ff83eba3eb73dfe7a34",
+  version: "5.x",
+  pageCount: 1,
+});
 export { assertCompactBudgets, assertCompactLockfile, isExcludedPackagePath };
 
 export function isAllowedKordocLink({
@@ -79,35 +88,44 @@ export async function runCommand(command, args, cwd, options = {}) {
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      const timeoutError = new Error(`Command timed out after ${timeoutMs} ms: ${command} ${args.join(" ")}`);
       void terminateProcessTree(child).then(
-        () => reject(timeoutError),
-        (terminationError) => reject(new Error(`${timeoutError.message}; process-tree termination failed.`, {
-          cause: terminationError,
-        })),
+        () => reject(commandError("COMMAND_TIMEOUT", "subprocess timed out")),
+        () => reject(commandError(
+          "COMMAND_TERMINATION_FAILED",
+          "subprocess termination failed after timeout",
+        )),
       );
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => {
+    child.on("error", () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      reject(error);
+      reject(commandError("COMMAND_START_FAILED", "subprocess could not start"));
     });
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (code !== 0 && !allowFailure) {
-        reject(new Error(`${command} ${args.join(" ")} failed (${code}): ${stderr || stdout}`));
+        reject(commandError("COMMAND_FAILED", "subprocess exited unsuccessfully", {
+          exitCode: code,
+        }));
       } else {
         resolvePromise({ code, stdout, stderr });
       }
     });
   });
+}
+
+function commandError(code, summary, properties = {}) {
+  const error = new Error(`${code}: ${summary}.`);
+  error.code = code;
+  Object.assign(error, properties);
+  return error;
 }
 
 async function terminateProcessTree(child) {
@@ -155,28 +173,86 @@ function runNpm(args, cwd, options = {}) {
 
 export function parseNpmLsResult(result) {
   const stdout = typeof result?.stdout === "string" ? result.stdout : "";
-  if (stdout.trim().length === 0) throw new Error("npm ls returned empty JSON output.");
+  if (stdout.trim().length === 0) {
+    throw npmLsError("NPM_LS_INVALID", "npm ls returned empty JSON output");
+  }
   let tree;
   try {
     tree = JSON.parse(stdout);
-  } catch (error) {
-    throw new Error("npm ls returned invalid JSON.", { cause: error });
+  } catch {
+    throw npmLsError("NPM_LS_INVALID", "npm ls returned invalid JSON");
   }
   if (tree === null || typeof tree !== "object" || Array.isArray(tree)) {
-    throw new Error("npm ls returned invalid JSON data.");
+    throw npmLsError("NPM_LS_INVALID", "npm ls returned invalid JSON data");
   }
-  if (Object.keys(tree).length === 0) throw new Error("npm ls returned an empty JSON object.");
+  if (Object.keys(tree).length === 0) {
+    throw npmLsError("NPM_LS_INVALID", "npm ls returned an empty JSON object");
+  }
   if (tree.problems !== undefined && !Array.isArray(tree.problems)) {
-    throw new Error("npm ls returned malformed dependency problems.");
+    throw npmLsError("NPM_LS_INVALID", "npm ls returned malformed dependency problems");
   }
   const problems = tree.problems ?? [];
   if (result.code !== 0) {
-    throw new Error(`npm ls exited with nonzero status ${result.code}: ${result.stderr || stdout}`);
+    throw npmLsError("NPM_LS_FAILED", "npm ls exited with nonzero status", {
+      exitCode: Number.isSafeInteger(result.code) ? result.code : null,
+    });
   }
   if (problems.length > 0) {
-    throw new Error(`npm ls reported dependency problems: ${problems.join(", ")}`);
+    throw npmLsError("NPM_LS_PROBLEMS", "npm ls reported dependency problems", {
+      problemCount: problems.length,
+    });
   }
   return { status: "passed", problems };
+}
+
+function npmLsError(code, summary, properties = {}) {
+  const error = new Error(`${code}: ${summary}.`);
+  error.code = code;
+  Object.assign(error, properties);
+  return error;
+}
+
+export function parseNpmAuditResult(result) {
+  const stdout = typeof result?.stdout === "string" ? result.stdout : "";
+  let audit;
+  try {
+    audit = JSON.parse(stdout);
+  } catch {
+    throw npmAuditError("NPM_AUDIT_INVALID", "npm audit returned invalid JSON");
+  }
+  const vulnerabilities = audit?.metadata?.vulnerabilities;
+  const total = vulnerabilities?.total;
+  if (vulnerabilities === null
+    || typeof vulnerabilities !== "object"
+    || Array.isArray(vulnerabilities)
+    || !Number.isSafeInteger(total)
+    || total < 0) {
+    throw npmAuditError("NPM_AUDIT_INVALID", "npm audit returned invalid vulnerability metadata");
+  }
+  if (result?.code !== 0 || total !== 0) {
+    throw npmAuditError("NPM_AUDIT_FAILED", "npm audit reported a failed security gate", {
+      exitCode: Number.isSafeInteger(result?.code) ? result.code : null,
+      vulnerabilityTotal: total,
+    });
+  }
+  return { ...vulnerabilities };
+}
+
+function npmAuditError(code, summary, properties = {}) {
+  const error = new Error(`${code}: ${summary}.`);
+  error.code = code;
+  Object.assign(error, properties);
+  return error;
+}
+
+export function assertMcpStderr(stderr) {
+  if (typeof stderr === "string" && stderr.length === 0) return;
+  const error = new Error("MCP_STDERR_NOT_EMPTY: MCP wrote diagnostic output to stderr.");
+  error.code = "MCP_STDERR_NOT_EMPTY";
+  error.stderrBytes = typeof stderr === "string"
+    ? Buffer.byteLength(stderr)
+    : null;
+  throw error;
 }
 
 async function measureTree(root, collectedEntries = undefined, pathRoot = root) {
@@ -215,11 +291,354 @@ async function measureTree(root, collectedEntries = undefined, pathRoot = root) 
 }
 
 function requireSuccess(name, result) {
-  if (result?.isError) throw new Error(`${name} smoke failed: ${JSON.stringify(result.structuredContent)}`);
+  if (result === null
+    || typeof result !== "object"
+    || Array.isArray(result)
+    || result.isError) {
+    const error = new Error("TOOL_SMOKE_FAILED: tool smoke returned an error.");
+    error.code = "TOOL_SMOKE_FAILED";
+    throw error;
+  }
   return result.structuredContent ?? {};
 }
 
-async function verifyMcp(runtimeRoot) {
+export async function verifyReadOnlyHwpTools({
+  sampleHwpPath,
+  expectedSha256,
+  detectFormat,
+  readDocument,
+  readSha256 = sha256File,
+  expectedBytes = 8_704,
+  expectedMarkdownEvidence = PINNED_MARKDOWN_EVIDENCE,
+}) {
+  const statuses = {};
+  const detectEvidence = await invokeReadOnlyHwpTool({
+    toolName: "hwp_detect_format",
+    operation: detectFormat,
+    sampleHwpPath,
+    expectedSha256,
+    readSha256,
+  });
+  assertDetectEvidence(detectEvidence, expectedBytes);
+  statuses.hwp_detect_format = "passed";
+
+  const readEvidence = await invokeReadOnlyHwpTool({
+    toolName: "hwp_read",
+    operation: readDocument,
+    sampleHwpPath,
+    expectedSha256,
+    readSha256,
+  });
+  assertReadEvidence(readEvidence, expectedMarkdownEvidence);
+  statuses.hwp_read = "passed";
+  return statuses;
+}
+
+export async function verifyMcpReadOnlyHwpTools({
+  client,
+  sampleHwpPath,
+  expectedSha256,
+  expectedBytes,
+  semanticMode,
+  readSha256 = sha256File,
+}) {
+  if (semanticMode !== "tracked" && semanticMode !== "diagnostic") {
+    throw semanticEvidenceError();
+  }
+  return await verifyReadOnlyHwpTools({
+    sampleHwpPath,
+    expectedSha256,
+    expectedBytes,
+    expectedMarkdownEvidence: semanticMode === "tracked"
+      ? PINNED_MARKDOWN_EVIDENCE
+      : null,
+    detectFormat: (input) => callMcpTool(client, "hwp_detect_format", input),
+    readDocument: (input) => callMcpTool(client, "hwp_read", input),
+    readSha256,
+  });
+}
+
+async function callMcpTool(client, name, args) {
+  try {
+    return await client.callTool({ name, arguments: args });
+  } catch {
+    const error = new Error("MCP_TOOL_CALL_FAILED: MCP tool call failed.");
+    error.code = "MCP_TOOL_CALL_FAILED";
+    throw error;
+  }
+}
+
+export async function copyVerifiedHwpFixture({
+  sourcePath,
+  targetRoot,
+  expectedSha256,
+  openFile = open,
+  readSha256 = sha256File,
+}) {
+  const ownedPath = join(targetRoot, "verified-source-copy.hwp");
+  let sourceHandle;
+  let destinationHandle;
+  let failure;
+  try {
+    sourceHandle = await openFile(sourcePath, "r");
+    const before = await sourceHandle.stat();
+    assertCopySourceStatus(before);
+    destinationHandle = await openFile(ownedPath, "wx");
+
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(Math.min(
+      HWP_COPY_CHUNK_BYTES,
+      Math.max(1, before.size),
+    ));
+    let position = 0;
+    while (position < before.size) {
+      assertHwpFixtureByteLimit(position);
+      const requested = Math.min(buffer.byteLength, before.size - position);
+      const { bytesRead } = await sourceHandle.read(
+        buffer,
+        0,
+        requested,
+        position,
+      );
+      if (!Number.isSafeInteger(bytesRead)
+        || bytesRead <= 0
+        || bytesRead > requested) {
+        throw new Error("invalid source read");
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+
+      let written = 0;
+      while (written < bytesRead) {
+        const remaining = bytesRead - written;
+        const { bytesWritten } = await destinationHandle.write(
+          buffer,
+          written,
+          remaining,
+          position + written,
+        );
+        if (!Number.isSafeInteger(bytesWritten)
+          || bytesWritten <= 0
+          || bytesWritten > remaining) {
+          throw new Error("invalid destination write");
+        }
+        written += bytesWritten;
+      }
+      position += bytesRead;
+      assertHwpFixtureByteLimit(position);
+    }
+
+    const after = await sourceHandle.stat();
+    assertCopySourceStatus(after);
+    if (!sameFileSnapshot(before, after) || position !== before.size) {
+      throw new Error("source changed during copy");
+    }
+    if (hash.digest("hex") !== expectedSha256) {
+      throw new Error("source digest mismatch");
+    }
+    await destinationHandle.sync();
+  } catch {
+    failure = hwpFixtureCopyError();
+  }
+
+  for (const handle of [destinationHandle, sourceHandle]) {
+    if (handle === undefined) continue;
+    try {
+      await handle.close();
+    } catch {
+      failure ??= hwpFixtureCopyError();
+    }
+  }
+
+  if (failure === undefined) {
+    let ownedMatches = false;
+    let sourceMatches = false;
+    try {
+      ownedMatches = await readSha256(ownedPath) === expectedSha256;
+    } catch {
+      // The generic copy error below is the public diagnostic.
+    }
+    try {
+      sourceMatches = await readSha256(sourcePath) === expectedSha256;
+    } catch {
+      // The generic copy error below is the public diagnostic.
+    }
+    if (!ownedMatches || !sourceMatches) {
+      failure = hwpFixtureCopyError();
+    }
+  }
+  if (failure !== undefined) throw failure;
+  return ownedPath;
+}
+
+function assertCopySourceStatus(status) {
+  if (status === null
+    || typeof status !== "object"
+    || typeof status.isFile !== "function"
+    || !status.isFile()) {
+    throw new Error("copy source is not a regular file");
+  }
+  assertHwpFixtureByteLimit(status.size);
+}
+
+function sameFileSnapshot(before, after) {
+  return after.dev === before.dev
+    && after.ino === before.ino
+    && after.size === before.size
+    && after.mtimeMs === before.mtimeMs
+    && after.ctimeMs === before.ctimeMs;
+}
+
+function hwpFixtureCopyError() {
+  const error = new Error(
+    "HWP_FIXTURE_COPY_FAILED: the verified HWP fixture could not be copied safely.",
+  );
+  error.code = "HWP_FIXTURE_COPY_FAILED";
+  return error;
+}
+
+export async function finalizeFixtureWorkspace({
+  ownedSample,
+  sourcePath,
+  expectedSha256,
+  temporaryRoot,
+  readSha256 = sha256File,
+  removeTree = rm,
+}) {
+  try {
+    if (ownedSample !== undefined) {
+      await assertSampleHash(
+        ownedSample,
+        expectedSha256,
+        "compact-runtime verification",
+        readSha256,
+      );
+    }
+  } finally {
+    try {
+      await assertSampleHash(
+        sourcePath,
+        expectedSha256,
+        "compact-runtime verification",
+        readSha256,
+      );
+    } finally {
+      await removeTree(temporaryRoot, { recursive: true, force: true });
+    }
+  }
+}
+
+export async function verifyClassicHwpPreview({
+  sampleHwpPath,
+  expectedSha256,
+  outputSvgPath,
+  renderPreview,
+  readSha256 = sha256File,
+}) {
+  const evidence = await invokeReadOnlyHwpTool({
+    toolName: "classic_hwp_render_preview",
+    operation: ({ file_path }) => renderPreview(
+      { file_path, output_svg_path: outputSvgPath },
+      {
+        renderDocument: async () => {
+          throw new Error("forced primary renderer failure");
+        },
+      },
+    ),
+    sampleHwpPath,
+    expectedSha256,
+    readSha256,
+  });
+  if (evidence?.backend !== "rhwp") throw rhwpPreviewEvidenceError();
+  let svg;
+  try {
+    svg = await readFile(outputSvgPath, "utf8");
+  } catch {
+    throw rhwpPreviewEvidenceError();
+  }
+  if (!/^\s*<svg\b/iu.test(svg)) throw rhwpPreviewEvidenceError();
+  return evidence;
+}
+
+async function invokeReadOnlyHwpTool({
+  toolName,
+  operation,
+  sampleHwpPath,
+  expectedSha256,
+  readSha256,
+}) {
+  let result;
+  try {
+    result = await operation({ file_path: sampleHwpPath });
+  } finally {
+    await assertSampleHash(
+      sampleHwpPath,
+      expectedSha256,
+      toolName,
+      readSha256,
+    );
+  }
+  return requireSuccess(toolName, result);
+}
+
+function assertDetectEvidence(evidence, expectedBytes) {
+  const details = evidence?.details;
+  if (evidence?.format !== "hwp"
+    || details === null
+    || typeof details !== "object"
+    || details.container_format !== "ole2"
+    || details.file_size_bytes !== expectedBytes) {
+    throw semanticEvidenceError();
+  }
+}
+
+function assertReadEvidence(evidence, expectedMarkdownEvidence) {
+  const markdown = evidence?.markdown;
+  const metadata = evidence?.metadata;
+  const warnings = evidence?.warnings;
+  if (typeof markdown !== "string"
+    || markdown.length === 0
+    || metadata === null
+    || typeof metadata !== "object"
+    || metadata.fileType !== "hwp"
+    || typeof metadata.version !== "string"
+    || metadata.version.length === 0
+    || !Number.isSafeInteger(metadata.pageCount)
+    || metadata.pageCount <= 0
+    || !Array.isArray(warnings)
+    || (expectedMarkdownEvidence !== null
+      && (markdown.length !== expectedMarkdownEvidence.characters
+        || Buffer.byteLength(markdown, "utf8") !== expectedMarkdownEvidence.bytes
+        || createHash("sha256").update(markdown, "utf8").digest("hex")
+          !== expectedMarkdownEvidence.sha256
+        || metadata.version !== expectedMarkdownEvidence.version
+        || metadata.pageCount !== expectedMarkdownEvidence.pageCount
+        || warnings.length !== 0))) {
+    throw semanticEvidenceError();
+  }
+}
+
+function semanticEvidenceError() {
+  const error = new Error(
+    "COMPACT_HWP_SEMANTIC_MISMATCH: real-HWP smoke evidence did not match the pinned oracle.",
+  );
+  error.code = "COMPACT_HWP_SEMANTIC_MISMATCH";
+  return error;
+}
+
+function rhwpPreviewEvidenceError() {
+  const error = new Error(
+    "COMPACT_HWP_RHWP_PREVIEW_MISMATCH: classic HWP preview did not use rhwp with SVG evidence.",
+  );
+  error.code = "COMPACT_HWP_RHWP_PREVIEW_MISMATCH";
+  return error;
+}
+
+async function verifyMcp(runtimeRoot, {
+  sampleHwpPath,
+  expectedSha256,
+  expectedBytes,
+  semanticMode,
+}) {
   const serverPath = join(runtimeRoot, "dist", "mcp.js");
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -238,15 +657,34 @@ async function verifyMcp(runtimeRoot) {
     const tools = (await client.listTools()).tools.map((tool) => tool.name);
     if (version !== expectedVersion) throw new Error(`Unexpected MCP version: ${version}`);
     if (JSON.stringify(tools) !== JSON.stringify(TOOL_NAMES)) throw new Error(`Unexpected MCP tools: ${tools.join(", ")}`);
-    return { version, tools, stderrBytes: Buffer.byteLength(stderr) };
+    const readOnlyToolSmokes = await verifyMcpReadOnlyHwpTools({
+      client,
+      sampleHwpPath,
+      expectedSha256,
+      expectedBytes,
+      semanticMode,
+    });
+    return {
+      version,
+      tools,
+      readOnlyToolSmokes,
+      stderrBytes: Buffer.byteLength(stderr),
+    };
   } finally {
     await client.close();
     await transport.close();
-    if (stderr.length > 0) throw new Error(`MCP wrote to stderr: ${stderr}`);
+    assertMcpStderr(stderr);
   }
 }
 
-async function verifyTools(runtimeRoot, workRoot, sampleHwpPath) {
+async function verifyTools(
+  runtimeRoot,
+  workRoot,
+  sampleHwpPath,
+  expectedSha256,
+  expectedBytes,
+  semanticMode,
+) {
   const toolRoot = join(runtimeRoot, "dist", "tools");
   const detect = await import(pathToFileURL(join(toolRoot, "detect.js")).href);
   const read = await import(pathToFileURL(join(toolRoot, "read.js")).href);
@@ -256,10 +694,23 @@ async function verifyTools(runtimeRoot, workRoot, sampleHwpPath) {
   const assets = await import(pathToFileURL(join(toolRoot, "assets.js")).href);
   const statuses = {};
 
-  requireSuccess("hwp_detect_format", await detect.handleHwpDetectFormat({ file_path: sampleHwpPath }));
-  statuses.hwp_detect_format = "passed";
-  requireSuccess("hwp_read", await read.handleHwpRead({ file_path: sampleHwpPath }));
-  statuses.hwp_read = "passed";
+  Object.assign(statuses, await verifyReadOnlyHwpTools({
+    sampleHwpPath,
+    expectedSha256,
+    detectFormat: detect.handleHwpDetectFormat,
+    readDocument: read.handleHwpRead,
+    expectedBytes,
+    expectedMarkdownEvidence: semanticMode === "tracked"
+      ? PINNED_MARKDOWN_EVIDENCE
+      : null,
+  }));
+
+  await verifyClassicHwpPreview({
+    sampleHwpPath,
+    expectedSha256,
+    outputSvgPath: join(workRoot, "classic-hwp-preview.svg"),
+    renderPreview: preview.handleHwpRenderPreview,
+  });
 
   const generated = join(workRoot, "generated.hwpx");
   requireSuccess("hwp_generate_hwpx", await write.handleHwpGenerateHwpx({
@@ -312,11 +763,24 @@ async function verifyTools(runtimeRoot, workRoot, sampleHwpPath) {
 
 export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
   const source = resolve(sourceRoot);
-  const sample = resolve(sampleHwpPath);
-  const sampleBefore = createHash("sha256").update(await readFile(sample)).digest("hex");
+  const fixture = sampleHwpPath === undefined
+    ? await resolveHwpFixture({ requireTracked: true })
+    : await resolveHwpFixture({ overridePath: sampleHwpPath });
+  const sample = fixture.path;
+  const sampleBefore = await sha256File(sample);
+  if (sampleBefore !== fixture.sha256) {
+    throw new Error("The HWP sample changed before verification.");
+  }
   const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-compact-"));
   let report;
+  let ownedSample;
   try {
+    ownedSample = join(temporaryRoot, "verified-source-copy.hwp");
+    await copyVerifiedHwpFixture({
+      sourcePath: sample,
+      targetRoot: temporaryRoot,
+      expectedSha256: fixture.sha256,
+    });
     const runtimeRoot = join(temporaryRoot, "runtime");
     await buildRuntime({ root: source, outputRoot: runtimeRoot });
     const provenanceRecord = await verifyKordocCoreRuntime(join(runtimeRoot, "vendor", "kordoc-core"));
@@ -340,10 +804,7 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
       runtimeRoot,
       { allowFailure: true },
     );
-    const audit = JSON.parse(auditRun.stdout);
-    if (auditRun.code !== 0 || audit.metadata?.vulnerabilities?.total !== 0) {
-      throw new Error(`npm audit reported vulnerabilities: ${auditRun.stdout}`);
-    }
+    const audit = parseNpmAuditResult(auditRun);
     const installedEntries = { filePaths: [], linkPaths: [] };
     const nodeModulesBytes = await measureTree(join(runtimeRoot, "node_modules"), installedEntries, runtimeRoot);
     const installedBytes = await measureTree(runtimeRoot);
@@ -352,17 +813,38 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
       throw new Error(`Excluded dependencies installed: ${installedSummary.excludedPaths.join(", ")}`);
     }
     assertCompactBudgets({ nodeModulesBytes, installedBytes, publicRuntimeBytes });
-    const mcp = await verifyMcp(runtimeRoot);
+    const semanticMode = fixture.provenance?.tracked === false
+      ? "diagnostic"
+      : "tracked";
+    const mcp = await verifyMcp(runtimeRoot, {
+      sampleHwpPath: ownedSample,
+      expectedSha256: fixture.sha256,
+      expectedBytes: fixture.bytes,
+      semanticMode,
+    });
     const smokeRun = await runCommand(process.execPath, [
       fileURLToPath(import.meta.url),
       "--tool-smoke",
       runtimeRoot,
       temporaryRoot,
-      sample,
+      ownedSample,
+      fixture.sha256,
+      String(fixture.bytes),
+      semanticMode,
     ], source, { timeoutMs: TOOL_SMOKE_TIMEOUT_MS });
     const tools = JSON.parse(smokeRun.stdout);
-    const sampleAfter = createHash("sha256").update(await readFile(sample)).digest("hex");
-    if (sampleAfter !== sampleBefore) throw new Error("The HWP sample changed during verification.");
+    await assertSampleHash(
+      ownedSample,
+      fixture.sha256,
+      "tool verification",
+      sha256File,
+    );
+    await assertSampleHash(
+      sample,
+      fixture.sha256,
+      "tool verification",
+      sha256File,
+    );
     report = {
       publicRuntimeBytes,
       nodeModulesBytes,
@@ -374,16 +856,22 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
       excludedPackagePaths: installedSummary.excludedPaths,
       provenance,
       npmLs,
-      audit: audit.metadata.vulnerabilities,
+      audit,
       serverVersion: mcp.version,
       toolNames: mcp.tools,
+      mcpReadOnlySmokes: mcp.readOnlyToolSmokes,
       toolSmokes: tools,
       sourceSha256: sampleBefore,
       stderrBytes: mcp.stderrBytes,
       cleanup: false,
     };
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
+    await finalizeFixtureWorkspace({
+      ownedSample,
+      sourcePath: sample,
+      expectedSha256: fixture.sha256,
+      temporaryRoot,
+    });
   }
   report.cleanup = true;
   return report;
@@ -391,23 +879,143 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
 
 async function main() {
   if (process.argv[2] === "--tool-smoke") {
-    const [, , , runtimeRoot, workRoot, sampleHwpPath] = process.argv;
-    if (!runtimeRoot || !workRoot || !sampleHwpPath) throw new Error("Incomplete tool-smoke arguments.");
-    process.stdout.write(`${JSON.stringify(await verifyTools(runtimeRoot, workRoot, sampleHwpPath))}\n`);
+    const {
+      runtimeRoot,
+      workRoot,
+      sampleHwpPath,
+      expectedSha256,
+      expectedBytes,
+      semanticMode,
+    } = parseToolSmokeArguments(process.argv.slice(3));
+    process.stdout.write(`${JSON.stringify(await verifyTools(
+      runtimeRoot,
+      workRoot,
+      sampleHwpPath,
+      expectedSha256,
+      expectedBytes,
+      semanticMode,
+    ))}\n`);
     return;
   }
   const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  const configuredFixture = process.env.HWP_TEST_FIXTURE?.trim();
-  if (!configuredFixture) {
-    process.stdout.write(`${JSON.stringify({
-      check: "real-hwp-compact-runtime",
-      status: "skipped",
-      reason: "Set HWP_TEST_FIXTURE to an explicit diagnostic HWP fixture path.",
-    }, null, 2)}\n`);
-    return;
+  const cli = parseCliArguments(process.argv.slice(2));
+  const options = cli.mode === "release"
+    ? { sourceRoot }
+    : { sourceRoot, sampleHwpPath: cli.sampleHwpPath };
+  process.stdout.write(`${JSON.stringify(await verifyCompactRuntime(options), null, 2)}\n`);
+}
+
+export function parseToolSmokeArguments(args) {
+  const [
+    runtimeRoot,
+    workRoot,
+    sampleHwpPath,
+    expectedSha256,
+    serializedExpectedBytes,
+    semanticMode,
+  ] = args;
+  const expectedBytes = Number(serializedExpectedBytes);
+  if (args.length !== 6
+    || typeof runtimeRoot !== "string"
+    || runtimeRoot.length === 0
+    || typeof workRoot !== "string"
+    || workRoot.length === 0
+    || typeof sampleHwpPath !== "string"
+    || sampleHwpPath.length === 0
+    || !/^[a-f0-9]{64}$/u.test(expectedSha256 ?? "")
+    || !Number.isSafeInteger(expectedBytes)
+    || expectedBytes <= 0
+    || expectedBytes > 512 * 1024 * 1024
+    || (semanticMode !== "tracked" && semanticMode !== "diagnostic")) {
+    const error = new Error(
+      "COMPACT_TOOL_SMOKE_ARGUMENTS_INVALID: tool-smoke arguments are invalid.",
+    );
+    error.code = "COMPACT_TOOL_SMOKE_ARGUMENTS_INVALID";
+    throw error;
   }
-  const sampleHwpPath = resolve(configuredFixture);
-  process.stdout.write(`${JSON.stringify(await verifyCompactRuntime({ sourceRoot, sampleHwpPath }), null, 2)}\n`);
+  return {
+    runtimeRoot,
+    workRoot,
+    sampleHwpPath,
+    expectedSha256,
+    expectedBytes,
+    semanticMode,
+  };
+}
+
+export function parseCliArguments(args) {
+  if (args.length === 0) return { mode: "release" };
+  if (args.length === 2
+    && args[0] === "--sample"
+    && typeof args[1] === "string"
+    && args[1].trim().length > 0) {
+    return { mode: "diagnostic", sampleHwpPath: args[1] };
+  }
+  const error = new Error(
+    "COMPACT_RUNTIME_CLI_INVALID: use no arguments for release verification or --sample <path> for diagnostics.",
+  );
+  error.code = "COMPACT_RUNTIME_CLI_INVALID";
+  throw error;
+}
+
+async function assertSampleHash(path, expectedSha256, toolName, readSha256) {
+  if (await readSha256(path) !== expectedSha256) {
+    throw new Error(`The HWP sample changed after ${toolName}.`);
+  }
+}
+
+export async function sha256File(path) {
+  let handle;
+  let digest;
+  let failure;
+  try {
+    handle = await open(path, "r");
+    const before = await handle.stat();
+    if (!before.isFile()) throw new Error("not a regular file");
+    assertHwpFixtureByteLimit(before.size);
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(Math.min(
+      1024 * 1024,
+      Math.max(1, before.size),
+    ));
+    let position = 0;
+    while (position < before.size) {
+      const length = Math.min(buffer.byteLength, before.size - position);
+      const { bytesRead } = await handle.read(buffer, 0, length, position);
+      if (bytesRead <= 0) throw new Error("unexpected end of file");
+      position += bytesRead;
+      assertHwpFixtureByteLimit(position);
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    const after = await handle.stat();
+    assertHwpFixtureByteLimit(after.size);
+    if (position !== before.size
+      || after.dev !== before.dev
+      || after.ino !== before.ino
+      || after.size !== before.size
+      || after.mtimeMs !== before.mtimeMs
+      || after.ctimeMs !== before.ctimeMs) {
+      throw new Error("file changed while hashing");
+    }
+    digest = hash.digest("hex");
+  } catch {
+    failure = hwpIntegrityCheckError();
+  }
+  if (handle !== undefined) {
+    try {
+      await handle.close();
+    } catch {
+      failure ??= hwpIntegrityCheckError();
+    }
+  }
+  if (failure !== undefined) throw failure;
+  return digest;
+}
+
+function hwpIntegrityCheckError() {
+  const error = new Error("HWP_INTEGRITY_CHECK_FAILED: HWP bytes could not be hashed.");
+  error.code = "HWP_INTEGRITY_CHECK_FAILED";
+  return error;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
