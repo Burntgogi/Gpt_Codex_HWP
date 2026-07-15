@@ -147,6 +147,64 @@ test("the staged runtime documents HWP read-only and context-safe large reads", 
   assert.doesNotMatch(skill, /release-approval gate/u);
 });
 
+test("macOS claims require a successful current-head platform receipt", async () => {
+  const [koSource, enSource, skillSource, koRuntime, enRuntime, skillRuntime] = await Promise.all([
+    readFile(join(REPOSITORY_ROOT, "README.md"), "utf8"),
+    readFile(join(REPOSITORY_ROOT, "README.en.md"), "utf8"),
+    readFile(join(SOURCE_ROOT, "skills", "gpt-codex-hwp", "SKILL.md"), "utf8"),
+    readFile(join(RUNTIME_ROOT, "README.md"), "utf8"),
+    readFile(join(RUNTIME_ROOT, "README.en.md"), "utf8"),
+    readFile(join(RUNTIME_ROOT, "skills", "gpt-codex-hwp", "SKILL.md"), "utf8"),
+  ]);
+
+  for (const korean of [koSource, koRuntime]) {
+    assert.match(korean, /주로 Windows x64에서 개발/u);
+    assert.match(korean, /macOS Apple Silicon 플러그인 런타임 CI는 구성/u);
+    assert.match(korean, /현재 HEAD에 대한 성공 영수증.*확인되기 전.*통과.*검증 완료.*표현하지/isu);
+    assert.match(korean, /실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정은 검증하지 않았/u);
+    assert.match(korean, /macOS 완전 지원을 주장하지 않/u);
+    assert.doesNotMatch(korean, /macOS(?: Apple Silicon)?(?:을|를|은|는)? 완전히 지원(?:합니다|함)/u);
+    assertNoCompletedMacOsSupportClaim(korean);
+  }
+  for (const english of [enSource, enRuntime]) {
+    assert.match(english, /developed primarily on Windows x64/u);
+    assert.match(english, /macOS Apple Silicon plugin-runtime CI is configured/u);
+    assert.match(english, /must not be described as passed or validated until a successful receipt for the current HEAD exists/u);
+    assert.match(english, /Actual use with Codex Desktop and Hancom Office Hangul on macOS remains unverified/u);
+    assert.match(english, /Full macOS support is not claimed/u);
+    assert.doesNotMatch(english, /macOS(?: Apple Silicon)? is fully supported/iu);
+    assert.doesNotMatch(english, /fully supports macOS/iu);
+    assertNoCompletedMacOsSupportClaim(english);
+  }
+  for (const skill of [skillSource, skillRuntime]) {
+    assert.match(skill, /developed primarily on Windows x64/u);
+    assert.match(skill, /macOS Apple Silicon plugin-runtime CI is configured/u);
+    assert.match(skill, /successful receipt for the current HEAD/u);
+    assert.match(skill, /Codex Desktop and Hancom Office Hangul on macOS remains unverified/u);
+    assert.match(skill, /gate for declaring macOS validated support/u);
+  }
+});
+
+test("equivalent completed macOS support claims are rejected", () => {
+  assert.doesNotThrow(() => assertNoCompletedMacOsSupportClaim(
+    "Full macOS support is not claimed. macOS 완전 지원을 주장하지 않습니다.",
+  ));
+  for (const claim of [
+    "macOS support is complete.",
+    "Complete macOS support is available.",
+    "macOS is production-ready.",
+    "macOS는 지원 완료된 플랫폼입니다.",
+    "macOS Apple Silicon은 검증 완료되었습니다.",
+    "macOS를 완전히 지원합니다.",
+  ]) {
+    assert.throws(
+      () => assertNoCompletedMacOsSupportClaim(claim),
+      /completed macOS support claim/u,
+      claim,
+    );
+  }
+});
+
 test("the staged runtime preserves the historical plugin removal selector", async () => {
   const metadata = await loadProjectMetadata(REPOSITORY_ROOT);
   const readmes = await Promise.all([
@@ -306,6 +364,25 @@ function extractMarkdownSection(markdown: string, heading: string): string {
   const end = normalized.indexOf("\n## ", start + heading.length);
   assert.notEqual(end, -1, `section has no closing heading: ${heading}`);
   return normalized.slice(start, end);
+}
+
+function assertNoCompletedMacOsSupportClaim(document: string): void {
+  const claims = document
+    .replaceAll("Full macOS support is not claimed.", "")
+    .replaceAll("full macOS support is not claimed.", "")
+    .replaceAll("macOS 완전 지원을 주장하지 않습니다.", "");
+  const forbiddenClaims = [
+    /macOS(?: Apple Silicon)? support (?:is|has been) (?:complete|completed|validated|production[- ]ready)/iu,
+    /(?:complete|completed|validated|production[- ]ready) macOS(?: Apple Silicon)? support/iu,
+    /macOS(?: Apple Silicon)? (?:is|has been) (?:fully supported|completely supported|validated|production[- ]ready)/iu,
+    /fully supports macOS/iu,
+    /macOS(?: Apple Silicon)?(?:은|는|을|를)?\s*(?:지원|검증)(?:이|을|은|는)?\s*완료(?:된|되었|됐|되었습니다|됐습니다)?/u,
+    /macOS(?: Apple Silicon)?(?:은|는|을|를)?\s*완전히\s*지원/u,
+    /macOS(?: Apple Silicon)?\s*완전\s*지원(?:을|이)?\s*(?:제공|보장|완료)/u,
+  ];
+  for (const forbiddenClaim of forbiddenClaims) {
+    assert.doesNotMatch(claims, forbiddenClaim, "completed macOS support claim is forbidden");
+  }
 }
 
 function assertSecureAgentInstallSection(

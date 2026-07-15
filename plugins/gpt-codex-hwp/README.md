@@ -57,7 +57,7 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 ## 개발 및 플랫폼 검증 상태
 
-이 프로젝트는 Windows x64 환경을 중심으로 제작하고 실제 검증했습니다. macOS Apple Silicon 호환성을 고려해 런처와 런타임 경로를 구성했지만, 실제 Mac 기기 스모크 테스트는 아직 수행하지 않았습니다. 따라서 macOS Apple Silicon은 호환 대상이지만 현재 검증 완료된 플랫폼은 아닙니다.
+이 프로젝트는 주로 Windows x64에서 개발하고 실제 검증했습니다. macOS Apple Silicon 플러그인 런타임 CI는 구성되어 있지만, 현재 HEAD에 대한 성공 영수증이 확인되기 전에는 이 CI를 통과 또는 검증 완료로 표현하지 않습니다. 실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정은 검증하지 않았습니다. 따라서 macOS는 호환 대상이며 macOS 완전 지원을 주장하지 않습니다.
 
 `v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 릴리즈 노트](RELEASE_NOTES.md#검증-결과)를 참조하십시오.
 
