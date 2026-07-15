@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -11,6 +12,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const VERSION_TIMEOUT_MS = 10_000;
 const VERSION_MAX_OUTPUT_BYTES = 4 * 1024;
 const TASKKILL_TIMEOUT_MS = 2_000;
+const MAX_STAGE_COMMANDS = 4;
 const TOOL_COUNT = 9;
 
 export const REQUIRED_RELEASE_STAGES = Object.freeze([
@@ -113,7 +115,7 @@ export async function runCli(options = {}) {
 }
 
 export async function runStageCommand(stage, options = {}) {
-  const invocation = resolveInvocation(stage);
+  const invocations = resolveStageInvocations(stage);
   const evidence = validateStageEvidence(stage.evidence);
   const timeoutMs = positiveInteger(
     options.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS,
@@ -123,14 +125,25 @@ export async function runStageCommand(stage, options = {}) {
     options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
     "output bound",
   );
-  const result = await executeCommand({
-    ...invocation,
-    cwd: requiredRoot(stage.cwd),
-    env: stageEnvironment(stage.env),
-    timeoutMs,
-    maxOutputBytes,
-    captureOutput: evidence !== undefined,
-  });
+  const cwd = requiredRoot(stage.cwd);
+  const env = stageEnvironment(stage.env);
+  const outputBudget = { used: 0, limit: maxOutputBytes };
+  const started = performance.now();
+  let result;
+  for (let index = 0; index < invocations.length; index += 1) {
+    const remainingTimeoutMs = Math.ceil(timeoutMs - (performance.now() - started));
+    if (remainingTimeoutMs <= 0) return Object.freeze({ status: "failed" });
+    result = await executeCommand({
+      ...invocations[index],
+      cwd,
+      env,
+      timeoutMs: remainingTimeoutMs,
+      maxOutputBytes,
+      outputBudget,
+      captureOutput: evidence !== undefined && index === invocations.length - 1,
+    });
+    if (result.status !== "passed") return Object.freeze({ status: "failed" });
+  }
   const passed = result.status === "passed"
     && (evidence === undefined || hasRequiredNodeTestSummary(result, evidence));
   return Object.freeze({ status: passed ? "passed" : "failed" });
@@ -147,7 +160,15 @@ function releaseStageDefinitions(root) {
   );
   const stages = [
     npmStage("metadata", ["run", "check:metadata"], root, none),
-    npmStage("build", ["run", "build"], root, none),
+    compositeStage("build", [
+      fixedCommand("npm", [
+        "ci",
+        "--prefix",
+        "packages/gpt-codex-hwp",
+        "--ignore-scripts",
+      ]),
+      fixedCommand("npm", ["run", "build"]),
+    ], root, none),
     npmStage("node-tests", ["test"], root, requiredRhwp),
     npmStage("python-tests", ["run", "test:python"], root, none),
     npmStage("real-hwp", [
@@ -176,7 +197,17 @@ function releaseStageDefinitions(root) {
       "verify",
       "packages/gpt-codex-hwp/vendor/kordoc-core",
     ], root, none),
-    npmStage("production-dependencies", ["run", "verify:dependencies"], root, none),
+    compositeStage("production-dependencies", [
+      fixedCommand("npm", [
+        "--prefix",
+        "packages/gpt-codex-hwp",
+        "ls",
+        "--omit=dev",
+        "--all",
+        "--json",
+      ]),
+      fixedCommand("npm", ["run", "verify:source-dependencies"]),
+    ], root, none),
     npmStage("audit", [
       "--prefix",
       "packages/gpt-codex-hwp",
@@ -224,6 +255,21 @@ function nodeStage(name, args, cwd, env) {
     cwd,
     env,
   });
+}
+
+function compositeStage(name, commands, cwd, env, evidence) {
+  const stage = {
+    name,
+    commands: Object.freeze([...commands]),
+    cwd,
+    env,
+  };
+  if (evidence !== undefined) stage.evidence = evidence;
+  return Object.freeze(stage);
+}
+
+function fixedCommand(tool, args) {
+  return Object.freeze({ tool, args: Object.freeze([...args]) });
 }
 
 function nodeTestEvidence(targetName) {
@@ -402,6 +448,26 @@ function resolveInvocation(stage) {
   return { command: "npm", args: [...stage.args] };
 }
 
+function resolveStageInvocations(stage) {
+  if (stage === null || typeof stage !== "object" || Array.isArray(stage)) {
+    throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
+  }
+  if (stage.commands === undefined) return Object.freeze([resolveInvocation(stage)]);
+  if (Object.hasOwn(stage, "tool") || Object.hasOwn(stage, "args")
+    || !Array.isArray(stage.commands) || stage.commands.length === 0
+    || stage.commands.length > MAX_STAGE_COMMANDS) {
+    throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
+  }
+  const invocations = stage.commands.map((command) => {
+    if (command === null || typeof command !== "object" || Array.isArray(command)
+      || Object.keys(command).sort().join(",") !== "args,tool") {
+      throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
+    }
+    return resolveInvocation(command);
+  });
+  return Object.freeze(invocations);
+}
+
 function stageEnvironment(overrides) {
   if (overrides === null || typeof overrides !== "object" || Array.isArray(overrides)) {
     throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
@@ -423,8 +489,15 @@ async function executeCommand({
   env,
   timeoutMs,
   maxOutputBytes,
+  outputBudget: sharedOutputBudget,
   captureOutput,
 }) {
+  const outputBudget = sharedOutputBudget ?? { used: 0, limit: maxOutputBytes };
+  if (outputBudget === null || typeof outputBudget !== "object"
+    || !Number.isSafeInteger(outputBudget.used) || outputBudget.used < 0
+    || outputBudget.limit !== maxOutputBytes) {
+    throw releaseError("RELEASE_VERIFY_OUTPUT_BOUND_INVALID");
+  }
   return await new Promise((resolvePromise) => {
     let child;
     try {
@@ -442,8 +515,6 @@ async function executeCommand({
 
     let stdout = "";
     let stderr = "";
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
     let settled = false;
     let terminating = false;
     let timer;
@@ -473,15 +544,13 @@ async function executeCommand({
       stream?.on("data", (chunk) => {
         const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
         const bytes = Buffer.byteLength(text);
+        outputBudget.used += bytes;
         if (target === "stdout") {
-          stdoutBytes += bytes;
-          if (captureOutput && stdoutBytes <= maxOutputBytes) stdout += text;
-          if (stdoutBytes > maxOutputBytes) void stop();
+          if (captureOutput && outputBudget.used <= outputBudget.limit) stdout += text;
         } else {
-          stderrBytes += bytes;
-          if (captureOutput && stderrBytes <= maxOutputBytes) stderr += text;
-          if (stderrBytes > maxOutputBytes) void stop();
+          if (captureOutput && outputBudget.used <= outputBudget.limit) stderr += text;
         }
+        if (outputBudget.used > outputBudget.limit) void stop();
       });
     };
     observe(child.stdout, "stdout");

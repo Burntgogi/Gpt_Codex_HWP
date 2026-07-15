@@ -13,6 +13,7 @@ import {
   INSTALLED_EXCLUDED_PACKAGES,
   assertInstalledDependencyTree,
   isInstalledExcludedPackagePath,
+  verifyInstalledDependencies,
 } from "../scripts/verify-installed-dependencies.mjs";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
@@ -68,6 +69,10 @@ test("dependency contract pins exact direct source and runtime metadata", async 
   assert.equal(Object.hasOwn(runtimePackage, "devDependencies"), false);
   assert.deepEqual(runtimePackage.scripts, { start: "node dist/mcp.js" });
   assert.equal(rootPackage.scripts?.["verify:dependencies"], "node scripts/verify-installed-dependencies.mjs");
+  assert.equal(
+    rootPackage.scripts?.["verify:source-dependencies"],
+    "node scripts/verify-installed-dependencies.mjs --source-only",
+  );
 });
 
 test("dependency contract resolves Kordoc only through the vendored compact core", async () => {
@@ -162,6 +167,46 @@ test("installed dependency verifier accepts only the canonical Kordoc link", asy
   await assert.rejects(
     assertInstalledDependencyTree({ packageRoot: root, label: "fixture" }),
     /Kordoc link target is not the vendored compact core/iu,
+  );
+});
+
+test("source-only dependency verification needs no installed runtime and rejects bad source trees", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-source-dependencies-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const source = join(root, "packages", "gpt-codex-hwp");
+  const nodeModules = join(source, "node_modules");
+  const vendor = join(source, "vendor", "kordoc-core");
+  await mkdir(nodeModules, { recursive: true });
+  await mkdir(vendor, { recursive: true });
+  await writeFile(join(vendor, "package.json"), "{}\n");
+  try {
+    await symlink(vendor, join(nodeModules, "kordoc"), process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code ?? "")) {
+      t.skip(`directory-link capability is unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+
+  const sourceOnly = await verifyInstalledDependencies({ root, sourceOnly: true });
+  assert.deepEqual(Object.keys(sourceOnly), ["source"]);
+  assert.equal(sourceOnly.source.label, "source");
+  await assert.rejects(
+    verifyInstalledDependencies({ root }),
+    /runtime node_modules is missing/iu,
+  );
+
+  await mkdir(join(nodeModules, "boolean"));
+  await assert.rejects(
+    verifyInstalledDependencies({ root, sourceOnly: true }),
+    /source contains excluded package path.*node_modules\/boolean/iu,
+  );
+  await rm(join(nodeModules, "boolean"), { recursive: true });
+  await rm(nodeModules, { recursive: true });
+  await assert.rejects(
+    verifyInstalledDependencies({ root, sourceOnly: true }),
+    /source node_modules is missing/iu,
   );
 });
 

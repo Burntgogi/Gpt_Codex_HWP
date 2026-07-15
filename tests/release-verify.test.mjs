@@ -78,10 +78,11 @@ test("release verification runs the exact required stage contract in order", asy
   assert.deepEqual(calls.map((stage) => stage.name), EXPECTED_STAGES);
   assert.ok(calls.every((stage) => stage.cwd === ROOT));
   assert.deepEqual(
-    calls.map(({ name, tool, args, env, evidence }) => ({
+    calls.map(({ name, tool, args, commands, env, evidence }) => ({
       name,
       tool,
       args,
+      commands,
       env,
       evidence,
     })),
@@ -112,6 +113,63 @@ test("release verification runs the exact required stage contract in order", asy
     EXPECTED_STAGES.map((name) => ({ name, status: "passed" })));
   assert.ok(receipt.stages.every((stage) =>
     Number.isInteger(stage.elapsedMs) && stage.elapsedMs >= 0));
+});
+
+test("release stages install source dependencies and keep temp nine-tools as runtime authority", async () => {
+  const calls = [];
+  await runReleaseVerification({
+    root: ROOT,
+    platform: "test-platform",
+    arch: "test-arch",
+    versions: VERSIONS,
+    resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    runStage: async (stage) => {
+      calls.push(stage);
+      return { status: "passed" };
+    },
+  });
+
+  const build = calls.find((stage) => stage.name === "build");
+  assert.deepEqual(build.commands, [
+    {
+      tool: "npm",
+      args: ["ci", "--prefix", "packages/gpt-codex-hwp", "--ignore-scripts"],
+    },
+    { tool: "npm", args: ["run", "build"] },
+  ]);
+  const productionDependencies = calls.find(
+    (stage) => stage.name === "production-dependencies",
+  );
+  assert.deepEqual(productionDependencies.commands, [
+    {
+      tool: "npm",
+      args: [
+        "--prefix",
+        "packages/gpt-codex-hwp",
+        "ls",
+        "--omit=dev",
+        "--all",
+        "--json",
+      ],
+    },
+    { tool: "npm", args: ["run", "verify:source-dependencies"] },
+  ]);
+  const nineToolsIndex = calls.findIndex((stage) => stage.name === "nine-tools");
+  const productionDependenciesIndex = calls.findIndex(
+    (stage) => stage.name === "production-dependencies",
+  );
+  assert.ok(nineToolsIndex < productionDependenciesIndex);
+  assert.deepEqual(calls[nineToolsIndex], {
+    name: "nine-tools",
+    tool: "npm",
+    args: ["run", "verify:compact-runtime"],
+    cwd: ROOT,
+    env: {},
+  });
+  assert.equal(
+    JSON.stringify(productionDependencies).includes("plugins/gpt-codex-hwp"),
+    false,
+  );
 });
 
 for (const failure of [
@@ -262,6 +320,163 @@ test("stage command execution is fail-closed and never returns process output", 
   );
   assert.deepEqual(failed, { status: "failed" });
   assert.equal(JSON.stringify(failed).includes("PRIVATE_"), false);
+});
+
+test("composite stage commands execute sequentially", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-sequence-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const marker = join(root, "sequence.txt");
+  const first = [
+    "-e",
+    "require('node:fs').writeFileSync(process.argv[1], 'installed', 'utf8')",
+    marker,
+  ];
+  const second = [
+    "-e",
+    [
+      "const fs = require('node:fs')",
+      "if (fs.readFileSync(process.argv[1], 'utf8') !== 'installed') process.exit(9)",
+      "fs.writeFileSync(process.argv[1], 'verified', 'utf8')",
+    ].join(";"),
+    marker,
+  ];
+
+  const result = await runStageCommand({
+    name: "sequential-composite",
+    commands: [
+      { tool: "node", args: first },
+      { tool: "node", args: second },
+    ],
+    cwd: ROOT,
+    env: {},
+  }, { timeoutMs: 2_000, maxOutputBytes: 1_024 });
+
+  assert.deepEqual(result, { status: "passed" });
+  assert.equal(await readFile(marker, "utf8"), "verified");
+});
+
+test("composite stage commands fail fast before later commands", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-fail-fast-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const firstMarker = join(root, "first.txt");
+  const forbiddenMarker = join(root, "must-not-run.txt");
+
+  const result = await runStageCommand({
+    name: "failed-composite",
+    commands: [
+      {
+        tool: "node",
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], 'ran', 'utf8'); process.exit(7)",
+          firstMarker,
+        ],
+      },
+      {
+        tool: "node",
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], 'unexpected', 'utf8')",
+          forbiddenMarker,
+        ],
+      },
+    ],
+    cwd: ROOT,
+    env: {},
+  }, { timeoutMs: 2_000, maxOutputBytes: 1_024 });
+
+  assert.deepEqual(result, { status: "failed" });
+  assert.equal(await readFile(firstMarker, "utf8"), "ran");
+  await assert.rejects(readFile(forbiddenMarker, "utf8"), { code: "ENOENT" });
+});
+
+test("composite stage fails closed when its final verification command fails", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-final-failure-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const installedMarker = join(root, "installed.txt");
+  const verifiedMarker = join(root, "verification-ran.txt");
+
+  const result = await runStageCommand({
+    name: "failed-final-verification",
+    commands: [
+      {
+        tool: "node",
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], 'installed', 'utf8')",
+          installedMarker,
+        ],
+      },
+      {
+        tool: "node",
+        args: [
+          "-e",
+          [
+            "require('node:fs').writeFileSync(process.argv[1], 'ran', 'utf8')",
+            "process.stdout.write('PRIVATE_INSTALL_OUTPUT')",
+            "process.stderr.write('PRIVATE_VERIFY_FAILURE')",
+            "process.exit(7)",
+          ].join(";"),
+          verifiedMarker,
+        ],
+      },
+    ],
+    cwd: ROOT,
+    env: {},
+  }, { timeoutMs: 2_000, maxOutputBytes: 1_024 });
+
+  assert.deepEqual(result, { status: "failed" });
+  assert.equal(await readFile(installedMarker, "utf8"), "installed");
+  assert.equal(await readFile(verifiedMarker, "utf8"), "ran");
+  assert.equal(JSON.stringify(result).includes("PRIVATE_"), false);
+});
+
+test("composite stage shares one aggregate output bound across commands", async () => {
+  const result = await runStageCommand({
+    name: "aggregate-output-bound",
+    commands: [
+      { tool: "node", args: ["-e", 'process.stdout.write("x".repeat(40))'] },
+      { tool: "node", args: ["-e", 'process.stderr.write("y".repeat(40))'] },
+    ],
+    cwd: ROOT,
+    env: {},
+  }, { timeoutMs: 2_000, maxOutputBytes: 64 });
+
+  assert.deepEqual(result, { status: "failed" });
+});
+
+test("composite stage shares one aggregate timeout across commands", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-total-timeout-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const firstMarker = join(root, "first.txt");
+  const started = Date.now();
+
+  const result = await runStageCommand({
+    name: "aggregate-timeout",
+    commands: [
+      {
+        tool: "node",
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], 'ran', 'utf8'); setTimeout(() => {}, 80)",
+          firstMarker,
+        ],
+      },
+      {
+        tool: "node",
+        args: [
+          "-e",
+          "setTimeout(() => {}, 150)",
+        ],
+      },
+    ],
+    cwd: ROOT,
+    env: {},
+  }, { timeoutMs: 180, maxOutputBytes: 1_024 });
+
+  assert.deepEqual(result, { status: "failed" });
+  assert.equal(await readFile(firstMarker, "utf8"), "ran");
+  assert.ok(Date.now() - started < 1_000);
 });
 
 test("stage command execution enforces output and timeout bounds", async () => {
@@ -516,13 +731,21 @@ function expectedStageCommands() {
       name: "metadata",
       tool: "npm",
       args: ["run", "check:metadata"],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },
     {
       name: "build",
-      tool: "npm",
-      args: ["run", "build"],
+      tool: undefined,
+      args: undefined,
+      commands: [
+        {
+          tool: "npm",
+          args: ["ci", "--prefix", "packages/gpt-codex-hwp", "--ignore-scripts"],
+        },
+        { tool: "npm", args: ["run", "build"] },
+      ],
       env: {},
       evidence: noEvidence,
     },
@@ -530,6 +753,7 @@ function expectedStageCommands() {
       name: "node-tests",
       tool: "npm",
       args: ["test"],
+      commands: undefined,
       env: { HWP_REQUIRE_RHWP: "1" },
       evidence: noEvidence,
     },
@@ -537,6 +761,7 @@ function expectedStageCommands() {
       name: "python-tests",
       tool: "npm",
       args: ["run", "test:python"],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },
@@ -553,6 +778,7 @@ function expectedStageCommands() {
         "--test-name-pattern=real external HWP",
         "tests/rhwp-backend.test.ts",
       ],
+      commands: undefined,
       env: { HWP_REQUIRE_RHWP: "1" },
       evidence: realHwpEvidence,
     },
@@ -569,6 +795,7 @@ function expectedStageCommands() {
         "--test-name-pattern=hwp_generate_hwpx creates a valid, readable document and forced-reflow SVG preview",
         "tests/hwp-plugin.test.ts",
       ],
+      commands: undefined,
       env: {},
       evidence: hwpxEvidence,
     },
@@ -576,6 +803,7 @@ function expectedStageCommands() {
       name: "nine-tools",
       tool: "npm",
       args: ["run", "verify:compact-runtime"],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },
@@ -587,13 +815,28 @@ function expectedStageCommands() {
         "verify",
         "packages/gpt-codex-hwp/vendor/kordoc-core",
       ],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },
     {
       name: "production-dependencies",
-      tool: "npm",
-      args: ["run", "verify:dependencies"],
+      tool: undefined,
+      args: undefined,
+      commands: [
+        {
+          tool: "npm",
+          args: [
+            "--prefix",
+            "packages/gpt-codex-hwp",
+            "ls",
+            "--omit=dev",
+            "--all",
+            "--json",
+          ],
+        },
+        { tool: "npm", args: ["run", "verify:source-dependencies"] },
+      ],
       env: {},
       evidence: noEvidence,
     },
@@ -601,6 +844,7 @@ function expectedStageCommands() {
       name: "audit",
       tool: "npm",
       args: ["--prefix", "packages/gpt-codex-hwp", "audit", "--omit=dev", "--json"],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },
@@ -615,6 +859,7 @@ function expectedStageCommands() {
         "--",
         "tests/public-runtime-privacy.test.ts",
       ],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },
@@ -622,6 +867,7 @@ function expectedStageCommands() {
       name: "runtime-diff",
       tool: "npm",
       args: ["run", "runtime:check"],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },
@@ -629,6 +875,7 @@ function expectedStageCommands() {
       name: "release-artifacts",
       tool: "node",
       args: ["packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs"],
+      commands: undefined,
       env: {},
       evidence: noEvidence,
     },

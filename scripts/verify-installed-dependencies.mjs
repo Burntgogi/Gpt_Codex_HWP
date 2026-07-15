@@ -102,12 +102,16 @@ export async function assertInstalledDependencyTree({ packageRoot, label }) {
   return Object.freeze({ label: treeLabel, fileCount, linkCount, bytes });
 }
 
-export async function verifyInstalledDependencies({ root }) {
+export async function verifyInstalledDependencies({ root, sourceOnly = false }) {
   const projectRoot = resolveRequiredPath(root, "root");
+  if (typeof sourceOnly !== "boolean") {
+    throw dependencyContractError("sourceOnly must be a boolean");
+  }
   const source = await assertInstalledDependencyTree({
     packageRoot: join(projectRoot, "packages", "gpt-codex-hwp"),
     label: "source",
   });
+  if (sourceOnly) return Object.freeze({ source });
   const runtime = await assertInstalledDependencyTree({
     packageRoot: join(projectRoot, "plugins", "gpt-codex-hwp"),
     label: "runtime",
@@ -154,8 +158,15 @@ function comparePaths(left, right) {
 }
 
 async function main() {
+  const [mode, ...extra] = process.argv.slice(2);
+  if (extra.length > 0 || ![undefined, "--source-only"].includes(mode)) {
+    throw dependencyContractError("Usage: node scripts/verify-installed-dependencies.mjs [--source-only]");
+  }
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  process.stdout.write(`${JSON.stringify(await verifyInstalledDependencies({ root }), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(await verifyInstalledDependencies({
+    root,
+    sourceOnly: mode === "--source-only",
+  }), null, 2)}\n`);
 }
 
 const entryPoint = process.argv[1];
