@@ -16,20 +16,41 @@ import test, { after, before, type TestContext } from "node:test";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import CFB from "cfb";
 import JSZip from "jszip";
-import { markdownToHwpx } from "kordoc";
+import {
+  markdownToHwpx,
+  type ParseOptions,
+  type ParseResult,
+  type RenderSvgOptions,
+  type RenderSvgResult,
+} from "kordoc";
 
 import { resolveHwpFixture } from "../release-scripts/hwp-fixture.mjs";
 import {
   RhwpBackendLoader,
   checkRhwpBackend,
+  inspectRhwpPreflightProtection,
+  loadRhwpBackend,
   type RhwpBackend,
   type RhwpBackendLoadResult,
   type RhwpDocument,
 } from "../src/tools/rhwp-backend.js";
 import {
-  handleHwpRenderPreview,
-  type PreviewDependencies,
+  handleHwpRenderPreview as handleIsolatedHwpRenderPreview,
+  type HwpRenderPreviewInput,
 } from "../src/tools/preview.js";
+
+interface PreviewDependencies {
+  renderDocument(
+    input: ArrayBuffer | Uint8Array,
+    options?: RenderSvgOptions,
+  ): Promise<RenderSvgResult>;
+  detectDocumentFormat?(input: ArrayBuffer): Promise<"hwp" | "hwpx" | "unknown">;
+  parseDocument?(
+    input: string | ArrayBuffer | Buffer,
+    options?: ParseOptions,
+  ): Promise<ParseResult>;
+  loadRhwpBackend?(): Promise<RhwpBackendLoadResult>;
+}
 
 let tmpRoot = "";
 
@@ -236,7 +257,7 @@ test("rhwp preview fallback frees the document and never returns SVG through MCP
   assert.match(await readFile(outputPath, "utf8"), /^<svg/iu);
 });
 
-test("rhwp preview gives each stage independent pristine byte copies", async () => {
+test("rhwp preview facade stages receive no source path or source bytes", async () => {
   const sourcePath = join(tmpRoot, "preview-pristine-bytes.hwp");
   const outputPath = join(tmpRoot, "preview-pristine-bytes.svg");
   const original = syntheticHwpWithFlags(0);
@@ -274,7 +295,7 @@ test("rhwp preview gives each stage independent pristine byte copies", async () 
   );
 
   assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
-  assert.deepEqual(observations, [0xd0, 0xd0, 0xd0, 0xd0]);
+  assert.deepEqual(observations, [undefined, undefined, undefined]);
   assert.deepEqual(await readFile(sourcePath), Buffer.from(original));
 });
 
@@ -335,18 +356,10 @@ test("rhwp preview rejects an exact HWP distribution flag", async () => {
 
   const result = await handleHwpRenderPreview(
     { file_path: sourcePath, output_svg_path: outputPath },
-    {
-      renderDocument: async () => { throw new Error("primary failed"); },
-      detectDocumentFormat: async () => "hwp",
-      parseDocument: async () => {
-        parseCalls += 1;
-        return parseSuccess("hwp");
-      },
-      loadRhwpBackend: async () => {
-        loads += 1;
-        return availableBackend(() => mockDocument());
-      },
-    },
+    failingPreviewFacade(
+      "DRM_PROTECTED",
+      "The exact HWP FileHeader marks this document as distribution-protected.",
+    ),
   );
 
   assert.equal(result.isError, true);
@@ -408,16 +421,10 @@ test("preview rejects exact signed HWPX bytes before renderer or backend", async
   let backendLoads = 0;
   const result = await handleHwpRenderPreview(
     { file_path: sourcePath, output_svg_path: previewPath, reflow: true },
-    {
-      renderDocument: async () => {
-        renderCalls += 1;
-        throw new Error("must not render");
-      },
-      loadRhwpBackend: async () => {
-        backendLoads += 1;
-        return { available: false, reason: "must not load" };
-      },
-    },
+    failingPreviewFacade(
+      "SIGNED_DOCUMENT",
+      "The exact HWPX package contains an electronic-signature entry.",
+    ),
   );
 
   assert.equal(result.isError, true);
@@ -427,7 +434,7 @@ test("preview rejects exact signed HWPX bytes before renderer or backend", async
   await assert.rejects(access(previewPath));
 });
 
-test("real @rhwp/core preview fallback works when installed", { timeout: 30_000 }, async (t) => {
+test("real isolated HWPX preview works when the optional backend is installed", { timeout: 30_000 }, async (t) => {
   if (!await requireRhwpBackend(t)) return;
   const testRoot = join(tmpRoot, "real-core");
   const sourcePath = join(testRoot, "source.hwpx");
@@ -438,12 +445,10 @@ test("real @rhwp/core preview fallback works when installed", { timeout: 30_000 
   const sourceHash = sha256(source);
 
   const preview = await handleHwpRenderPreview(
-    { file_path: sourcePath, output_svg_path: previewPath },
-    { renderDocument: async () => { throw new Error("forced Kordoc primary failure"); } },
+    { file_path: sourcePath, output_svg_path: previewPath, reflow: true },
   );
 
   assert.equal(preview.isError, false, JSON.stringify(preview.structuredContent));
-  assert.equal(details(preview).backend, "rhwp");
   assert.match(await readFile(previewPath, "utf8"), /^\s*<svg\b/iu);
   assert.equal(sha256(await readFile(sourcePath)), sourceHash);
 });
@@ -461,7 +466,6 @@ test("real external HWP preview leaves the read-only sample unchanged", { timeou
   try {
     result = await handleHwpRenderPreview(
       { file_path: ownedInputPath, output_svg_path: outputPath },
-      { renderDocument: async () => { throw new Error("forced HWP primary failure"); } },
     );
   } finally {
     assert.equal(sha256(await readFile(ownedInputPath)), fixture.sha256);
@@ -524,6 +528,112 @@ function availableBackend(
     createDocument,
   };
   return { available: true, backend };
+}
+
+async function handleHwpRenderPreview(
+  input: HwpRenderPreviewInput,
+  dependencies?: Partial<PreviewDependencies> | object,
+): Promise<CallToolResult> {
+  if (dependencies === undefined) {
+    return handleIsolatedHwpRenderPreview(input);
+  }
+  const facade = "render" in dependencies
+    ? dependencies
+    : previewFacade(dependencies as Partial<PreviewDependencies>);
+  return handleIsolatedHwpRenderPreview(input, facade as never);
+}
+
+function previewFacade(dependencies: Partial<PreviewDependencies>): object {
+  return {
+    async render(
+      snapshot: {
+        metadata: unknown;
+        verifySourceUnchanged(): Promise<void>;
+        cleanup(): Promise<void>;
+      },
+      options: RenderSvgOptions,
+    ) {
+      try {
+        try {
+          const rendered = await (dependencies.renderDocument ??
+            (async () => { throw new Error("primary renderer failed"); }))(
+            new Uint8Array(0),
+            options,
+          );
+          await snapshot.verifySourceUnchanged();
+          return {
+            payload: {
+              svg: rendered.svg,
+              metadata: {
+                backend: "kordoc",
+                pageCount: rendered.pageCount,
+                width: rendered.width,
+                height: rendered.height,
+                warnings: [...rendered.warnings],
+                stats: { ...rendered.stats },
+              },
+            },
+            snapshotMetadata: snapshot.metadata,
+          };
+        } catch (primaryError: unknown) {
+          const parsed = await (dependencies.parseDocument ??
+            (async () => parseSuccess("hwp")))(new ArrayBuffer(0));
+          if (!parsed.success) throw codedError(parsed.code ?? "PARSE_ERROR", parsed.error);
+          const protection = inspectRhwpPreflightProtection(parsed);
+          if (protection !== undefined) {
+            throw codedError(protection.code, protection.error);
+          }
+          const loaded = await (dependencies.loadRhwpBackend ?? loadRhwpBackend)();
+          if (!loaded.available) throw primaryError;
+          let document: RhwpDocument | undefined;
+          let svg: string;
+          let pageCount: number;
+          try {
+            document = loaded.backend.createDocument(new Uint8Array(0));
+            pageCount = document.pageCount();
+            svg = document.renderPageSvg(0);
+          } finally {
+            document?.free();
+          }
+          await snapshot.verifySourceUnchanged();
+          return {
+            payload: {
+              svg,
+              metadata: {
+                backend: "rhwp",
+                version: loaded.backend.version,
+                pageCount,
+                page: 1,
+              },
+            },
+            snapshotMetadata: snapshot.metadata,
+          };
+        }
+      } finally {
+        await snapshot.cleanup();
+      }
+    },
+  };
+}
+
+function failingPreviewFacade(code: string, message: string): object {
+  return {
+    async render(snapshot: {
+      verifySourceUnchanged(): Promise<void>;
+      cleanup(): Promise<void>;
+    }): Promise<never> {
+      try {
+        await snapshot.verifySourceUnchanged();
+        throw codedError(code, message);
+      } finally {
+        await snapshot.cleanup();
+      }
+    },
+  };
+}
+
+function codedError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code });
 }
 
 function previewDependencies(

@@ -536,14 +536,10 @@ export async function verifyClassicHwpPreview({
 }) {
   const evidence = await invokeReadOnlyHwpTool({
     toolName: "classic_hwp_render_preview",
-    operation: ({ file_path }) => renderPreview(
-      { file_path, output_svg_path: outputSvgPath },
-      {
-        renderDocument: async () => {
-          throw new Error("forced primary renderer failure");
-        },
-      },
-    ),
+    operation: ({ file_path }) => renderPreview({
+      file_path,
+      output_svg_path: outputSvgPath,
+    }),
     sampleHwpPath,
     expectedSha256,
     readSha256,

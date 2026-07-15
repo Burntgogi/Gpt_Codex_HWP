@@ -1,15 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import {
-  detectFormat,
-  detectOle2Format,
-  detectZipFormat,
-  type FileType,
-} from "kordoc";
 import { z } from "zod";
 
+import {
+  defaultDocumentEngineFacade,
+  type DocumentEngineFacade,
+} from "../shared/document-engine.js";
+import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { readFileBounded } from "../shared/files.js";
 import { toolError, toolSuccess } from "../shared/result.js";
 
 export const HWP_DETECT_FORMAT_TOOL_NAME = "hwp_detect_format";
@@ -27,28 +25,26 @@ interface FormatDetails {
 
 export async function handleHwpDetectFormat(
   input: HwpDetectFormatInput,
+  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
 ): Promise<CallToolResult> {
   let filePath: string;
 
   try {
     filePath = resolveLocalPath(input.file_path, "file_path");
-    const bytes = await readFileBounded(filePath, "source document");
-    const buffer = toArrayBuffer(bytes);
-    const detected = await refineContainerFormat(buffer);
+    const snapshot = await openDocumentSnapshot(filePath);
+    const detected = await documentEngine.detect(snapshot);
     const details: FormatDetails = {
       file_path: filePath,
-      file_size_bytes: bytes.byteLength,
+      file_size_bytes: detected.snapshotMetadata.sizeBytes,
     };
 
-    if (detected.containerFormat !== undefined) {
-      details.container_format = detected.containerFormat;
-    }
-    if (detected.warning !== undefined) {
-      details.detection_warning = detected.warning;
+    const container = detected.snapshotMetadata.shallowFormat.container;
+    if (container === "zip" || container === "ole2") {
+      details.container_format = container;
     }
 
-    return toolSuccess(`Detected ${detected.format} document format.`, {
-      format: detected.format,
+    return toolSuccess(`Detected ${detected.payload.format} document format.`, {
+      format: detected.payload.format,
       details,
     });
   } catch (error: unknown) {
@@ -75,54 +71,8 @@ export function registerHwpDetectFormat(server: McpServer): void {
         readOnlyHint: true,
       },
     },
-    handleHwpDetectFormat,
+    (args) => handleHwpDetectFormat(args),
   );
-}
-
-async function refineContainerFormat(buffer: ArrayBuffer): Promise<{
-  format: FileType;
-  containerFormat?: "zip" | "ole2";
-  warning?: string;
-}> {
-  const initialFormat = detectFormat(buffer);
-
-  if (initialFormat === "hwpx") {
-    try {
-      return {
-        format: await detectZipFormat(buffer),
-        containerFormat: "zip",
-      };
-    } catch (error: unknown) {
-      return {
-        format: "unknown",
-        containerFormat: "zip",
-        warning: `Could not inspect the ZIP container: ${errorMessage(error)}`,
-      };
-    }
-  }
-
-  if (initialFormat === "hwp") {
-    try {
-      return {
-        format: detectOle2Format(buffer),
-        containerFormat: "ole2",
-      };
-    } catch (error: unknown) {
-      return {
-        format: "unknown",
-        containerFormat: "ole2",
-        warning: `Could not inspect the OLE2 container: ${errorMessage(error)}`,
-      };
-    }
-  }
-
-  return { format: initialFormat };
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
 }
 
 function safeResolvedPath(path: unknown): string | undefined {

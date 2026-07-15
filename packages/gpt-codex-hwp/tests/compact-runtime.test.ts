@@ -1014,7 +1014,7 @@ test("MCP read-only smoke calls the advertised routes and rejects empty routing"
   );
 });
 
-test("classic HWP preview smoke forces and verifies the rhwp fallback", async (t) => {
+test("classic HWP preview smoke uses the actual isolated runtime route", async (t) => {
   const module = await import("../release-scripts/verify-compact-runtime.mjs");
   const verifyClassicHwpPreview = Reflect.get(module, "verifyClassicHwpPreview") as
     | undefined
@@ -1022,10 +1022,7 @@ test("classic HWP preview smoke forces and verifies the rhwp fallback", async (t
       sampleHwpPath: string;
       expectedSha256: string;
       outputSvgPath: string;
-      renderPreview: (
-        input: { file_path: string; output_svg_path: string },
-        dependencies: { renderDocument: () => Promise<never> },
-      ) => Promise<unknown>;
+      renderPreview: (input: { file_path: string; output_svg_path: string }) => Promise<unknown>;
       readSha256: (path: string) => Promise<string>;
     }) => Promise<Record<string, unknown>>);
   assert.equal(typeof verifyClassicHwpPreview, "function");
@@ -1043,15 +1040,12 @@ test("classic HWP preview smoke forces and verifies the rhwp fallback", async (t
     sampleHwpPath,
     expectedSha256,
     outputSvgPath,
-    renderPreview: async (input, dependencies) => {
+    renderPreview: async (...args) => {
+      assert.equal(args.length, 1);
+      const [input] = args;
       calls.push("preview");
       assert.equal(input.file_path, sampleHwpPath);
       assert.equal(input.output_svg_path, outputSvgPath);
-      await assert.rejects(
-        dependencies.renderDocument(),
-        /forced primary renderer failure/iu,
-      );
-      calls.push("primary");
       await writeFile(outputSvgPath, '<svg xmlns="http://www.w3.org/2000/svg"/>');
       return {
         isError: false,
@@ -1065,7 +1059,7 @@ test("classic HWP preview smoke forces and verifies the rhwp fallback", async (t
   });
 
   assert.equal(evidence.backend, "rhwp");
-  assert.deepEqual(calls, ["preview", "primary", "hash"]);
+  assert.deepEqual(calls, ["preview", "hash"]);
   assert.match(await readFile(outputSvgPath, "utf8"), /^\s*<svg\b/iu);
 });
 

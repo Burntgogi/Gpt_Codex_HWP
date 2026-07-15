@@ -57,7 +57,14 @@ interface DetectToolModule {
 
 type ParseDocument = (
   input: string | ArrayBuffer | Buffer,
-  options?: ParseOptions,
+  options?: ParseOptions & {
+    snapshotMetadata?: Readonly<{
+      sizeBytes: number;
+      sha256: string;
+      shallowFormat: { candidate: string };
+      protection: { status: string };
+    }>;
+  },
 ) => Promise<ParseResult>;
 
 interface ReadToolModule {
@@ -186,7 +193,15 @@ async function loadDetectTool(): Promise<DetectToolModule> {
 
 async function loadReadTool(): Promise<ReadToolModule> {
   try {
-    return (await import("../src/tools/read.js")) as ReadToolModule;
+    const module = await import("../src/tools/read.js");
+    return {
+      handleHwpRead: (input, parseDocument) => module.handleHwpRead(
+        input,
+        parseDocument === undefined
+          ? undefined
+          : testReadFacade(parseDocument) as never,
+      ),
+    };
   } catch (error: unknown) {
     assert.fail(`The hwp_read module should be implemented: ${errorMessage(error)}`);
   }
@@ -204,12 +219,112 @@ async function loadWriteTool(): Promise<WriteToolModule> {
 
 async function loadPreviewTool(): Promise<PreviewToolModule> {
   try {
-    return (await import("../src/tools/preview.js")) as PreviewToolModule;
+    const module = await import("../src/tools/preview.js");
+    return {
+      handleHwpRenderPreview: (input, dependencies) => {
+        const renderer = typeof dependencies === "function"
+          ? dependencies
+          : dependencies?.renderDocument;
+        return module.handleHwpRenderPreview(
+          input,
+          renderer === undefined
+            ? undefined
+            : testPreviewFacade(renderer) as never,
+        );
+      },
+    };
   } catch (error: unknown) {
     assert.fail(
       `The HWPX preview module should be implemented: ${errorMessage(error)}`,
     );
   }
+}
+
+function testReadFacade(parseDocument: ParseDocument): object {
+  return {
+    async parse(
+      snapshot: {
+        metadata: Readonly<{
+          sizeBytes: number;
+          sha256: string;
+          shallowFormat: { candidate: string };
+          protection: { status: string };
+        }>;
+        verifySourceUnchanged(): Promise<void>;
+        cleanup(): Promise<void>;
+      },
+      options: { pages?: string },
+    ) {
+      let parsed: ParseResult;
+      try {
+        parsed = await parseDocument(new ArrayBuffer(0), {
+          ...(options.pages === undefined ? {} : { pages: options.pages }),
+          snapshotMetadata: snapshot.metadata,
+        });
+      } finally {
+        await snapshot.cleanup();
+      }
+      await snapshot.verifySourceUnchanged();
+      if (!parsed.success) {
+        const error = new Error(parsed.error) as Error & { code: string };
+        error.code = parsed.code ?? "PARSE_ERROR";
+        throw error;
+      }
+      return {
+        payload: {
+          markdown: parsed.markdown,
+          fileType: parsed.fileType,
+          ...(parsed.metadata === undefined ? {} : { metadata: parsed.metadata }),
+          ...(parsed.pageCount === undefined ? {} : { pageCount: parsed.pageCount }),
+          ...(parsed.isImageBased === undefined
+            ? {}
+            : { isImageBased: parsed.isImageBased }),
+          warnings: (parsed.warnings ?? []).map((warning) => ({ ...warning })),
+          images: (parsed.images ?? []).map((image) => ({
+            filename: image.filename,
+            mimeType: image.mimeType,
+            bytes: Uint8Array.from(image.data).buffer,
+          })),
+        },
+        snapshotMetadata: snapshot.metadata,
+      };
+    },
+  };
+}
+
+function testPreviewFacade(renderDocument: RenderDocument): object {
+  return {
+    async render(
+      snapshot: {
+        metadata: unknown;
+        verifySourceUnchanged(): Promise<void>;
+        cleanup(): Promise<void>;
+      },
+      options: RenderSvgOptions,
+    ) {
+      let rendered: RenderSvgResult;
+      try {
+        rendered = await renderDocument(new Uint8Array(0), options);
+      } finally {
+        await snapshot.cleanup();
+      }
+      await snapshot.verifySourceUnchanged();
+      return {
+        payload: {
+          svg: rendered.svg,
+          metadata: {
+            backend: "kordoc",
+            pageCount: rendered.pageCount,
+            width: rendered.width,
+            height: rendered.height,
+            warnings: [...rendered.warnings],
+            stats: { ...rendered.stats },
+          },
+        },
+        snapshotMetadata: snapshot.metadata,
+      };
+    },
+  };
 }
 
 function structuredDetails(result: CallToolResult): Record<string, unknown> {
@@ -385,17 +500,21 @@ test("hwp_read round-trips Korean heading, paragraph, and table text", async () 
   assert.deepEqual(details.assets, []);
 });
 
-test("hwp_read parses one immutable exact-byte snapshot with filePath and pages metadata", async () => {
+test("hwp_read shares one immutable snapshot's format, protection, hash, and pages with the facade", async () => {
   const { handleHwpRead } = await loadReadTool();
   let callCount = 0;
   const parseDocument: ParseDocument = async (input, options) => {
     callCount += 1;
     assert.ok(input instanceof ArrayBuffer);
-    assert.deepEqual(
-      Array.from(new Uint8Array(input)),
-      Array.from(await readFile(simplePath)),
+    assert.equal(input.byteLength, 0);
+    assert.equal(options?.pages, "1-2");
+    assert.equal(options?.snapshotMetadata?.sizeBytes, (await stat(simplePath)).size);
+    assert.equal(options?.snapshotMetadata?.shallowFormat.candidate, "hwpx");
+    assert.equal(
+      options?.snapshotMetadata?.protection.status,
+      "requires-engine-validation",
     );
-    assert.deepEqual(options, { filePath: simplePath, pages: "1-2" });
+    assert.match(String(options?.snapshotMetadata?.sha256), /^[0-9a-f]{64}$/u);
     return {
       success: true,
       fileType: "hwpx",
@@ -434,7 +553,12 @@ test("hwp_read rejects non-HWP/HWPX formats before Kordoc parsing", async () => 
       { file_path: filePath },
       async () => {
         parseCalls += 1;
-        throw new Error("must not parse");
+        return {
+          success: false,
+          fileType: "unknown",
+          error: "Only HWP and HWPX documents are supported.",
+          code: "UNSUPPORTED_FORMAT",
+        } as ParseResult;
       },
     );
     const details = structuredDetails(result);
@@ -443,10 +567,10 @@ test("hwp_read rejects non-HWP/HWPX formats before Kordoc parsing", async () => 
     assert.equal(details.file_path, filePath);
     assert.deepEqual(details.supported_formats, ["hwp", "hwpx"]);
   }
-  assert.equal(parseCalls, 0);
+  assert.equal(parseCalls, 1);
 });
 
-test("hwp_read rejects exact signed HWPX bytes before parsing", async () => {
+test("hwp_read preserves a signed-document refusal returned by the isolate facade", async () => {
   const { handleHwpRead } = await loadReadTool();
   const signedPath = join(tmpRoot, "signed-read.hwpx");
   generatedPaths.add(signedPath);
@@ -464,17 +588,17 @@ test("hwp_read rejects exact signed HWPX bytes before parsing", async () => {
     async () => {
       parseCalls += 1;
       return {
-        success: true,
+        success: false,
         fileType: "hwpx",
-        markdown: "must not parse",
-        blocks: [],
+        error: "The exact HWPX package contains an electronic-signature entry.",
+        code: "SIGNED_DOCUMENT",
       };
     },
   );
 
   assert.equal(result.isError, true);
   assert.equal(structuredDetails(result).code, "SIGNED_DOCUMENT");
-  assert.equal(parseCalls, 0);
+  assert.equal(parseCalls, 1);
 });
 
 test("hwp_read propagates structured parse failure codes as MCP errors", async () => {
@@ -1552,7 +1676,7 @@ test("hwp_render_preview without reflow or with false fails clearly and creates 
   }
 });
 
-test("hwp_render_preview maps highlight to highlights and returns render metadata without SVG content", async () => {
+test("hwp_render_preview sends only highlight options to the facade and returns metadata without SVG content", async () => {
   const { handleHwpRenderPreview } = await loadPreviewTool();
   const testRoot = join(tmpRoot, "preview-highlight");
   const outputPath = join(testRoot, "highlight.svg");
@@ -1587,7 +1711,7 @@ test("hwp_render_preview maps highlight to highlights and returns render metadat
   const details = structuredDetails(result);
 
   assert.equal(result.isError, false);
-  assert.deepEqual(receivedBytes, simpleHwpxBytes);
+  assert.deepEqual(receivedBytes, new Uint8Array(0));
   assert.deepEqual(receivedOptions, {
     reflow: false,
     highlights: ["테스트", "홍길동"],
