@@ -12,6 +12,7 @@ const BINARY_EXTENSIONS = new Set([
   ".ttf", ".webp", ".woff", ".woff2",
 ]);
 const TEXT_FILENAMES = new Set(["LICENSE", "NOTICE"]);
+const TEXT_RUNTIME_PATHS = new Set(["dist/workers/windows-job-supervisor.ps1"]);
 const PLACEHOLDER_USERS = new Set(["example", "user", "username", "your-user", "your_username"]);
 
 export async function assertPublicRuntimePrivacy(runtimeRoot, limits = {}) {
@@ -31,7 +32,11 @@ export async function assertPublicRuntimePrivacy(runtimeRoot, limits = {}) {
     if (aggregateBytes > maxRuntimeBytes) fail("aggregate byte budget", relativePath);
     if (extension === ".map") fail("source map", relativePath);
     if (BINARY_EXTENSIONS.has(extension)) continue;
-    if (!TEXT_EXTENSIONS.has(extension) && !TEXT_FILENAMES.has(filename)) {
+    if (
+      !TEXT_EXTENSIONS.has(extension) &&
+      !TEXT_FILENAMES.has(filename) &&
+      !TEXT_RUNTIME_PATHS.has(relativePath)
+    ) {
       fail("unsupported staged extension", relativePath);
     }
     const text = (await readBounded(path, maxFileBytes, relativePath)).toString("utf8");

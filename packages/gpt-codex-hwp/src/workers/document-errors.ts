@@ -3,6 +3,8 @@ export const DOCUMENT_ENGINE_ERROR_CODES = [
   "ENGINE_CRASH",
   "ENGINE_INIT_FAILED",
   "ENGINE_OOM",
+  "ENGINE_RESOURCE_LIMIT",
+  "ENGINE_TERMINATION_FAILED",
   "REQUEST_CANCELLED",
   "ENGINE_PROTOCOL_ERROR",
 ] as const;
@@ -17,6 +19,8 @@ export const DOCUMENT_ENGINE_ERROR_MESSAGES: Readonly<
   ENGINE_CRASH: "The document engine stopped unexpectedly.",
   ENGINE_INIT_FAILED: "The document engine could not be initialized.",
   ENGINE_OOM: "The document engine exceeded its memory limit.",
+  ENGINE_RESOURCE_LIMIT: "The document engine request exceeds the configured resource budget.",
+  ENGINE_TERMINATION_FAILED: "The document engine process tree could not be terminated safely.",
   REQUEST_CANCELLED: "The document engine request was cancelled.",
   ENGINE_PROTOCOL_ERROR: "The document engine returned an invalid protocol message.",
 };
@@ -80,6 +84,42 @@ export class DocumentProtocolError extends Error {
   }
 }
 
+const documentEngineRunErrors = new WeakSet<object>();
+
+export class DocumentEngineRunError extends Error {
+  readonly code: DocumentEngineErrorCode;
+  readonly details?: DocumentEngineErrorDetails;
+
+  constructor(publicError: DocumentEnginePublicError) {
+    super(publicError.message);
+    this.name = "DocumentEngineRunError";
+    this.code = publicError.code;
+    if (publicError.details !== undefined) this.details = publicError.details;
+    documentEngineRunErrors.add(this);
+  }
+}
+
+export function isDocumentEngineRunError(
+  value: unknown,
+): value is DocumentEngineRunError {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    documentEngineRunErrors.has(value)
+  );
+}
+
+export function createDocumentEngineRunError(
+  code: DocumentEngineErrorCode,
+  details?: DocumentEngineErrorDetails,
+): DocumentEngineRunError {
+  return new DocumentEngineRunError({
+    code,
+    message: DOCUMENT_ENGINE_ERROR_MESSAGES[code],
+    ...(details === undefined ? {} : { details }),
+  });
+}
+
 export function isDocumentProtocolError(
   value: unknown,
 ): value is DocumentProtocolError {
@@ -135,7 +175,11 @@ export function isDocumentEngineRemediation(
 function classifyDocumentEngineError(
   errorMessage: string,
   context: DocumentEngineFailureContext,
-): Exclude<DocumentEngineErrorCode, "ENGINE_PROTOCOL_ERROR"> {
+): Exclude<
+  DocumentEngineErrorCode,
+  "ENGINE_PROTOCOL_ERROR" | "ENGINE_RESOURCE_LIMIT"
+  | "ENGINE_TERMINATION_FAILED"
+> {
   if (hasKnownOutOfMemorySignature(errorMessage)) return "ENGINE_OOM";
   if (context.terminationReason === "deadline") return "ENGINE_TIMEOUT";
   if (context.terminationReason === "abort") return "REQUEST_CANCELLED";

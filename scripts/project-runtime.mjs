@@ -218,9 +218,18 @@ async function compileFreshTypeScript(sourceRoot, outputRoot) {
     "--inlineSourceMap",
     "false",
   ], sourceRoot);
+  const supervisorAsset = "workers/windows-job-supervisor.ps1";
+  await copyRegularFile(
+    join(sourceRoot, "src", ...supervisorAsset.split("/")),
+    join(outputRoot, ...supervisorAsset.split("/")),
+    `dist/${supervisorAsset}`,
+  );
   const records = await fileRecords(outputRoot);
-  if (records.length === 0 || records.some(({ path }) => extname(path).toLowerCase() !== ".js")) {
-    throw runtimeBuildError("Fresh TypeScript output must contain only JavaScript files");
+  if (
+    records.length === 0 ||
+    records.some(({ path }) => extname(path).toLowerCase() !== ".js" && path !== supervisorAsset)
+  ) {
+    throw runtimeBuildError("Fresh TypeScript output contains an unexpected file");
   }
 }
 

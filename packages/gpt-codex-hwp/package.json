@@ -5,7 +5,7 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-build-assets.mjs",
     "pretest": "npm run build",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:focused": "node --import tsx --test --test-concurrency=1",

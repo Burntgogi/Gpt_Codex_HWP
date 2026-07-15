@@ -12,6 +12,8 @@ export const DOCUMENT_PROTOCOL_VERSION = 1 as const;
 export const MAX_DOCUMENT_ENGINE_INPUT_BYTES = 512 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_IMAGE_BYTES = 25 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_RESULT_BYTES = 512 * 1024 * 1024;
+export const MAX_CHILD_INLINE_RESULT_BYTES = 8 * 1024 * 1024;
+export const MAX_CHILD_REQUEST_FRAME_BYTES = 32 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_TEXT_CHARACTERS = 5_000_000;
 export const MAX_IMAGE_DIMENSION_PX = 10_000;
 export const MAX_IMAGE_PIXELS = 40_000_000;
@@ -273,6 +275,28 @@ export interface DocumentResultEvent<
 export interface DocumentFailureEvent extends EventBase<"failure"> {
   readonly error: DocumentEnginePublicError;
 }
+export type DocumentResultSpoolEncoding =
+  | "document-result-v1"
+  | "utf8"
+  | "binary";
+export type DocumentSpoolEligibleOperation = Exclude<
+  DocumentEngineOperation,
+  "detect" | "validateHwpx"
+>;
+export interface DocumentResultSpoolReceipt<
+  Operation extends DocumentEngineOperation = DocumentEngineOperation,
+> {
+  readonly descriptor: 5;
+  readonly operation: Operation;
+  readonly encoding: DocumentResultSpoolEncoding;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+}
+export interface DocumentSpoolResultEvent<
+  Operation extends DocumentEngineOperation = DocumentEngineOperation,
+> extends EventBase<"spoolResult"> {
+  readonly receipt: DocumentResultSpoolReceipt<Operation>;
+}
 export type DocumentEventEnvelope<
   Operation extends DocumentEngineOperation = DocumentEngineOperation,
 > =
@@ -280,11 +304,19 @@ export type DocumentEventEnvelope<
   | DocumentProgressEvent
   | DocumentResultEvent<Operation>
   | DocumentFailureEvent;
+export type ChildDocumentEventEnvelope<
+  Operation extends DocumentEngineOperation = DocumentEngineOperation,
+> = DocumentEventEnvelope<Operation> | DocumentSpoolResultEvent<Operation>;
 
 export interface DocumentEventValidator<
   Operation extends DocumentEngineOperation = DocumentEngineOperation,
 > {
   accept(value: unknown): DocumentEventEnvelope<Operation>;
+}
+export interface ChildDocumentEventValidator<
+  Operation extends DocumentEngineOperation = DocumentEngineOperation,
+> {
+  accept(value: unknown): ChildDocumentEventEnvelope<Operation>;
 }
 
 interface ParsedRequest {
@@ -340,6 +372,32 @@ export function createDocumentEventValidator<
   expectedRequestId: string,
   expectedOperation: Operation,
 ): DocumentEventValidator<Operation> {
+  const validator = createEventValidator(
+    expectedRequestId,
+    expectedOperation,
+    false,
+  );
+  return {
+    accept(value: unknown): DocumentEventEnvelope<Operation> {
+      return validator.accept(value) as DocumentEventEnvelope<Operation>;
+    },
+  };
+}
+
+export function createChildDocumentEventValidator<
+  Operation extends DocumentEngineOperation,
+>(
+  expectedRequestId: string,
+  expectedOperation: Operation,
+): ChildDocumentEventValidator<Operation> {
+  return createEventValidator(expectedRequestId, expectedOperation, true);
+}
+
+function createEventValidator<Operation extends DocumentEngineOperation>(
+  expectedRequestId: string,
+  expectedOperation: Operation,
+  childMode: boolean,
+): ChildDocumentEventValidator<Operation> {
   return protocolBoundary(() => {
     requireRequestId(expectedRequestId);
     requireOperation(expectedOperation);
@@ -349,14 +407,19 @@ export function createDocumentEventValidator<
     let progressCompleted = -1;
 
     return {
-      accept(value: unknown): DocumentEventEnvelope<Operation> {
+      accept(value: unknown): ChildDocumentEventEnvelope<Operation> {
         return protocolBoundary(() => {
           if (terminalAccepted) {
             throw new DocumentProtocolError(
               "A terminal document engine event was already accepted.",
             );
           }
-          const event = parseEvent(value, expectedRequestId, expectedOperation);
+          const event = parseEvent(
+            value,
+            expectedRequestId,
+            expectedOperation,
+            childMode,
+          );
           switch (event.type) {
             case "failure":
               terminalAccepted = true;
@@ -380,10 +443,38 @@ export function createDocumentEventValidator<
               if (!readyAccepted) protocolFailure();
               terminalAccepted = true;
               return event;
+            case "spoolResult":
+              if (!readyAccepted || !childMode) protocolFailure();
+              terminalAccepted = true;
+              return event;
           }
         });
       },
     };
+  });
+}
+
+export function createInlineDocumentResultEvent<
+  Operation extends DocumentEngineOperation,
+>(
+  requestId: string,
+  operation: Operation,
+  payload: unknown,
+): DocumentResultEvent<Operation> {
+  return protocolBoundary(() => {
+    requireRequestId(requestId);
+    requireOperation(operation);
+    const outputByteLength = measureResultInternal(operation, payload);
+    if (outputByteLength > MAX_CHILD_INLINE_RESULT_BYTES) protocolFailure();
+    const event = {
+      protocolVersion: DOCUMENT_PROTOCOL_VERSION,
+      requestId,
+      type: "result" as const,
+      payload,
+      outputByteLength,
+    };
+    parseEvent(event, requestId, operation, true);
+    return event as DocumentResultEvent<Operation>;
   });
 }
 
@@ -540,7 +631,8 @@ function parseEvent<Operation extends DocumentEngineOperation>(
   value: unknown,
   expectedRequestId: string,
   expectedOperation: Operation,
-): DocumentEventEnvelope<Operation> {
+  childMode = false,
+): ChildDocumentEventEnvelope<Operation> {
   const event = readRecord(value);
   if (event.protocolVersion !== DOCUMENT_PROTOCOL_VERSION) protocolFailure();
   if (event.requestId !== expectedRequestId) protocolFailure();
@@ -570,11 +662,24 @@ function parseEvent<Operation extends DocumentEngineOperation>(
       requireIntegerInRange(
         event.outputByteLength,
         0,
-        MAX_DOCUMENT_ENGINE_RESULT_BYTES,
+        childMode
+          ? MAX_CHILD_INLINE_RESULT_BYTES
+          : MAX_DOCUMENT_ENGINE_RESULT_BYTES,
       );
       const measured = measureResultInternal(expectedOperation, event.payload);
       if (measured !== event.outputByteLength) protocolFailure();
       return value as DocumentResultEvent<Operation>;
+    }
+    case "spoolResult": {
+      if (!childMode) protocolFailure();
+      requireKeys(event, [
+        "protocolVersion",
+        "requestId",
+        "type",
+        "receipt",
+      ]);
+      validateSpoolResultReceipt(event.receipt, expectedOperation);
+      return value as DocumentSpoolResultEvent<Operation>;
     }
     case "failure":
       requireKeys(event, ["protocolVersion", "requestId", "type", "error"]);
@@ -582,6 +687,51 @@ function parseEvent<Operation extends DocumentEngineOperation>(
       return value as DocumentFailureEvent;
     default:
       return protocolFailure();
+  }
+}
+
+function validateSpoolResultReceipt<Operation extends DocumentEngineOperation>(
+  value: unknown,
+  expectedOperation: Operation,
+): void {
+  if (expectedOperation === "detect" || expectedOperation === "validateHwpx") {
+    protocolFailure();
+  }
+  const receipt = exactRecord(value, [
+    "descriptor",
+    "operation",
+    "encoding",
+    "sizeBytes",
+    "sha256",
+  ]);
+  if (receipt.descriptor !== 5 || receipt.operation !== expectedOperation) {
+    protocolFailure();
+  }
+  if (receipt.encoding !== resultSpoolEncoding(expectedOperation)) {
+    protocolFailure();
+  }
+  requireIntegerInRange(receipt.sizeBytes, 1, MAX_DOCUMENT_ENGINE_RESULT_BYTES);
+  if (
+    typeof receipt.sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(receipt.sha256)
+  ) {
+    protocolFailure();
+  }
+}
+
+export function resultSpoolEncoding(
+  operation: DocumentSpoolEligibleOperation,
+): DocumentResultSpoolEncoding {
+  switch (operation) {
+    case "parse":
+      return "document-result-v1";
+    case "render":
+      return "utf8";
+    case "generateHwpx":
+    case "patchHwpx":
+    case "fillHwpx":
+    case "insertImage":
+      return "binary";
   }
 }
 

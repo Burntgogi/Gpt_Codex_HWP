@@ -12,6 +12,7 @@ interface ProtocolApi {
   readonly MAX_INLINE_MARKDOWN_CHARACTERS: number;
   readonly MAX_DOCUMENT_PARSE_MARKDOWN_BYTES: number;
   readonly MAX_DOCUMENT_RENDER_SVG_BYTES: number;
+  readonly MAX_CHILD_INLINE_RESULT_BYTES: number;
   validateLogicalDocumentRequest(value: unknown): Readonly<Record<string, unknown>>;
   validateWireDocumentRequest(value: unknown): Readonly<Record<string, unknown>>;
   createWireDocumentRequest(
@@ -22,6 +23,15 @@ interface ProtocolApi {
     requestId: string,
     operation: string,
   ): { accept(value: unknown): unknown };
+  createChildDocumentEventValidator(
+    requestId: string,
+    operation: string,
+  ): { accept(value: unknown): unknown };
+  createInlineDocumentResultEvent(
+    requestId: string,
+    operation: string,
+    payload: unknown,
+  ): Readonly<Record<string, unknown>>;
   measureDocumentResultByteLength(operation: string, payload: unknown): number;
 }
 
@@ -354,6 +364,80 @@ test("document engine protocol validates path-free child spool descriptors and s
       protocol.validateWireDocumentRequest({ ...child, input: badInput }),
     );
   }
+});
+
+test("document child protocol accepts only small inline results", () => {
+  assert.equal(protocol.MAX_CHILD_INLINE_RESULT_BYTES, 8 * 1024 * 1024);
+  const validator = protocol.createChildDocumentEventValidator(requestId, "detect");
+  validator.accept(readyEvent());
+  assert.deepEqual(
+    validator.accept(resultEvent({ format: "hwp" }, 3)),
+    resultEvent({ format: "hwp" }, 3),
+  );
+
+  const oversized = protocol.createChildDocumentEventValidator(requestId, "detect");
+  oversized.accept(readyEvent());
+  assertProtocolError(() => oversized.accept({
+    ...resultEvent({ format: "hwp" }, 3),
+    outputByteLength: protocol.MAX_CHILD_INLINE_RESULT_BYTES + 1,
+  }));
+});
+
+test("document child protocol validates exact fd 5 spool receipts by operation", () => {
+  const validator = protocol.createChildDocumentEventValidator(requestId, "render");
+  validator.accept(readyEvent());
+  const event = {
+    protocolVersion: 1,
+    requestId,
+    type: "spoolResult",
+    receipt: {
+      descriptor: 5,
+      operation: "render",
+      encoding: "utf8",
+      sizeBytes: 9 * 1024 * 1024,
+      sha256: "a".repeat(64),
+    },
+  };
+  assert.deepEqual(validator.accept(event), event);
+
+  for (const receipt of [
+    { ...event.receipt, descriptor: 4 },
+    { ...event.receipt, operation: "parse" },
+    { ...event.receipt, encoding: "binary" },
+    { ...event.receipt, sizeBytes: 0 },
+    { ...event.receipt, sha256: "C:\\private\\output.hwpx" },
+    { ...event.receipt, path: "C:\\private\\output.hwpx" },
+  ]) {
+    const rejected = protocol.createChildDocumentEventValidator(requestId, "render");
+    rejected.accept(readyEvent());
+    assertProtocolError(() => rejected.accept({ ...event, receipt }));
+  }
+});
+
+test("document child protocol requires detect and validate results inline", () => {
+  for (const operation of ["detect", "validateHwpx"] as const) {
+    const validator = protocol.createChildDocumentEventValidator(requestId, operation);
+    validator.accept(readyEvent());
+    assertProtocolError(() => validator.accept({
+      protocolVersion: 1,
+      requestId,
+      type: "spoolResult",
+      receipt: {
+        descriptor: 5,
+        operation,
+        encoding: "safe-json",
+        sizeBytes: 1024,
+        sha256: "a".repeat(64),
+      },
+    }));
+  }
+});
+
+test("document child protocol sender refuses oversized inline payloads before posting", () => {
+  const payload = { svg: "x".repeat(8 * 1024 * 1024 + 1) };
+  assertProtocolError(() =>
+    protocol.createInlineDocumentResultEvent(requestId, "render", payload),
+  );
 });
 
 test("document engine protocol rejects empty and oversized image buffers", () => {

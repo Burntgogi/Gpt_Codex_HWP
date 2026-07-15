@@ -37,6 +37,7 @@ test("public runtime projection stages only branded executable files", { timeout
     "assets/gpt-codex-hwp-icon-64.png",
     "assets/gpt-codex-hwp-icon-128.png",
     "dist/mcp.js",
+    "dist/workers/windows-job-supervisor.ps1",
     "scripts/hwpx-safe-edit/hwpxlib.py",
     "scripts/hwpx-safe-edit/insert_image.py",
     "scripts/hwpx-safe-edit/verify.py",
@@ -97,6 +98,10 @@ test("public runtime projection stages only branded executable files", { timeout
   assert.deepEqual(
     await readFile(join(output, "vendor", "kordoc-core", "dist", "index.js")),
     await readFile(join(SOURCE_ROOT, "vendor", "kordoc-core", "dist", "index.js")),
+  );
+  assert.deepEqual(
+    await readFile(join(output, "dist", "workers", "windows-job-supervisor.ps1")),
+    await readFile(join(SOURCE_ROOT, "src", "workers", "windows-job-supervisor.ps1")),
   );
 
   const notice = await readFile(join(output, "NOTICE"), "utf8");

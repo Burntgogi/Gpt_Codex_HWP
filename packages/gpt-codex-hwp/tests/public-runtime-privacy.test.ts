@@ -160,6 +160,21 @@ test("public runtime privacy scanner enforces exact budgets and staged file type
     await assert.rejects(assertPublicRuntimePrivacy(root), /source map.*runtime\.js\.map/iu);
   });
 
+  await t.test("only the fixed supervisor PowerShell path is accepted", async (subtest) => {
+    const root = await temporaryRuntime(subtest, "privacy-powershell-path-");
+    await mkdir(join(root, "dist", "workers"), { recursive: true });
+    await writeFile(
+      join(root, "dist", "workers", "windows-job-supervisor.ps1"),
+      "param([int]$TargetPid)\n",
+    );
+    await assert.doesNotReject(assertPublicRuntimePrivacy(root));
+    await writeFile(join(root, "unexpected.ps1"), "Write-Output safe\n");
+    await assert.rejects(
+      assertPublicRuntimePrivacy(root),
+      /unsupported staged extension.*unexpected\.ps1/iu,
+    );
+  });
+
   await t.test("nested symlink reports from the original runtime root", async (subtest) => {
     const root = await temporaryRuntime(subtest, "privacy-symlink-");
     await mkdir(join(root, "deep", "nested"), { recursive: true });
