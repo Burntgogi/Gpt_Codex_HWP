@@ -85,7 +85,16 @@ test("bilingual release documentation states the same release boundary", async (
   const englishCandidate = /Status:\s*.*candidate/iu.test(enNotes);
   assert.equal(koreanFinal, englishFinal, "Korean and English notes must agree on final status");
   assert.equal(koreanCandidate, englishCandidate, "Korean and English notes must agree on candidate status");
-  assert.equal(koreanFinal || koreanCandidate, true, "release notes must declare final or candidate status");
+  assert.equal(
+    Number(koreanFinal) + Number(koreanCandidate),
+    1,
+    "Korean release notes must declare exactly one of final or candidate status",
+  );
+  assert.equal(
+    Number(englishFinal) + Number(englishCandidate),
+    1,
+    "English release notes must declare exactly one of final or candidate status",
+  );
 });
 
 test("production metadata derives the current release from the root record", async () => {
@@ -307,6 +316,7 @@ function assertSecureAgentInstallSection(
     .map((match) => match[1]!);
   assert.equal(referencedTags.length, 1, "the marketplace source must pin exactly one version tag");
   const recommendedTag = referencedTags[0]!;
+  assert.equal(recommendedTag, `v${metadata.version}`, "the marketplace source must pin the current metadata version");
   const requiredText = [
     "Burntgogi/Gpt_Codex_HWP",
     `--ref ${recommendedTag}`,

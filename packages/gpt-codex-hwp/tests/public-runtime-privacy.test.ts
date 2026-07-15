@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -9,8 +10,34 @@ import {
   assertPublicRuntimePrivacy,
   classifyRuntimeEntryForTest,
 } from "../release-scripts/public-runtime-privacy.mjs";
+import { buildRuntime } from "../../../scripts/project-runtime.mjs";
 
 const TEST_ROOT = dirname(fileURLToPath(import.meta.url));
+const SOURCE_ROOT = dirname(TEST_ROOT);
+const REPOSITORY_ROOT = dirname(dirname(SOURCE_ROOT));
+
+test("runtime projection rejects staged sensitive content before promotion", async (t) => {
+  const temporaryRoot = await temporaryRuntime(t, "privacy-projection-integration-");
+  const fixtureRoot = join(temporaryRoot, "fixture");
+  const fixtureSource = join(fixtureRoot, "packages", "gpt-codex-hwp");
+  const outputRoot = join(temporaryRoot, "runtime");
+  const swapId = `privacy-probe-${randomUUID()}`;
+  await createProjectionFixture(fixtureRoot, fixtureSource);
+  await writeFile(
+    join(fixtureSource, "assets", "privacy-probe.txt"),
+    credentialAssignment(["OPENAI", "API", "KEY"], ["sk", "projection", "probe"]),
+  );
+  await assert.rejects(
+    buildRuntime({ root: fixtureRoot, outputRoot, swapId }),
+    /runtime privacy violation.*literal credential/iu,
+  );
+  await assert.rejects(lstat(outputRoot), { code: "ENOENT" });
+  assert.deepEqual(
+    (await readdir(temporaryRoot)).filter((name) => name.startsWith(".runtime.")),
+    [],
+    "failed validation must not leave a staged or backup projection",
+  );
+});
 
 test("public runtime privacy rejects personal paths and secrets before projection", async (t) => {
   const cases = [
@@ -304,4 +331,35 @@ async function temporaryRuntime(t: TestContext, prefix: string): Promise<string>
   const root = await mkdtemp(join(tmpdir(), prefix));
   t.after(async () => rm(root, { recursive: true, force: true }));
   return root;
+}
+
+async function createProjectionFixture(fixtureRoot: string, fixtureSource: string): Promise<void> {
+  await mkdir(fixtureSource, { recursive: true });
+  for (const name of [
+    "LICENSE",
+    "NOTICE",
+    "README.en.md",
+    "README.md",
+    "RELEASE_NOTES.en.md",
+    "RELEASE_NOTES.md",
+    "THIRD_PARTY_NOTICES.md",
+    "package.json",
+  ]) await copyFile(join(REPOSITORY_ROOT, name), join(fixtureRoot, name));
+
+  for (const name of ["package.json", "package-lock.json", "tsconfig.json"]) {
+    await copyFile(join(SOURCE_ROOT, name), join(fixtureSource, name));
+  }
+  for (const name of ["assets", "src", "scripts", "skills", "vendor"]) {
+    await cp(join(SOURCE_ROOT, name), join(fixtureSource, name), { recursive: true });
+  }
+
+  const dependencySource = join(SOURCE_ROOT, "node_modules");
+  const dependencyTarget = join(fixtureSource, "node_modules");
+  try {
+    await symlink(dependencySource, dependencyTarget, process.platform === "win32" ? "junction" : "dir");
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code ?? "";
+    if (!["EPERM", "EACCES", "ENOTSUP"].includes(code)) throw error;
+    await cp(dependencySource, dependencyTarget, { recursive: true, dereference: true });
+  }
 }

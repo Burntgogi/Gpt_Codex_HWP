@@ -56,6 +56,7 @@ test("obsolete public-source references are absent from split release suites", a
   ];
   const sourceFiles = await collectSourceFiles([
     join(REPOSITORY_ROOT, "scripts"),
+    join(REPOSITORY_ROOT, "tests"),
     join(SOURCE_ROOT, "release-scripts"),
     join(SOURCE_ROOT, "scripts"),
     join(SOURCE_ROOT, "tests"),
