@@ -88,6 +88,7 @@ test("metadata loader rejects invalid semantic versions, build IDs, and legacy s
   const fixture = await createFixture(t);
   const cases = [
     ["version", "1.4", "version"],
+    ["version", "0.2.0+ci.1", "version"],
     ["codexBuildId", "20260713", "codexBuildId"],
     ["legacyUninstallSelector", "gpt-codex-hwp@gpt-codex-hwp-local", "legacyUninstallSelector"],
   ];
@@ -101,6 +102,19 @@ test("metadata loader rejects invalid semantic versions, build IDs, and legacy s
       loadProjectMetadata(fixture),
       (error) => error instanceof Error && error.message.includes(expectedMessage),
     );
+  }
+});
+
+test("metadata loader accepts release and prerelease versions without build metadata", async (t) => {
+  const fixture = await createFixture(t);
+
+  for (const version of ["0.2.0", "0.2.0-rc.1"]) {
+    const rootPackage = structuredClone(BASE_ROOT_PACKAGE);
+    rootPackage.version = version;
+    await writeJson(join(fixture, "package.json"), rootPackage);
+    const metadata = await loadProjectMetadata(fixture);
+    assert.equal(metadata.version, version);
+    assert.equal(pluginVersion(metadata), `${version}+codex.20260713023606`);
   }
 });
 

@@ -109,6 +109,12 @@ async function loadProjectConfiguration(root) {
   if (!SEMVER_PATTERN.test(version)) {
     throw projectMetadataError("version", "must be a valid semantic version");
   }
+  if (version.includes("+")) {
+    throw projectMetadataError(
+      "version",
+      "must not contain build metadata because the +codex.<build-id> suffix is generated separately",
+    );
+  }
 
   const metadata = {
     productId: requiredString(config.productId, "productId"),
