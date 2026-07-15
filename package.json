@@ -20,6 +20,8 @@
     "check:metadata": "node scripts/sync-project-metadata.mjs --check",
     "runtime:write": "node scripts/project-runtime.mjs --write",
     "runtime:check": "node scripts/project-runtime.mjs --check",
+    "release:verify": "node scripts/release-verify.mjs",
+    "verify:compact-runtime": "node packages/gpt-codex-hwp/release-scripts/verify-compact-runtime.mjs",
     "verify:dependencies": "node scripts/verify-installed-dependencies.mjs",
     "test:repository": "node --test tests/*.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
