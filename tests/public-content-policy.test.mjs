@@ -22,6 +22,7 @@ import {
   readOwnedRegularFile,
   runBoundedProcess,
   scanPublicDirectory,
+  terminatePosixProcessGroup,
   walkOwnedRegularFiles,
 } from "../scripts/public-content-policy.mjs";
 import { scanPublicHistory } from "../scripts/scan-public-history.mjs";
@@ -495,6 +496,84 @@ test("bounded process owns an overflow-exit race with one authoritative terminat
   assert.equal(result.terminationFailed, false);
 });
 
+test("POSIX process group termination classifies ESRCH as gone at TERM", async () => {
+  const signals = [];
+  const result = await terminatePosixProcessGroup({ pid: 41 }, {
+    killProcess: (_pid, signal) => {
+      signals.push(signal);
+      throw systemError("ESRCH");
+    },
+    delay: async () => {},
+  });
+  assert.equal(result, true);
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("POSIX process group termination stops after TERM when liveness reports gone", async () => {
+  const signals = [];
+  const result = await terminatePosixProcessGroup({ pid: 45 }, {
+    killProcess: (_pid, signal) => { signals.push(signal); },
+    liveness: async () => false,
+    delay: async () => {},
+  });
+  assert.equal(result, true);
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("POSIX process group termination accepts ESRCH at KILL after bounded polling", async () => {
+  const signals = [];
+  const result = await terminatePosixProcessGroup({ pid: 42 }, {
+    killProcess: (_pid, signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") throw systemError("ESRCH");
+    },
+    liveness: async () => true,
+    delay: async () => {},
+    pollAttempts: 2,
+  });
+  assert.equal(result, true);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("POSIX process group termination confirms gone after KILL", async () => {
+  const signals = [];
+  const alive = [true, false];
+  const result = await terminatePosixProcessGroup({ pid: 46 }, {
+    killProcess: (_pid, signal) => { signals.push(signal); },
+    liveness: async () => alive.shift(),
+    delay: async () => {},
+    pollAttempts: 1,
+  });
+  assert.equal(result, true);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("POSIX process group termination treats EPERM as alive and failed", async () => {
+  const signals = [];
+  const result = await terminatePosixProcessGroup({ pid: 43 }, {
+    killProcess: (_pid, signal) => {
+      signals.push(signal);
+      throw systemError("EPERM");
+    },
+    delay: async () => {},
+    pollAttempts: 2,
+  });
+  assert.equal(result, false);
+  assert.deepEqual(signals, ["SIGTERM", 0, 0, "SIGKILL", 0, 0]);
+});
+
+test("POSIX process group termination fails closed while the group remains alive", async () => {
+  const signals = [];
+  const result = await terminatePosixProcessGroup({ pid: 44 }, {
+    killProcess: (_pid, signal) => { signals.push(signal); },
+    liveness: async () => true,
+    delay: async () => {},
+    pollAttempts: 2,
+  });
+  assert.equal(result, false);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
 test("public content policy is mandatory in root scripts and release ordering", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(packageJson.scripts["security:scan-tree"], "node scripts/public-content-policy.mjs --tree");
@@ -507,6 +586,10 @@ test("public content policy is mandatory in root scripts and release ordering", 
 
 function fragments(...parts) {
   return parts.join("");
+}
+
+function systemError(code) {
+  return Object.assign(new Error("redacted system error"), { code });
 }
 
 function captureThrown(operation) {

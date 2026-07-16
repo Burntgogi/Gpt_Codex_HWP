@@ -1159,12 +1159,54 @@ async function withinDeadline(promise, deadline) {
   } finally { clearTimeout(timer); }
 }
 
-async function terminatePosixProcessGroup(child) {
-  if (!Number.isInteger(child?.pid)) return true;
-  try { process.kill(-child.pid, "SIGTERM"); } catch { /* it may already be gone */ }
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
-  try { process.kill(-child.pid, "SIGKILL"); } catch { /* it may already be gone */ }
-  return true;
+export async function terminatePosixProcessGroup(child, dependencies = {}) {
+  if (!Number.isSafeInteger(child?.pid) || child.pid <= 0) return false;
+  const groupPid = -child.pid;
+  const killProcess = dependencies.killProcess ?? process.kill;
+  const liveness = dependencies.liveness ?? ((pid) => posixProcessGroupAlive(pid, killProcess));
+  const delay = dependencies.delay ?? ((milliseconds) =>
+    new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)));
+  const pollAttempts = dependencies.pollAttempts ?? 5;
+  const pollIntervalMs = dependencies.pollIntervalMs ?? 50;
+  if (typeof killProcess !== "function" || typeof liveness !== "function" || typeof delay !== "function"
+    || !Number.isSafeInteger(pollAttempts) || pollAttempts < 1 || pollAttempts > 20
+    || !Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 0 || pollIntervalMs > 1_000) return false;
+  try {
+    if (sendPosixGroupSignal(groupPid, "SIGTERM", killProcess) === "gone") return true;
+    if (await pollPosixGroupGone(groupPid, liveness, delay, pollAttempts, pollIntervalMs)) return true;
+    if (sendPosixGroupSignal(groupPid, "SIGKILL", killProcess) === "gone") return true;
+    return await pollPosixGroupGone(groupPid, liveness, delay, pollAttempts, pollIntervalMs);
+  } catch {
+    return false;
+  }
+}
+
+function sendPosixGroupSignal(groupPid, signal, killProcess) {
+  try {
+    killProcess(groupPid, signal);
+    return "sent";
+  } catch (error) {
+    return error?.code === "ESRCH" ? "gone" : "failed";
+  }
+}
+
+function posixProcessGroupAlive(groupPid, killProcess) {
+  try {
+    killProcess(groupPid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+}
+
+async function pollPosixGroupGone(groupPid, liveness, delay, attempts, intervalMs) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let alive = true;
+    try { alive = await liveness(groupPid); } catch { alive = true; }
+    if (alive === false) return true;
+    if (attempt + 1 < attempts) await delay(intervalMs);
+  }
+  return false;
 }
 
 async function abortStartup(child, supervisor, startupHelper) {

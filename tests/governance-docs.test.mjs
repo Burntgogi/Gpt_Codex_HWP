@@ -301,7 +301,7 @@ test("governance documentation dependency issue lifecycle is marker-owned and pa
   assert.match(created.body, new RegExp(`^${escapeRegExp(module.ISSUE_MARKER)}\\n\\n\\| Package`, "u"));
 });
 
-test("governance documentation dependency issue updates, reopens, closes, and rejects takeover", async () => {
+test("governance documentation dependency issue ignores lookalikes while owning exact lifecycle", async () => {
   const module = await import("../scripts/dependency-audit-issue.mjs");
   const record = {
     package: "esbuild",
@@ -337,25 +337,48 @@ test("governance documentation dependency issue updates, reopens, closes, and re
     if (records.length > 0) assert.match(JSON.parse(requests.at(-1).body).body, /\| esbuild \|/u);
   }
 
-  for (const issues of [
-    [owned(7), owned(8)],
-    [owned(7, { user: { login: "attacker", type: "User" } })],
-    [owned(7, { body: "marker missing" })],
-    [owned(7, { title: "Different title" })],
+  const lookalikes = [
+    owned(20, { user: { login: "attacker", type: "User" } }),
+    owned(21, { user: { login: "github-actions[bot]", type: "User" } }),
+    owned(22, { body: "marker missing" }),
+    owned(23, { title: "Different title" }),
+    owned(24, { pull_request: { url: "https://example.invalid/pull/24" } }),
+  ];
+  for (const [issues, records, expectedIssue, expectedMethod, expectedNumber] of [
+    [lookalikes, [record], "created", "POST", undefined],
+    [[...lookalikes, owned(7)], [record], "updated", "PATCH", 7],
+    [[...lookalikes, owned(7, { state: "open" })], [], "closed", "PATCH", 7],
+    [lookalikes, [], "unchanged", undefined, undefined],
   ]) {
-    let mutations = 0;
-    await assert.rejects(module.reconcileDependencyIssue({
+    const requests = [];
+    const result = await module.reconcileDependencyIssue({
       owner: "owner",
       repository: "repository",
       ...githubAuthorization(),
-      records: [record],
-      fetchImpl: async (_url, options = {}) => {
-        if ((options.method ?? "GET") !== "GET") mutations += 1;
-        return jsonResponse(issues);
+      records,
+      fetchImpl: async (url, options = {}) => {
+        requests.push({ url: String(url), method: options.method ?? "GET" });
+        return (options.method ?? "GET") === "GET" ? jsonResponse(issues) : jsonResponse({ number: 7 });
       },
-    }), { code: "ISSUE_OWNERSHIP_INVALID" });
-    assert.equal(mutations, 0);
+    });
+    assert.equal(result.issue, expectedIssue);
+    const mutation = requests.find((request) => request.method !== "GET");
+    assert.equal(mutation?.method, expectedMethod);
+    if (expectedNumber !== undefined) assert.match(mutation.url, new RegExp(`/issues/${expectedNumber}$`, "u"));
   }
+
+  let mutations = 0;
+  await assert.rejects(module.reconcileDependencyIssue({
+    owner: "owner",
+    repository: "repository",
+    ...githubAuthorization(),
+    records: [record],
+    fetchImpl: async (_url, options = {}) => {
+      if ((options.method ?? "GET") !== "GET") mutations += 1;
+      return jsonResponse([...lookalikes, owned(7), owned(8)]);
+    },
+  }), { code: "ISSUE_OWNERSHIP_INVALID" });
+  assert.equal(mutations, 0);
 });
 
 test("governance documentation dependency issue pagination has a hard all-state ceiling", async () => {
@@ -396,6 +419,15 @@ test("governance documentation advisory records bind every exact scoped lock nod
   assert.deepEqual(items.map((item) => item.record.current), ["1.0.0", "1.5.0"]);
   assert.deepEqual(items.map((item) => item.record.patched), ["2.0.0", "2.0.0"]);
   assert.deepEqual(items.map((item) => item.node), nodes);
+  const sameVersionLock = { packages: {
+    [nodes[0]]: { version: "1.0.0" },
+    [nodes[1]]: { version: "1.0.0" },
+  } };
+  const deduplicated = module.advisoryRecords(name, {
+    name, nodes, fixAvailable: { name, version: "2.0.0" }, via: [],
+  }, sameVersionLock);
+  assert.equal(deduplicated.length, 1);
+  assert.equal(deduplicated[0].record.current, "1.0.0");
   for (const badNode of [
     "node_modules/other",
     "../node_modules/@scope/pkg",

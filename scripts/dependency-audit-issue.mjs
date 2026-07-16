@@ -43,7 +43,8 @@ export async function runDependencyAuditIssue({
       throw auditError("AUDIT_RESULT_INVALID");
     for (const [name, vulnerability] of Object.entries(vulnerabilities)) {
       for (const item of advisoryRecords(name, vulnerability, lock)) {
-        records.set(`${target.directory}\0${name}\0${item.node}`, item.record);
+        const { package: packageName, current, patched, link } = item.record;
+        records.set(`${packageName}\0${current}\0${patched}\0${link}`, item.record);
         if (records.size > MAX_ADVISORY_RECORDS) throw auditError("ADVISORY_RECORD_LIMIT");
       }
     }
@@ -178,7 +179,7 @@ export function advisoryRecords(name, vulnerability, lock) {
     ?? `https://www.npmjs.com/package/${encodeURIComponent(packageName)}`;
   const link = advisoryUrl(rawLink);
   const seen = new Set();
-  return Object.freeze(vulnerability.nodes.map((node) => {
+  const validated = vulnerability.nodes.map((node) => {
     const exactNode = exactLockNode(packageName, node);
     if (seen.has(exactNode) || !Object.hasOwn(lock.packages, exactNode)) throw auditError("ADVISORY_NODE_INVALID");
     seen.add(exactNode);
@@ -192,7 +193,14 @@ export function advisoryRecords(name, vulnerability, lock) {
       link,
     });
     return Object.freeze({ node: exactNode, record });
-  }));
+  });
+  const displayed = new Map();
+  for (const item of validated) {
+    const { package: displayedPackage, current, patched: displayedPatched, link: displayedLink } = item.record;
+    const key = `${displayedPackage}\0${current}\0${displayedPatched}\0${displayedLink}`;
+    if (!displayed.has(key)) displayed.set(key, item);
+  }
+  return Object.freeze([...displayed.values()]);
 }
 
 export function advisoryRecord(name, vulnerability, lock) {
@@ -282,12 +290,13 @@ async function findOwnedIssue(owner, repository, token, fetchImpl) {
     );
     if (!Array.isArray(issues) || issues.length > ISSUES_PER_PAGE) throw auditError("GITHUB_RESPONSE_INVALID");
     for (const issue of issues) {
-      const titleMatches = issue?.title === ISSUE_TITLE;
-      const markerMatches = hasExactIssueMarker(issue?.body);
-      if (!titleMatches && !markerMatches) continue;
-      if (!titleMatches || !markerMatches || issue?.pull_request !== undefined
-        || issue?.user?.login !== "github-actions[bot]" || issue?.user?.type !== "Bot"
-        || !Number.isSafeInteger(issue?.number) || issue.number <= 0
+      const owned = issue?.title === ISSUE_TITLE
+        && hasExactIssueMarker(issue?.body)
+        && issue?.pull_request === undefined
+        && issue?.user?.login === "github-actions[bot]"
+        && issue?.user?.type === "Bot";
+      if (!owned) continue;
+      if (!Number.isSafeInteger(issue?.number) || issue.number <= 0
         || !["open", "closed"].includes(issue?.state)) throw auditError("ISSUE_OWNERSHIP_INVALID");
       candidates.push(Object.freeze({ number: issue.number, state: issue.state }));
       if (candidates.length > 1) throw auditError("ISSUE_OWNERSHIP_INVALID");
