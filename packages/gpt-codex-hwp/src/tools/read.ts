@@ -35,10 +35,6 @@ import {
   type ToolExecutionContext,
 } from "../shared/tool-context.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
-import {
-  MAX_MCP_RESPONSE_BYTES,
-  serializedBytes,
-} from "../shared/resource-limits.js";
 import type {
   ParseImageResult as ExtractedImage,
   ParseWarningResult as ParseWarning,
@@ -160,20 +156,7 @@ export async function handleHwpRead(
       ? `Read ${parsed.fileType} document.`
       : `Read ${parsed.fileType} document and saved complete Markdown.`;
     const successResult = toolSuccess(summary, details);
-    const responseBytes = serializedBytes(successResult);
-    if (responseBytes > MAX_MCP_RESPONSE_BYTES) {
-      return toolError(
-        "The complete result is too large for one MCP response. Read a smaller page/section range with pages.",
-        {
-          code: "RESPONSE_TOO_LARGE",
-          file_path: filePath,
-          file_type: parsed.fileType,
-          response_bytes: responseBytes,
-          maximum_response_bytes: MAX_MCP_RESPONSE_BYTES,
-          guidance: "Retry hwp_read with a narrower pages range.",
-        },
-      );
-    }
+    if (successResult.isError) return successResult;
 
     if (delivery.outputPath !== undefined) {
       await writeFilesExclusively(

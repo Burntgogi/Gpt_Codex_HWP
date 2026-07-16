@@ -1,5 +1,10 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import {
+  MAX_MCP_RESPONSE_BYTES,
+  serializedBytes,
+} from "./resource-limits.js";
+
 export type ToolResultDetails = Record<string, unknown>;
 
 export function toolSuccess(
@@ -27,14 +32,43 @@ function buildToolResult(
   }
 
   const safeDetails = sanitizeSensitivePathError(details);
+  const result = assembleToolResult(readableSummary, safeDetails, isError);
+  const responseBytes = serializedBytes(result);
+  if (responseBytes <= MAX_MCP_RESPONSE_BYTES) return result;
+  return oversizedToolResult(responseBytes);
+}
+
+function assembleToolResult(
+  summary: string,
+  details: ToolResultDetails,
+  isError: boolean,
+): CallToolResult {
   return {
     content: [
-      { type: "text", text: readableSummary },
-      { type: "text", text: JSON.stringify(safeDetails, null, 2) },
+      { type: "text", text: summary },
+      { type: "text", text: JSON.stringify(details, null, 2) },
     ],
-    structuredContent: safeDetails,
+    structuredContent: details,
     isError,
   };
+}
+
+function oversizedToolResult(responseBytes: number): CallToolResult {
+  const details = {
+    code: "RESPONSE_TOO_LARGE",
+    error: "The tool result exceeds the eight MiB MCP response limit.",
+    response_bytes: responseBytes,
+    maximum_response_bytes: MAX_MCP_RESPONSE_BYTES,
+  };
+  const result = assembleToolResult(
+    "The tool result is too large for one MCP response.",
+    details,
+    true,
+  );
+  if (serializedBytes(result) > MAX_MCP_RESPONSE_BYTES) {
+    throw new Error("Bounded MCP response fallback exceeds its safety limit.");
+  }
+  return result;
 }
 
 function sanitizeSensitivePathError(
