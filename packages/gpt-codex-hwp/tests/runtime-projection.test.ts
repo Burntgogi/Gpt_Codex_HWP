@@ -42,6 +42,7 @@ test("public runtime projection stages only branded executable files", { timeout
     "scripts/hwpx-safe-edit/hwpxlib.py",
     "scripts/hwpx-safe-edit/insert_image.py",
     "scripts/hwpx-safe-edit/verify.py",
+    "scripts/kordoc-runtime-verifier.mjs",
     "skills/gpt-codex-hwp/SKILL.md",
     "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
     "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",

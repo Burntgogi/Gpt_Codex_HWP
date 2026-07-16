@@ -3,67 +3,26 @@ import {
   lstat,
   mkdir,
   readFile,
-  readdir,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 
-export const KORDOC_SOURCE = Object.freeze({
-  name: "kordoc",
-  version: "3.18.1",
-  resolved: "https://registry.npmjs.org/kordoc/-/kordoc-3.18.1.tgz",
-  integrity: "sha512-/SrgNK9RKnz1wdlhOvBeJi6+pNSO+vZeBHMxKd8TvfIkuinQBpwbE+W76TGNsMC7bxx2NJhNQAJPqCyD5ltiGA==",
-});
+import {
+  KORDOC_GENERATOR_VERSION,
+  KORDOC_LIMITS,
+  KORDOC_SOURCE,
+  kordocFileRecords,
+  kordocPackageSubset,
+  verifyKordocCoreRuntime,
+} from "./kordoc-runtime-verifier.mjs";
 
-const TOP_LEVEL = ["dist", "LICENSE", "package.json", "PROVENANCE.json", "README.md"];
-const GENERATOR_VERSION = 2;
-export const KORDOC_LIMITS = Object.freeze({
-  archiveBytes: 32 * 1024 * 1024,
-  expandedBytes: 64 * 1024 * 1024,
-  entryBytes: 16 * 1024 * 1024,
-  entries: 512,
-});
-const PACKAGE_FIELDS = [
-  "name",
-  "version",
-  "description",
-  "type",
-  "exports",
-  "main",
-  "module",
-  "types",
-  "files",
-  "dependencies",
-  "peerDependencies",
-  "peerDependenciesMeta",
-  "engines",
-  "author",
-  "license",
-  "repository",
-];
+export { KORDOC_LIMITS, KORDOC_SOURCE, verifyKordocCoreRuntime };
 
 function json(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-function sha256(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-function packageSubset(source) {
-  return Object.fromEntries(
-    PACKAGE_FIELDS.filter((field) => source[field] !== undefined).map((field) => [field, source[field]]),
-  );
-}
-
-async function assertRegularFile(path) {
-  const info = await lstat(path);
-  if (info.isSymbolicLink() || !info.isFile()) {
-    throw new Error(`Expected a regular file: ${path}`);
-  }
 }
 
 function parseTarOctal(bytes, label) {
@@ -196,54 +155,6 @@ function selectedArchiveFiles(entries) {
   return selected;
 }
 
-async function assertTreeHasNoLinks(root) {
-  const info = await lstat(root);
-  if (info.isSymbolicLink()) {
-    throw new Error(`Symbolic links are forbidden: ${root}`);
-  }
-  if (!info.isDirectory()) {
-    throw new Error(`Expected a directory: ${root}`);
-  }
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const path = join(root, entry.name);
-    const child = await lstat(path);
-    if (child.isSymbolicLink()) {
-      throw new Error(`Symbolic links are forbidden: ${path}`);
-    }
-    if (child.isDirectory()) {
-      await assertTreeHasNoLinks(path);
-    } else if (!child.isFile()) {
-      throw new Error(`Unsupported filesystem entry: ${path}`);
-    }
-  }
-}
-
-async function fileRecords(root, excluded = new Set()) {
-  const records = [];
-  async function visit(directory) {
-    const entries = await readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name, "en"));
-    for (const entry of entries) {
-      const absolute = join(directory, entry.name);
-      const info = await lstat(absolute);
-      if (info.isSymbolicLink()) {
-        throw new Error(`Symbolic links are forbidden: ${absolute}`);
-      }
-      const path = relative(root, absolute).split(sep).join("/");
-      if (entry.isDirectory()) {
-        await visit(absolute);
-      } else if (entry.isFile() && !excluded.has(path)) {
-        const bytes = await readFile(absolute);
-        records.push({ path, size: bytes.length, sha256: sha256(bytes) });
-      } else if (!entry.isFile()) {
-        throw new Error(`Unsupported filesystem entry: ${absolute}`);
-      }
-    }
-  }
-  await visit(root);
-  return records.sort((left, right) => left.path.localeCompare(right.path, "en"));
-}
-
 async function validatedInputs(tarballPath, expectedSource) {
   await assertArchiveFileSize(tarballPath);
   const archiveBytes = await readFile(tarballPath);
@@ -294,13 +205,13 @@ export async function buildKordocCoreRuntime({
       await mkdir(dirname(destination), { recursive: true });
       await writeFile(destination, bytes, { flag: "wx" });
     }
-    await writeFile(join(output, "package.json"), json(packageSubset(sourcePackage)), { flag: "wx" });
+    await writeFile(join(output, "package.json"), json(kordocPackageSubset(sourcePackage)), { flag: "wx" });
     const provenance = {
       schemaVersion: 2,
-      generatorVersion: GENERATOR_VERSION,
+      generatorVersion: KORDOC_GENERATOR_VERSION,
       source: expectedSource,
       archive: { sha512: archiveIntegrity },
-      files: await fileRecords(output),
+      files: await kordocFileRecords(output),
     };
     await writeFile(join(output, "PROVENANCE.json"), json(provenance), { flag: "wx" });
     await verifyKordocCoreRuntime(output, expectedSource);
@@ -313,40 +224,6 @@ export async function buildKordocCoreRuntime({
 
 async function createOutputDirectory(path) {
   await mkdir(path, { recursive: false });
-}
-
-export async function verifyKordocCoreRuntime(vendorRoot, expectedSource = KORDOC_SOURCE) {
-  const root = resolve(vendorRoot);
-  await assertTreeHasNoLinks(root);
-  const topLevel = (await readdir(root)).sort((a, b) => a.localeCompare(b, "en"));
-  assertSame(topLevel, [...TOP_LEVEL].sort((a, b) => a.localeCompare(b, "en")), "top-level entries");
-
-  const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-  assertSame(Object.keys(packageJson), PACKAGE_FIELDS.filter((field) => packageJson[field] !== undefined), "package fields");
-  if (packageJson.name !== KORDOC_SOURCE.name || packageJson.version !== KORDOC_SOURCE.version) {
-    throw new Error("Vendored Kordoc identity is invalid.");
-  }
-  if (packageJson.license !== "MIT") throw new Error("Vendored Kordoc license must be MIT.");
-
-  const provenance = JSON.parse(await readFile(join(root, "PROVENANCE.json"), "utf8"));
-  if (provenance.schemaVersion !== 2) throw new Error("Unsupported provenance schema.");
-  if (provenance.generatorVersion !== GENERATOR_VERSION) throw new Error("Unsupported provenance generator version.");
-  assertSame(provenance.source, expectedSource, "provenance source");
-  if (provenance.archive?.sha512 !== expectedSource.integrity) {
-    throw new Error("Kordoc archive provenance does not match the pinned integrity.");
-  }
-  const actual = await fileRecords(root, new Set(["PROVENANCE.json"]));
-  if (actual.some((record) => record.path.endsWith(".map"))) {
-    throw new Error("Vendored Kordoc source maps are forbidden.");
-  }
-  assertSame(actual, provenance.files, "provenance file records");
-  return provenance;
-}
-
-function assertSame(actual, expected, label) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(`Kordoc Core ${label} do not match.`);
-  }
 }
 
 async function main(argv) {

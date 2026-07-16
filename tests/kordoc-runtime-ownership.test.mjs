@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 import { buildKordocCoreRuntime, verifyKordocCoreRuntime } from "../scripts/kordoc-core-runtime.mjs";
+
+const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
 test("Kordoc output creation race never deletes an unowned sentinel", async () => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-kordoc-ownership-"));
@@ -68,6 +71,58 @@ test("Kordoc builder remains compatible without a file-system hook", async () =>
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+});
+
+test("Kordoc verifier bounds files and empty directories in one streamed entry budget", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-kordoc-entry-budget-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const vendor = join(temporaryRoot, "vendor");
+  await cp(join(ROOT, "packages", "gpt-codex-hwp", "vendor", "kordoc-core"), vendor, {
+    recursive: true,
+  });
+  const directoryRoot = join(vendor, "dist", "empty-directories");
+  await mkdir(directoryRoot);
+  for (let index = 0; index < 513; index += 1) {
+    await mkdir(join(directoryRoot, `entry-${String(index).padStart(3, "0")}`));
+  }
+  await assert.rejects(
+    verifyKordocCoreRuntime(vendor),
+    /tree exceeds the entry limit/u,
+  );
+});
+
+test("shared Kordoc verifier rejects every pinned provenance and tree-record deviation", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-kordoc-provenance-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const vendor = join(temporaryRoot, "vendor");
+  await cp(join(ROOT, "packages", "gpt-codex-hwp", "vendor", "kordoc-core"), vendor, {
+    recursive: true,
+  });
+  const provenancePath = join(vendor, "PROVENANCE.json");
+  const original = JSON.parse(await readFile(provenancePath, "utf8"));
+  const scenarios = [
+    ["schema", (value) => { value.schemaVersion = 1; }],
+    ["generator", (value) => { delete value.generatorVersion; }],
+    ["resolved source", (value) => { value.source.resolved = "https://example.invalid/kordoc.tgz"; }],
+    ["source integrity", (value) => { value.source.integrity = `sha512-${"A".repeat(88)}`; }],
+    ["archive integrity", (value) => { value.archive.sha512 = `sha512-${"B".repeat(88)}`; }],
+    ["archive extra field", (value) => { value.archive.unexpected = true; }],
+    ["duplicate file record", (value) => { value.files.splice(1, 0, structuredClone(value.files[0])); }],
+    ["reordered file records", (value) => { value.files.reverse(); }],
+    ["missing file record", (value) => { value.files.pop(); }],
+  ];
+  for (const [label, mutate] of scenarios) {
+    const changed = structuredClone(original);
+    mutate(changed);
+    await writeFile(provenancePath, `${JSON.stringify(changed, null, 2)}\n`, "utf8");
+    await assert.rejects(
+      verifyKordocCoreRuntime(vendor),
+      undefined,
+      `accepted ${label} deviation`,
+    );
+  }
+  await writeFile(provenancePath, `${JSON.stringify(original, null, 2)}\n`, "utf8");
+  await verifyKordocCoreRuntime(vendor);
 });
 
 function syntheticKordocArchive() {

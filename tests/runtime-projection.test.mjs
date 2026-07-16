@@ -45,6 +45,7 @@ const ROOT_DOCUMENTS = [
   "THIRD_PARTY_NOTICES.md",
 ];
 const PYTHON_RUNTIME_FILES = ["hwpxlib.py", "insert_image.py", "verify.py"];
+const READ_ONLY_RUNTIME_FILES = ["scripts/kordoc-runtime-verifier.mjs"];
 const GENERATED_FILES = [
   ".codex-plugin/plugin.json",
   ".mcp.json",
@@ -86,6 +87,7 @@ test("runtime projection contains the exact sorted allowlist and no special entr
     ...await prefixedFiles(join(SOURCE, "assets"), "assets"),
     ...await prefixedFiles(join(actualRoot, "dist"), "dist"),
     ...PYTHON_RUNTIME_FILES.map((name) => `scripts/hwpx-safe-edit/${name}`),
+    ...READ_ONLY_RUNTIME_FILES,
     ...await prefixedFiles(join(SOURCE, "skills", "gpt-codex-hwp"), "skills/gpt-codex-hwp"),
     ...SKILL_ICON_FILES,
     ...await prefixedFiles(join(SOURCE, "vendor", "kordoc-core"), "vendor/kordoc-core"),

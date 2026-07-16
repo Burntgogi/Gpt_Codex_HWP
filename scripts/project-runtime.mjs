@@ -42,6 +42,7 @@ const ROOT_DOCUMENTS = Object.freeze([
   "THIRD_PARTY_NOTICES.md",
 ]);
 const PYTHON_RUNTIME_FILES = Object.freeze(["hwpxlib.py", "insert_image.py", "verify.py"]);
+const READ_ONLY_RUNTIME_FILES = Object.freeze(["kordoc-runtime-verifier.mjs"]);
 const SKILL_ICONS = Object.freeze(["gpt-codex-hwp-icon-64.png", "gpt-codex-hwp-icon.png"]);
 const FORBIDDEN_SEGMENTS = new Set([
   ".superpowers",
@@ -163,6 +164,14 @@ async function stageRuntime({ projectRoot, stage }) {
   for (const name of PYTHON_RUNTIME_FILES) {
     const relativePath = `scripts/hwpx-safe-edit/${name}`;
     await copyRegularFile(join(sourceRoot, ...relativePath.split("/")), join(stage, ...relativePath.split("/")), relativePath);
+  }
+  for (const name of READ_ONLY_RUNTIME_FILES) {
+    const relativePath = `scripts/${name}`;
+    await copyRegularFile(
+      join(projectRoot, "scripts", name),
+      join(stage, "scripts", name),
+      relativePath,
+    );
   }
   await copyTree(
     join(sourceRoot, "skills", metadata.productId),

@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
+import type { Stats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
 import { PROJECT_METADATA } from "./generated/project-metadata.js";
-import { toolDefinitions } from "./tools/index.js";
+import { registerTools } from "./tools/index.js";
+import { terminateDocumentProcessTreeByPid } from "./workers/document-child-client.js";
 
 export const DOCTOR_SCHEMA_VERSION = 1;
 
@@ -24,7 +31,7 @@ const COMMAND_TIMEOUT_MS = 10_000;
 const COMMAND_OUTPUT_LIMIT_BYTES = 64 * 1024;
 const JSON_LIMIT_BYTES = 1024 * 1024;
 const KORDOC_FILE_LIMIT_BYTES = 16 * 1024 * 1024;
-const KORDOC_FILE_COUNT_LIMIT = 256;
+const KORDOC_FILE_COUNT_LIMIT = 512;
 const KORDOC_TOTAL_LIMIT_BYTES = 64 * 1024 * 1024;
 const REMEDIATION = Object.freeze({
   node: "Install a supported Node.js release and retry the diagnostic.",
@@ -51,19 +58,39 @@ export interface BoundedCommandResult {
   readonly signal: NodeJS.Signals | null;
   readonly timedOut: boolean;
   readonly truncated: boolean;
+  readonly terminationFailed?: boolean;
   readonly stdout: string;
   readonly stderr: string;
+}
+
+export interface DoctorCommandExecutionDependencies {
+  readonly platform?: NodeJS.Platform;
+  readonly spawnProcess?: typeof spawn;
+  readonly terminateProcessTree?: (pid: number) => Promise<boolean>;
+}
+
+export interface DoctorRuntimeAccess {
+  readJson(path: string): Promise<unknown>;
+  readBytes(path: string, maximumBytes: number): Promise<Uint8Array>;
+  statRegular(path: string): Promise<{ readonly regular: boolean; readonly size: number }>;
+  sameCanonicalKordocLink(): Promise<boolean>;
+}
+
+interface DoctorRuntimeBoundary {
+  readonly lexicalRoot: string;
+  readonly canonicalRoot: string;
 }
 
 export interface DoctorDependencies {
   readonly nodeVersion: string;
   readonly projectMetadata: { readonly productId: string; readonly version: string };
-  readonly toolNames: readonly string[];
   readonly npmCommand: { readonly command: string; readonly argsPrefix: readonly string[] } | null;
   readonly pythonCommands: readonly {
     readonly command: string;
     readonly argsPrefix: readonly string[];
   }[];
+  verifyKordocRuntime(): Promise<{ readonly fileCount: number }>;
+  probeRegisteredTools(): Promise<readonly string[]>;
   readJson(path: string): Promise<unknown>;
   readBytes(path: string): Promise<Uint8Array>;
   statRegular(path: string): Promise<{ readonly regular: boolean; readonly size: number }>;
@@ -104,7 +131,7 @@ export async function runDoctor(
   checks.push(await kordocProvenanceCheck(dependencies));
   checks.push(await kordocLinkCheck(dependencies));
   checks.push(await productionDependencyCheck(dependencies));
-  checks.push(toolCountCheck(dependencies.toolNames));
+  checks.push(await toolCountCheck(dependencies));
   checks.push(await rhwpCheck(dependencies));
   checks.push(await pinnedFixtureCheck(dependencies));
 
@@ -161,11 +188,12 @@ export function redactDiagnosticText(value: string): string {
 
 async function createDefaultDependencies(): Promise<DoctorDependencies> {
   const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const runtimeAccess = await createDoctorRuntimeAccess(runtimeRoot);
   const npmCommand = await resolveNpmCommand();
+  let verifiedKordoc = false;
   return {
     nodeVersion: process.version,
     projectMetadata: PROJECT_METADATA,
-    toolNames: toolDefinitions.map((definition) => definition.name),
     npmCommand,
     pythonCommands: process.platform === "win32"
       ? [
@@ -176,27 +204,31 @@ async function createDefaultDependencies(): Promise<DoctorDependencies> {
         { command: "python3", argsPrefix: [] },
         { command: "python", argsPrefix: [] },
       ],
-    readJson: async (path) => JSON.parse(
-      new TextDecoder().decode(await readBoundedRuntimeFile(runtimeRoot, path, JSON_LIMIT_BYTES)),
-    ),
-    readBytes: async (path) => readBoundedRuntimeFile(runtimeRoot, path, KORDOC_FILE_LIMIT_BYTES),
-    statRegular: async (path) => {
-      try {
-        const metadata = await lstat(resolveRuntimePath(runtimeRoot, path));
-        return { regular: !metadata.isSymbolicLink() && metadata.isFile(), size: metadata.size };
-      } catch {
-        return { regular: false, size: 0 };
+    verifyKordocRuntime: async () => {
+      const verifier = await import(new URL(
+        "../scripts/kordoc-runtime-verifier.mjs",
+        import.meta.url,
+      ).href) as {
+        verifyKordocCoreRuntime(root: string): Promise<{ readonly files?: readonly unknown[] }>;
+      };
+      const result = await verifier.verifyKordocCoreRuntime(
+        join(runtimeRoot, "vendor", "kordoc-core"),
+      );
+      const fileCount = Array.isArray(result.files) ? result.files.length : 0;
+      if (fileCount <= 0 || fileCount > KORDOC_FILE_COUNT_LIMIT) {
+        throw new Error("invalid verified Kordoc file count");
       }
+      verifiedKordoc = true;
+      return Object.freeze({ fileCount });
     },
-    sameCanonicalPath: async (left, right) => {
-      try {
-        const leftPath = await realpath(resolveRuntimePath(runtimeRoot, left));
-        const rightPath = await realpath(resolveRuntimePath(runtimeRoot, right));
-        return samePath(leftPath, rightPath);
-      } catch {
-        return false;
-      }
-    },
+    probeRegisteredTools: probeRegisteredToolsInProcess,
+    readJson: (path) => runtimeAccess.readJson(path),
+    readBytes: (path) => runtimeAccess.readBytes(path, KORDOC_FILE_LIMIT_BYTES),
+    statRegular: (path) => runtimeAccess.statRegular(path),
+    sameCanonicalPath: async (left, right) => left === "node_modules/kordoc"
+      && right === "vendor/kordoc-core"
+      && verifiedKordoc
+      && await runtimeAccess.sameCanonicalKordocLink(),
     runCommand: (specification) => executeBoundedCommand(specification, runtimeRoot),
   };
 }
@@ -286,37 +318,10 @@ async function mcpManifestCheck(dependencies: DoctorDependencies): Promise<Docto
 
 async function kordocProvenanceCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
   try {
-    const runtimePackage = object(await dependencies.readJson("package.json"));
-    const kordocPackage = object(await dependencies.readJson("vendor/kordoc-core/package.json"));
-    const provenance = object(await dependencies.readJson("vendor/kordoc-core/PROVENANCE.json"));
-    const source = object(provenance.source);
-    const files = Array.isArray(provenance.files) ? provenance.files : [];
-    if (
-      object(runtimePackage.dependencies).kordoc !== "file:vendor/kordoc-core"
-      || kordocPackage.name !== "kordoc"
-      || kordocPackage.license !== "MIT"
-      || source.name !== "kordoc"
-      || source.version !== kordocPackage.version
-      || files.length === 0
-      || files.length > KORDOC_FILE_COUNT_LIMIT
-    ) throw new Error("invalid provenance");
-    let declaredBytes = 0;
-    for (const candidate of files) {
-      const file = object(candidate);
-      if (!safeRelativeFile(file.path) || !safeHash(file.sha256) || !safeSize(file.size)) {
-        throw new Error("invalid provenance entry");
-      }
-      declaredBytes += Number(file.size);
-      if (declaredBytes > KORDOC_TOTAL_LIMIT_BYTES) throw new Error("provenance budget exceeded");
-    }
-    for (const candidate of files) {
-      const file = object(candidate);
-      const bytes = await dependencies.readBytes(`vendor/kordoc-core/${file.path}`);
-      if (bytes.byteLength !== file.size || sha256(bytes) !== file.sha256) {
-        throw new Error("provenance mismatch");
-      }
-    }
-    return check("KORDOC_PROVENANCE_OK", true, true, { count: files.length });
+    const verified = await dependencies.verifyKordocRuntime();
+    if (!Number.isSafeInteger(verified.fileCount) || verified.fileCount <= 0
+      || verified.fileCount > KORDOC_FILE_COUNT_LIMIT) throw new Error("invalid verifier result");
+    return check("KORDOC_PROVENANCE_OK", true, true, { count: verified.fileCount });
   } catch {
     return check("KORDOC_PROVENANCE_INVALID", false, true, { remediation: REMEDIATION.metadata });
   }
@@ -362,12 +367,42 @@ async function productionDependencyCheck(dependencies: DoctorDependencies): Prom
   }
 }
 
-function toolCountCheck(names: readonly string[]): DoctorCheck {
-  const valid = names.length === EXPECTED_TOOL_NAMES.length
-    && names.every((name, index) => name === EXPECTED_TOOL_NAMES[index]);
-  return valid
-    ? check("MCP_TOOL_COUNT_OK", true, true, { count: names.length })
-    : check("MCP_TOOL_COUNT_INVALID", false, true, { count: names.length, remediation: REMEDIATION.metadata });
+async function toolCountCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  try {
+    const names = await dependencies.probeRegisteredTools();
+    const valid = names.length === EXPECTED_TOOL_NAMES.length
+      && names.every((name, index) => name === EXPECTED_TOOL_NAMES[index]);
+    return valid
+      ? check("MCP_TOOL_COUNT_OK", true, true, { count: names.length })
+      : check("MCP_TOOL_COUNT_INVALID", false, true, {
+        count: names.length,
+        remediation: REMEDIATION.metadata,
+      });
+  } catch {
+    return check("MCP_TOOL_COUNT_INVALID", false, true, { remediation: REMEDIATION.metadata });
+  }
+}
+
+export async function probeRegisteredToolsInProcess(): Promise<readonly string[]> {
+  const server = new McpServer({
+    name: `${PROJECT_METADATA.productId}-doctor`,
+    version: PROJECT_METADATA.version,
+  });
+  const client = new Client({
+    name: `${PROJECT_METADATA.productId}-doctor-client`,
+    version: PROJECT_METADATA.version,
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  registerTools(server);
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const response = await client.listTools();
+    return Object.freeze(response.tools.map((tool) => tool.name));
+  } finally {
+    await client.close().catch(() => undefined);
+    await server.close().catch(() => undefined);
+  }
 }
 
 async function rhwpCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
@@ -425,6 +460,7 @@ async function safeRun(
       signal: result.signal,
       timedOut: result.timedOut,
       truncated: result.truncated,
+      terminationFailed: result.terminationFailed === true,
       stdout: redactDiagnosticText(result.stdout),
       stderr: redactDiagnosticText(result.stderr),
     });
@@ -434,33 +470,35 @@ async function safeRun(
       signal: null,
       timedOut: false,
       truncated: false,
+      terminationFailed: false,
       stdout: "",
       stderr: "",
     });
   }
 }
 
-function executeBoundedCommand(
+export function executeBoundedCommand(
   specification: BoundedCommandSpec,
   runtimeRoot: string,
+  dependencies: DoctorCommandExecutionDependencies = {},
 ): Promise<BoundedCommandResult> {
   return new Promise((resolvePromise) => {
+    const platform = dependencies.platform ?? process.platform;
+    const spawnProcess = dependencies.spawnProcess ?? spawn;
+    const terminateProcessTree = dependencies.terminateProcessTree
+      ?? ((pid: number) => terminateDocumentProcessTreeByPid(pid));
     let settled = false;
     let timedOut = false;
     let truncated = false;
     let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
     let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-    const child = spawn(specification.command, [...specification.args], {
+    const child = spawnProcess(specification.command, [...specification.args], {
       cwd: runtimeRoot,
       shell: false,
       windowsHide: true,
+      detached: platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, specification.timeoutMs);
-    timer.unref();
     const append = (current: Buffer<ArrayBufferLike>, chunk: Buffer | string): Buffer<ArrayBufferLike> => {
       const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       const remaining = specification.maxOutputBytes - stdout.byteLength - stderr.byteLength;
@@ -479,22 +517,65 @@ function executeBoundedCommand(
       clearTimeout(timer);
       resolvePromise(result);
     };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      if (child.exitCode !== null) {
+        finish({
+          code: child.exitCode,
+          signal: child.signalCode,
+          timedOut: false,
+          truncated,
+          terminationFailed: false,
+          stdout: stdout.toString("utf8"),
+          stderr: stderr.toString("utf8"),
+        });
+        return;
+      }
+      timedOut = true;
+      void (async () => {
+        let treeGone = false;
+        try {
+          treeGone = child.pid === undefined ? child.exitCode !== null : await terminateProcessTree(child.pid);
+        } catch {
+          treeGone = false;
+        }
+        if (!treeGone) {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          try { child.unref(); } catch {}
+        }
+        finish({
+          code: null,
+          signal: null,
+          timedOut: true,
+          truncated,
+          terminationFailed: !treeGone,
+          stdout: stdout.toString("utf8"),
+          stderr: stderr.toString("utf8"),
+        });
+      })();
+    }, specification.timeoutMs);
     child.once("error", () => finish({
       code: null,
       signal: null,
       timedOut,
       truncated,
+      terminationFailed: false,
       stdout: stdout.toString("utf8"),
       stderr: stderr.toString("utf8"),
     }));
-    child.once("close", (code, signal) => finish({
+    child.once("close", (code, signal) => {
+      if (timedOut) return;
+      finish({
       code,
       signal,
       timedOut,
       truncated,
+      terminationFailed: false,
       stdout: stdout.toString("utf8"),
       stderr: stderr.toString("utf8"),
-    }));
+      });
+    });
   });
 }
 
@@ -523,17 +604,59 @@ async function resolveNpmCommand(): Promise<{
   return null;
 }
 
+export async function createDoctorRuntimeAccess(runtimeRoot: string): Promise<DoctorRuntimeAccess> {
+  const lexicalRoot = resolve(runtimeRoot);
+  const rootMetadata = await lstat(lexicalRoot);
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
+    throw new Error("unsafe diagnostic runtime root");
+  }
+  const canonicalRoot = await realpath(lexicalRoot);
+  if (!samePath(lexicalRoot, canonicalRoot)) throw new Error("linked diagnostic runtime root");
+  const boundary = Object.freeze({ lexicalRoot, canonicalRoot });
+  return Object.freeze({
+    readJson: async (path: string) => JSON.parse(
+      new TextDecoder().decode(await readBoundedRuntimeFile(boundary, path, JSON_LIMIT_BYTES)),
+    ),
+    readBytes: (path: string, maximumBytes: number) =>
+      readBoundedRuntimeFile(boundary, path, maximumBytes),
+    statRegular: async (path: string) => {
+      try {
+        const { metadata } = await assertOwnedRuntimePath(boundary, path);
+        return { regular: metadata.isFile(), size: metadata.size };
+      } catch {
+        return { regular: false, size: 0 };
+      }
+    },
+    sameCanonicalKordocLink: async () => {
+      try {
+        const vendor = await assertOwnedRuntimePath(boundary, "vendor/kordoc-core");
+        if (!vendor.metadata.isDirectory()) return false;
+        const nodeModules = await assertOwnedRuntimePath(boundary, "node_modules");
+        if (!nodeModules.metadata.isDirectory()) return false;
+        const link = await assertOwnedRuntimePath(boundary, "node_modules/kordoc", true);
+        if (!link.metadata.isSymbolicLink()) return false;
+        return samePath(await realpath(link.absolute), vendor.canonical);
+      } catch {
+        return false;
+      }
+    },
+  });
+}
+
 async function readBoundedRuntimeFile(
-  runtimeRoot: string,
+  boundary: DoctorRuntimeBoundary,
   path: string,
   maximumBytes: number,
 ): Promise<Uint8Array> {
-  const absolute = resolveRuntimePath(runtimeRoot, path);
-  const metadata = await lstat(absolute);
-  if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > maximumBytes) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0 || maximumBytes > KORDOC_TOTAL_LIMIT_BYTES) {
+    throw new Error("invalid diagnostic read budget");
+  }
+  const { absolute, metadata } = await assertOwnedRuntimePath(boundary, path);
+  if (!metadata.isFile() || metadata.size > maximumBytes) {
     throw new Error("unsafe diagnostic file");
   }
-  const handle = await open(absolute, "r");
+  const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+  const handle = await open(absolute, fsConstants.O_RDONLY | noFollow);
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.size > maximumBytes || !sameFileIdentity(metadata, opened)) {
@@ -552,14 +675,48 @@ async function readBoundedRuntimeFile(
   }
 }
 
-function resolveRuntimePath(runtimeRoot: string, path: string): string {
+async function assertOwnedRuntimePath(
+  boundary: DoctorRuntimeBoundary,
+  path: string,
+  allowFinalLink = false,
+): Promise<{
+  readonly absolute: string;
+  readonly canonical: string;
+  readonly metadata: Stats;
+}> {
   if (!safeRelativeFile(path)) throw new Error("unsafe diagnostic path");
-  const absolute = resolve(runtimeRoot, ...path.split("/"));
-  const fromRoot = relative(runtimeRoot, absolute);
+  const absolute = resolve(boundary.lexicalRoot, ...path.split("/"));
+  const fromRoot = relative(boundary.lexicalRoot, absolute);
   if (isAbsolute(fromRoot) || fromRoot === ".." || fromRoot.startsWith(`..${sep}`)) {
     throw new Error("diagnostic path escapes runtime");
   }
-  return absolute;
+  let current = boundary.lexicalRoot;
+  const segments = path.split("/");
+  let metadata = await lstat(current);
+  let canonical = boundary.canonicalRoot;
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    metadata = await lstat(current);
+    const final = index === segments.length - 1;
+    if (metadata.isSymbolicLink()) {
+      if (!final || !allowFinalLink) throw new Error("linked diagnostic path component");
+      canonical = await realpath(current);
+      if (!isWithinBoundary(boundary, canonical)) throw new Error("diagnostic link escapes runtime");
+      continue;
+    }
+    if (!final && !metadata.isDirectory()) throw new Error("diagnostic ancestor is not a directory");
+    canonical = await realpath(current);
+    if (!isWithinBoundary(boundary, canonical) || !samePath(current, canonical)) {
+      throw new Error("diagnostic path component is redirected");
+    }
+  }
+  return Object.freeze({ absolute, canonical, metadata });
+}
+
+function isWithinBoundary(boundary: DoctorRuntimeBoundary, candidate: string): boolean {
+  if (samePath(candidate, boundary.canonicalRoot)) return true;
+  const suffix = relative(boundary.canonicalRoot, candidate);
+  return suffix !== "" && suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
 }
 
 function renderHumanReport(report: DoctorReport): string {
@@ -589,7 +746,8 @@ function check(
 }
 
 function successful(result: BoundedCommandResult): boolean {
-  return result.code === 0 && !result.timedOut && !result.truncated;
+  return result.code === 0 && !result.timedOut && !result.truncated
+    && result.terminationFailed !== true;
 }
 
 function cleanVersion(value: string): string | undefined {

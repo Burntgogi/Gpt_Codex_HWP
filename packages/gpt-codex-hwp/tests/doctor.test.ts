@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
+
+import * as doctorModule from "../src/doctor.js";
 
 import {
   DOCTOR_SCHEMA_VERSION,
@@ -53,9 +60,6 @@ test("doctor contract reports safe required and optional capability results", as
     "package.json",
     "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp",
     "tests/fixtures/rhwp/provenance.json",
-    "vendor/kordoc-core/PROVENANCE.json",
-    "vendor/kordoc-core/dist/index.js",
-    "vendor/kordoc-core/package.json",
   ].sort());
   assert.equal(reads.some((path) => /(?:^|\/)(?:user|document|form)(?:\/|$)/iu.test(path)), false);
 });
@@ -155,25 +159,194 @@ test("doctor contract maps hostile probe output to stable codes without leaking 
   assert.doesNotMatch(redacted, /private-person|private\.hwp|leaked-value/u);
 });
 
-test("doctor contract rejects Kordoc provenance above the aggregate read budget", async () => {
+test("doctor contract rejects an impossible shared Kordoc verifier result", async () => {
   const fixture = passingDependencies();
-  fixture.dependencies.readJson = async (path) => {
-    if (path !== "vendor/kordoc-core/PROVENANCE.json") return fixture.readJson(path);
-    return {
-      schemaVersion: 2,
-      source: { name: "kordoc", version: "3.18.1" },
-      files: Array.from({ length: 5 }, (_, index) => ({
-        path: `dist/chunk-${index}.js`,
-        size: 16 * 1024 * 1024,
-        sha256: "a".repeat(64),
-      })),
-    };
+  fixture.dependencies.verifyKordocRuntime = async () => ({ fileCount: 513 });
+
+  const report = await runDoctor(fixture.dependencies);
+  assert.equal(report.ok, false);
+  assert.ok(report.checks.some((check) => check.code === "KORDOC_PROVENANCE_INVALID"));
+});
+
+test("doctor maps shared Kordoc verifier failures to a stable non-leaking code", async () => {
+  const fixture = passingDependencies();
+  fixture.dependencies.verifyKordocRuntime = async () => {
+    throw new Error("private verifier path and provenance detail");
   };
 
   const report = await runDoctor(fixture.dependencies);
   assert.equal(report.ok, false);
   assert.ok(report.checks.some((check) => check.code === "KORDOC_PROVENANCE_INVALID"));
-  assert.equal(fixture.reads.some((path) => path.startsWith("vendor/kordoc-core/dist/chunk-")), false);
+  assert.doesNotMatch(JSON.stringify(report), /private verifier path|provenance detail/u);
+});
+
+test("doctor registration probe rejects wrong missing duplicate extra and throwing registrations", async () => {
+  const scenarios: Array<readonly string[] | Error> = [
+    [...TOOL_NAMES.slice(0, -1), "hwp_wrong"],
+    TOOL_NAMES.slice(0, -1),
+    [...TOOL_NAMES, TOOL_NAMES[0]],
+    [...TOOL_NAMES, "hwp_tenth"],
+    new Error("private registry failure"),
+  ];
+  for (const scenario of scenarios) {
+    const fixture = passingDependencies();
+    let calls = 0;
+    fixture.dependencies.probeRegisteredTools = async () => {
+      calls += 1;
+      if (scenario instanceof Error) throw scenario;
+      return scenario;
+    };
+    const report = await runDoctor(fixture.dependencies);
+    assert.equal(calls, 1);
+    assert.equal(report.ok, false);
+    assert.ok(report.checks.some((check) => check.code === "MCP_TOOL_COUNT_INVALID"));
+    assert.doesNotMatch(JSON.stringify(report), /private registry failure/u);
+  }
+});
+
+test("doctor registration probe lists the actual private in-process MCP registry", async () => {
+  assert.deepEqual(await doctorModule.probeRegisteredToolsInProcess(), TOOL_NAMES);
+});
+
+test("doctor runtime access rejects linked file and directory ancestors without reading outside bytes", async (t) => {
+  const createAccess = (doctorModule as unknown as {
+    createDoctorRuntimeAccess?: (root: string) => Promise<{
+      readJson(path: string): Promise<unknown>;
+      readBytes(path: string, maximumBytes: number): Promise<Uint8Array>;
+    }>;
+  }).createDoctorRuntimeAccess;
+  assert.equal(typeof createAccess, "function");
+  if (createAccess === undefined) return;
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-path-boundary-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const runtimeRoot = join(temporaryRoot, "runtime");
+  const outsideRoot = join(temporaryRoot, "outside");
+  await mkdir(runtimeRoot);
+  await mkdir(outsideRoot);
+  const outsideName = ["private", "-outside-value"].join("");
+  await writeFile(join(outsideRoot, "record.json"), JSON.stringify({ value: outsideName }));
+  const access = await createAccess(runtimeRoot);
+
+  const linkedDirectory = join(runtimeRoot, "linked-directory");
+  try {
+    await symlink(outsideRoot, linkedDirectory, process.platform === "win32" ? "junction" : "dir");
+  } catch (error: unknown) {
+    const code = errorCode(error);
+    if (["EACCES", "ENOTSUP", "EPERM"].includes(code)) {
+      t.skip(`directory-link capability is unavailable on ${process.platform}: ${code}`);
+      return;
+    }
+    throw error;
+  }
+  await assert.rejects(access.readJson("linked-directory/record.json"));
+
+  await t.test("final file link", async (t) => {
+    const linkedFile = join(runtimeRoot, "linked-file.json");
+    try {
+      await symlink(join(outsideRoot, "record.json"), linkedFile, "file");
+    } catch (error: unknown) {
+      const code = errorCode(error);
+      if (["EACCES", "ENOTSUP", "EPERM"].includes(code)) {
+        t.skip(`file-link capability is unavailable on ${process.platform}: ${code}`);
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(access.readBytes("linked-file.json", 1024));
+  });
+
+  const fixture = passingDependencies();
+  fixture.dependencies.readJson = async (path) => path === ".codex-plugin/plugin.json"
+    ? access.readJson("linked-directory/record.json")
+    : fixture.readJson(path);
+  const report = await runDoctor(fixture.dependencies);
+  assert.ok(report.checks.some((check) => check.code === "PLUGIN_MANIFEST_INVALID"));
+  assert.doesNotMatch(JSON.stringify(report), new RegExp(outsideName, "u"));
+  assert.doesNotMatch(JSON.stringify(report), new RegExp(escapeRegExp(temporaryRoot), "u"));
+});
+
+test("doctor bounded command injects detached group termination and fails closed when it remains alive", async () => {
+  const execute = (doctorModule as unknown as {
+    executeBoundedCommand?: (
+      specification: BoundedCommandSpec,
+      runtimeRoot: string,
+      dependencies: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
+  }).executeBoundedCommand;
+  assert.equal(typeof execute, "function");
+  if (execute === undefined) return;
+
+  for (const treeGone of [true, false]) {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      exitCode: number | null;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill(signal?: string): boolean;
+      unref(): void;
+    };
+    child.pid = 4242;
+    child.exitCode = null;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {
+      throw new Error("direct child kill is forbidden");
+    };
+    let unrefCalls = 0;
+    child.unref = () => { unrefCalls += 1; };
+    const terminationCalls: number[] = [];
+    const result = await execute(commandSpecification(20), process.cwd(), {
+      platform: "linux",
+      spawnProcess: (_command: string, _args: readonly string[], options: Record<string, unknown>) => {
+        assert.equal(options.detached, true);
+        return child;
+      },
+      terminateProcessTree: async (pid: number) => {
+        terminationCalls.push(pid);
+        return treeGone;
+      },
+    });
+    assert.deepEqual(terminationCalls, [4242]);
+    assert.equal(result.timedOut, true);
+    assert.equal(result.terminationFailed, !treeGone);
+    assert.equal(result.code, null);
+    assert.equal(unrefCalls, treeGone ? 0 : 1);
+    assert.equal(child.stdout.destroyed, !treeGone);
+    assert.equal(child.stderr.destroyed, !treeGone);
+  }
+});
+
+test("doctor bounded command removes a real descendant after timeout", { timeout: 10_000 }, async (t) => {
+  const execute = (doctorModule as unknown as {
+    executeBoundedCommand?: (
+      specification: BoundedCommandSpec,
+      runtimeRoot: string,
+    ) => Promise<Record<string, unknown>>;
+  }).executeBoundedCommand;
+  assert.equal(typeof execute, "function");
+  if (execute === undefined) return;
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-process-tree-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const fixturePath = join(temporaryRoot, "tree.mjs");
+  await writeFile(fixturePath, [
+    'import { spawn } from "node:child_process";',
+    'const descendant = spawn(process.execPath, ["-e", "process.on(\\"SIGTERM\\",()=>{});setInterval(()=>{},1000)"], { stdio: "ignore" });',
+    'process.stdout.write(String(descendant.pid) + "\\n");',
+    'process.on("SIGTERM", () => {});',
+    'setInterval(() => {}, 1000);',
+  ].join("\n"));
+  const result = await execute({
+    ...commandSpecification(750),
+    command: process.execPath,
+    args: [fixturePath],
+  }, temporaryRoot);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.terminationFailed, false);
+  const descendantPid = Number.parseInt(String(result.stdout).trim(), 10);
+  assert.equal(Number.isSafeInteger(descendantPid), true);
+  await waitUntilProcessGone(descendantPid);
 });
 
 test("doctor contract rejects unsupported arguments and emits JSON only in json mode", async () => {
@@ -224,12 +397,6 @@ function passingDependencies(): {
         "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
       },
     }],
-    ["vendor/kordoc-core/package.json", { name: "kordoc", version: "3.18.1", license: "MIT" }],
-    ["vendor/kordoc-core/PROVENANCE.json", {
-      schemaVersion: 2,
-      source: { name: "kordoc", version: "3.18.1" },
-      files: [{ path: "dist/index.js", size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" }],
-    }],
     ["node_modules/@rhwp/core/package.json", { name: "@rhwp/core", version: "0.7.17" }],
     ["tests/fixtures/rhwp/provenance.json", {
       bytes: 7,
@@ -266,13 +433,13 @@ function passingDependencies(): {
     dependencies: {
       nodeVersion: "v22.20.1",
       projectMetadata: { productId: "gpt-codex-hwp", version: "0.1.4" },
-      toolNames: TOOL_NAMES,
       npmCommand: { command: "node", argsPrefix: ["npm-cli.js"] },
       pythonCommands: [{ command: "python", argsPrefix: [] }],
+      verifyKordocRuntime: async () => ({ fileCount: 40 }),
+      probeRegisteredTools: async () => TOOL_NAMES,
       readJson,
       readBytes: async (path) => {
         reads.push(path);
-        if (path === "vendor/kordoc-core/dist/index.js") return Buffer.from("abc");
         if (path === "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp") return Buffer.from("fixture");
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
       },
@@ -283,4 +450,39 @@ function passingDependencies(): {
       runCommand,
     },
   };
+}
+
+function commandSpecification(timeoutMs: number): BoundedCommandSpec {
+  return {
+    command: "controlled-command",
+    args: [],
+    cwdCode: "RUNTIME_ROOT",
+    shell: false,
+    windowsHide: true,
+    timeoutMs,
+    maxOutputBytes: 64 * 1024,
+  };
+}
+
+async function waitUntilProcessGone(pid: number): Promise<void> {
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error: unknown) {
+      if (errorCode(error) === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+  }
+  assert.fail("descendant process remained alive after bounded doctor termination");
+}
+
+function errorCode(error: unknown): string {
+  if (error === null || typeof error !== "object" || !("code" in error)) return "UNKNOWN";
+  return String(error.code);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
