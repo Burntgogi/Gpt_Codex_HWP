@@ -120,6 +120,8 @@ test("credential references must occupy the whole assigned expression", () => {
     fragments("api", "Key = process", ".env.OPENAI_API_KEY"),
     fragments("api", "Key = $", "{OPENAI_API_KEY}"),
     fragments("api", "Key = os", ".environ[\"OPENAI_API_KEY\"]"),
+    fragments("GH_", "TOK", "EN", ": $", "{{github.token}}"),
+    fragments("GH_", "TOK", "EN", ": $", "{{secrets.GITHUB_TOKEN}}"),
   ];
   for (const contents of accepted) assert.doesNotThrow(() => assertPublicContentBuffer(
     Buffer.from(contents), { label: "safe/reference.ts", scope: "runtime" },
@@ -130,6 +132,7 @@ test("credential references must occupy the whole assigned expression", () => {
     fragments("api", "Key = process", ".env.OPENAI_API_KEY + suffix"),
     fragments("api", "Key = $", "{OPENAI_API_KEY}-suffix"),
     fragments("api", "Key = `$", "{OPENAI_API_KEY}-suffix`"),
+    fragments("GH_", "TOK", "EN", ": $", "{{github.token}}-suffix"),
   ];
   for (const contents of rejected) assert.throws(() => assertPublicContentBuffer(
     Buffer.from(contents), { label: "unsafe/reference.ts", scope: "runtime" },

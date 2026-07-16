@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const WORKFLOW_PATH = join(ROOT, ".github", "workflows", "ci.yml");
+const DEPENDENCY_WORKFLOW_PATH = join(ROOT, ".github", "workflows", "dependency-audit.yml");
 const DEPENDABOT_PATH = join(ROOT, ".github", "dependabot.yml");
 const ACTION_PINS = Object.freeze({
   "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -79,17 +80,21 @@ test("both CI jobs require the exact platform and all document gates", async () 
   assert.doesNotMatch(workflow, /\b(?:cp|copy|Copy-Item|rsync)\b[^\n]*node_modules/iu);
 });
 
-test("Dependabot updates both npm locks and pinned GitHub Actions weekly", async () => {
-  const dependabot = await readFile(DEPENDABOT_PATH, "utf8");
+test("dependency automation is immutable, scheduled, and issue-only", async () => {
+  await assert.rejects(access(DEPENDABOT_PATH), { code: "ENOENT" });
+  const workflow = await readFile(DEPENDENCY_WORKFLOW_PATH, "utf8");
+  assert.match(workflow, /^\s*schedule:/mu);
+  assert.match(workflow, /^permissions:\n  contents: read\n  issues: write$/mu);
+  assert.doesNotMatch(workflow, /^\s*(?:contents|pull-requests|actions|checks|packages):\s*write$/mu);
+  assert.doesNotMatch(workflow, /pull_request|auto-merge|automerge|git\s+(?:commit|push|checkout\s+-b)/iu);
+  assert.equal(countMatches(workflow, /^\s+persist-credentials: false$/gmu), 1);
 
-  assert.match(dependabot, /^version: 2$/mu);
-  assert.equal(countMatches(dependabot, /^  - package-ecosystem: "npm"$/gmu), 2);
-  assert.equal(countMatches(dependabot, /^  - package-ecosystem: "github-actions"$/gmu), 1);
-  for (const directory of ["/", "/packages/gpt-codex-hwp"]) {
-    assert.match(dependabot, new RegExp(`^    directory: "${escapeRegex(directory)}"$`, "mu"));
+  const uses = [...workflow.matchAll(/^\s*- uses:\s*([^\s@]+)@([^\s#]+)(?:\s+#\s*\S.*)?$/gmu)];
+  assert.deepEqual(uses.map((match) => match[1]), ["actions/checkout", "actions/setup-node"]);
+  for (const [, action, revision] of uses) {
+    assert.match(revision, /^[0-9a-f]{40}$/u);
+    assert.equal(revision, ACTION_PINS[action]);
   }
-  assert.equal(countMatches(dependabot, /^      interval: "weekly"$/gmu), 3);
-  assert.equal(countMatches(dependabot, /^    open-pull-requests-limit: 5$/gmu), 3);
 });
 
 function jobSection(workflow, job, nextJob) {
@@ -104,8 +109,4 @@ function jobSection(workflow, job, nextJob) {
 
 function countMatches(input, pattern) {
   return [...input.matchAll(pattern)].length;
-}
-
-function escapeRegex(input) {
-  return input.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

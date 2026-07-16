@@ -229,3 +229,14 @@ Pixelify Sans was used only to render title text into the final raster banner; t
 ## License
 
 Gpt_Codex_HWP is distributed under [Apache-2.0](LICENSE). Third-party components and production inputs remain subject to their respective licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Contributing and governance
+
+Public issue and pull-request discussion is welcome. The repository owner reviews
+and authors official branch, tag, release, vendored-runtime, and generated-runtime
+mutations; dependency automation is advisory and issue-only. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md), review the source-versus-generated-runtime
+boundary in [Architecture](docs/ARCHITECTURE.md), and consult the
+[Changelog](CHANGELOG.md). Never include credentials, private documents,
+environment files, personal paths, or unpublished audit artifacts in public
+reports. Security reports use the private process in [SECURITY.md](SECURITY.md).

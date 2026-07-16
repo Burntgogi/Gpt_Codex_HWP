@@ -1,5 +1,10 @@
 # Third-Party Notices
 
+Gpt_Codex_HWP project-authored code is distributed under Apache-2.0. The
+components and adapted production inputs below remain subject to their respective
+upstream copyrights and licenses; inclusion does not relicense them as
+Apache-2.0. Preserve these notices in source and generated runtime distributions.
+
 The versions below are fixed by `package-lock.json` or, for non-runtime inputs, by the exact source commit recorded during production. License identifiers describe those fixed sources.
 
 ## hwpx-editing-skill

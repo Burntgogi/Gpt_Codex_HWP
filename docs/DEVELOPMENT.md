@@ -1,5 +1,34 @@
 # Development
 
+## Reproducible source workflow
+
+The authoritative implementation lives under `packages/gpt-codex-hwp` and in
+the repository `scripts`. The committed `plugins/gpt-codex-hwp` directory is a
+generated runtime projection. Do not edit generated runtime files directly.
+Use test-driven development: first add and run a focused test that demonstrates
+the failure, change authoritative source, then run the focused test and the full
+suite. Security-boundary changes require adversarial regression tests and owner
+review.
+
+```powershell
+npm ci --prefix packages/gpt-codex-hwp --ignore-scripts
+npm run build
+npm test
+npm run test:python
+npm run security:scan-tree
+npm run runtime:write
+npm run runtime:check
+npm run release:artifacts
+npm run release:verify
+```
+
+Runtime projection is an explicit step because end-user README and third-party
+notice changes are shipped, while contributor documents, tests, fixtures, and
+benchmark receipts are not. Review both source and generated diffs. The public
+contract remains exactly nine MCP tools, classic HWP read-only input, and HWPX
+output for every new or modified document. See [Architecture](ARCHITECTURE.md)
+and [Contributing](../CONTRIBUTING.md).
+
 ## Document benchmark modes
 
 The bounded document benchmark is engineering evidence for the production
@@ -41,5 +70,6 @@ verifier then checks the exact large receipt schema, order, and freshness. Set
 `HWP_BENCH_LARGE_EVIDENCE` only when the ignored receipt is not at the default
 `.superpowers/benchmarks/large.json` location.
 
-Windows x64 is the currently exercised device class. macOS remains an
-unverified-device status; no completed macOS capacity claim is made.
+Windows x64 is the currently exercised and verified device class. macOS Apple
+Silicon remains a compatibility target with unverified-device status; no
+completed macOS capacity or Hancom Office claim is made.

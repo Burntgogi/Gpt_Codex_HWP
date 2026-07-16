@@ -615,7 +615,7 @@ function isCredentialKey(key) {
 
 function isAllowedCredentialReference(value, scope) {
   const normalized = String(value).trim();
-  const exactReference = /^(?:<[^>]+>|\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|REDACTED|YOUR[_-][A-Z0-9_-]*|PLACEHOLDER|EXAMPLE|process\.env(?:\.[A-Z_][A-Z0-9_]*|\[["'][A-Z_][A-Z0-9_]*["']\])|Deno\.env\.get\(["'][A-Z_][A-Z0-9_]*["']\)|os\.environ\[["'][A-Z_][A-Z0-9_]*["']\])$/iu;
+  const exactReference = /^(?:<[^>]+>|\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}|\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|REDACTED|YOUR[_-][A-Z0-9_-]*|PLACEHOLDER|EXAMPLE|process\.env(?:\.[A-Z_][A-Z0-9_]*|\[["'][A-Z_][A-Z0-9_]*["']\])|Deno\.env\.get\(["'][A-Z_][A-Z0-9_]*["']\)|os\.environ\[["'][A-Z_][A-Z0-9_]*["']\])$/iu;
   if (normalized === "" || exactReference.test(normalized)) {
     return true;
   }
@@ -627,7 +627,7 @@ function isAllowedCredentialReference(value, scope) {
 }
 
 function hasMixedCredentialReference(text) {
-  const reference = /(?:\$\{[A-Z_][A-Z0-9_]*\}|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|process\.env(?:\.[A-Z_][A-Z0-9_]*|\[["'][A-Z_][A-Z0-9_]*["']\])|Deno\.env\.get\(["'][A-Z_][A-Z0-9_]*["']\)|os\.environ\[["'][A-Z_][A-Z0-9_]*["']\])/giu;
+  const reference = /(?:\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}|\$\{[A-Z_][A-Z0-9_]*\}|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|process\.env(?:\.[A-Z_][A-Z0-9_]*|\[["'][A-Z_][A-Z0-9_]*["']\])|Deno\.env\.get\(["'][A-Z_][A-Z0-9_]*["']\)|os\.environ\[["'][A-Z_][A-Z0-9_]*["']\])/giu;
   for (const match of text.matchAll(reference)) {
     const lineStart = text.lastIndexOf("\n", match.index - 1) + 1;
     const prefix = text.slice(lineStart, match.index);

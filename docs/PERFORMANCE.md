@@ -1,7 +1,8 @@
 # Performance and capacity evidence
 
 The document engine accepts sources up to a 512 MiB safety ceiling, but that
-ceiling is an input boundary, not a capacity guarantee. Actual work is also
+ceiling is an input boundary, not a capacity guarantee. It does not raise the
+limits of either engine in the hybrid Kordoc/rhwp path. Actual work is also
 bounded by the 64 MiB worker-input and worker-inline result ceilings, the 8 MiB
 aggregate MCP response ceiling, the 64,000-character inline Markdown limit, and
 the 1536 MiB supervised-child working-set policy.
@@ -56,3 +57,8 @@ these receipts must not be presented as macOS validation. Benchmark files and
 receipts are ignored development artifacts and are excluded from the compact
 installed runtime. Clean them from the selected ignored output directory after
 retaining only the evidence needed for the release decision.
+
+The benchmark implementation, receipt schema, and release decision are
+maintainer-owned security-sensitive surfaces. Change authoritative source and
+tests rather than the generated runtime, and require owner review before treating
+new numbers as release evidence.
