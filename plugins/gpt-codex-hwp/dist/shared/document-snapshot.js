@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { FileLimitError, MAX_DOCUMENT_BYTES, openFileForBoundedRead, } from "./files.js";
+import { AllowedRootsPathError, authorizeExistingPath, } from "./allowed-roots.js";
 import { toOwnedExactBytes } from "./owned-bytes.js";
 export const WORKER_INPUT_MAX_BYTES = 64 * 1024 * 1024;
 const READ_CHUNK_BYTES = 1024 * 1024;
@@ -30,9 +31,10 @@ export async function openDocumentSnapshot(path, options = {}) {
     if (typeof path !== "string" || path.trim().length === 0) {
         throw openFailedError();
     }
+    const authorizedPath = await authorizeExistingPath(path);
     let pendingSpool;
     try {
-        const handle = await openFileForBoundedRead(path);
+        const handle = await openFileForBoundedRead(authorizedPath);
         let preparation;
         let sizeBytes;
         let initialIdentity;
@@ -46,7 +48,7 @@ export async function openDocumentSnapshot(path, options = {}) {
             }
             sizeBytes = Number(initialHandleStatus.size);
             initialIdentity = sourceIdentityOf(initialHandleStatus);
-            assertSameSourceIdentity(initialIdentity, await pathSourceIdentity(path));
+            assertSameSourceIdentity(initialIdentity, await pathSourceIdentity(authorizedPath));
             if (sizeBytes <= normalized.workerInputMaxBytes) {
                 preparation = await prepareWorkerSnapshot(handle, sizeBytes, normalized);
             }
@@ -55,8 +57,12 @@ export async function openDocumentSnapshot(path, options = {}) {
                 pendingSpool = preparation.owner;
             }
             await normalized.testHooks?.afterSourceRead?.();
+            const reauthorizedPath = await authorizeExistingPath(authorizedPath);
+            if (comparableAuthorizedPath(reauthorizedPath) !== comparableAuthorizedPath(authorizedPath)) {
+                throw new AllowedRootsPathError();
+            }
             assertSameSourceIdentity(initialIdentity, sourceIdentityOf(await handle.stat({ bigint: true })));
-            assertSameSourceIdentity(initialIdentity, await pathSourceIdentity(path));
+            assertSameSourceIdentity(initialIdentity, await pathSourceIdentity(authorizedPath));
         }
         finally {
             try {
@@ -67,7 +73,7 @@ export async function openDocumentSnapshot(path, options = {}) {
             }
         }
         const metadata = createMetadata(sizeBytes, preparation.sha256, preparation.preflight);
-        const verifySourceUnchanged = createSourceVerifier(path, initialIdentity, preparation.sha256, sizeBytes, normalized.allocationObserver);
+        const verifySourceUnchanged = createSourceVerifier(authorizedPath, initialIdentity, preparation.sha256, sizeBytes, normalized.allocationObserver);
         if (preparation.kind === "worker") {
             const owned = toOwnedExactBytes(preparation.bytes);
             return createWorkerSnapshot(metadata, owned.transferable, verifySourceUnchanged);
@@ -85,7 +91,9 @@ export async function openDocumentSnapshot(path, options = {}) {
                 throw cleanupFailedError();
             }
         }
-        if (error instanceof DocumentSnapshotError || error instanceof FileLimitError) {
+        if (error instanceof DocumentSnapshotError ||
+            error instanceof FileLimitError ||
+            error instanceof AllowedRootsPathError) {
             throw error;
         }
         throw openFailedError();
@@ -225,6 +233,10 @@ function createSourceVerifier(path, initialIdentity, expectedSha256, sizeBytes, 
     return async () => {
         let handle;
         try {
+            const reauthorizedPath = await authorizeExistingPath(path);
+            if (comparableAuthorizedPath(reauthorizedPath) !== comparableAuthorizedPath(path)) {
+                throw new AllowedRootsPathError();
+            }
             handle = await openFileForBoundedRead(path);
             const openedStatus = await handle.stat({ bigint: true });
             if (!openedStatus.isFile())
@@ -605,6 +617,11 @@ function startsWith(bytes, prefix) {
             return false;
     }
     return true;
+}
+function comparableAuthorizedPath(path) {
+    return process.platform === "win32"
+        ? path.toLocaleLowerCase("en-US")
+        : path;
 }
 function sourceChangedError() {
     return new DocumentSnapshotError("SOURCE_CHANGED", "Source document changed while its snapshot was opened.");

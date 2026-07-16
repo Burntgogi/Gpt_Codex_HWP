@@ -2,6 +2,7 @@ import { lstat, mkdir, open, realpath, stat, } from "node:fs/promises";
 import { read as readFd } from "node:fs";
 import { dirname, join, parse as parsePath } from "node:path";
 import { resolveLocalPath } from "./paths.js";
+import { AllowedRootsPathError, authorizeExistingPath, authorizeFuturePath, } from "./allowed-roots.js";
 export class OutputConflictError extends Error {
     code = "OUTPUT_CONFLICT";
     constructor(path) {
@@ -27,11 +28,11 @@ export async function writeFilesExclusively(files, options = {}) {
     if (files.length === 0) {
         return [];
     }
-    const resolvedFiles = files.map((file) => ({
+    const resolvedFiles = await Promise.all(files.map(async (file) => ({
         ...file,
-        path: resolveLocalPath(file.path, "output_path"),
-    }));
-    const resolvedSources = (options.sourcePaths ?? []).map((path) => resolveLocalPath(path, "source_path"));
+        path: await authorizeFuturePath(resolveLocalPath(file.path, "output_path")),
+    })));
+    const resolvedSources = await Promise.all((options.sourcePaths ?? []).map((path) => authorizeExistingPath(resolveLocalPath(path, "source_path"))));
     assertDistinctOutputPaths(resolvedFiles.map((file) => file.path));
     assertNoLexicalSourceAliases(resolvedFiles.map((file) => file.path), resolvedSources);
     const sourceIdentities = await existingSourceIdentities(resolvedSources);
@@ -55,6 +56,7 @@ export async function writeFilesExclusively(files, options = {}) {
                 throw new Error("Output directory reservation is missing.");
             }
             await assertDirectoryIdentity(directory);
+            await assertFuturePathStillAuthorized(file.path);
             let handle;
             try {
                 handle = await open(file.path, "wx");
@@ -68,6 +70,7 @@ export async function writeFilesExclusively(files, options = {}) {
             }
             try {
                 const created = await handle.stat({ bigint: true });
+                await assertOpenedPathIdentity(file.path, created.dev, created.ino);
                 reservations.push({
                     path: file.path,
                     handle,
@@ -104,14 +107,16 @@ export async function writeFileRangeExclusively(outputPath, input, options = {})
         !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0) {
         throw new Error("Exclusive input range is invalid.");
     }
-    const resolvedOutput = resolveLocalPath(outputPath, "output_path");
-    const resolvedSources = (options.sourcePaths ?? []).map((path) => resolveLocalPath(path, "source_path"));
+    const resolvedOutput = await authorizeFuturePath(resolveLocalPath(outputPath, "output_path"));
+    const resolvedSources = await Promise.all((options.sourcePaths ?? []).map((path) => authorizeExistingPath(resolveLocalPath(path, "source_path"))));
     assertNoLexicalSourceAliases([resolvedOutput], resolvedSources);
     const sourceIdentities = await existingSourceIdentities(resolvedSources);
     await rejectExistingTarget(resolvedOutput, sourceIdentities);
     const directory = await prepareCanonicalDirectory(dirname(resolvedOutput));
     await assertDirectoryIdentity(directory);
     await options.beforeOpen?.();
+    await assertDirectoryIdentity(directory);
+    await assertFuturePathStillAuthorized(resolvedOutput);
     let handle;
     try {
         handle = await open(resolvedOutput, "wx");
@@ -124,6 +129,8 @@ export async function writeFileRangeExclusively(outputPath, input, options = {})
         throw error;
     }
     try {
+        const created = await handle.stat({ bigint: true });
+        await assertOpenedPathIdentity(resolvedOutput, created.dev, created.ino);
         const buffer = Buffer.allocUnsafeSlow(1024 * 1024);
         let copied = 0;
         while (copied < input.sizeBytes) {
@@ -146,13 +153,16 @@ export async function writeFileRangeExclusively(outputPath, input, options = {})
 export async function writeFileRangeAndFilesExclusively(outputPath, input, companionFiles, options = {}) {
     assertValidInputRange(input);
     const resolvedFiles = [
-        { path: resolveLocalPath(outputPath, "output_path"), range: input },
-        ...companionFiles.map((file) => ({
-            path: resolveLocalPath(file.path, "output_path"),
+        {
+            path: await authorizeFuturePath(resolveLocalPath(outputPath, "output_path")),
+            range: input,
+        },
+        ...await Promise.all(companionFiles.map(async (file) => ({
+            path: await authorizeFuturePath(resolveLocalPath(file.path, "output_path")),
             data: file.data,
-        })),
+        }))),
     ];
-    const resolvedSources = (options.sourcePaths ?? []).map((path) => resolveLocalPath(path, "source_path"));
+    const resolvedSources = await Promise.all((options.sourcePaths ?? []).map((path) => authorizeExistingPath(resolveLocalPath(path, "source_path"))));
     assertDistinctOutputPaths(resolvedFiles.map((file) => file.path));
     assertNoLexicalSourceAliases(resolvedFiles.map((file) => file.path), resolvedSources);
     const sourceIdentities = await existingSourceIdentities(resolvedSources);
@@ -176,6 +186,7 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
                 throw new Error("Output directory reservation is missing.");
             }
             await assertDirectoryIdentity(directory);
+            await assertFuturePathStillAuthorized(file.path);
             let handle;
             try {
                 handle = await open(file.path, "wx");
@@ -189,6 +200,7 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
             }
             try {
                 const created = await handle.stat({ bigint: true });
+                await assertOpenedPathIdentity(file.path, created.dev, created.ino);
                 reservations.push({
                     path: file.path,
                     handle,
@@ -219,6 +231,21 @@ function assertValidInputRange(input) {
         !Number.isSafeInteger(input.offset) || input.offset < 0 ||
         !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0) {
         throw new Error("Exclusive input range is invalid.");
+    }
+}
+async function assertFuturePathStillAuthorized(path) {
+    const authorized = await authorizeFuturePath(path);
+    if (comparablePath(authorized) !== comparablePath(path)) {
+        throw new AllowedRootsPathError();
+    }
+}
+async function assertOpenedPathIdentity(path, device, inode) {
+    const status = await lstat(path, { bigint: true });
+    if (!status.isFile() ||
+        status.isSymbolicLink() ||
+        status.dev !== device ||
+        status.ino !== inode) {
+        throw new UnsafeOutputPathError("Output path changed while it was being created.");
     }
 }
 async function copyRangeToHandle(handle, input) {

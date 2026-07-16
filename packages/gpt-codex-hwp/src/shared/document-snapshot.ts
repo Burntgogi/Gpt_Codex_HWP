@@ -22,6 +22,10 @@ import {
   MAX_DOCUMENT_BYTES,
   openFileForBoundedRead,
 } from "./files.js";
+import {
+  AllowedRootsPathError,
+  authorizeExistingPath,
+} from "./allowed-roots.js";
 import { toOwnedExactBytes } from "./owned-bytes.js";
 
 export const WORKER_INPUT_MAX_BYTES = 64 * 1024 * 1024;
@@ -178,10 +182,11 @@ export async function openDocumentSnapshot(
   if (typeof path !== "string" || path.trim().length === 0) {
     throw openFailedError();
   }
+  const authorizedPath = await authorizeExistingPath(path);
 
   let pendingSpool: PrivateSpoolOwner | undefined;
   try {
-    const handle = await openFileForBoundedRead(path);
+    const handle = await openFileForBoundedRead(authorizedPath);
     let preparation: SnapshotPreparation;
     let sizeBytes: number;
     let initialIdentity: SourceIdentity;
@@ -200,7 +205,7 @@ export async function openDocumentSnapshot(
       initialIdentity = sourceIdentityOf(initialHandleStatus);
       assertSameSourceIdentity(
         initialIdentity,
-        await pathSourceIdentity(path),
+        await pathSourceIdentity(authorizedPath),
       );
 
       if (sizeBytes <= normalized.workerInputMaxBytes) {
@@ -219,13 +224,17 @@ export async function openDocumentSnapshot(
       }
 
       await normalized.testHooks?.afterSourceRead?.();
+      const reauthorizedPath = await authorizeExistingPath(authorizedPath);
+      if (comparableAuthorizedPath(reauthorizedPath) !== comparableAuthorizedPath(authorizedPath)) {
+        throw new AllowedRootsPathError();
+      }
       assertSameSourceIdentity(
         initialIdentity,
         sourceIdentityOf(await handle.stat({ bigint: true })),
       );
       assertSameSourceIdentity(
         initialIdentity,
-        await pathSourceIdentity(path),
+        await pathSourceIdentity(authorizedPath),
       );
     } finally {
       try {
@@ -241,7 +250,7 @@ export async function openDocumentSnapshot(
       preparation.preflight,
     );
     const verifySourceUnchanged = createSourceVerifier(
-      path,
+      authorizedPath,
       initialIdentity,
       preparation.sha256,
       sizeBytes,
@@ -272,7 +281,11 @@ export async function openDocumentSnapshot(
         throw cleanupFailedError();
       }
     }
-    if (error instanceof DocumentSnapshotError || error instanceof FileLimitError) {
+    if (
+      error instanceof DocumentSnapshotError ||
+      error instanceof FileLimitError ||
+      error instanceof AllowedRootsPathError
+    ) {
       throw error;
     }
     throw openFailedError();
@@ -472,6 +485,10 @@ function createSourceVerifier(
   return async (): Promise<void> => {
     let handle: FileHandle | undefined;
     try {
+      const reauthorizedPath = await authorizeExistingPath(path);
+      if (comparableAuthorizedPath(reauthorizedPath) !== comparableAuthorizedPath(path)) {
+        throw new AllowedRootsPathError();
+      }
       handle = await openFileForBoundedRead(path);
       const openedStatus = await handle.stat({ bigint: true });
       if (!openedStatus.isFile()) throw postOpenSourceChangedError();
@@ -971,6 +988,12 @@ function startsWith(bytes: Uint8Array, prefix: Uint8Array): boolean {
     if (bytes[index] !== prefix[index]) return false;
   }
   return true;
+}
+
+function comparableAuthorizedPath(path: string): string {
+  return process.platform === "win32"
+    ? path.toLocaleLowerCase("en-US")
+    : path;
 }
 
 function sourceChangedError(): DocumentSnapshotError {

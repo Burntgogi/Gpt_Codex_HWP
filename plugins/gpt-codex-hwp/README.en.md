@@ -160,6 +160,22 @@ The final serialized MCP result is capped at 8 MiB. For source files above 8 MiB
 
 For vulnerabilities, follow the GitHub private-reporting process in [SECURITY.md](SECURITY.md); never attach secrets, private documents, or personal data to a public issue. See [Security Boundaries](docs/SECURITY-BOUNDARIES.md) for the complete trust model, including document-content and isolation limits.
 
+### Optional document-root restriction
+
+Set `GPT_CODEX_HWP_ALLOWED_ROOTS` to restrict every user-supplied input and output path used by all nine MCP tools to selected local directories. When the variable is unset, the backward-compatible default allows local paths available to the current OS user. The value must be a non-empty JSON array of unique, existing absolute directories. A symbolic-link or Windows junction/reparse alias cannot itself be a configured root. These are exact JSON-string examples:
+
+```powershell
+$env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
+```
+
+```bash
+export GPT_CODEX_HWP_ALLOWED_ROOTS='["/Volumes/TeamDocs"]'
+```
+
+An empty array, malformed JSON, a relative or duplicate path, a missing root, a file, or a linked root makes MCP startup fail closed. Configuration is bounded to 16,384 UTF-8 bytes, 32 roots, and 4,096 characters per item. When configured, the same realpath-resolved policy covers source HWP/HWPX files, Markdown and image inputs, generated/patched/filled/image-inserted HWPX files, Markdown/SVG/PNG/preview/extracted-image outputs, and output directories. A denial returns only `PATH_OUTSIDE_ALLOWED_ROOTS`; it does not disclose the raw setting or rejected absolute path.
+
+Internal large-document spools use a separate unpredictable, owner-only directory under the plugin-selected OS temporary root. Their location cannot be supplied through MCP or configuration, only inherited handles are passed to child processes, and cleanup runs in `finally`. The spool is an independent internal trust namespace, not a user-root exception. `allowed_roots` reduces accidental or agent-driven path escape; it is not complete isolation from a hostile process running as the same OS user. Node.js cannot portably provide Linux `openat2` or Windows handle-relative atomic guarantees for every filesystem race. Process high-risk documents under a separate least-privilege account, VM, or container boundary.
+
 - Input and output paths must differ, and existing output files are never overwritten.
 - Signed, encrypted, DRM-protected, or distribution-protected documents are refused without bypassing protection.
 - Path aliases, hard links, symbolic links, Windows junctions, and ZIP path traversal are defended against.

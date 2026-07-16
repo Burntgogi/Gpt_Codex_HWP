@@ -24,6 +24,7 @@ import {
   type ExclusiveOutputOptions,
 } from "./output.js";
 import { UnsafeWindowsPathError } from "./paths.js";
+import { AllowedRootsPathError } from "./allowed-roots.js";
 import {
   MAX_PREVIEW_SVG_BYTES,
   ResourceLimitError,
@@ -264,6 +265,7 @@ function isSafePublicError(value: unknown): boolean {
     value instanceof OutputConflictError ||
     value instanceof PathAliasError ||
     value instanceof UnsafeOutputPathError ||
+    value instanceof AllowedRootsPathError ||
     value instanceof UnsafeWindowsPathError;
 }
 

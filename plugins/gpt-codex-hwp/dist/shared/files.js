@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import { open, stat } from "node:fs/promises";
+import { authorizeExistingPath } from "./allowed-roots.js";
 export const MAX_DOCUMENT_BYTES = 512 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const READ_CHUNK_BYTES = 1024 * 1024;
@@ -9,10 +10,11 @@ export async function readFileBounded(path, label, maximumBytes = MAX_DOCUMENT_B
     if (typeof path !== "string" || path.trim().length === 0) {
         throw readFailedError(safeLabel);
     }
+    const authorizedPath = await authorizeExistingPath(path);
     try {
-        const handle = await openFileForBoundedRead(path);
+        const handle = await openFileForBoundedRead(authorizedPath);
         try {
-            return await readExactFile(handle, path, safeLabel, maximumBytes, options);
+            return await readExactFile(handle, authorizedPath, safeLabel, maximumBytes, options);
         }
         finally {
             try {

@@ -8,6 +8,7 @@ import { OutputConflictError, PathAliasError, UnsafeOutputPathError, writeFilesE
 import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/document-contract.js";
 import { MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES, } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
+import { AllowedRootsPathError, authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
 import { toolError, toolSuccess } from "../shared/result.js";
 import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 export const HWP_CREATE_SVG_ASSET_TOOL_NAME = "hwp_create_svg_asset";
@@ -481,30 +482,32 @@ function assertSafeDimensions(width, height) {
     }
 }
 async function preflightOutputPath(outputPath, sourcePaths) {
-    const comparableOutput = comparablePath(outputPath);
-    if (sourcePaths.some((source) => comparablePath(source) === comparableOutput)) {
+    const authorizedOutput = await authorizeFuturePath(outputPath);
+    const authorizedSources = await Promise.all(sourcePaths.map((source) => authorizeExistingPath(source)));
+    const comparableOutput = comparablePath(authorizedOutput);
+    if (authorizedSources.some((source) => comparablePath(source) === comparableOutput)) {
         throw new PathAliasError("A source path and output path must be different.");
     }
     let outputLink;
     try {
-        outputLink = await lstat(outputPath);
+        outputLink = await lstat(authorizedOutput);
     }
     catch (error) {
         if (errorCode(error, "") === "ENOENT")
             return;
         throw error;
     }
-    for (const sourcePath of sourcePaths) {
+    for (const sourcePath of authorizedSources) {
         const [source, output] = await Promise.all([
             stat(sourcePath, { bigint: true }),
-            stat(outputPath, { bigint: true }).catch(() => undefined),
+            stat(authorizedOutput, { bigint: true }).catch(() => undefined),
         ]);
         if (output !== undefined && source.dev === output.dev && source.ino === output.ino) {
             throw new PathAliasError(`Output path aliases a source file: ${sourcePath}`);
         }
     }
     void outputLink;
-    throw new OutputConflictError(outputPath);
+    throw new OutputConflictError(authorizedOutput);
 }
 function validationDetails(validation) {
     return {
@@ -610,7 +613,8 @@ function safeResolvedPath(value) {
 function isOutputSafetyError(error) {
     return error instanceof OutputConflictError ||
         error instanceof PathAliasError ||
-        error instanceof UnsafeOutputPathError;
+        error instanceof UnsafeOutputPathError ||
+        error instanceof AllowedRootsPathError;
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

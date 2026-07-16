@@ -9,12 +9,21 @@ function buildToolResult(summary, details, isError) {
     if (readableSummary.length === 0) {
         throw new Error("Tool result summary must not be empty.");
     }
+    const safeDetails = sanitizeSensitivePathError(details);
     return {
         content: [
             { type: "text", text: readableSummary },
-            { type: "text", text: JSON.stringify(details, null, 2) },
+            { type: "text", text: JSON.stringify(safeDetails, null, 2) },
         ],
-        structuredContent: details,
+        structuredContent: safeDetails,
         isError,
+    };
+}
+function sanitizeSensitivePathError(details) {
+    if (details.code !== "PATH_OUTSIDE_ALLOWED_ROOTS")
+        return details;
+    return {
+        code: "PATH_OUTSIDE_ALLOWED_ROOTS",
+        error: "Path is outside configured allowed roots.",
     };
 }

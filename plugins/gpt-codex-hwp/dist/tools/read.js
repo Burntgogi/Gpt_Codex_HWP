@@ -4,6 +4,7 @@ import { z } from "zod";
 import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
+import { authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
 import { MarkdownDeliveryError, planMarkdownDelivery, } from "../shared/markdown-output.js";
 import { writeFilesExclusively } from "../shared/output.js";
 import { toolError, toolSuccess } from "../shared/result.js";
@@ -176,8 +177,8 @@ async function collectImageAssets(images, outputDir, sourceFilePath, warnings, c
         return filenames;
     }
     requireToolNotCancelled(context);
-    const resolvedOutputDir = resolveLocalPath(outputDir, "output_dir");
-    const resolvedSourceFilePath = resolveLocalPath(sourceFilePath, "file_path");
+    const resolvedOutputDir = await authorizeFuturePath(resolveLocalPath(outputDir, "output_dir"));
+    const resolvedSourceFilePath = await authorizeExistingPath(resolveLocalPath(sourceFilePath, "file_path"));
     const outputDirectory = await prepareCanonicalOutputDirectory(resolvedOutputDir);
     const paths = [];
     for (const [index, image] of images.entries()) {
@@ -261,12 +262,15 @@ async function writeImageAssetExclusively(image, baseFilename, outputDirectory, 
     let attempt = 1;
     while (true) {
         const filename = filenameForAttempt(baseFilename, attempt);
-        const outputPath = resolve(outputDirectory.path, filename);
+        const outputPath = await authorizeFuturePath(resolve(outputDirectory.path, filename));
         if (comparablePath(outputPath) === comparablePath(sourceFilePath)) {
             attempt += 1;
             continue;
         }
         await assertCanonicalDirectoryIdentity(outputDirectory);
+        if (comparablePath(await authorizeFuturePath(outputPath)) !== comparablePath(outputPath)) {
+            throw new UnsafeOutputDirectoryError("output_dir changed before asset creation.");
+        }
         requireToolNotCancelled(context);
         let handle;
         try {
@@ -281,7 +285,17 @@ async function writeImageAssetExclusively(image, baseFilename, outputDirectory, 
         }
         let closed = false;
         try {
-            await handle.stat({ bigint: true });
+            const created = await handle.stat({ bigint: true });
+            await assertCanonicalDirectoryIdentity(outputDirectory);
+            const openedPath = await lstat(outputPath, { bigint: true });
+            if (!openedPath.isFile() ||
+                openedPath.isSymbolicLink() ||
+                openedPath.dev !== created.dev ||
+                openedPath.ino !== created.ino ||
+                comparablePath(await authorizeFuturePath(outputPath)) !==
+                    comparablePath(outputPath)) {
+                throw new UnsafeOutputDirectoryError("Extracted asset path changed while it was being created.");
+            }
             await handle.writeFile(new Uint8Array(image.bytes));
             await handle.close();
             closed = true;

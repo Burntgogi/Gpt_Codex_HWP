@@ -412,7 +412,12 @@ async function createProjectionFixture(fixtureRoot: string, fixtureSource: strin
     "package.json",
   ]) await copyFile(join(REPOSITORY_ROOT, name), join(fixtureRoot, name));
 
-  for (const name of ["package.json", "package-lock.json", "tsconfig.json"]) {
+  for (const name of [
+    ".npmrc",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+  ]) {
     await copyFile(join(SOURCE_ROOT, name), join(fixtureSource, name));
   }
   for (const name of ["assets", "src", "scripts", "skills", "vendor"]) {

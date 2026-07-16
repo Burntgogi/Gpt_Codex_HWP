@@ -4,6 +4,7 @@ import { MAX_DOCUMENT_ENGINE_RESULT_BYTES, MAX_SAFE_JSON_BYTES, measureDocumentR
 import { isIntegrityVerifiedResultSpool } from "../workers/document-child-client.js";
 import { OutputConflictError, PathAliasError, UnsafeOutputPathError, writeFileRangeExclusively, writeFilesExclusively, } from "./output.js";
 import { UnsafeWindowsPathError } from "./paths.js";
+import { AllowedRootsPathError } from "./allowed-roots.js";
 import { MAX_PREVIEW_SVG_BYTES, ResourceLimitError, } from "./resource-limits.js";
 import { assertSafeSvgString, IncrementalSvgPolicyValidator, } from "./svg-policy.js";
 const RENDER_SPOOL_PREFIX_BYTES = 4;
@@ -178,6 +179,7 @@ function isSafePublicError(value) {
         value instanceof OutputConflictError ||
         value instanceof PathAliasError ||
         value instanceof UnsafeOutputPathError ||
+        value instanceof AllowedRootsPathError ||
         value instanceof UnsafeWindowsPathError;
 }
 function isRecord(value) {

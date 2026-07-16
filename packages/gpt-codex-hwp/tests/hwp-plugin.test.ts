@@ -33,6 +33,11 @@ import {
   inspectHwpxFontReferences,
   normalizeGeneratedFontReferences,
 } from "../src/shared/hwpx-font-integrity.js";
+import {
+  createAllowedRootsPolicy,
+  resetActiveAllowedRootsPolicy,
+  setActiveAllowedRootsPolicy,
+} from "../src/shared/allowed-roots.js";
 import { writeFilesExclusively } from "../src/shared/output.js";
 import {
   MAX_FILL_VALUES,
@@ -764,6 +769,10 @@ test("hwp_read parses once and saves complete Markdown with a 64,000-character p
 
 test("hwp_read refuses unsafe Markdown output targets without overwriting", async (t) => {
   const { handleHwpRead } = await loadReadTool();
+  setActiveAllowedRootsPolicy(
+    await createAllowedRootsPolicy(JSON.stringify([tmpRoot])),
+  );
+  t.after(() => resetActiveAllowedRootsPolicy());
   const root = join(tmpRoot, "markdown-output-safety");
   const existingPath = join(root, "existing.md");
   const sourcePath = join(root, "source.md");

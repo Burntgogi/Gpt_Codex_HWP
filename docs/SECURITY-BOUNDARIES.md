@@ -20,6 +20,10 @@ Existing output files are not overwritten, protected documents are not unlocked 
 
 Paths are local filesystem capabilities granted by the caller. Alias, hard-link, symbolic-link, junction, overwrite, traversal, and archive-entry checks constrain common path attacks, but the process still runs with the current operating-system user's permissions. The plugin does not provide a multi-tenant authorization layer.
 
+Operators can optionally set `GPT_CODEX_HWP_ALLOWED_ROOTS` to a bounded JSON array of existing canonical directories. When configured, every user-supplied input/output path is resolved and checked at its actual I/O boundary; malformed configuration fails MCP startup, and denials redact both configuration values and rejected absolute paths. When unset, local path behavior remains unrestricted for backward compatibility.
+
+Private document spools do not use a configured user root. They are created in a non-configurable, unpredictable, owner-only directory under the plugin-selected OS temporary root, passed to children only through inherited handles, and removed in `finally`. This independent internal namespace prevents a document or caller from selecting the spool location. It does not defeat a hostile process with the same OS-user privileges. Node.js has no portable equivalent of Linux `openat2` or Windows handle-relative operations that closes every path-swap race on every supported filesystem; use a separate least-privilege account or OS sandbox for hostile documents.
+
 Document links and embedded references are not fetched automatically. Runtime dependencies should be installed from the committed lockfile with lifecycle scripts disabled. Ordinary installs disable npm audit so registry availability cannot mutate install behavior; the release workflow runs audit explicitly and fails closed. Never place registry tokens or user/global npm credentials in this repository.
 
 ## Resource and isolation boundary
