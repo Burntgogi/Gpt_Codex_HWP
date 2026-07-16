@@ -608,7 +608,17 @@ function requireExactKeys(value, keys) {
 
 async function toolVersions(root) {
   let npm;
-  try { npm = (await executeFile("npm", ["--version"], { cwd: root, encoding: "utf8" })).stdout.trim(); }
+  try {
+    const npmExecPath = process.env.npm_execpath;
+    const invocation = typeof npmExecPath === "string" && npmExecPath.length > 0
+      ? { command: process.execPath, args: [npmExecPath, "--version"] }
+      : process.platform === "win32"
+        ? { command: "cmd.exe", args: ["/d", "/s", "/c", "npm.cmd", "--version"] }
+        : { command: "npm", args: ["--version"] };
+    npm = (await executeFile(invocation.command, invocation.args, {
+      cwd: root, encoding: "utf8", windowsHide: true,
+    })).stdout.trim();
+  }
   catch { throw releaseError("RELEASE_ARTIFACTS_TOOLCHAIN_INVALID"); }
   return { node: process.version, npm, zlib: process.versions.zlib, tool: BUILDER_VERSION };
 }

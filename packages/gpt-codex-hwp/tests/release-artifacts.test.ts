@@ -47,6 +47,8 @@ test("release artifacts are deterministic and independently verifiable", async (
   const fixture = await createReleaseFixture(t);
   const first = join(fixture.parent, "artifacts-one");
   const second = join(fixture.parent, "artifacts-two");
+  const probed = join(fixture.parent, "artifacts-probed-toolchain");
+  const probedAgain = join(fixture.parent, "artifacts-probed-toolchain-again");
 
   const firstReceipt = await buildReleaseArtifacts({
     root: fixture.root,
@@ -62,6 +64,18 @@ test("release artifacts are deterministic and independently verifiable", async (
     prepareRuntime: fixture.prepareRuntime,
     versions: VERSIONS,
   });
+  const probedReceipt = await buildReleaseArtifacts({
+    root: fixture.root,
+    output: probed,
+    sourceDateEpoch: REPRODUCIBLE_EPOCH,
+    prepareRuntime: fixture.prepareRuntime,
+  });
+  const probedAgainReceipt = await buildReleaseArtifacts({
+    root: fixture.root,
+    output: probedAgain,
+    sourceDateEpoch: REPRODUCIBLE_EPOCH,
+    prepareRuntime: fixture.prepareRuntime,
+  });
 
   assert.deepEqual(firstReceipt.files, [
     "SHA256SUMS",
@@ -70,6 +84,11 @@ test("release artifacts are deterministic and independently verifiable", async (
     "provenance.json",
   ]);
   assert.deepEqual(firstReceipt.hashes, secondReceipt.hashes);
+  assert.deepEqual(probedReceipt.hashes, probedAgainReceipt.hashes);
+  const probedProvenance = JSON.parse(await readFile(join(probed, "provenance.json"), "utf8"));
+  assert.equal(probedProvenance.toolchain.node, process.version);
+  assert.equal(probedProvenance.toolchain.zlib, process.versions.zlib);
+  assert.match(probedProvenance.toolchain.npm, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u);
   for (const name of firstReceipt.files) {
     assert.deepEqual(await readFile(join(first, name)), await readFile(join(second, name)), name);
   }
