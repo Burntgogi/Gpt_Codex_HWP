@@ -11,6 +11,8 @@ const MAX_ENTRIES = 20_000;
 const MAX_GIT_LIST_BYTES = 16 * 1024 * 1024;
 const DEFAULT_PROCESS_TIMEOUT_MS = 120_000;
 const MAX_PROCESS_TIMEOUT_MS = 15 * 60 * 1_000;
+const DEFAULT_TERMINATION_TIMEOUT_MS = 20_000;
+const MAX_TERMINATION_TIMEOUT_MS = 60_000;
 const WINDOWS_RUNNER = fileURLToPath(new URL("./public-scan-command-runner.mjs", import.meta.url));
 const WINDOWS_SUPERVISOR = fileURLToPath(new URL(
   "../packages/gpt-codex-hwp/src/workers/windows-job-supervisor.ps1",
@@ -835,11 +837,17 @@ function codedError(code, publicLabel) {
 
 export async function runBoundedProcess(tool, args, options = {}) {
   const maxOutputBytes = options.maxOutputBytes ?? MAX_GIT_LIST_BYTES;
+  const terminationTimeoutMs = options.terminationTimeoutMs ?? DEFAULT_TERMINATION_TIMEOUT_MS;
+  const startProcess = options.startProcess ?? startBoundedProcess;
   if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) {
     throw new TypeError("bounded process options are invalid");
   }
+  if (!Number.isSafeInteger(terminationTimeoutMs) || terminationTimeoutMs < 1
+    || terminationTimeoutMs > MAX_TERMINATION_TIMEOUT_MS || typeof startProcess !== "function") {
+    throw new TypeError("bounded process options are invalid");
+  }
   let lifecycle;
-  try { lifecycle = await startBoundedProcess(tool, args, options); }
+  try { lifecycle = await startProcess(tool, args, options); }
   catch (error) {
     return failedProcessReceipt({ timedOut: error?.code === "PUBLIC_PROCESS_TIMEOUT" });
   }
@@ -848,6 +856,7 @@ export async function runBoundedProcess(tool, args, options = {}) {
     exit: lifecycle.exit,
     maxOutputBytes,
     terminate: lifecycle.terminate,
+    terminationTimeoutMs,
   });
 }
 
@@ -918,7 +927,13 @@ export async function startBoundedProcess(tool, args, options = {}) {
   });
 }
 
-async function collectBoundedProcess(child, { deadline, exit, maxOutputBytes, terminate }) {
+async function collectBoundedProcess(child, {
+  deadline,
+  exit,
+  maxOutputBytes,
+  terminate,
+  terminationTimeoutMs,
+}) {
   return await new Promise((resolvePromise) => {
     const stdout = [];
     const stderr = [];
@@ -930,11 +945,10 @@ async function collectBoundedProcess(child, { deadline, exit, maxOutputBytes, te
     const remaining = Math.max(1, deadline - Date.now());
     let timer;
     const finish = async (code, signal) => {
-      if (terminal) return;
+      if (terminal || stopping) return;
       terminal = true;
       clearTimeout(timer);
-      let treeGone = false;
-      try { treeGone = await terminate(); } catch { treeGone = false; }
+      const treeGone = await boundedTermination(terminate, terminationTimeoutMs);
       destroyProcessPipes(child);
       resolvePromise(Object.freeze({
         code: overflow || timedOut || !treeGone ? -1 : code,
@@ -951,8 +965,7 @@ async function collectBoundedProcess(child, { deadline, exit, maxOutputBytes, te
       stopping = true;
       if (reason === "overflow") overflow = true;
       if (reason === "timeout") timedOut = true;
-      let treeGone = false;
-      try { treeGone = await terminate(); } catch { treeGone = false; }
+      const treeGone = await boundedTermination(terminate, terminationTimeoutMs);
       destroyProcessPipes(child);
       if (terminal) return;
       terminal = true;
@@ -976,6 +989,19 @@ async function collectBoundedProcess(child, { deadline, exit, maxOutputBytes, te
     });
     timer = setTimeout(() => { void stop("timeout"); }, remaining);
   });
+}
+
+async function boundedTermination(terminate, timeoutMs) {
+  if (typeof terminate !== "function") return false;
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => terminate()).then((value) => value === true, () => false),
+      new Promise((resolvePromise) => { timer = setTimeout(() => resolvePromise(false), timeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function observeProcessExit(child) {

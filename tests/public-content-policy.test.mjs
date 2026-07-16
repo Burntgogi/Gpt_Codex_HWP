@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
@@ -430,6 +431,68 @@ test("bounded process kills a descendant after its parent exits with inherited p
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_200));
   assert.equal(processExists(descendantPid), false);
   await assert.rejects(readFile(sentinelPath), { code: "ENOENT" });
+});
+
+test("bounded process makes terminator failure authoritative after early parent exit", async () => {
+  const child = { stdout: new PassThrough(), stderr: new PassThrough() };
+  const result = await runBoundedProcess("unused-tool", [], {
+    maxOutputBytes: 64,
+    startProcess: async () => ({
+      child,
+      deadline: Date.now() + 1_000,
+      exit: Promise.resolve({ code: 0, signal: null, error: false }),
+      terminate: async () => false,
+    }),
+    terminationTimeoutMs: 50,
+  });
+  assert.equal(result.code, -1);
+  assert.equal(result.terminationFailed, true);
+});
+
+test("bounded process bounds a hanging terminator after early parent exit", async () => {
+  const child = { stdout: new PassThrough(), stderr: new PassThrough() };
+  const started = Date.now();
+  const result = await runBoundedProcess("unused-tool", [], {
+    maxOutputBytes: 64,
+    startProcess: async () => ({
+      child,
+      deadline: Date.now() + 1_000,
+      exit: Promise.resolve({ code: 0, signal: null, error: false }),
+      terminate: () => new Promise(() => {}),
+    }),
+    terminationTimeoutMs: 20,
+  });
+  assert.ok(Date.now() - started < 1_000);
+  assert.equal(result.code, -1);
+  assert.equal(result.terminationFailed, true);
+});
+
+test("bounded process owns an overflow-exit race with one authoritative terminator", async () => {
+  const child = { stdout: new PassThrough(), stderr: new PassThrough() };
+  let resolveExit;
+  let terminations = 0;
+  const exit = new Promise((resolvePromise) => { resolveExit = resolvePromise; });
+  const resultPromise = runBoundedProcess("unused-tool", [], {
+    maxOutputBytes: 8,
+    startProcess: async () => ({
+      child,
+      deadline: Date.now() + 1_000,
+      exit,
+      terminate: async () => {
+        terminations += 1;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+        return terminations === 1;
+      },
+    }),
+    terminationTimeoutMs: 100,
+  });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  child.stdout.write(Buffer.alloc(9));
+  resolveExit({ code: 0, signal: null, error: false });
+  const result = await resultPromise;
+  assert.equal(terminations, 1);
+  assert.equal(result.overflow, true);
+  assert.equal(result.terminationFailed, false);
 });
 
 test("public content policy is mandatory in root scripts and release ordering", async () => {

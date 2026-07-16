@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +10,6 @@ import {
   MAX_GITHUB_RESPONSE_BYTES,
   advisoryRecord,
   auditChildEnvironment,
-  collectAudit,
   readBoundedResponseJson,
   renderIssueBody,
 } from "../scripts/dependency-audit-issue.mjs";
@@ -128,6 +126,7 @@ test("governance documentation dependency audit is scheduled and issue-only", as
   assert.doesNotMatch(workflow, /^\s*contents:\s*write\s*$/mu);
   assert.doesNotMatch(workflow, /pull_request|auto-merge|automerge|git\s+(commit|push|checkout\s+-b)|persist-credentials:\s*true/iu);
   assert.match(workflow, /persist-credentials:\s*false/iu);
+  assert.match(workflow, /^\s*timeout-minutes:\s*10\s*$/mu);
   assert.match(workflow, /package.{0,80}current.{0,80}patched.{0,80}link/isu);
   assert.doesNotMatch(workflow, /\b(console\.log|Write-Output|echo)\b/u);
   for (const reference of [...workflow.matchAll(/uses:\s*[^@\s]+@([^\s#]+)/gu)].map((match) => match[1])) {
@@ -138,8 +137,10 @@ test("governance documentation dependency audit is scheduled and issue-only", as
 
 test("governance documentation dependency audit bounds secrets, processes, and issue data", async () => {
   const implementation = await text("scripts/dependency-audit-issue.mjs");
-  assert.match(implementation, /env:\s*auditChildEnvironment\(/u);
-  assert.match(implementation, /terminateProcessTree/u);
+  assert.match(implementation, /runBoundedProcess/u);
+  assert.match(implementation, /createOwnedBoundary/u);
+  assert.match(implementation, /readOwnedRegularFile/u);
+  assert.doesNotMatch(implementation, /from "node:child_process"|function collectAudit/u);
   assert.match(implementation, /AUDIT_TIMEOUT_MS/u);
   assert.match(implementation, /MAX_ADVISORY_RECORDS/u);
   assert.match(implementation, /MAX_ISSUE_BODY_BYTES/u);
@@ -171,65 +172,39 @@ test("governance documentation dependency audit gives npm a credential-free mini
   assert.equal(environment.npm_config_ignore_scripts, "true");
 
   let childOptions;
-  const child = new EventEmitter();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  child.kill = () => true;
-  child.unref = () => {};
-  const pending = collectAudit("npm", ["audit"], {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  await module.runNpmAudit({ directory: "plugins/gpt-codex-hwp", omitDev: true }, {
     environment: source,
-    spawnProcess: (_command, _args, options) => {
+    runProcess: async (_command, _args, options) => {
       childOptions = options;
-      setImmediate(() => child.emit("close", 0));
-      return child;
+      return {
+        code: 0,
+        signal: null,
+        stdout: Buffer.from('{"vulnerabilities":{}}'),
+        stderr: Buffer.alloc(0),
+        overflow: false,
+        timedOut: false,
+        terminationFailed: false,
+      };
     },
-    timeoutMs: 100,
   });
-  await pending;
   assert.equal(childOptions.env.GH_TOKEN, undefined);
   assert.equal(childOptions.env.NPM_TOKEN, undefined);
   assert.equal(childOptions.env.NODE_OPTIONS, undefined);
 });
 
-test("governance documentation dependency audit times out through process-tree cleanup", async () => {
-  const child = new EventEmitter();
-  child.pid = 42;
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  let killed = false;
-  let unrefed = false;
-  child.kill = () => { killed = true; return true; };
-  child.unref = () => { unrefed = true; };
-  let terminations = 0;
-  await assert.rejects(
-    collectAudit("npm", ["audit"], {
-      environment: {
-        PATH: process.env.PATH ?? "path",
-        [["GH", "TOKEN"].join("_")]: ["must", "not", "leak"].join("-"),
-      },
-      spawnProcess: () => child,
-      terminateTree: async () => { terminations += 1; return true; },
-      timeoutMs: 5,
-      terminationTimeoutMs: 10,
-    }),
-    { code: "AUDIT_TIMEOUT" },
-  );
-  assert.equal(terminations, 1);
-  assert.equal(killed, true);
-  assert.equal(unrefed, true);
-});
-
 test("governance documentation dependency issue contains only bounded safe columns", async () => {
   const record = advisoryRecord("esbuild", {
+    name: "esbuild",
     nodes: ["node_modules/esbuild"],
-    fixAvailable: true,
+    fixAvailable: { name: "indirect-parent", version: "9.9.9" },
     severity: "low",
     via: [{ range: ">=0.27.3 <0.28.1", url: "https://github.com/advisories/GHSA-test" }],
   }, { packages: { "node_modules/esbuild": { version: "0.27.3" } } });
   assert.deepEqual(record, {
     package: "esbuild",
     current: "0.27.3",
-    patched: "0.28.1",
+    patched: "owner review required",
     link: "https://github.com/advisories/GHSA-test",
   });
   const body = renderIssueBody([{
@@ -240,17 +215,34 @@ test("governance documentation dependency issue contains only bounded safe colum
   assert.equal(body, [
     "| Package | Current | Patched | Link |",
     "| --- | --- | --- | --- |",
-    "| esbuild | 0.27.3 | 0.28.1 | https://github.com/advisories/GHSA-test |",
+    "| esbuild | 0.27.3 | owner review required | https://github.com/advisories/GHSA-test |",
   ].join("\n"));
   assert.doesNotMatch(body, /secret|severity|low/u);
   assert.throws(
     () => advisoryRecord("esbuild", {
+      name: "esbuild",
       nodes: ["node_modules/esbuild"],
       fixAvailable: false,
       via: [{ url: "https://example.com/advisory)| injected" }],
     }, { packages: { "node_modules/esbuild": { version: "0.27.3" } } }),
     { code: "ADVISORY_LINK_INVALID" },
   );
+  assert.throws(() => advisoryRecord("esbuild", {
+    name: "other-package",
+    nodes: ["node_modules/esbuild"],
+    fixAvailable: false,
+    via: [],
+  }, { packages: { "node_modules/esbuild": { version: "0.27.3" } } }), {
+    code: "ADVISORY_NAME_INVALID",
+  });
+  assert.throws(() => advisoryRecord("esbuild", {
+    name: "esbuild",
+    nodes: ["node_modules/missing"],
+    fixAvailable: false,
+    via: [],
+  }, { packages: { "node_modules/esbuild": { version: "0.27.3" } } }), {
+    code: "ADVISORY_NODE_INVALID",
+  });
   assert.throws(() => renderIssueBody(Array(MAX_ADVISORY_RECORDS + 1).fill(record)), {
     code: "ADVISORY_RECORD_LIMIT",
   });
@@ -271,8 +263,226 @@ test("governance documentation dependency audit bounds GitHub response bodies", 
   assert.deepEqual(await readBoundedResponseJson(new Response('[{"number":1}]')), [{ number: 1 }]);
 });
 
+test("governance documentation dependency issue lifecycle is marker-owned and paginated", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  assert.equal(typeof module.reconcileDependencyIssue, "function");
+  assert.equal(typeof module.ISSUE_MARKER, "string");
+  const record = {
+    package: "esbuild",
+    current: "0.27.3",
+    patched: "owner review required",
+    link: "https://github.com/advisories/GHSA-test",
+  };
+  const harmless = Array.from({ length: 100 }, (_, index) => ({
+    number: index + 1,
+    title: `Other ${index}`,
+    body: "other",
+    user: { login: "person", type: "User" },
+  }));
+  const requests = [];
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
+    if (/[?&]page=1(?:&|$)/u.test(String(url))) return jsonResponse(harmless);
+    if (/[?&]page=2(?:&|$)/u.test(String(url))) return jsonResponse([]);
+    return jsonResponse({ number: 201 }, 201);
+  };
+  const result = await module.reconcileDependencyIssue({
+    owner: "owner",
+    repository: "repository",
+    ...githubAuthorization(),
+    records: [record],
+    fetchImpl,
+  });
+  assert.deepEqual(result, { records: 1, issue: "created" });
+  assert.match(requests[0].url, /state=all.*per_page=100.*page=1/u);
+  assert.match(requests[1].url, /page=2/u);
+  const created = JSON.parse(requests.at(-1).body);
+  assert.equal(created.title, module.ISSUE_TITLE);
+  assert.match(created.body, new RegExp(`^${escapeRegExp(module.ISSUE_MARKER)}\\n\\n\\| Package`, "u"));
+});
+
+test("governance documentation dependency issue updates, reopens, closes, and rejects takeover", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  const record = {
+    package: "esbuild",
+    current: "0.27.3",
+    patched: "owner review required",
+    link: "https://github.com/advisories/GHSA-test",
+  };
+  const owned = (number, extra = {}) => ({
+    number,
+    title: module.ISSUE_TITLE,
+    body: `${module.ISSUE_MARKER}\n\nold`,
+    state: "closed",
+    user: { login: "github-actions[bot]", type: "Bot" },
+    ...extra,
+  });
+
+  for (const [records, expectedIssue, expectedPatch] of [
+    [[record], "updated", { state: "open" }],
+    [[], "closed", { state: "closed" }],
+  ]) {
+    const requests = [];
+    const fetchImpl = async (url, options = {}) => {
+      requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
+      return (options.method ?? "GET") === "GET"
+        ? jsonResponse([owned(7, { state: records.length > 0 ? "closed" : "open" })])
+        : jsonResponse({ number: 7 });
+    };
+    const result = await module.reconcileDependencyIssue({
+      owner: "owner", repository: "repository", ...githubAuthorization(), records, fetchImpl,
+    });
+    assert.equal(result.issue, expectedIssue);
+    assert.deepEqual({ state: JSON.parse(requests.at(-1).body).state }, expectedPatch);
+    if (records.length > 0) assert.match(JSON.parse(requests.at(-1).body).body, /\| esbuild \|/u);
+  }
+
+  for (const issues of [
+    [owned(7), owned(8)],
+    [owned(7, { user: { login: "attacker", type: "User" } })],
+    [owned(7, { body: "marker missing" })],
+    [owned(7, { title: "Different title" })],
+  ]) {
+    let mutations = 0;
+    await assert.rejects(module.reconcileDependencyIssue({
+      owner: "owner",
+      repository: "repository",
+      ...githubAuthorization(),
+      records: [record],
+      fetchImpl: async (_url, options = {}) => {
+        if ((options.method ?? "GET") !== "GET") mutations += 1;
+        return jsonResponse(issues);
+      },
+    }), { code: "ISSUE_OWNERSHIP_INVALID" });
+    assert.equal(mutations, 0);
+  }
+});
+
+test("governance documentation dependency issue pagination has a hard all-state ceiling", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  const fullPage = Array.from({ length: 100 }, (_, index) => ({
+    number: index + 1,
+    title: `Other ${index}`,
+    body: "other",
+    state: "open",
+    user: { login: "person", type: "User" },
+  }));
+  let pages = 0;
+  await assert.rejects(module.reconcileDependencyIssue({
+    owner: "owner",
+    repository: "repository",
+    ...githubAuthorization(),
+    records: [],
+    fetchImpl: async () => { pages += 1; return jsonResponse(fullPage); },
+  }), { code: "GITHUB_PAGINATION_LIMIT" });
+  assert.equal(pages, 10);
+});
+
+test("governance documentation advisory records bind every exact scoped lock node", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  assert.equal(typeof module.advisoryRecords, "function");
+  const name = "@scope/pkg";
+  const nodes = ["node_modules/@scope/pkg", "node_modules/parent/node_modules/@scope/pkg"];
+  const lock = { packages: {
+    [nodes[0]]: { version: "1.0.0" },
+    [nodes[1]]: { version: "1.5.0" },
+  } };
+  const items = module.advisoryRecords(name, {
+    name,
+    nodes,
+    fixAvailable: { name, version: "2.0.0" },
+    via: ["transitive", { range: "<99.0.0", url: "https://github.com/advisories/GHSA-test" }],
+  }, lock);
+  assert.deepEqual(items.map((item) => item.record.current), ["1.0.0", "1.5.0"]);
+  assert.deepEqual(items.map((item) => item.record.patched), ["2.0.0", "2.0.0"]);
+  assert.deepEqual(items.map((item) => item.node), nodes);
+  for (const badNode of [
+    "node_modules/other",
+    "../node_modules/@scope/pkg",
+    "vendor/node_modules/@scope/pkg",
+    "node_modules/@scope/pkg/extra",
+  ])
+    assert.throws(() => module.advisoryRecords(name, {
+      name, nodes: [badNode], fixAvailable: false, via: [],
+    }, lock), { code: "ADVISORY_NODE_INVALID" });
+  assert.throws(() => module.advisoryRecords(name, {
+    name, nodes: [nodes[0], "node_modules/missing/node_modules/@scope/pkg"], fixAvailable: false, via: [],
+  }, lock), { code: "ADVISORY_NODE_INVALID" });
+  assert.throws(() => module.advisoryRecords(name, {
+    name, nodes: [nodes[0], nodes[0]], fixAvailable: false, via: [],
+  }, lock), { code: "ADVISORY_NODE_INVALID" });
+  assert.throws(() => module.advisoryRecords(name, {
+    name, nodes: [nodes[0]], fixAvailable: { name, version: "latest" }, via: [],
+  }, lock), { code: "ADVISORY_PATCHED_INVALID" });
+  assert.throws(() => module.advisoryRecords(name, {
+    name, nodes: [nodes[0]], fixAvailable: false, via: [],
+  }, { packages: { [nodes[0]]: { version: "workspace:*" } } }), {
+    code: "ADVISORY_CURRENT_INVALID",
+  });
+});
+
+test("governance documentation audit uses shared bounded process receipts authoritatively", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  assert.equal(typeof module.runNpmAudit, "function");
+  const base = {
+    code: 0,
+    signal: null,
+    stdout: Buffer.from('{"vulnerabilities":{}}'),
+    stderr: Buffer.alloc(0),
+    overflow: false,
+    timedOut: false,
+    terminationFailed: false,
+  };
+  for (const [override, code] of [
+    [{ terminationFailed: true }, "AUDIT_TERMINATION_FAILED"],
+    [{ timedOut: true, code: -1 }, "AUDIT_TIMEOUT"],
+    [{ overflow: true, code: -1 }, "AUDIT_RESULT_TOO_LARGE"],
+  ]) await assert.rejects(module.runNpmAudit(
+    { directory: "plugins/gpt-codex-hwp", omitDev: true },
+    { environment: { PATH: process.env.PATH ?? "path" }, runProcess: async () => ({ ...base, ...override }) },
+  ), { code });
+});
+
+test("governance documentation lock read is bounded and rejects an open-time swap", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  assert.equal(typeof module.readAuditLock, "function");
+  const root = await mkdtemp(join(tmpdir(), "governance-lock-"));
+  try {
+    const directory = join(root, "packages", "gpt-codex-hwp");
+    await mkdir(directory, { recursive: true });
+    const lockPath = join(directory, "package-lock.json");
+    const replacement = join(directory, "replacement.json");
+    await writeFile(lockPath, '{"packages":{}}');
+    await writeFile(replacement, '{"packages":{"changed":{}}}');
+    await assert.rejects(module.readAuditLock(root, { directory: "packages/gpt-codex-hwp" }, {
+      readOptions: { beforeOpen: async () => rename(replacement, lockPath) },
+    }), { code: "LOCKFILE_CHANGED" });
+    await writeFile(lockPath, Buffer.alloc(4 * 1024 * 1024 + 1));
+    await assert.rejects(module.readAuditLock(root, { directory: "packages/gpt-codex-hwp" }), {
+      code: "LOCKFILE_TOO_LARGE",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("governance documentation keeps contributor-only material out of generated runtime", async () => {
   const projection = await text("scripts/project-runtime.mjs");
   for (const forbidden of ["CONTRIBUTING.md", "docs/ARCHITECTURE.md", "docs/DEVELOPMENT.md", "docs/PERFORMANCE.md"])
     assert.equal(projection.includes(forbidden), false, forbidden);
 });
+
+function jsonResponse(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function githubAuthorization() {
+  return { [["to", "ken"].join("")]: ["test", "authorization", "fixture"].join("-") };
+}
