@@ -287,6 +287,30 @@ export async function createOwnedBoundary(root) {
   }
 }
 
+export async function assertBoundaryRootUnchanged(boundary) {
+  validateBoundary(boundary);
+  try {
+    const before = await lstat(boundary.root);
+    if (before.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK", "<root>");
+    if (!before.isDirectory() || !sameIdentity(before, boundary.identity)) {
+      throw codedError("PUBLIC_FILE_CHANGED", "<root>");
+    }
+    const canonicalRoot = await realpath(boundary.root);
+    if (!samePath(canonicalRoot, boundary.canonicalRoot)) {
+      throw codedError("PUBLIC_FILE_CHANGED", "<root>");
+    }
+    const after = await lstat(boundary.root);
+    if (after.isSymbolicLink() || !after.isDirectory()
+      || !sameIdentity(before, after) || !sameIdentity(after, boundary.identity)) {
+      throw codedError("PUBLIC_FILE_CHANGED", "<root>");
+    }
+    return after;
+  } catch (error) {
+    if (error?.code?.startsWith?.("PUBLIC_")) throw error;
+    throw codedError("PUBLIC_FILE_CHANGED", "<root>");
+  }
+}
+
 export async function* walkOwnedRegularFiles(boundary, options = {}) {
   validateBoundary(boundary);
   const maxEntries = options.maxEntries ?? MAX_ENTRIES;
@@ -297,40 +321,57 @@ export async function* walkOwnedRegularFiles(boundary, options = {}) {
   if (!Number.isSafeInteger(maxFileBytes) || maxFileBytes < 1 || maxFileBytes > MAX_FILE_BYTES) {
     throw codedError("PUBLIC_FILE_TOO_LARGE");
   }
+  validateReadObserver(options.onContentRead);
   const state = { entries: 0 };
-  yield* walkOwnedDirectory(boundary, boundary.root, state, maxEntries, maxFileBytes);
+  await assertBoundaryRootUnchanged(boundary);
+  try {
+    yield* walkOwnedDirectory(boundary, boundary.root, state, maxEntries, maxFileBytes, options);
+  } finally {
+    await assertBoundaryRootUnchanged(boundary);
+  }
 }
 
-async function* walkOwnedDirectory(boundary, current, state, maxEntries, maxFileBytes) {
+async function* walkOwnedDirectory(boundary, current, state, maxEntries, maxFileBytes, options) {
+  await assertBoundaryRootUnchanged(boundary);
   const before = await verifyOwnedDirectory(boundary, current);
   const directory = await opendir(current);
   try {
+    await assertBoundaryRootUnchanged(boundary);
     const opened = await lstat(current);
     if (!sameIdentity(before, opened) || !opened.isDirectory()) throw codedError("PUBLIC_FILE_CHANGED");
     for await (const entry of directory) {
-      state.entries += 1;
-      const path = join(current, entry.name);
-      const label = relative(boundary.root, path).replaceAll("\\", "/");
-      if (state.entries > maxEntries) throw codedError("PUBLIC_ENTRY_BUDGET", label);
-      const metadata = await lstat(path);
-      if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK", label);
-      if (metadata.isDirectory()) {
-        yield* walkOwnedDirectory(boundary, path, state, maxEntries, maxFileBytes);
-      } else if (metadata.isFile()) {
-        const record = await readOwnedRegularFile(boundary, path, label, maxFileBytes);
-        yield Object.freeze({ ...record, label, entries: state.entries });
-      } else throw codedError("PUBLIC_NON_REGULAR", label);
+      await assertBoundaryRootUnchanged(boundary);
+      try {
+        state.entries += 1;
+        const path = join(current, entry.name);
+        const label = relative(boundary.root, path).replaceAll("\\", "/");
+        if (state.entries > maxEntries) throw codedError("PUBLIC_ENTRY_BUDGET", label);
+        const metadata = await lstat(path);
+        if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK", label);
+        if (metadata.isDirectory()) {
+          yield* walkOwnedDirectory(boundary, path, state, maxEntries, maxFileBytes, options);
+        } else if (metadata.isFile()) {
+          const record = await readOwnedRegularFile(boundary, path, label, maxFileBytes, {
+            onContentRead: options.onContentRead,
+          });
+          yield Object.freeze({ ...record, label, entries: state.entries });
+        } else throw codedError("PUBLIC_NON_REGULAR", label);
+      } finally {
+        await assertBoundaryRootUnchanged(boundary);
+      }
     }
   } finally {
     try { await directory.close(); } catch { /* for-await may already close it */ }
+    await assertBoundaryRootUnchanged(boundary);
   }
   const after = await verifyOwnedDirectory(boundary, current);
   if (!sameIdentity(before, after)) throw codedError("PUBLIC_FILE_CHANGED");
 }
 
-export async function readOwnedRegularFile(boundary, path, label, maxBytes = MAX_FILE_BYTES) {
+export async function readOwnedRegularFile(boundary, path, label, maxBytes = MAX_FILE_BYTES, options = {}) {
   validateBoundary(boundary);
   requiredLabel(label);
+  validateReadOptions(options);
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_FILE_BYTES) {
     throw codedError("PUBLIC_FILE_TOO_LARGE", label);
   }
@@ -338,30 +379,35 @@ export async function readOwnedRegularFile(boundary, path, label, maxBytes = MAX
   if (!insideRoot(boundary.root, resolvedPath) || resolvedPath === boundary.root) {
     throw codedError("PUBLIC_NON_REGULAR", label);
   }
+  await assertBoundaryRootUnchanged(boundary);
   await verifyOwnedAncestors(boundary, resolvedPath);
   const before = await lstat(resolvedPath);
   if (before.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK", label);
   if (!before.isFile()) throw codedError("PUBLIC_NON_REGULAR", label);
   if (before.size > maxBytes) throw codedError("PUBLIC_FILE_TOO_LARGE", label);
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  await options.beforeOpen?.();
   const handle = await open(resolvedPath, fsConstants.O_RDONLY | noFollow);
   try {
+    await options.afterOpen?.();
     const opened = await handle.stat();
-    const canonicalPath = await realpath(resolvedPath);
-    if (!opened.isFile() || !sameIdentity(opened, before)
-      || !insideRoot(boundary.canonicalRoot, canonicalPath)) {
+    if (!opened.isFile() || !sameIdentity(opened, before)) {
       throw codedError("PUBLIC_FILE_CHANGED", label);
     }
+    await assertOpenedOwnedPathUnchanged(boundary, resolvedPath, opened, label);
     const chunks = [];
     let total = 0;
     while (true) {
+      await assertOpenedOwnedPathUnchanged(boundary, resolvedPath, opened, label);
       const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total));
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (bytesRead === 0) break;
+      options.onContentRead?.(bytesRead);
       total += bytesRead;
       if (total > maxBytes) throw codedError("PUBLIC_FILE_TOO_LARGE", label);
       chunks.push(buffer.subarray(0, bytesRead));
     }
+    await assertBoundaryRootUnchanged(boundary);
     const [after, pathAfter, canonicalAfter] = await Promise.all([
       handle.stat(),
       lstat(resolvedPath),
@@ -379,27 +425,52 @@ export async function readOwnedRegularFile(boundary, path, label, maxBytes = MAX
 }
 
 async function verifyOwnedDirectory(boundary, path) {
+  await assertBoundaryRootUnchanged(boundary);
   await verifyOwnedAncestors(boundary, path);
   const metadata = await lstat(path);
   if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK");
   if (!metadata.isDirectory()) throw codedError("PUBLIC_NON_REGULAR");
   const canonical = await realpath(path);
   if (!insideRoot(boundary.canonicalRoot, canonical)) throw codedError("PUBLIC_FILE_CHANGED");
+  await assertBoundaryRootUnchanged(boundary);
   return metadata;
 }
 
 async function verifyOwnedAncestors(boundary, target) {
+  await assertBoundaryRootUnchanged(boundary);
   const parentRelative = relative(boundary.root, resolve(target));
-  if (parentRelative.startsWith("..") || resolve(target) === boundary.root) return;
+  if (parentRelative.startsWith("..") || resolve(target) === boundary.root) {
+    await assertBoundaryRootUnchanged(boundary);
+    return;
+  }
   const parts = parentRelative.split(/[\\/]/u).slice(0, -1);
   let current = boundary.root;
   for (const part of parts) {
+    await assertBoundaryRootUnchanged(boundary);
     current = join(current, part);
     const metadata = await lstat(current);
     if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK");
     if (!metadata.isDirectory()) throw codedError("PUBLIC_NON_REGULAR");
     const canonical = await realpath(current);
     if (!insideRoot(boundary.canonicalRoot, canonical)) throw codedError("PUBLIC_FILE_CHANGED");
+    await assertBoundaryRootUnchanged(boundary);
+  }
+  await assertBoundaryRootUnchanged(boundary);
+}
+
+async function assertOpenedOwnedPathUnchanged(boundary, path, opened, label) {
+  await assertBoundaryRootUnchanged(boundary);
+  const metadata = await lstat(path);
+  if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK", label);
+  const canonical = await realpath(path);
+  if (!metadata.isFile() || !sameIdentity(metadata, opened)
+    || !insideRoot(boundary.canonicalRoot, canonical)) {
+    throw codedError("PUBLIC_FILE_CHANGED", label);
+  }
+  await assertBoundaryRootUnchanged(boundary);
+  const after = await lstat(path);
+  if (after.isSymbolicLink() || !after.isFile() || !sameIdentity(after, opened)) {
+    throw codedError("PUBLIC_FILE_CHANGED", label);
   }
 }
 
@@ -416,8 +487,26 @@ async function rejectJunctionAncestors(path) {
 
 function validateBoundary(boundary) {
   if (boundary === null || typeof boundary !== "object"
-    || typeof boundary.root !== "string" || typeof boundary.canonicalRoot !== "string") {
+    || typeof boundary.root !== "string" || typeof boundary.canonicalRoot !== "string"
+    || boundary.identity === null || typeof boundary.identity !== "object"
+    || !(typeof boundary.identity.dev === "number" || typeof boundary.identity.dev === "bigint")
+    || !(typeof boundary.identity.ino === "number" || typeof boundary.identity.ino === "bigint")) {
     throw codedError("PUBLIC_NON_REGULAR");
+  }
+}
+
+function validateReadOptions(options) {
+  if (options === null || typeof options !== "object") throw new TypeError("read options are invalid");
+  for (const name of ["beforeOpen", "afterOpen", "onContentRead"]) {
+    if (options[name] !== undefined && typeof options[name] !== "function") {
+      throw new TypeError("read options are invalid");
+    }
+  }
+}
+
+function validateReadObserver(observer) {
+  if (observer !== undefined && typeof observer !== "function") {
+    throw new TypeError("walk options are invalid");
   }
 }
 

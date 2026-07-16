@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdir,
   mkdtemp,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -15,9 +16,12 @@ import test from "node:test";
 import {
   PUBLIC_BINARY_ALLOWLIST,
   assertPublicContentBuffer,
+  createOwnedBoundary,
   formatPublicFindings,
+  readOwnedRegularFile,
   runBoundedProcess,
   scanPublicDirectory,
+  walkOwnedRegularFiles,
 } from "../scripts/public-content-policy.mjs";
 import { scanPublicHistory } from "../scripts/scan-public-history.mjs";
 import { REQUIRED_RELEASE_STAGES } from "../scripts/release-verify.mjs";
@@ -196,6 +200,67 @@ test("owned directory boundary rejects a linked root before reading target conte
     throw error;
   }
   await assert.rejects(scanPublicDirectory(linked), /public content scan failed/iu);
+});
+
+test("owned boundary rejects a replaced root before walk or direct content read", async (t) => {
+  const parent = await temporaryDirectory(t, "public-root-replacement-");
+  const root = join(parent, "owned");
+  const original = join(parent, "original");
+  await mkdir(root);
+  await writeFile(join(root, "data.txt"), "original\n");
+  const boundary = await createOwnedBoundary(root);
+  await rename(root, original);
+  await mkdir(root);
+  await writeFile(join(root, "data.txt"), "replacement\n");
+
+  let observedReads = 0;
+  await assert.rejects(readOwnedRegularFile(
+    boundary,
+    join(root, "data.txt"),
+    "data.txt",
+    1024,
+    { onContentRead: () => { observedReads += 1; } },
+  ), { code: "PUBLIC_FILE_CHANGED" });
+  let observedRecords = 0;
+  await assert.rejects(async () => {
+    for await (const _record of walkOwnedRegularFiles(boundary, {
+      onContentRead: () => { observedReads += 1; },
+    })) observedRecords += 1;
+  }, { code: "PUBLIC_FILE_CHANGED" });
+  assert.equal(observedReads, 0);
+  assert.equal(observedRecords, 0);
+});
+
+test("owned file read rejects swap-open-restore before the first byte", async (t) => {
+  const parent = await temporaryDirectory(t, "public-open-restore-");
+  const root = join(parent, "owned");
+  const path = join(root, "data.txt");
+  const saved = join(parent, "saved.txt");
+  const replacement = join(parent, "replacement.txt");
+  await mkdir(root);
+  await writeFile(path, "original\n");
+  await writeFile(replacement, "replacement\n");
+  const boundary = await createOwnedBoundary(root);
+
+  let observedReads = 0;
+  await assert.rejects(readOwnedRegularFile(
+    boundary,
+    path,
+    "data.txt",
+    1024,
+    {
+      beforeOpen: async () => {
+        await rename(path, saved);
+        await rename(replacement, path);
+      },
+      afterOpen: async () => {
+        await rename(path, replacement);
+        await rename(saved, path);
+      },
+      onContentRead: () => { observedReads += 1; },
+    },
+  ), { code: "PUBLIC_FILE_CHANGED" });
+  assert.equal(observedReads, 0);
 });
 
 test("Git history privacy finds deleted blobs, metadata, identities, and refs while keeping diagnostics redacted", async (t) => {
