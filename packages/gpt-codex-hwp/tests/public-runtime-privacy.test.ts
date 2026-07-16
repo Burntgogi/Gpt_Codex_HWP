@@ -206,9 +206,10 @@ test("public runtime privacy scanner enforces exact budgets and staged file type
     await writeFile(join(root, "asset.png"), Buffer.from([0, 255, 1]));
     await assert.rejects(assertPublicRuntimePrivacy(root), /binary not allowlisted/iu);
     await rm(join(root, "asset.png"));
+    await mkdir(join(root, "assets"));
     await copyFile(
       join(SOURCE_ROOT, "assets", "gpt-codex-hwp-icon-64.png"),
-      join(root, "gpt-codex-hwp-icon-64.png"),
+      join(root, "assets", "gpt-codex-hwp-icon-64.png"),
     );
     await assert.doesNotReject(assertPublicRuntimePrivacy(root));
     await writeFile(join(root, "unknown.blobx"), "safe");
@@ -384,6 +385,32 @@ test("public runtime privacy scanner bounds limit override maxima", async (t) =>
     assertPublicRuntimePrivacy(root, { maxFileBytes, maxRuntimeBytes: maxRuntimeBytes + 1 }),
     /aggregate byte budget/iu,
   );
+});
+
+test("public runtime privacy counts directories and files with streaming entry bounds", async (t) => {
+  const root = await temporaryRuntime(t, "privacy-entry-bound-");
+  await mkdir(join(root, "one", "two"), { recursive: true });
+  await writeFile(join(root, "one", "two", "safe.txt"), "safe\n");
+  await assert.rejects(
+    assertPublicRuntimePrivacy(root, { maxEntries: 2 }),
+    /aggregate entry budget/iu,
+  );
+  await assert.doesNotReject(assertPublicRuntimePrivacy(root, { maxEntries: 3 }));
+});
+
+test("public runtime privacy rejects a junction root before target content is read", async (t) => {
+  const parent = await temporaryRuntime(t, "privacy-junction-boundary-");
+  const outside = join(parent, "outside");
+  const linked = join(parent, "linked");
+  await mkdir(outside);
+  await writeFile(join(outside, "unsafe.txt"), fragments("gh", "p_", "R".repeat(36)));
+  try {
+    await symlink(outside, linked, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) return;
+    throw error;
+  }
+  await assert.rejects(assertPublicRuntimePrivacy(linked), /runtime privacy violation/iu);
 });
 
 test("split release-suite sources contain no assembled privacy probe", async (t) => {

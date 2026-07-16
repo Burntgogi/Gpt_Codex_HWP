@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -6,17 +5,20 @@ import {
   classifyPublicContent,
   classifyPublicLabel,
   formatPublicFindings,
-  isApprovedOwnerEmail,
+  isApprovedOwnerIdentity,
   publicFinding,
   publicScanFailure,
   runBoundedProcess,
+  startBoundedProcess,
 } from "./public-content-policy.mjs";
 
 const MAX_COMMAND_BYTES = 32 * 1024 * 1024;
 const MAX_OBJECT_BYTES = 64 * 1024 * 1024;
 const MAX_HISTORY_BYTES = 512 * 1024 * 1024;
 const MAX_OBJECTS = 100_000;
+const MAX_PATH_ASSOCIATIONS = 500_000;
 const NEUTRAL_EMAIL = "codex@local";
+const NEUTRAL_NAME = "Codex";
 
 export const IMMUTABLE_NEUTRAL_OBJECT_IDS = Object.freeze([
   "8ab57d6b289727a6ea4b53f21193223e314c5f11",
@@ -56,7 +58,7 @@ export async function scanPublicHistory(options = {}) {
 
   const objectsResult = await invokeGit(runGit, root, ["rev-list", "--objects", "--all", "-z"]);
   if (objectsResult.code !== 0 || objectsResult.stderr.length !== 0) throw historyFailure();
-  const { objectIds, objectLabels } = parseObjectRecords(objectsResult.stdout);
+  const { objectIds } = parseObjectRecords(objectsResult.stdout);
   if (objectIds.length === 0 || objectIds.length > MAX_OBJECTS) throw historyFailure();
 
   const findings = [];
@@ -64,37 +66,51 @@ export async function scanPublicHistory(options = {}) {
     const refFindings = classifyPublicContent(Buffer.from(ref.name, "utf8"), {
       label: `ref:${ref.objectId}`,
     });
-    for (const item of refFindings) {
+    const refLabelFindings = classifyPublicLabel(ref.name);
+    if (refFindings.length > 0 || refLabelFindings.length > 0) {
       findings.push(historyFinding("sensitive ref name", `ref:${ref.objectId}`, ref.objectId, "ref"));
     }
   }
 
   let totalBytes = 0;
+  const blobs = new Map();
+  const trees = new Map();
+  const rootTrees = new Set();
   await readObjectsBatch(root, objectIds, async ({ objectId, type, bytes }) => {
     totalBytes += bytes.length;
     if (totalBytes > MAX_HISTORY_BYTES) throw historyFailure();
     if (type === "blob") {
-      const blobFindings = classifyPublicContent(bytes, {
-        label: objectLabels.get(objectId) ?? `blob:${objectId}`,
+      blobs.set(objectId, bytes);
+    } else if (type === "commit" || type === "tag") {
+      const metadata = scanGitMetadata({
+        objectId,
+        type,
+        bytes,
+        neutralObjectAllowlist,
       });
+      findings.push(...metadata.findings);
+      if (metadata.rootTree !== undefined) rootTrees.add(metadata.rootTree);
+    } else if (type === "tree") {
+      const tree = scanTreeObject(objectId, bytes);
+      findings.push(...tree.findings);
+      trees.set(objectId, tree.entries);
+    } else {
+      throw historyFailure();
+    }
+  });
+
+  const blobPaths = associateBlobPaths(rootTrees, trees, blobs);
+  for (const [objectId, bytes] of blobs) {
+    const paths = blobPaths.get(objectId) ?? new Set([`blob:${objectId}`]);
+    for (const label of paths) {
+      const blobFindings = classifyPublicContent(bytes, { label });
       findings.push(...blobFindings.map((item) => Object.freeze({
         ...item,
         objectId,
         objectType: "blob",
       })));
-    } else if (type === "commit" || type === "tag") {
-      findings.push(...scanGitMetadata({
-        objectId,
-        type,
-        bytes,
-        neutralObjectAllowlist,
-      }));
-    } else if (type === "tree") {
-      findings.push(...scanTreeObject(objectId, bytes));
-    } else {
-      throw historyFailure();
     }
-  });
+  }
 
   return Object.freeze({
     status: findings.length === 0 ? "passed" : "failed",
@@ -116,29 +132,58 @@ function scanGitMetadata({ objectId, type, bytes, neutralObjectAllowlist }) {
   const identityHeaders = type === "commit" ? new Set(["author", "committer"]) : new Set(["tagger"]);
   const observed = new Set();
   const findings = [];
+  let rootTree;
   for (const header of headers) {
     const separator = header.indexOf(" ");
-    if (separator < 1) continue;
+    if (separator === 0) {
+      const continuation = header.slice(1);
+      const continuationFindings = classifyPublicContent(Buffer.from(continuation, "utf8"), {
+        label: `${type}:${objectId}`,
+      });
+      const continuationLabelFindings = classifyPublicLabel(continuation);
+      if (continuationFindings.length > 0 || continuationLabelFindings.length > 0) {
+        findings.push(historyFinding("sensitive Git metadata", `${type}:${objectId}`, objectId, type));
+      }
+      continue;
+    }
+    if (separator < 1) throw historyFailure();
     const name = header.slice(0, separator);
-    if (!identityHeaders.has(name)) continue;
-    observed.add(name);
-    const email = parseIdentityEmail(header.slice(separator + 1));
-    if (email === undefined || !identityAllowed(email, objectId, neutralObjectAllowlist)) {
-      findings.push(historyFinding("personal identity", `${type}:${objectId}`, objectId, type));
+    const value = header.slice(separator + 1);
+    if (identityHeaders.has(name)) {
+      if (observed.has(name)) throw historyFailure();
+      observed.add(name);
+      const identity = parseIdentity(value);
+      if (identity === undefined || !identityAllowed(identity, objectId, neutralObjectAllowlist)) {
+        findings.push(historyFinding("personal identity", `${type}:${objectId}`, objectId, type));
+      }
+    }
+    if (type === "commit" && name === "tree") {
+      if (rootTree !== undefined || !/^[a-f0-9]{40}$/u.test(value)) throw historyFailure();
+      rootTree = value;
+    }
+    const headerFindings = classifyPublicContent(Buffer.from(value, "utf8"), {
+      label: `${type}:${objectId}`,
+    });
+    const headerLabelFindings = classifyPublicLabel(value);
+    if (headerFindings.length > 0 || headerLabelFindings.length > 0) {
+      findings.push(historyFinding("sensitive Git metadata", `${type}:${objectId}`, objectId, type));
     }
   }
-  if (observed.size !== identityHeaders.size) throw historyFailure();
+  if (observed.size !== identityHeaders.size || (type === "commit" && rootTree === undefined)) {
+    throw historyFailure();
+  }
   const messageFindings = classifyPublicContent(Buffer.from(message, "utf8"), {
     label: `${type}:${objectId}`,
   });
   if (messageFindings.length > 0) {
     findings.push(historyFinding("sensitive Git metadata", `${type}:${objectId}`, objectId, type));
   }
-  return findings;
+  return Object.freeze({ findings: Object.freeze(findings), rootTree });
 }
 
 function scanTreeObject(objectId, bytes) {
   const findings = [];
+  const entriesFound = [];
   let cursor = 0;
   let entries = 0;
   while (cursor < bytes.length) {
@@ -151,6 +196,10 @@ function scanTreeObject(objectId, bytes) {
     let name;
     try { name = new TextDecoder("utf-8", { fatal: true }).decode(nameBytes); }
     catch { throw historyFailure(); }
+    if (name === "." || name === ".." || name.includes("/") || name.includes("\\")) throw historyFailure();
+    const childId = bytes.subarray(nul + 1, nul + 21).toString("hex");
+    const kind = /^(?:0?40000)$/u.test(mode) ? "tree" : mode === "160000" ? "gitlink" : "blob";
+    entriesFound.push(Object.freeze({ name, objectId: childId, kind }));
     const nameFindings = classifyPublicLabel(name);
     const contentFindings = classifyPublicContent(Buffer.from(name, "utf8"), {
       label: `tree:${objectId}`,
@@ -163,18 +212,53 @@ function scanTreeObject(objectId, bytes) {
     if (entries > MAX_OBJECTS) throw historyFailure();
   }
   if (cursor !== bytes.length) throw historyFailure();
-  return findings;
+  return Object.freeze({ findings: Object.freeze(findings), entries: Object.freeze(entriesFound) });
 }
 
-function parseIdentityEmail(value) {
-  const match = /<([^<>\r\n]+)>\s+[0-9]+\s+[+-][0-9]{4}$/u.exec(value);
-  return match?.[1];
+function associateBlobPaths(rootTrees, trees, blobs) {
+  if (rootTrees.size === 0) throw historyFailure();
+  const blobPaths = new Map();
+  const visited = new Set();
+  const pending = [...rootTrees].map((treeId) => Object.freeze({ treeId, prefix: "" }));
+  let associations = 0;
+  while (pending.length > 0) {
+    const { treeId, prefix } = pending.pop();
+    const visitKey = `${treeId}\0${prefix}`;
+    if (visited.has(visitKey)) continue;
+    visited.add(visitKey);
+    const entries = trees.get(treeId);
+    if (entries === undefined) throw historyFailure();
+    for (const entry of entries) {
+      const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (path.length > 4096) throw historyFailure();
+      associations += 1;
+      if (associations > MAX_PATH_ASSOCIATIONS) throw historyFailure();
+      if (entry.kind === "tree") {
+        pending.push(Object.freeze({ treeId: entry.objectId, prefix: path }));
+      } else if (entry.kind === "blob") {
+        if (!blobs.has(entry.objectId)) throw historyFailure();
+        let paths = blobPaths.get(entry.objectId);
+        if (paths === undefined) {
+          paths = new Set();
+          blobPaths.set(entry.objectId, paths);
+        }
+        paths.add(path);
+      }
+    }
+  }
+  return blobPaths;
 }
 
-function identityAllowed(email, objectId, neutralObjectAllowlist) {
-  const normalized = email.normalize("NFKC").toLowerCase();
-  return isApprovedOwnerEmail(normalized)
-    || (normalized === NEUTRAL_EMAIL && neutralObjectAllowlist.has(objectId));
+function parseIdentity(value) {
+  const match = /^([^<>\r\n]+) <([^<>\r\n]+)>\s+[0-9]+\s+[+-][0-9]{4}$/u.exec(value);
+  if (match === null) return undefined;
+  return Object.freeze({ name: match[1], email: match[2] });
+}
+
+function identityAllowed(identity, objectId, neutralObjectAllowlist) {
+  return isApprovedOwnerIdentity(identity.name, identity.email)
+    || (identity.name === NEUTRAL_NAME && identity.email === NEUTRAL_EMAIL
+      && neutralObjectAllowlist.has(objectId));
 }
 
 function parseRefs(bytes) {
@@ -234,47 +318,65 @@ function parseObjectRecords(bytes) {
 }
 
 async function readObjectsBatch(root, objectIds, visit) {
-  await new Promise((resolvePromise, reject) => {
-    const child = spawn("git", ["-C", root, "cat-file", "--batch"], {
-      shell: false,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
+  const input = Buffer.from(`${objectIds.join("\n")}\n`, "ascii");
+  let lifecycle;
+  try {
+    lifecycle = await startBoundedProcess("git", ["-C", root, "cat-file", "--batch"], {
+      input,
+      timeoutMs: 15 * 60 * 1_000,
     });
+  } catch { throw historyFailure(); }
+  await new Promise((resolvePromise, reject) => {
+    const { child } = lifecycle;
     let buffer = Buffer.alloc(0);
     let expected = 0;
     let current;
     let processing = Promise.resolve();
     let stderrBytes = 0;
+    let aggregateBytes = 0;
     let failed;
-    const fail = () => {
+    let timer;
+    const fail = async () => {
       if (failed !== undefined) return;
       failed = historyFailure();
-      try { child.kill("SIGKILL"); } catch { /* failure remains authoritative */ }
+      clearTimeout(timer);
+      try { await lifecycle.terminate(); } catch { /* failure remains authoritative */ }
+      reject(failed);
     };
     child.stderr.on("data", (chunk) => {
       stderrBytes += chunk.length;
-      if (stderrBytes > 0) fail();
+      if (stderrBytes > 0) void fail();
     });
     child.stdout.on("data", (chunk) => {
       if (failed !== undefined) return;
+      aggregateBytes += chunk.length;
+      if (aggregateBytes > MAX_HISTORY_BYTES + (MAX_OBJECTS * 128)) {
+        void fail();
+        return;
+      }
       buffer = Buffer.concat([buffer, chunk]);
+      if (buffer.length > MAX_OBJECT_BYTES + 512) {
+        void fail();
+        return;
+      }
+      const records = [];
       while (true) {
         if (current === undefined) {
           const newline = buffer.indexOf(0x0a);
           if (newline < 0) {
-            if (buffer.length > 256) fail();
+            if (buffer.length > 256) void fail();
             break;
           }
           const header = buffer.subarray(0, newline).toString("ascii");
           buffer = buffer.subarray(newline + 1);
           const match = /^([a-f0-9]{40}) (blob|commit|tag|tree) ([0-9]+)$/u.exec(header);
-          if (match === null || match[1] !== objectIds[expected]) { fail(); break; }
+          if (match === null || match[1] !== objectIds[expected]) { void fail(); break; }
           const size = Number(match[3]);
-          if (!Number.isSafeInteger(size) || size < 0 || size > MAX_OBJECT_BYTES) { fail(); break; }
+          if (!Number.isSafeInteger(size) || size < 0 || size > MAX_OBJECT_BYTES) { void fail(); break; }
           current = { objectId: match[1], type: match[2], size };
         }
         if (buffer.length < current.size + 1) break;
-        if (buffer[current.size] !== 0x0a) { fail(); break; }
+        if (buffer[current.size] !== 0x0a) { void fail(); break; }
         const record = Object.freeze({
           objectId: current.objectId,
           type: current.type,
@@ -283,19 +385,33 @@ async function readObjectsBatch(root, objectIds, visit) {
         buffer = buffer.subarray(current.size + 1);
         current = undefined;
         expected += 1;
-        processing = processing.then(() => visit(record)).catch(() => fail());
+        records.push(record);
+      }
+      if (records.length > 0) {
+        child.stdout.pause();
+        processing = processing.then(async () => {
+          for (const record of records) await visit(record);
+        }).then(() => {
+          if (failed === undefined) child.stdout.resume();
+        }).catch(() => { void fail(); });
       }
     });
-    child.once("error", () => fail());
-    child.once("close", (code, signal) => {
+    lifecycle.exit.then(({ code, signal, error }) => {
+      if (error) { void fail(); return; }
       processing.finally(() => {
         if (failed !== undefined || code !== 0 || signal !== null || stderrBytes !== 0
           || expected !== objectIds.length || current !== undefined || buffer.length !== 0) {
-          reject(failed ?? historyFailure());
-        } else resolvePromise();
+          void fail();
+        } else {
+          clearTimeout(timer);
+          lifecycle.terminate().then((gone) => {
+            if (gone) resolvePromise();
+            else reject(historyFailure());
+          }, () => reject(historyFailure()));
+        }
       });
     });
-    child.stdin.end(`${objectIds.join("\n")}\n`);
+    timer = setTimeout(() => { void fail(); }, Math.max(1, lifecycle.deadline - Date.now()));
   });
 }
 

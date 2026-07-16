@@ -2,13 +2,20 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
-import { basename, extname, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { basename, extname, join, parse, relative, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_AGGREGATE_BYTES = 256 * 1024 * 1024;
 const MAX_ENTRIES = 20_000;
 const MAX_GIT_LIST_BYTES = 16 * 1024 * 1024;
+const DEFAULT_PROCESS_TIMEOUT_MS = 120_000;
+const MAX_PROCESS_TIMEOUT_MS = 15 * 60 * 1_000;
+const WINDOWS_RUNNER = fileURLToPath(new URL("./public-scan-command-runner.mjs", import.meta.url));
+const WINDOWS_SUPERVISOR = fileURLToPath(new URL(
+  "../packages/gpt-codex-hwp/src/workers/windows-job-supervisor.ps1",
+  import.meta.url,
+));
 const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
 const TEXT_EXTENSIONS = new Set([
   "", ".cjs", ".cts", ".css", ".csv", ".html", ".js", ".json", ".md",
@@ -27,13 +34,36 @@ const SAFE_SOURCE_FIXTURE_VALUE_HASHES = new Set([
   "0c9fbc892e3831e50109728b2d3b547b8626cd11f1621eeaadb6443f6a51c31e",
 ]);
 const OWNER_EMAIL = "224273819+Burntgogi@users.noreply.github.com";
+const OWNER_NAME = "Gpt_Codex_HWP contributors";
 
 export const PUBLIC_BINARY_ALLOWLIST = Object.freeze([
-  binaryRecord("gpt-codex-hwp-banner.png", 1_659_083, "2a17366c5d9d164c5b7c837fad1e13182f9414ff1363bf1a0e5ab9ec88bfabfd"),
-  binaryRecord("gpt-codex-hwp-icon.png", 331_169, "2928286646749c5d7272c3d25c981231bb31d6a4d6c2cb9cdc03d29e14898892"),
-  binaryRecord("gpt-codex-hwp-icon-128.png", 29_837, "e13ec563c49723aa5b78a755e9097bff28173b4c4214ca3c9e9dd886d0311812"),
-  binaryRecord("gpt-codex-hwp-icon-64.png", 9_053, "f3642b4ef5f6985ff3fa96f454d86f50ed745923ba31a51a1f73e92ddbbcd166"),
-  binaryRecord("re-01-hangul-only-hancom.hwp", 8_704, "61538931d2e2cf38f35050618ce7698960823938884d0d8977812c94587e85fd"),
+  binaryRecord([
+    "assets/gpt-codex-hwp-banner.png",
+    "packages/gpt-codex-hwp/assets/gpt-codex-hwp-banner.png",
+    "plugins/gpt-codex-hwp/assets/gpt-codex-hwp-banner.png",
+  ], 1_659_083, "2a17366c5d9d164c5b7c837fad1e13182f9414ff1363bf1a0e5ab9ec88bfabfd"),
+  binaryRecord([
+    "assets/gpt-codex-hwp-icon.png",
+    "packages/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
+    "plugins/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
+    "plugins/gpt-codex-hwp/skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
+    "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
+  ], 331_169, "2928286646749c5d7272c3d25c981231bb31d6a4d6c2cb9cdc03d29e14898892"),
+  binaryRecord([
+    "assets/gpt-codex-hwp-icon-128.png",
+    "packages/gpt-codex-hwp/assets/gpt-codex-hwp-icon-128.png",
+    "plugins/gpt-codex-hwp/assets/gpt-codex-hwp-icon-128.png",
+  ], 29_837, "e13ec563c49723aa5b78a755e9097bff28173b4c4214ca3c9e9dd886d0311812"),
+  binaryRecord([
+    "assets/gpt-codex-hwp-icon-64.png",
+    "packages/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
+    "plugins/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
+    "plugins/gpt-codex-hwp/skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
+    "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
+  ], 9_053, "f3642b4ef5f6985ff3fa96f454d86f50ed745923ba31a51a1f73e92ddbbcd166"),
+  binaryRecord([
+    "packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp",
+  ], 8_704, "61538931d2e2cf38f35050618ce7698960823938884d0d8977812c94587e85fd"),
 ]);
 
 export const PUBLIC_CONTENT_LIMITS = Object.freeze({
@@ -45,6 +75,7 @@ export const PUBLIC_CONTENT_LIMITS = Object.freeze({
 const REMEDIATIONS = Object.freeze({
   "absolute source map path": "Remove absolute sources or omit the source map.",
   "aggregate byte budget": "Reduce the scanned public input set.",
+  "aggregate entry budget": "Reduce the number of public files and directories.",
   "binary not allowlisted": "Remove the binary or approve its exact size and SHA-256.",
   "cloud credential": "Revoke the credential and remove it from every public object.",
   "credential filename": "Remove the credential file and publish only a safe example template.",
@@ -81,7 +112,7 @@ export function classifyPublicContent(input, options = {}) {
   if (filenameFinding !== undefined) findings.push(finding(filenameFinding, label));
 
   const binaryAllowlist = normalizeBinaryAllowlist(options.binaryAllowlist ?? PUBLIC_BINARY_ALLOWLIST);
-  if (isAllowlistedBinary(bytes, binaryAllowlist)) return Object.freeze(findings);
+  if (isAllowlistedBinary(bytes, label, binaryAllowlist)) return Object.freeze(findings);
   const looksBinary = BINARY_EXTENSIONS.has(extension) || bytes.includes(0);
   let text;
   try {
@@ -101,6 +132,7 @@ export function classifyPublicContent(input, options = {}) {
   if (hasCloudAccessKey(normalized)) findings.push(finding("cloud credential", label));
   if (hasPrivateKeyHeader(normalized)) findings.push(finding("private key", label));
   if (hasLiteralNpmCredential(normalized)) findings.push(finding("literal credential", label));
+  if (hasMixedCredentialReference(normalized)) findings.push(finding("literal credential", label));
   if (hasLiteralCredentialAssignment(normalized, scope)) findings.push(finding("literal credential", label));
   if (hasConcreteHomePath(normalized)) findings.push(finding("personal home path", label));
   if (extension === ".map" && hasAbsoluteSourceMapPath(normalized)) {
@@ -121,22 +153,44 @@ export function classifyPublicLabel(label) {
 }
 
 export async function scanPublicDirectory(root, options = {}) {
-  const canonicalRoot = await canonicalDirectory(root);
   const limits = validateLimits(options);
   const binaryAllowlist = options.binaryAllowlist ?? PUBLIC_BINARY_ALLOWLIST;
-  const state = { entries: 0, aggregateBytes: 0, findings: [] };
-  await walkDirectory(canonicalRoot, canonicalRoot, state, limits, binaryAllowlist);
-  if (state.findings.length > 0) throw publicScanError(state.findings);
+  let boundary;
+  try { boundary = await createOwnedBoundary(root); }
+  catch (error) { throw publicScanError([boundaryFinding(error)]); }
+  let entries = 0;
+  let aggregateBytes = 0;
+  const findings = [];
+  try {
+    for await (const record of walkOwnedRegularFiles(boundary, {
+      maxEntries: limits.maxEntries,
+      maxFileBytes: limits.maxFileBytes,
+    })) {
+      entries = record.entries;
+      aggregateBytes += record.bytes.length;
+      if (aggregateBytes > limits.maxAggregateBytes) {
+        findings.push(finding("aggregate byte budget", record.label));
+        break;
+      }
+      findings.push(...classifyPublicContent(record.bytes, { label: record.label, binaryAllowlist }));
+    }
+  } catch (error) {
+    findings.push(boundaryFinding(error));
+  }
+  if (findings.length > 0) throw publicScanError(findings);
   return Object.freeze({
     status: "passed",
-    entries: state.entries,
-    bytes: state.aggregateBytes,
+    entries,
+    bytes: aggregateBytes,
     findings: Object.freeze([]),
   });
 }
 
 export async function scanTrackedPublicTree(options = {}) {
-  const root = resolve(options.root ?? process.cwd());
+  let boundary;
+  try { boundary = await createOwnedBoundary(options.root ?? process.cwd()); }
+  catch (error) { throw publicScanError([boundaryFinding(error)]); }
+  const root = boundary.root;
   const limits = validateLimits(options);
   const result = await runBoundedProcess("git", ["-C", root, "ls-files", "-z"], {
     maxOutputBytes: MAX_GIT_LIST_BYTES,
@@ -162,7 +216,7 @@ export async function scanTrackedPublicTree(options = {}) {
     }
     let record;
     try {
-      record = await readRegularFileBounded(path, limits.maxFileBytes);
+      record = await readOwnedRegularFile(boundary, path, name, limits.maxFileBytes);
     } catch (error) {
       findings.push(finding(error?.code === "PUBLIC_FILE_TOO_LARGE"
         ? "file byte budget"
@@ -208,60 +262,95 @@ export function publicScanFailure(findings, message = "Public content scan faile
 }
 
 export function isApprovedOwnerEmail(email) {
-  return typeof email === "string" && email.normalize("NFKC").toLowerCase() === OWNER_EMAIL.toLowerCase();
+  return typeof email === "string" && email === OWNER_EMAIL;
 }
 
-async function walkDirectory(root, current, state, limits, binaryAllowlist) {
-  const directory = await opendir(current);
-  for await (const entry of directory) {
-    state.entries += 1;
-    const path = resolve(current, entry.name);
-    const label = relative(root, path).replaceAll("\\", "/");
-    if (state.entries > limits.maxEntries) {
-      state.findings.push(finding("aggregate byte budget", label));
-      return;
-    }
-    let metadata;
-    try { metadata = await lstat(path); }
-    catch { state.findings.push(finding("non-regular file", label)); continue; }
-    if (metadata.isSymbolicLink()) {
-      state.findings.push(finding("symbolic link", label));
-    } else if (metadata.isDirectory()) {
-      await walkDirectory(root, path, state, limits, binaryAllowlist);
-    } else if (!metadata.isFile()) {
-      state.findings.push(finding("non-regular file", label));
-    } else if (metadata.size > limits.maxFileBytes) {
-      state.findings.push(finding("file byte budget", label));
-    } else {
-      let record;
-      try { record = await readRegularFileBounded(path, limits.maxFileBytes); }
-      catch (error) {
-        state.findings.push(finding(error?.code === "PUBLIC_FILE_TOO_LARGE"
-          ? "file byte budget" : error?.code === "PUBLIC_SYMBOLIC_LINK"
-            ? "symbolic link" : "non-regular file", label));
-        continue;
-      }
-      state.aggregateBytes += record.bytes.length;
-      if (state.aggregateBytes > limits.maxAggregateBytes) {
-        state.findings.push(finding("aggregate byte budget", label));
-        return;
-      }
-      state.findings.push(...classifyPublicContent(record.bytes, { label, binaryAllowlist }));
-    }
+export function isApprovedOwnerIdentity(name, email) {
+  return name === OWNER_NAME && email === OWNER_EMAIL;
+}
+
+export async function createOwnedBoundary(root) {
+  const resolvedRoot = resolve(root);
+  try {
+    await rejectJunctionAncestors(resolvedRoot);
+    const before = await lstat(resolvedRoot);
+    if (before.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK");
+    if (!before.isDirectory()) throw codedError("PUBLIC_NON_REGULAR");
+    const canonicalRoot = await realpath(resolvedRoot);
+    if (!samePath(resolvedRoot, canonicalRoot)) throw codedError("PUBLIC_SYMBOLIC_LINK");
+    const after = await lstat(resolvedRoot);
+    if (!sameIdentity(before, after) || !after.isDirectory()) throw codedError("PUBLIC_FILE_CHANGED");
+    return Object.freeze({ root: resolvedRoot, canonicalRoot, identity: identityOf(after) });
+  } catch (error) {
+    if (error?.code?.startsWith?.("PUBLIC_")) throw error;
+    throw codedError("PUBLIC_NON_REGULAR");
   }
 }
 
-async function readRegularFileBounded(path, maxBytes) {
-  const before = await lstat(path);
-  if (before.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK");
-  if (!before.isFile()) throw codedError("PUBLIC_NON_REGULAR");
-  if (before.size > maxBytes) throw codedError("PUBLIC_FILE_TOO_LARGE");
+export async function* walkOwnedRegularFiles(boundary, options = {}) {
+  validateBoundary(boundary);
+  const maxEntries = options.maxEntries ?? MAX_ENTRIES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > MAX_ENTRIES) {
+    throw codedError("PUBLIC_ENTRY_BUDGET");
+  }
+  const maxFileBytes = options.maxFileBytes ?? MAX_FILE_BYTES;
+  if (!Number.isSafeInteger(maxFileBytes) || maxFileBytes < 1 || maxFileBytes > MAX_FILE_BYTES) {
+    throw codedError("PUBLIC_FILE_TOO_LARGE");
+  }
+  const state = { entries: 0 };
+  yield* walkOwnedDirectory(boundary, boundary.root, state, maxEntries, maxFileBytes);
+}
+
+async function* walkOwnedDirectory(boundary, current, state, maxEntries, maxFileBytes) {
+  const before = await verifyOwnedDirectory(boundary, current);
+  const directory = await opendir(current);
+  try {
+    const opened = await lstat(current);
+    if (!sameIdentity(before, opened) || !opened.isDirectory()) throw codedError("PUBLIC_FILE_CHANGED");
+    for await (const entry of directory) {
+      state.entries += 1;
+      const path = join(current, entry.name);
+      const label = relative(boundary.root, path).replaceAll("\\", "/");
+      if (state.entries > maxEntries) throw codedError("PUBLIC_ENTRY_BUDGET", label);
+      const metadata = await lstat(path);
+      if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK", label);
+      if (metadata.isDirectory()) {
+        yield* walkOwnedDirectory(boundary, path, state, maxEntries, maxFileBytes);
+      } else if (metadata.isFile()) {
+        const record = await readOwnedRegularFile(boundary, path, label, maxFileBytes);
+        yield Object.freeze({ ...record, label, entries: state.entries });
+      } else throw codedError("PUBLIC_NON_REGULAR", label);
+    }
+  } finally {
+    try { await directory.close(); } catch { /* for-await may already close it */ }
+  }
+  const after = await verifyOwnedDirectory(boundary, current);
+  if (!sameIdentity(before, after)) throw codedError("PUBLIC_FILE_CHANGED");
+}
+
+export async function readOwnedRegularFile(boundary, path, label, maxBytes = MAX_FILE_BYTES) {
+  validateBoundary(boundary);
+  requiredLabel(label);
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_FILE_BYTES) {
+    throw codedError("PUBLIC_FILE_TOO_LARGE", label);
+  }
+  const resolvedPath = resolve(path);
+  if (!insideRoot(boundary.root, resolvedPath) || resolvedPath === boundary.root) {
+    throw codedError("PUBLIC_NON_REGULAR", label);
+  }
+  await verifyOwnedAncestors(boundary, resolvedPath);
+  const before = await lstat(resolvedPath);
+  if (before.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK", label);
+  if (!before.isFile()) throw codedError("PUBLIC_NON_REGULAR", label);
+  if (before.size > maxBytes) throw codedError("PUBLIC_FILE_TOO_LARGE", label);
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-  const handle = await open(path, fsConstants.O_RDONLY | noFollow);
+  const handle = await open(resolvedPath, fsConstants.O_RDONLY | noFollow);
   try {
     const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
-      throw codedError("PUBLIC_FILE_CHANGED");
+    const canonicalPath = await realpath(resolvedPath);
+    if (!opened.isFile() || !sameIdentity(opened, before)
+      || !insideRoot(boundary.canonicalRoot, canonicalPath)) {
+      throw codedError("PUBLIC_FILE_CHANGED", label);
     }
     const chunks = [];
     let total = 0;
@@ -270,27 +359,80 @@ async function readRegularFileBounded(path, maxBytes) {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (bytesRead === 0) break;
       total += bytesRead;
-      if (total > maxBytes) throw codedError("PUBLIC_FILE_TOO_LARGE");
+      if (total > maxBytes) throw codedError("PUBLIC_FILE_TOO_LARGE", label);
       chunks.push(buffer.subarray(0, bytesRead));
     }
-    const after = await handle.stat();
-    if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== total
+    const [after, pathAfter, canonicalAfter] = await Promise.all([
+      handle.stat(),
+      lstat(resolvedPath),
+      realpath(resolvedPath),
+    ]);
+    if (!sameIdentity(after, opened) || !sameIdentity(pathAfter, opened) || after.size !== total
       || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) {
-      throw codedError("PUBLIC_FILE_CHANGED");
+      throw codedError("PUBLIC_FILE_CHANGED", label);
     }
+    if (!insideRoot(boundary.canonicalRoot, canonicalAfter)) throw codedError("PUBLIC_FILE_CHANGED", label);
     return Object.freeze({ bytes: Buffer.concat(chunks, total) });
   } finally {
     await handle.close();
   }
 }
 
-async function canonicalDirectory(root) {
-  const resolved = resolve(root);
-  const info = await lstat(resolved);
-  if (info.isSymbolicLink() || !info.isDirectory()) throw publicScanError([
-    finding(info.isSymbolicLink() ? "symbolic link" : "non-regular file", "<root>"),
-  ]);
-  return await realpath(resolved);
+async function verifyOwnedDirectory(boundary, path) {
+  await verifyOwnedAncestors(boundary, path);
+  const metadata = await lstat(path);
+  if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK");
+  if (!metadata.isDirectory()) throw codedError("PUBLIC_NON_REGULAR");
+  const canonical = await realpath(path);
+  if (!insideRoot(boundary.canonicalRoot, canonical)) throw codedError("PUBLIC_FILE_CHANGED");
+  return metadata;
+}
+
+async function verifyOwnedAncestors(boundary, target) {
+  const parentRelative = relative(boundary.root, resolve(target));
+  if (parentRelative.startsWith("..") || resolve(target) === boundary.root) return;
+  const parts = parentRelative.split(/[\\/]/u).slice(0, -1);
+  let current = boundary.root;
+  for (const part of parts) {
+    current = join(current, part);
+    const metadata = await lstat(current);
+    if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK");
+    if (!metadata.isDirectory()) throw codedError("PUBLIC_NON_REGULAR");
+    const canonical = await realpath(current);
+    if (!insideRoot(boundary.canonicalRoot, canonical)) throw codedError("PUBLIC_FILE_CHANGED");
+  }
+}
+
+async function rejectJunctionAncestors(path) {
+  const root = parse(path).root;
+  let current = root;
+  const parts = relative(root, path).split(/[\\/]/u).filter(Boolean);
+  for (const part of parts) {
+    current = join(current, part);
+    const metadata = await lstat(current);
+    if (metadata.isSymbolicLink()) throw codedError("PUBLIC_SYMBOLIC_LINK");
+  }
+}
+
+function validateBoundary(boundary) {
+  if (boundary === null || typeof boundary !== "object"
+    || typeof boundary.root !== "string" || typeof boundary.canonicalRoot !== "string") {
+    throw codedError("PUBLIC_NON_REGULAR");
+  }
+}
+
+function identityOf(metadata) {
+  return Object.freeze({ dev: metadata.dev, ino: metadata.ino });
+}
+
+function sameIdentity(left, right) {
+  return left?.dev === right?.dev && left?.ino === right?.ino;
+}
+
+function samePath(left, right) {
+  return process.platform === "win32"
+    ? resolve(left).toLowerCase() === resolve(right).toLowerCase()
+    : resolve(left) === resolve(right);
 }
 
 function validateLimits(options) {
@@ -384,10 +526,28 @@ function isCredentialKey(key) {
 
 function isAllowedCredentialReference(value, scope) {
   const normalized = String(value).trim();
-  if (normalized === "" || /^(?:<[^>]+>|\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|REDACTED|YOUR[_-]|PLACEHOLDER|EXAMPLE|process\.env\.|Deno\.env\.|os\.environ)/iu.test(normalized)) {
+  const exactReference = /^(?:<[^>]+>|\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|REDACTED|YOUR[_-][A-Z0-9_-]*|PLACEHOLDER|EXAMPLE|process\.env(?:\.[A-Z_][A-Z0-9_]*|\[["'][A-Z_][A-Z0-9_]*["']\])|Deno\.env\.get\(["'][A-Z_][A-Z0-9_]*["']\)|os\.environ\[["'][A-Z_][A-Z0-9_]*["']\])$/iu;
+  if (normalized === "" || exactReference.test(normalized)) {
     return true;
   }
+  if (scope === "source") {
+    const fixtureReference = normalized.replace(/\\[nrt]["']?$/u, "");
+    if (fixtureReference !== normalized && exactReference.test(fixtureReference)) return true;
+  }
   return scope === "source" && /^(?:secret|must-not-propagate|PRIVATE_[A-Z0-9_]*_VALUE|0{8}-0{4}-0{4}-0{4}-0{12})$/u.test(normalized);
+}
+
+function hasMixedCredentialReference(text) {
+  const reference = /(?:\$\{[A-Z_][A-Z0-9_]*\}|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|process\.env(?:\.[A-Z_][A-Z0-9_]*|\[["'][A-Z_][A-Z0-9_]*["']\])|Deno\.env\.get\(["'][A-Z_][A-Z0-9_]*["']\)|os\.environ\[["'][A-Z_][A-Z0-9_]*["']\])/giu;
+  for (const match of text.matchAll(reference)) {
+    const lineStart = text.lastIndexOf("\n", match.index - 1) + 1;
+    const prefix = text.slice(lineStart, match.index);
+    const assignment = /["']?([A-Za-z][A-Za-z0-9_-]*)["']?\s*[:=]\s*["'`]?\s*$/u.exec(prefix);
+    if (assignment === null || !isCredentialKey(assignment[1])) continue;
+    const suffix = text.slice(match.index + match[0].length).match(/^[ \t]*([^\r\n,;}\])])/u)?.[1];
+    if (suffix !== undefined && /^(?:\||&|\?|\+|-|\*|\/|`|[A-Za-z0-9_$])/u.test(suffix)) return true;
+  }
+  return false;
 }
 
 function isProtocolProgressReference({ match, key, value, scope, notificationRanges, sourceMetaRanges }) {
@@ -450,24 +610,29 @@ function credentialFilenameCategory(label) {
   return undefined;
 }
 
-function isAllowlistedBinary(bytes, allowlist) {
+function isAllowlistedBinary(bytes, label, allowlist) {
   const digest = sha256(bytes);
-  return allowlist.some((record) => record.size === bytes.length && record.sha256 === digest);
+  const normalizedLabel = label.replaceAll("\\", "/");
+  return allowlist.some((record) => record.size === bytes.length && record.sha256 === digest
+    && record.paths.includes(normalizedLabel));
 }
 
 function normalizeBinaryAllowlist(value) {
   if (!Array.isArray(value)) throw new TypeError("binaryAllowlist must be an array");
   for (const record of value) {
     if (!Number.isSafeInteger(record?.size) || record.size < 0
-      || typeof record.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.sha256)) {
+      || typeof record.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.sha256)
+      || !Array.isArray(record.paths) || record.paths.length === 0
+      || record.paths.some((path) => !safeRepositoryPath(path))
+      || new Set(record.paths).size !== record.paths.length) {
       throw new TypeError("binaryAllowlist record is invalid");
     }
   }
   return value;
 }
 
-function binaryRecord(name, size, sha256Value) {
-  return Object.freeze({ name, size, sha256: sha256Value });
+function binaryRecord(paths, size, sha256Value) {
+  return Object.freeze({ paths: Object.freeze([...paths]), size, sha256: sha256Value });
 }
 
 function isKnownTextFilename(label) {
@@ -554,52 +719,370 @@ function safeRepositoryPath(name) {
 function insideRoot(root, path) {
   const normalizedRoot = resolve(root);
   const normalizedPath = resolve(path);
-  return normalizedPath === normalizedRoot
-    || normalizedPath.toLowerCase().startsWith(`${normalizedRoot}${sep}`.toLowerCase());
+  if (process.platform === "win32") {
+    return normalizedPath.toLowerCase() === normalizedRoot.toLowerCase()
+      || normalizedPath.toLowerCase().startsWith(`${normalizedRoot}${sep}`.toLowerCase());
+  }
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}${sep}`);
 }
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function codedError(code) {
+function boundaryFinding(error) {
+  const category = error?.code === "PUBLIC_FILE_TOO_LARGE" ? "file byte budget"
+    : error?.code === "PUBLIC_ENTRY_BUDGET" ? "aggregate entry budget"
+      : error?.code === "PUBLIC_SYMBOLIC_LINK" ? "symbolic link" : "non-regular file";
+  return finding(category, error?.publicLabel ?? "<boundary>");
+}
+
+function codedError(code, publicLabel) {
   const error = new Error(code);
   error.code = code;
+  if (publicLabel !== undefined) error.publicLabel = safeLabel(publicLabel);
   return error;
 }
 
 export async function runBoundedProcess(tool, args, options = {}) {
   const maxOutputBytes = options.maxOutputBytes ?? MAX_GIT_LIST_BYTES;
-  return await new Promise((resolvePromise, reject) => {
-    const child = spawn(tool, args, {
-      cwd: options.cwd,
-      env: options.env,
-      shell: false,
-      windowsHide: true,
-      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-    });
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) {
+    throw new TypeError("bounded process options are invalid");
+  }
+  let lifecycle;
+  try { lifecycle = await startBoundedProcess(tool, args, options); }
+  catch (error) {
+    return failedProcessReceipt({ timedOut: error?.code === "PUBLIC_PROCESS_TIMEOUT" });
+  }
+  return await collectBoundedProcess(lifecycle.child, {
+    deadline: lifecycle.deadline,
+    exit: lifecycle.exit,
+    maxOutputBytes,
+    terminate: lifecycle.terminate,
+  });
+}
+
+export async function startBoundedProcess(tool, args, options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS;
+  if (typeof tool !== "string" || tool.length < 1 || tool.length > 4096
+    || !Array.isArray(args) || args.some((value) => typeof value !== "string" || value.length > 4096)
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_PROCESS_TIMEOUT_MS) {
+    throw new TypeError("bounded process options are invalid");
+  }
+  const input = options.input === undefined ? Buffer.alloc(0) : asBuffer(options.input);
+  const deadline = Date.now() + timeoutMs;
+  let child;
+  let exit;
+  let supervisor;
+  let startupHelper;
+  try {
+    if (process.platform === "win32") {
+      child = spawn(process.execPath, [WINDOWS_RUNNER], {
+        cwd: options.cwd,
+        env: options.env,
+        shell: false,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe", "pipe"],
+      });
+      exit = observeProcessExit(child);
+      const control = child.stdio[3];
+      if (control === null || typeof control.on !== "function") throw codedError("PUBLIC_PROCESS_START");
+      const startup = await withinDeadline(Promise.all([
+        readExactControlLine(control, "GPT_CODEX_HWP_SCAN_RUNNER_READY", 128),
+        createWindowsProcessSupervisor(child, (helper) => { startupHelper = helper; }),
+      ]), deadline);
+      supervisor = startup[1];
+      child.stdin.end(encodeWindowsRunnerInput(tool, args, input));
+    } else {
+      child = spawn(tool, args, {
+        cwd: options.cwd,
+        env: options.env,
+        detached: true,
+        shell: false,
+        windowsHide: true,
+        stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      });
+      exit = observeProcessExit(child);
+      if (options.input !== undefined) child.stdin.end(input);
+    }
+  } catch {
+    await abortStartup(child, supervisor, startupHelper);
+    const error = codedError(Date.now() >= deadline ? "PUBLIC_PROCESS_TIMEOUT" : "PUBLIC_PROCESS_START");
+    throw error;
+  }
+  let activeTermination;
+  const terminate = () => {
+    activeTermination ??= (async () => {
+      const gone = process.platform === "win32"
+        ? await supervisor.terminate()
+        : await terminatePosixProcessGroup(child);
+      destroyProcessPipes(child);
+      return gone;
+    })();
+    return activeTermination;
+  };
+  return Object.freeze({
+    child,
+    deadline,
+    exit,
+    terminate,
+  });
+}
+
+async function collectBoundedProcess(child, { deadline, exit, maxOutputBytes, terminate }) {
+  return await new Promise((resolvePromise) => {
     const stdout = [];
     const stderr = [];
     let total = 0;
     let overflow = false;
-    const collect = (target) => (chunk) => {
-      total += chunk.length;
-      if (total > maxOutputBytes) {
-        overflow = true;
-        child.kill("SIGKILL");
-      } else target.push(chunk);
+    let timedOut = false;
+    let terminal = false;
+    let stopping = false;
+    const remaining = Math.max(1, deadline - Date.now());
+    let timer;
+    const finish = async (code, signal) => {
+      if (terminal) return;
+      terminal = true;
+      clearTimeout(timer);
+      let treeGone = false;
+      try { treeGone = await terminate(); } catch { treeGone = false; }
+      destroyProcessPipes(child);
+      resolvePromise(Object.freeze({
+        code: overflow || timedOut || !treeGone ? -1 : code,
+        signal,
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr),
+        overflow,
+        timedOut,
+        terminationFailed: !treeGone,
+      }));
     };
-    child.stdout.on("data", collect(stdout));
-    child.stderr.on("data", collect(stderr));
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolvePromise(Object.freeze({
-      code: overflow ? -1 : code,
-      signal,
-      stdout: Buffer.concat(stdout),
-      stderr: Buffer.concat(stderr),
-      overflow,
-    })));
-    if (options.input !== undefined) child.stdin.end(options.input);
+    const stop = async (reason) => {
+      if (stopping || terminal) return;
+      stopping = true;
+      if (reason === "overflow") overflow = true;
+      if (reason === "timeout") timedOut = true;
+      let treeGone = false;
+      try { treeGone = await terminate(); } catch { treeGone = false; }
+      destroyProcessPipes(child);
+      if (terminal) return;
+      terminal = true;
+      clearTimeout(timer);
+      resolvePromise(Object.freeze({
+        ...failedProcessReceipt({ overflow, timedOut }),
+        terminationFailed: !treeGone,
+      }));
+    };
+    const collect = (target) => (chunk) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += bytes.length;
+      if (total > maxOutputBytes) void stop("overflow");
+      else target.push(bytes);
+    };
+    child.stdout?.on("data", collect(stdout));
+    child.stderr?.on("data", collect(stderr));
+    exit.then(({ code, signal, error }) => {
+      if (error) void stop("error");
+      else void finish(code, signal);
+    });
+    timer = setTimeout(() => { void stop("timeout"); }, remaining);
+  });
+}
+
+function observeProcessExit(child) {
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolvePromise(Object.freeze(value));
+    };
+    child.once("error", () => finish({ code: null, signal: null, error: true }));
+    child.once("close", (code, signal) => finish({ code, signal, error: false }));
+  });
+}
+
+function failedProcessReceipt({ overflow = false, timedOut = false } = {}) {
+  return Object.freeze({
+    code: -1,
+    signal: null,
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    overflow,
+    timedOut,
+    terminationFailed: false,
+  });
+}
+
+function encodeWindowsRunnerInput(tool, args, input) {
+  const frame = Buffer.from(JSON.stringify({ tool, args }), "utf8");
+  if (frame.length > 64 * 1024 || input.length > 32 * 1024 * 1024) {
+    throw codedError("PUBLIC_PROCESS_START");
+  }
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(frame.length);
+  return Buffer.concat([header, frame, input]);
+}
+
+async function createWindowsProcessSupervisor(child, observeHelper) {
+  if (!Number.isInteger(child?.pid)) throw codedError("PUBLIC_PROCESS_START");
+  const systemRoot = process.env.SystemRoot;
+  if (typeof systemRoot !== "string" || !/^[A-Za-z]:[\\/]/u.test(systemRoot)) {
+    throw codedError("PUBLIC_PROCESS_START");
+  }
+  const powershell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const helper = spawn(powershell, [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-File", WINDOWS_SUPERVISOR, "-TargetPid", String(child.pid), "-ForceTracker",
+  ], {
+    env: minimalWindowsHelperEnvironment(process.env),
+    shell: false,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  observeHelper?.(helper);
+  const lines = new BoundedLineReader(helper.stdout, 256);
+  let stderrBytes = 0;
+  helper.stderr.on("data", (chunk) => { stderrBytes += chunk.length; });
+  const ready = await lines.next(10_000);
+  if (!new RegExp(`^GPT_CODEX_HWP_JOB READY ${child.pid} [12] [0-9]+$`, "u").test(ready)
+    || stderrBytes !== 0) {
+    throw codedError("PUBLIC_PROCESS_START");
+  }
+  let active;
+  return Object.freeze({
+    terminate() {
+      active ??= (async () => {
+        try {
+          helper.stdin.end("TERMINATE\n");
+          let line = await lines.next(5_000);
+          if (/^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(line)) line = await lines.next(5_000);
+          if (!/^GPT_CODEX_HWP_JOB GONE 0 [12]$/u.test(line) || stderrBytes !== 0) return false;
+          return await waitForClose(helper, 5_000) === 0;
+        } catch { return false; }
+      })();
+      return active;
+    },
+    cancel() {
+      destroyProcessPipes(helper);
+      try { helper.kill("SIGKILL"); } catch { /* gated child remains separately owned */ }
+    },
+  });
+}
+
+function minimalWindowsHelperEnvironment(source) {
+  const result = {};
+  for (const key of ["SystemRoot", "WINDIR", "LANG", "LC_ALL", "TEMP", "TMP"]) {
+    if (typeof source[key] === "string") result[key] = source[key];
+  }
+  return result;
+}
+
+class BoundedLineReader {
+  #buffer = Buffer.alloc(0);
+  #lines = [];
+  #waiters = [];
+  #failed;
+  constructor(stream, maxBytes) {
+    this.maxBytes = maxBytes;
+    stream.on("data", (chunk) => this.#push(Buffer.from(chunk)));
+    stream.on("end", () => this.#fail());
+    stream.on("error", () => this.#fail());
+    stream.on("close", () => this.#fail());
+  }
+  next(timeoutMs) {
+    if (this.#lines.length > 0) return Promise.resolve(this.#lines.shift());
+    if (this.#failed) return Promise.reject(codedError("PUBLIC_PROCESS_START"));
+    return new Promise((resolvePromise, reject) => {
+      const waiter = { resolve: resolvePromise, reject };
+      this.#waiters.push(waiter);
+      waiter.timer = setTimeout(() => {
+        this.#waiters = this.#waiters.filter((item) => item !== waiter);
+        reject(codedError("PUBLIC_PROCESS_START"));
+      }, timeoutMs);
+    });
+  }
+  #push(chunk) {
+    if (this.#failed) return;
+    this.#buffer = Buffer.concat([this.#buffer, chunk]);
+    if (this.#buffer.length > this.maxBytes) return this.#fail();
+    let newline;
+    while ((newline = this.#buffer.indexOf(0x0a)) >= 0) {
+      const raw = this.#buffer.subarray(0, newline);
+      this.#buffer = this.#buffer.subarray(newline + 1);
+      const line = raw.at(-1) === 0x0d ? raw.subarray(0, -1).toString("ascii") : raw.toString("ascii");
+      const waiter = this.#waiters.shift();
+      if (waiter === undefined) this.#lines.push(line);
+      else { clearTimeout(waiter.timer); waiter.resolve(line); }
+    }
+  }
+  #fail() {
+    if (this.#failed) return;
+    this.#failed = true;
+    for (const waiter of this.#waiters.splice(0)) {
+      clearTimeout(waiter.timer);
+      waiter.reject(codedError("PUBLIC_PROCESS_START"));
+    }
+  }
+}
+
+async function readExactControlLine(stream, expected, maxBytes) {
+  const reader = new BoundedLineReader(stream, maxBytes);
+  const line = await reader.next(10_000);
+  if (line !== expected) throw codedError("PUBLIC_PROCESS_START");
+}
+
+async function withinDeadline(promise, deadline) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw codedError("PUBLIC_PROCESS_TIMEOUT");
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(codedError("PUBLIC_PROCESS_TIMEOUT")), remaining); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+async function terminatePosixProcessGroup(child) {
+  if (!Number.isInteger(child?.pid)) return true;
+  try { process.kill(-child.pid, "SIGTERM"); } catch { /* it may already be gone */ }
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+  try { process.kill(-child.pid, "SIGKILL"); } catch { /* it may already be gone */ }
+  return true;
+}
+
+async function abortStartup(child, supervisor, startupHelper) {
+  try { supervisor?.cancel(); } catch { /* startup already failed */ }
+  if (supervisor === undefined && startupHelper !== undefined) {
+    destroyProcessPipes(startupHelper);
+    try { startupHelper.kill("SIGKILL"); } catch { /* startup helper may already be gone */ }
+  }
+  if (child !== undefined) {
+    destroyProcessPipes(child);
+    try { child.kill("SIGKILL"); } catch { /* gated runner may already be gone */ }
+  }
+}
+
+function destroyProcessPipes(child) {
+  for (const stream of [child?.stdin, child?.stdout, child?.stderr, ...(child?.stdio ?? []).slice(3)]) {
+    try { stream?.destroy?.(); } catch { /* cleanup is best effort after bounded termination */ }
+  }
+  try { child?.unref?.(); } catch { /* cleanup is best effort */ }
+}
+
+async function waitForClose(child, timeoutMs) {
+  if (child.exitCode !== null) return child.exitCode;
+  return await new Promise((resolvePromise) => {
+    let settled = false;
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise(code);
+    };
+    child.once("close", finish);
+    const timer = setTimeout(() => finish(null), timeoutMs);
   });
 }
 

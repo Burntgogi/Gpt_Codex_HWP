@@ -16,6 +16,7 @@ import {
   PUBLIC_BINARY_ALLOWLIST,
   assertPublicContentBuffer,
   formatPublicFindings,
+  runBoundedProcess,
   scanPublicDirectory,
 } from "../scripts/public-content-policy.mjs";
 import { scanPublicHistory } from "../scripts/scan-public-history.mjs";
@@ -56,8 +57,8 @@ test("public content policy detects secrets, personal paths, and unsafe metadata
 
 test("public content policy preserves deliberate false-positive controls", () => {
   const safe = [
-    "OPENAI_API_KEY=${OPENAI_API_KEY}\n",
-    "apiKey=<your-key>\n",
+    fragments("OPENAI_API", "_KEY=$", "{OPENAI_API_KEY}\n"),
+    fragments("api", "Key=<your-key>\n"),
     "Never paste a private key, password, token, or secret here.\n",
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA public@example.invalid\n",
     "-----BEGIN CERTIFICATE-----\npublic material\n-----END CERTIFICATE-----\n",
@@ -110,11 +111,41 @@ test("public content policy limits progress-token exceptions to protocol context
   ), { label: "src/credential.ts", scope: "source" }));
 });
 
+test("credential references must occupy the whole assigned expression", () => {
+  const accepted = [
+    fragments("api", "Key = process", ".env.OPENAI_API_KEY"),
+    fragments("api", "Key = $", "{OPENAI_API_KEY}"),
+    fragments("api", "Key = os", ".environ[\"OPENAI_API_KEY\"]"),
+  ];
+  for (const contents of accepted) assert.doesNotThrow(() => assertPublicContentBuffer(
+    Buffer.from(contents), { label: "safe/reference.ts", scope: "runtime" },
+  ));
+
+  const rejected = [
+    fragments("api", "Key = process", ".env.OPENAI_API_KEY || fallback"),
+    fragments("api", "Key = process", ".env.OPENAI_API_KEY + suffix"),
+    fragments("api", "Key = $", "{OPENAI_API_KEY}-suffix"),
+    fragments("api", "Key = `$", "{OPENAI_API_KEY}-suffix`"),
+  ];
+  for (const contents of rejected) assert.throws(() => assertPublicContentBuffer(
+    Buffer.from(contents), { label: "unsafe/reference.ts", scope: "runtime" },
+  ));
+});
+
 test("public content policy enforces exact binary, file, aggregate, link, and entry contracts", async (t) => {
   assert.ok(PUBLIC_BINARY_ALLOWLIST.some((record) =>
     record.size === 8704 && record.sha256 === "61538931d2e2cf38f35050618ce7698960823938884d0d8977812c94587e85fd"));
   assert.ok(PUBLIC_BINARY_ALLOWLIST.every((record) =>
-    Number.isSafeInteger(record.size) && /^[a-f0-9]{64}$/u.test(record.sha256)));
+    Number.isSafeInteger(record.size) && /^[a-f0-9]{64}$/u.test(record.sha256)
+    && Array.isArray(record.paths) && record.paths.length > 0));
+
+  const approvedBanner = await readFile(new URL("../assets/gpt-codex-hwp-banner.png", import.meta.url));
+  assert.doesNotThrow(() => assertPublicContentBuffer(approvedBanner, {
+    label: "assets/gpt-codex-hwp-banner.png",
+  }));
+  assert.throws(() => assertPublicContentBuffer(approvedBanner, {
+    label: "copied/gpt-codex-hwp-banner.png",
+  }));
 
   const root = await temporaryDirectory(t, "public-content-policy-");
   await writeFile(join(root, "safe.txt"), "safe\n");
@@ -152,6 +183,21 @@ test("public content policy enforces exact binary, file, aggregate, link, and en
   }
 });
 
+test("owned directory boundary rejects a linked root before reading target content", async (t) => {
+  const parent = await temporaryDirectory(t, "public-owned-boundary-");
+  const outside = join(parent, "outside");
+  const linked = join(parent, "linked");
+  await mkdir(outside);
+  await writeFile(join(outside, "secret.txt"), fragments("gh", "p_", "Q".repeat(36)));
+  try {
+    await symlink(outside, linked, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) return;
+    throw error;
+  }
+  await assert.rejects(scanPublicDirectory(linked), /public content scan failed/iu);
+});
+
 test("Git history privacy finds deleted blobs, metadata, identities, and refs while keeping diagnostics redacted", async (t) => {
   const root = await temporaryGitRepository(t, "public-history-positive-");
   await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
@@ -187,6 +233,42 @@ test("Git history privacy finds deleted blobs, metadata, identities, and refs wh
   }
 });
 
+test("Git history binds binary approval to every reachable tree path", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-binary-path-");
+  const banner = await readFile(new URL("../assets/gpt-codex-hwp-banner.png", import.meta.url));
+  await commitFile(root, "assets/gpt-codex-hwp-banner.png", banner, "approved path", OWNER_EMAIL);
+  await mkdir(join(root, "copied"));
+  await writeFile(join(root, "copied", "gpt-codex-hwp-banner.png"), banner);
+  git(root, ["add", "copied/gpt-codex-hwp-banner.png"]);
+  git(root, ["commit", "-qm", "same blob at unapproved path"]);
+  const result = await scanPublicHistory({ root });
+  assert.ok(result.findings.some((finding) =>
+    finding.category === "binary not allowlisted"
+    && finding.label === "copied/gpt-codex-hwp-banner.png"));
+});
+
+test("Git history requires exact names and scans every header plus ref label", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-metadata-contract-");
+  await commitFile(root, "safe.txt", "safe\n", "safe", OWNER_EMAIL);
+  await writeFile(join(root, "wrong-owner.txt"), "safe\n");
+  git(root, ["add", "wrong-owner.txt"]);
+  git(root, ["-c", `user.name=Wrong Owner`, "commit", "-qm", "wrong owner name"]);
+
+  const base = git(root, ["cat-file", "commit", "HEAD"]);
+  const headerPath = fragments("C:", "\\", "Users", "\\private-person\\work");
+  const boundary = base.indexOf("\n\n");
+  const crafted = `${base.slice(0, boundary)}\nencoding ${headerPath}${base.slice(boundary)}`;
+  const craftedId = gitInput(root, ["hash-object", "-t", "commit", "-w", "--stdin"], crafted).trim();
+  git(root, ["update-ref", "refs/heads/header-probe", craftedId]);
+  git(root, ["update-ref", "refs/heads/credentials.json", "HEAD"]);
+
+  const result = await scanPublicHistory({ root });
+  assert.ok(result.findings.some((finding) => finding.category === "personal identity"));
+  assert.ok(result.findings.some((finding) => finding.objectId === craftedId
+    && finding.category === "sensitive Git metadata"));
+  assert.ok(result.findings.some((finding) => finding.category === "sensitive ref name"));
+});
+
 test("Git history privacy allows only the approved owner and exact neutral immutable objects", async (t) => {
   const root = await temporaryGitRepository(t, "public-history-identity-");
   const ownerCommit = await commitFile(root, "owner.txt", "safe\n", "owner", OWNER_EMAIL);
@@ -194,7 +276,7 @@ test("Git history privacy allows only the approved owner and exact neutral immut
   assert.equal(result.findings.length, 0);
 
   const neutralEmail = fragments("codex", "@local");
-  const neutralCommit = await commitFile(root, "neutral.txt", "safe\n", "neutral", neutralEmail);
+  const neutralCommit = await commitFile(root, "neutral.txt", "safe\n", "neutral", neutralEmail, "Codex");
   result = await scanPublicHistory({ root });
   assert.ok(result.findings.some((finding) => finding.category === "personal identity"));
 
@@ -204,7 +286,7 @@ test("Git history privacy allows only the approved owner and exact neutral immut
   });
   assert.equal(result.findings.length, 0);
 
-  git(root, ["-c", `user.email=${neutralEmail}`, "tag", "-a", "neutral-tag", "-m", "safe tag"]);
+  git(root, ["-c", "user.name=Codex", "-c", `user.email=${neutralEmail}`, "tag", "-a", "neutral-tag", "-m", "safe tag"]);
   const tagObject = git(root, ["rev-parse", "refs/tags/neutral-tag"]).trim();
   result = await scanPublicHistory({
     root,
@@ -230,6 +312,56 @@ test("Git history privacy fails closed for shallow and malformed Git operations"
     scanPublicHistory({ root: source, runGit: async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }) }),
     /history scan failed/iu,
   );
+});
+
+test("bounded process enforces a deadline and closes with a redacted receipt", async () => {
+  const started = Date.now();
+  const result = await runBoundedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    timeoutMs: 150,
+    maxOutputBytes: 1024,
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.code, -1);
+  assert.ok(Date.now() - started < 5_000);
+  assert.equal(result.stdout.length, 0);
+  assert.equal(result.stderr.length, 0);
+});
+
+test("bounded process keeps fast target bytes separate from control frames", async () => {
+  const result = await runBoundedProcess(process.execPath, [
+    "-e",
+    "process.stdout.write(Buffer.from([0,255,65]));process.stderr.write(Buffer.from([66,0,254]));",
+  ], { timeoutMs: 5_000, maxOutputBytes: 64 });
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.stdout, Buffer.from([0, 255, 65]));
+  assert.deepEqual(result.stderr, Buffer.from([66, 0, 254]));
+});
+
+test("bounded process kills a descendant after its parent exits with inherited pipes", async (t) => {
+  const root = await temporaryDirectory(t, "public-process-tree-");
+  const pidPath = join(root, "descendant.pid");
+  const sentinelPath = join(root, "descendant-sentinel.txt");
+  const descendant = [
+    "const fs=require('node:fs');",
+    `setTimeout(()=>fs.writeFileSync(${JSON.stringify(sentinelPath)},'unexpected'),6000);`,
+    "setInterval(()=>{},1000);",
+  ].join("");
+  const parent = [
+    "const {spawn}=require('node:child_process');const fs=require('node:fs');",
+    `const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],`,
+    "{stdio:['ignore','inherit','inherit']});",
+    `fs.writeFileSync(${JSON.stringify(pidPath)},String(child.pid));`,
+  ].join("");
+  const result = await runBoundedProcess(process.execPath, ["-e", parent], {
+    timeoutMs: 4_000,
+    maxOutputBytes: 1024,
+  });
+  assert.equal(result.timedOut, true);
+  const descendantPid = Number(await readFile(pidPath, "utf8"));
+  assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_200));
+  assert.equal(processExists(descendantPid), false);
+  await assert.rejects(readFile(sentinelPath), { code: "ENOENT" });
 });
 
 test("public content policy is mandatory in root scripts and release ordering", async () => {
@@ -266,11 +398,11 @@ async function temporaryGitRepository(t, prefix) {
   return root;
 }
 
-async function commitFile(root, name, contents, message, email) {
+async function commitFile(root, name, contents, message, email, userName = "Gpt_Codex_HWP contributors") {
   await mkdir(join(root, name, ".."), { recursive: true });
   await writeFile(join(root, name), contents);
   git(root, ["add", "--", name]);
-  git(root, ["-c", `user.email=${email}`, "commit", "-qm", message]);
+  git(root, ["-c", `user.name=${userName}`, "-c", `user.email=${email}`, "commit", "-qm", message]);
   return git(root, ["rev-parse", "HEAD"]).trim();
 }
 
@@ -278,4 +410,15 @@ function git(root, args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
   assert.equal(result.status, 0, `git ${args[0]} failed`);
   return result.stdout;
+}
+
+function gitInput(root, args, input) {
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", input });
+  assert.equal(result.status, 0, `git ${args[0]} failed`);
+  return result.stdout;
+}
+
+function processExists(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error?.code === "EPERM"; }
 }
