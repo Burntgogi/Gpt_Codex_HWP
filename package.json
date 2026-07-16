@@ -17,6 +17,8 @@
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",
     "doctor": "node scripts/doctor.mjs",
+    "security:scan-tree": "node scripts/public-content-policy.mjs --tree",
+    "security:scan-history": "node scripts/scan-public-history.mjs",
     "sync:metadata": "node scripts/sync-project-metadata.mjs --write",
     "check:metadata": "node scripts/sync-project-metadata.mjs --check",
     "runtime:write": "node scripts/project-runtime.mjs --write",

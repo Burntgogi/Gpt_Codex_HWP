@@ -59,6 +59,19 @@ test("public runtime privacy rejects personal paths and secrets before projectio
   }
 });
 
+test("public runtime privacy reuses provider and Unicode-aware public policy", async (t) => {
+  for (const [label, contents] of [
+    ["provider token", fragments("sk", "-proj-", "a".repeat(48))],
+    ["Unicode assignment", fragments("ＡＷＳ＿ＳＥＣＲＥＴ＿ＡＣＣＥＳＳ＿ＫＥＹ＝", "x".repeat(40))],
+  ] as const) {
+    await t.test(label, async (subtest) => {
+      const root = await temporaryRuntime(subtest, "privacy-shared-policy-");
+      await writeFile(join(root, "runtime.txt"), contents);
+      await assert.rejects(assertPublicRuntimePrivacy(root), /runtime privacy violation/iu);
+    });
+  }
+});
+
 test("public runtime privacy accepts a redacted credential placeholder", async (t) => {
   const root = await temporaryRuntime(t, "privacy-placeholder-");
   const contents = fragments(
@@ -188,9 +201,15 @@ test("public runtime privacy scanner enforces exact budgets and staged file type
     );
   });
 
-  await t.test("binary accepted and unknown and map rejected", async (subtest) => {
+  await t.test("only exact allowlisted binary is accepted and map is rejected", async (subtest) => {
     const root = await temporaryRuntime(subtest, "privacy-extension-");
     await writeFile(join(root, "asset.png"), Buffer.from([0, 255, 1]));
+    await assert.rejects(assertPublicRuntimePrivacy(root), /binary not allowlisted/iu);
+    await rm(join(root, "asset.png"));
+    await copyFile(
+      join(SOURCE_ROOT, "assets", "gpt-codex-hwp-icon-64.png"),
+      join(root, "gpt-codex-hwp-icon-64.png"),
+    );
     await assert.doesNotReject(assertPublicRuntimePrivacy(root));
     await writeFile(join(root, "unknown.blobx"), "safe");
     await assert.rejects(assertPublicRuntimePrivacy(root), /unsupported staged extension.*unknown\.blobx/iu);

@@ -30,6 +30,8 @@ export const REQUIRED_RELEASE_STAGES = Object.freeze([
   "kordoc-provenance",
   "production-dependencies",
   "audit",
+  "public-tree",
+  "public-history",
   "privacy",
   "runtime-diff",
   "document-benchmark",
@@ -415,6 +417,8 @@ function releaseStageDefinitions(root) {
       "--omit=dev",
       "--json",
     ], root, none),
+    npmStage("public-tree", ["run", "security:scan-tree"], root, none),
+    npmStage("public-history", ["run", "security:scan-history"], root, none),
     npmStage("privacy", [
       "--prefix",
       "packages/gpt-codex-hwp",

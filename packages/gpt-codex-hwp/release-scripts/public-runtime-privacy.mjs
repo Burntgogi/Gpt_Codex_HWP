@@ -1,6 +1,8 @@
 import { open, lstat, readdir } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
 
+import { assertPublicContentBuffer } from "../../../scripts/public-content-policy.mjs";
+
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_RUNTIME_BYTES = 64 * 1024 * 1024;
 const TEXT_EXTENSIONS = new Set([
@@ -13,7 +15,6 @@ const BINARY_EXTENSIONS = new Set([
 ]);
 const TEXT_FILENAMES = new Set([".npmrc", "LICENSE", "NOTICE"]);
 const TEXT_RUNTIME_PATHS = new Set(["dist/workers/windows-job-supervisor.ps1"]);
-const PLACEHOLDER_USERS = new Set(["example", "user", "username", "your-user", "your_username"]);
 
 export async function assertPublicRuntimePrivacy(runtimeRoot, limits = {}) {
   const maxFileBytes = limits.maxFileBytes ?? MAX_FILE_BYTES;
@@ -31,23 +32,23 @@ export async function assertPublicRuntimePrivacy(runtimeRoot, limits = {}) {
     if (metadata.size > maxFileBytes) fail("file byte budget", relativePath);
     if (aggregateBytes > maxRuntimeBytes) fail("aggregate byte budget", relativePath);
     if (extension === ".map") fail("source map", relativePath);
-    if (BINARY_EXTENSIONS.has(extension)) continue;
     if (
+      !BINARY_EXTENSIONS.has(extension) &&
       !TEXT_EXTENSIONS.has(extension) &&
       !TEXT_FILENAMES.has(filename) &&
       !TEXT_RUNTIME_PATHS.has(relativePath)
     ) {
       fail("unsupported staged extension", relativePath);
     }
-    const text = (await readBounded(path, maxFileBytes, relativePath)).toString("utf8");
-    if (hasConcreteHomePath(text)) fail("personal home path", relativePath);
-    if (hasPrivateKeyHeader(text)) {
-      fail("private key", relativePath);
+    const bytes = await readBounded(path, maxFileBytes, relativePath);
+    try {
+      assertPublicContentBuffer(bytes, { label: relativePath, scope: "runtime" });
+    } catch (error) {
+      const category = Array.isArray(error?.findings) && error.findings.length > 0
+        ? error.findings[0].category
+        : "policy failure";
+      fail(category, relativePath);
     }
-    if (filename === ".npmrc" && hasLiteralNpmCredential(text)) {
-      fail("literal credential", relativePath);
-    }
-    if (hasLiteralCredentialAssignment(text)) fail("literal credential", relativePath);
   }
 }
 
@@ -85,108 +86,6 @@ async function readBounded(path, limit, relativePath) {
   } finally {
     await handle.close();
   }
-}
-
-function hasConcreteHomePath(text) {
-  for (const match of text.matchAll(/[A-Za-z]:[\\/]+users[\\/]+([^\\/\s"']+)/giu)) {
-    if (!isPlaceholderUser(match[1])) return true;
-  }
-
-  const exemptRanges = [
-    ...matchRanges(text, /https?:\/\/[^\s"'`<>]+/giu),
-    ...matchRanges(
-      text,
-      /\b(?:app|router|server)\s*\.\s*(?:get|post|put|patch|delete|use|all)\s*\(\s*(?:"[^"\r\n]*"|'[^'\r\n]*')/giu,
-    ),
-  ];
-  for (const match of text.matchAll(/\/+(?:users|home)\/+([^/\s"']+)/giu)) {
-    if (isPlaceholderUser(match[1])) continue;
-    if (exemptRanges.some(([start, end]) => match.index >= start && match.index < end)) continue;
-    return true;
-  }
-  return false;
-}
-
-function isPlaceholderUser(user) {
-  const normalized = user.toLowerCase();
-  return PLACEHOLDER_USERS.has(normalized) || /^[<{$%]/u.test(normalized);
-}
-
-function matchRanges(text, pattern) {
-  return [...text.matchAll(pattern)].map((match) => [match.index, match.index + match[0].length]);
-}
-
-function hasLiteralCredentialAssignment(text) {
-  const assignment = /(?:^|[\s,{;])["']?([A-Za-z][A-Za-z0-9_-]*)["']?\s*[:=]\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;\r\n]+))/gmu;
-  const mcpProgressNotificationRanges = matchRanges(
-    text,
-    /\{\s*method\s*:\s*["']notifications\/progress["']\s*,\s*params\s*:\s*\{[\s\S]{0,1024}?\}\s*,?\s*\}/gu,
-  );
-  for (const match of text.matchAll(assignment)) {
-    if (!isCredentialKey(match[1])) continue;
-    const value = match[2] ?? match[3] ?? match[4];
-    if (isAllowedCredentialReference(value)) continue;
-    if (isMcpProgressTokenReference(match, mcpProgressNotificationRanges)) {
-      continue;
-    }
-    return true;
-  }
-  return hasLiteralEnvironmentAssignment(text);
-}
-
-function isMcpProgressTokenReference(match, notificationRanges) {
-  if (
-    match[1] !== "progressToken" ||
-    match[2] !== undefined ||
-    match[3] !== undefined ||
-    !/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(match[4] ?? "") ||
-    !/progressToken\s*:/u.test(match[0])
-  ) {
-    return false;
-  }
-  return notificationRanges.some(
-    ([start, end]) => match.index >= start && match.index < end,
-  );
-}
-
-function hasLiteralEnvironmentAssignment(text) {
-  const assignments = [
-    /\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;\r\n]+))/gu,
-    /\bprocess\.env\s*\[\s*["']([^"']+)["']\s*\]\s*=\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;\r\n]+))/gu,
-    /\bos\.environ\s*\[\s*["']([^"']+)["']\s*\]\s*=\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;\r\n]+))/gu,
-    /\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;\r\n]+))/giu,
-  ];
-  for (const assignment of assignments) {
-    for (const match of text.matchAll(assignment)) {
-      if (!isCredentialKey(match[1])) continue;
-      const value = match[2] ?? match[3] ?? match[4];
-      if (!isAllowedCredentialReference(value)) return true;
-    }
-  }
-  return false;
-}
-
-function hasLiteralNpmCredential(text) {
-  const assignment = /^\s*(?:\/\/[^\s=]+\/:)?(?:_authToken|_auth|username|_password|password)\s*=\s*(.*?)\s*$/gimu;
-  for (const match of text.matchAll(assignment)) {
-    const value = match[1].replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, "$1$2").trim();
-    if (value !== "" && !isAllowedCredentialReference(value)) return true;
-  }
-  return false;
-}
-
-function isAllowedCredentialReference(value) {
-  return /^(?:<[^>]+>|\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%|\{env:[A-Z_][A-Z0-9_]*\}|REDACTED|YOUR[_-]|PLACEHOLDER|EXAMPLE|process\.env\.|Deno\.env\.|os\.environ)/iu.test(value);
-}
-
-function isCredentialKey(key) {
-  const normalized = key.replaceAll("_", "").replaceAll("-", "").toLowerCase();
-  return ["apikey", "privatekey", "secretaccesskey", "token", "secret", "password"]
-    .some((suffix) => normalized.endsWith(suffix));
-}
-
-function hasPrivateKeyHeader(text) {
-  return /-{4,5}\s*BEGIN\s+(?:(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED)\s+)?PRIVATE KEY|PGP\s+PRIVATE KEY BLOCK|SSH2\s+ENCRYPTED PRIVATE KEY)\s*-{4,5}/iu.test(text);
 }
 
 function assertLimit(value, maximum, category) {

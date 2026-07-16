@@ -19,10 +19,12 @@ import test from "node:test";
 import { deflateRawSync } from "node:zlib";
 
 import {
+  assertReleaseArchivePrivacyForTest,
   buildDeterministicZip,
   buildReleaseArtifacts,
 } from "../release-scripts/build-release-artifacts.mjs";
 import {
+  assertVerifiedZipPrivacyForTest,
   inspectReleaseZipForTest,
   verifyReleaseArtifacts,
 } from "../../../scripts/verify-release-artifacts.mjs";
@@ -140,6 +142,46 @@ test("release artifacts are deterministic and independently verifiable", async (
     "provenance.json",
   ]);
   assert.equal(sums.every((line) => /^[a-f0-9]{64}  [A-Za-z0-9._-]+$/u.test(line)), true);
+});
+
+test("release artifact privacy runs before checksum or provenance output", async (t) => {
+  const unsafe = fragments("sk", "-proj-", "z".repeat(48));
+  assert.throws(
+    () => assertReleaseArchivePrivacyForTest([
+      { path: "dist/unsafe.txt", bytes: Buffer.from(unsafe) },
+    ]),
+    /RELEASE_ARTIFACTS_PRIVACY/u,
+  );
+  assert.doesNotThrow(() => assertReleaseArchivePrivacyForTest([
+    { path: "dist/safe.txt", bytes: Buffer.from("safe\n") },
+  ]));
+  assert.throws(
+    () => assertVerifiedZipPrivacyForTest([
+      { name: "dist/unsafe.txt", bytes: Buffer.from(unsafe) },
+    ]),
+    /RELEASE_ARTIFACTS_PRIVACY/u,
+  );
+
+  const fixture = await createReleaseFixture(t);
+  const unsafePath = join(
+    fixture.root,
+    "plugins",
+    "gpt-codex-hwp",
+    "dist",
+    "privacy-probe.js",
+  );
+  await writeFile(unsafePath, unsafe);
+  await runGit(fixture.root, ["add", "."]);
+  await runGit(fixture.root, ["commit", "-m", "privacy probe"]);
+  const output = join(fixture.parent, "privacy-failure-output");
+  await assert.rejects(buildReleaseArtifacts({
+    root: fixture.root,
+    output,
+    sourceDateEpoch: REPRODUCIBLE_EPOCH,
+    prepareRuntime: fixture.prepareRuntime,
+    versions: VERSIONS,
+  }), /RELEASE_ARTIFACTS_PRIVACY/u);
+  await assert.rejects(lstat(output), { code: "ENOENT" });
 });
 
 test("release artifacts reject unsafe source and output states", async (t) => {
@@ -629,6 +671,10 @@ async function writeJson(path: string, value: unknown) {
 
 function sha256(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function fragments(...parts: string[]) {
+  return parts.join("");
 }
 
 async function rewriteChecksums(output: string) {

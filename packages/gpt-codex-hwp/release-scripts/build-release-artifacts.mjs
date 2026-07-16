@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateRawSync } from "node:zlib";
 
 import { buildRuntime, compareRuntime } from "../../../scripts/project-runtime.mjs";
+import { assertPublicContentBuffer } from "../../../scripts/public-content-policy.mjs";
 
 const executeFile = promisify(execFile);
 const PRODUCT = "gpt-codex-hwp";
@@ -88,6 +89,7 @@ export async function buildReleaseArtifacts(options = {}) {
       entry.bytes = committed;
     }
     const kordoc = await readKordocProvenance(stageRoot);
+    assertReleaseArchivePrivacyForTest(runtimeEntries);
     const archiveEntries = runtimeEntries.map(({ path, bytes }) => ({ name: path, bytes }));
     const zipBytes = buildDeterministicZip(archiveEntries, source.epoch);
     const zipName = `${PRODUCT}-${version}.zip`;
@@ -207,6 +209,23 @@ export async function buildReleaseArtifacts(options = {}) {
     throw normalizeReleaseError(error);
   } finally {
     await rm(privateRoot, { recursive: true, force: true });
+  }
+}
+
+export function assertReleaseArchivePrivacyForTest(entries) {
+  if (!Array.isArray(entries) || entries.length === 0 || entries.length > MAX_FILES) {
+    throw releaseError("RELEASE_ARTIFACTS_PRIVACY");
+  }
+  try {
+    for (const entry of entries) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)
+        || typeof entry.path !== "string" || !(entry.bytes instanceof Uint8Array)) {
+        throw releaseError("RELEASE_ARTIFACTS_PRIVACY");
+      }
+      assertPublicContentBuffer(entry.bytes, { label: entry.path, scope: "runtime" });
+    }
+  } catch {
+    throw releaseError("RELEASE_ARTIFACTS_PRIVACY");
   }
 }
 

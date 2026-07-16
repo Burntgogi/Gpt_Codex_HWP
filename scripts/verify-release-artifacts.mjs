@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
+import { assertPublicContentBuffer } from "./public-content-policy.mjs";
+
 const executeFile = promisify(execFile);
 const PRODUCT = "gpt-codex-hwp";
 const RUNTIME_PREFIX = "plugins/gpt-codex-hwp/";
@@ -109,6 +111,7 @@ export async function verifyReleaseArtifacts(options = {}) {
     sourceDateEpoch: options.sourceDateEpoch ?? process.env.SOURCE_DATE_EPOCH,
   });
   const zipEntries = inspectReleaseZipForTest(artifactBytes.get(zipName));
+  assertVerifiedZipPrivacyForTest(zipEntries);
   const allowlist = await trackedRuntimeAllowlist(root, source.commit);
   if (JSON.stringify(zipEntries.map(({ name }) => name)) !== JSON.stringify(allowlist)) {
     throw verificationError("RELEASE_ARTIFACTS_RUNTIME_ALLOWLIST");
@@ -273,6 +276,23 @@ export function inspectReleaseZipForTest(input) {
   }
   if (expectedLocalOffset !== centralOffset) throw verificationError("RELEASE_ARTIFACTS_ZIP_INVALID");
   return Object.freeze(result);
+}
+
+export function assertVerifiedZipPrivacyForTest(entries) {
+  if (!Array.isArray(entries) || entries.length === 0 || entries.length > MAX_FILES) {
+    throw verificationError("RELEASE_ARTIFACTS_PRIVACY");
+  }
+  try {
+    for (const entry of entries) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)
+        || typeof entry.name !== "string" || !(entry.bytes instanceof Uint8Array)) {
+        throw verificationError("RELEASE_ARTIFACTS_PRIVACY");
+      }
+      assertPublicContentBuffer(entry.bytes, { label: entry.name, scope: "runtime" });
+    }
+  } catch {
+    throw verificationError("RELEASE_ARTIFACTS_PRIVACY");
+  }
 }
 
 function verifyProvenance(value, {

@@ -286,7 +286,10 @@ test("benchmark policy validates privacy-safe exact-schema receipts", () => {
   };
   assert.deepEqual(validateBenchmarkReceipt(receipt), receipt);
   for (const unsafe of [
-    { ...receipt, sourcePath: ["C:\\Us", "ers\\alice\\sample.hwpx"].join("") },
+    {
+      ...receipt,
+      sourcePath: ["C:", "\\", "Users", "\\alice\\sample.hwpx"].join(""),
+    },
     { ...receipt, error: "raw parser error" },
     { ...receipt, status: "failed", errorCode: "ENOENT: C:\\private" },
     { ...receipt, actualBytes: 0 },
@@ -411,8 +414,10 @@ test("benchmark policy requires fresh exact sequential large evidence", async (t
 
   mixedHost.receipts[1].arch = "x64";
   mixedHost.generatedAt = [
-    "Thu, 16 Jul 2026 00:00:00 GMT (C:\\Us",
-    "ers\\alice)",
+    "Thu, 16 Jul 2026 00:00:00 GMT (C:",
+    "\\",
+    "Users",
+    "\\alice)",
   ].join("");
   await writeFile(evidencePath, `${JSON.stringify(mixedHost)}\n`, "utf8");
   await assert.rejects(
