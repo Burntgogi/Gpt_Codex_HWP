@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   REQUIRED_RELEASE_STAGES,
   runCli,
+  runReleaseArtifactsStage,
   runReleaseVerification,
   runStageCommand,
   terminateProcessTree,
@@ -48,6 +49,14 @@ test("release verification package scripts use the exact public entry points", a
 
   assert.equal(rootPackage.scripts["release:verify"], "node scripts/release-verify.mjs");
   assert.equal(
+    rootPackage.scripts["release:artifacts"],
+    "node packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
+  );
+  assert.equal(
+    rootPackage.scripts["verify:release-artifacts"],
+    "node scripts/verify-release-artifacts.mjs",
+  );
+  assert.equal(
     rootPackage.scripts["verify:compact-runtime"],
     "node packages/gpt-codex-hwp/release-scripts/verify-compact-runtime.mjs",
   );
@@ -60,6 +69,10 @@ test("release verification package scripts use the exact public entry points", a
   assert.equal(
     sourcePackage.scripts["verify:compact-runtime"],
     "node release-scripts/verify-compact-runtime.mjs",
+  );
+  assert.equal(
+    sourcePackage.scripts["release:artifacts"],
+    "node release-scripts/build-release-artifacts.mjs",
   );
 });
 
@@ -82,11 +95,12 @@ test("release verification runs the exact required stage contract in order", asy
   assert.deepEqual(calls.map((stage) => stage.name), EXPECTED_STAGES);
   assert.ok(calls.every((stage) => stage.cwd === ROOT));
   assert.deepEqual(
-    calls.map(({ name, tool, args, commands, env, evidence }) => ({
+    calls.map(({ name, tool, args, commands, kind, env, evidence }) => ({
       name,
       tool,
       args,
       commands,
+      ...(kind === undefined ? {} : { kind }),
       env,
       evidence,
     })),
@@ -174,6 +188,105 @@ test("release stages install source dependencies and keep temp nine-tools as run
     JSON.stringify(productionDependencies).includes("plugins/gpt-codex-hwp"),
     false,
   );
+});
+
+test("release artifacts stage owns a fresh output, verifies it independently, and cleans it", async () => {
+  const events = [];
+  const hashes = {
+    "gpt-codex-hwp-0.1.4.spdx.json": "a".repeat(64),
+    "gpt-codex-hwp-0.1.4.zip": "b".repeat(64),
+    "provenance.json": "c".repeat(64),
+  };
+  const buildReceipt = {
+    schemaVersion: 1,
+    status: "passed",
+    commit: "d".repeat(40),
+    tree: "e".repeat(40),
+    reproducibleEpoch: 1_700_000_000,
+    files: ["SHA256SUMS", "gpt-codex-hwp-0.1.4.spdx.json", "gpt-codex-hwp-0.1.4.zip", "provenance.json"],
+    hashes,
+    runtimeFiles: 102,
+    productionPackages: 10,
+  };
+  const verifyReceipt = {
+    schemaVersion: 1,
+    status: "passed",
+    commit: buildReceipt.commit,
+    tree: buildReceipt.tree,
+    reproducibleEpoch: buildReceipt.reproducibleEpoch,
+    runtimeFiles: buildReceipt.runtimeFiles,
+    productionPackages: buildReceipt.productionPackages,
+    toolCount: 9,
+    hashes,
+  };
+  let invocation = 0;
+  const result = await runReleaseArtifactsStage({
+    name: "release-artifacts",
+    kind: "release-artifacts",
+    cwd: ROOT,
+    env: {},
+  }, {
+    createTemp: async () => "OWNED_TEMP",
+    runCommand: async (command) => {
+      events.push(command);
+      const receipt = invocation++ === 0 ? buildReceipt : verifyReceipt;
+      return { status: "passed", stdout: `${JSON.stringify(receipt)}\n`, stderr: "" };
+    },
+    removeTemp: async (path) => { events.push({ cleanup: path }); },
+  });
+  assert.deepEqual(result, { status: "passed" });
+  assert.deepEqual(events, [
+    {
+      tool: "node",
+      args: [
+        "packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
+        "--output",
+        join("OWNED_TEMP", "artifacts"),
+      ],
+    },
+    {
+      tool: "node",
+      args: [
+        "scripts/verify-release-artifacts.mjs",
+        "--artifacts",
+        join("OWNED_TEMP", "artifacts"),
+        "--root",
+        ROOT,
+      ],
+    },
+    { cleanup: "OWNED_TEMP" },
+  ]);
+});
+
+test("release artifacts stage rejects missing receipts and still cleans owned temp", async () => {
+  const events = [];
+  const result = await runReleaseArtifactsStage({
+    name: "release-artifacts",
+    kind: "release-artifacts",
+    cwd: ROOT,
+    env: {},
+  }, {
+    createTemp: async () => "OWNED_TEMP",
+    runCommand: async () => ({ status: "passed", stdout: "", stderr: "" }),
+    removeTemp: async (path) => { events.push(path); },
+  });
+  assert.deepEqual(result, { status: "failed" });
+  assert.deepEqual(events, ["OWNED_TEMP"]);
+});
+
+test("release artifacts stage awaits late temp creation and cleanup after its deadline", async () => {
+  const events = [];
+  const result = await runReleaseArtifactsStage({
+    name: "release-artifacts", kind: "release-artifacts", cwd: ROOT, env: {},
+  }, {
+    createTemp: async () => { events.push("created"); return "LATE_OWNED_TEMP"; },
+    runCommand: async () => { events.push("unexpected-command"); return { status: "failed" }; },
+    removeTemp: async (path) => { await Promise.resolve(); events.push(`removed:${path}`); },
+    deadlineAt: 10,
+    clock: () => 11,
+  });
+  assert.deepEqual(result, { status: "failed" });
+  assert.deepEqual(events, ["created", "removed:LATE_OWNED_TEMP"]);
 });
 
 for (const failure of [
@@ -895,9 +1008,10 @@ function expectedStageCommands() {
     },
     {
       name: "release-artifacts",
-      tool: "node",
-      args: ["packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs"],
+      tool: undefined,
+      args: undefined,
       commands: undefined,
+      kind: "release-artifacts",
       env: {},
       evidence: noEvidence,
     },

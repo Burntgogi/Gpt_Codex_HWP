@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { mkdtempSync } from "node:fs";
+import { lstat, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -13,6 +16,7 @@ const VERSION_TIMEOUT_MS = 10_000;
 const VERSION_MAX_OUTPUT_BYTES = 4 * 1024;
 const TASKKILL_TIMEOUT_MS = 2_000;
 const MAX_STAGE_COMMANDS = 4;
+const RELEASE_CLEANUP_RESERVE_MS = 10_000;
 const TOOL_COUNT = 9;
 
 export const REQUIRED_RELEASE_STAGES = Object.freeze([
@@ -116,6 +120,40 @@ export async function runCli(options = {}) {
 }
 
 export async function runStageCommand(stage, options = {}) {
+  if (stage?.kind === "release-artifacts") {
+    const timeoutMs = positiveInteger(
+      options.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS,
+      "timeout",
+    );
+    const maxOutputBytes = positiveInteger(
+      options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+      "output bound",
+    );
+    const cwd = requiredRoot(stage.cwd);
+    const env = stageEnvironment(stage.env);
+    const outputBudget = { used: 0, limit: maxOutputBytes };
+    const started = performance.now();
+    const deadlineAt = started + timeoutMs;
+    return await runReleaseArtifactsStage(stage, {
+      deadlineAt,
+      clock: performance.now,
+      runCommand: async (logical) => {
+        const remainingTimeoutMs = Math.ceil(
+          deadlineAt - performance.now() - RELEASE_CLEANUP_RESERVE_MS,
+        );
+        if (remainingTimeoutMs <= 0) return Object.freeze({ status: "failed" });
+        return await executeCommand({
+          ...resolveInvocation(logical),
+          cwd,
+          env,
+          timeoutMs: remainingTimeoutMs,
+          maxOutputBytes,
+          outputBudget,
+          captureOutput: true,
+        });
+      },
+    });
+  }
   const invocations = resolveStageInvocations(stage);
   const evidence = validateStageEvidence(stage.evidence);
   const timeoutMs = positiveInteger(
@@ -148,6 +186,167 @@ export async function runStageCommand(stage, options = {}) {
   const passed = result.status === "passed"
     && (evidence === undefined || hasRequiredNodeTestSummary(result, evidence));
   return Object.freeze({ status: passed ? "passed" : "failed" });
+}
+
+export async function runReleaseArtifactsStage(stage, options = {}) {
+  if (stage === null || typeof stage !== "object" || Array.isArray(stage)
+    || stage.name !== "release-artifacts" || stage.kind !== "release-artifacts"
+    || Object.hasOwn(stage, "tool") || Object.hasOwn(stage, "args")
+    || Object.hasOwn(stage, "commands")) {
+    throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
+  }
+  const cwd = requiredRoot(stage.cwd);
+  stageEnvironment(stage.env);
+  const createTemp = options.createTemp ?? (() =>
+    mkdtempSync(join(tmpdir(), "gpt-codex-hwp-release-verify-")));
+  const removeTemp = options.removeTemp;
+  const runCommand = options.runCommand ?? ((logical) => runStageCommand({
+    name: "release-artifacts-command",
+    ...logical,
+    cwd,
+    env: stage.env,
+  }));
+  const clock = options.clock ?? performance.now;
+  const deadlineAt = options.deadlineAt ?? Number.POSITIVE_INFINITY;
+  if (typeof createTemp !== "function"
+    || (removeTemp !== undefined && typeof removeTemp !== "function")
+    || typeof runCommand !== "function" || typeof clock !== "function"
+    || (deadlineAt !== Number.POSITIVE_INFINITY && !Number.isFinite(deadlineAt))) {
+    throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
+  }
+  let ownedTemp;
+  let ownedIdentity;
+  let status = "failed";
+  try {
+    ownedTemp = await createTemp();
+    if (deadlineAt !== Number.POSITIVE_INFINITY && clock() >= deadlineAt) {
+      throw releaseError("RELEASE_VERIFY_TIMEOUT");
+    }
+    if (typeof ownedTemp !== "string" || ownedTemp.length === 0) {
+      throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
+    }
+    if (options.createTemp === undefined) ownedIdentity = await tempIdentity(ownedTemp);
+    const output = join(ownedTemp, "artifacts");
+    const build = await runCommand({
+      tool: "node",
+      args: [
+        "packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
+        "--output",
+        output,
+      ],
+    });
+    const buildReceipt = parseArtifactStageReceipt(build, "build");
+    if (buildReceipt === undefined) return Object.freeze({ status: "failed" });
+    const verify = await runCommand({
+      tool: "node",
+      args: [
+        "scripts/verify-release-artifacts.mjs",
+        "--artifacts",
+        output,
+        "--root",
+        cwd,
+      ],
+    });
+    const verifyReceipt = parseArtifactStageReceipt(verify, "verify");
+    status = verifyReceipt !== undefined && matchingArtifactReceipts(buildReceipt, verifyReceipt)
+      ? "passed" : "failed";
+  } catch {
+    status = "failed";
+  } finally {
+    if (ownedTemp !== undefined) {
+      try {
+        if (removeTemp !== undefined) {
+          await removeTemp(ownedTemp);
+        } else {
+          await removeOwnedTemp(ownedTemp, ownedIdentity);
+        }
+      }
+      catch { status = "failed"; }
+    }
+  }
+  return Object.freeze({ status });
+}
+
+function parseArtifactStageReceipt(result, kind) {
+  if (result?.status !== "passed" || typeof result.stdout !== "string"
+    || typeof result.stderr !== "string" || result.stderr !== "") return undefined;
+  const lines = result.stdout.split(/\r?\n/u);
+  if (lines.at(-1) !== "") return undefined;
+  lines.pop();
+  if (lines.length !== 1) return undefined;
+  let receipt;
+  try { receipt = JSON.parse(lines[0]); } catch { return undefined; }
+  if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)
+    || receipt.schemaVersion !== 1 || receipt.status !== "passed"
+    || !/^[a-f0-9]{40}$/u.test(receipt.commit) || !/^[a-f0-9]{40}$/u.test(receipt.tree)
+    || !Number.isSafeInteger(receipt.reproducibleEpoch)
+    || !Number.isSafeInteger(receipt.runtimeFiles) || receipt.runtimeFiles <= 0
+    || !Number.isSafeInteger(receipt.productionPackages) || receipt.productionPackages <= 0
+    || !validArtifactHashes(receipt.hashes)) return undefined;
+  const baseKeys = [
+    "commit", "hashes", "productionPackages", "reproducibleEpoch", "runtimeFiles",
+    "schemaVersion", "status", "tree",
+  ];
+  if (kind === "build") {
+    const expectedFiles = ["SHA256SUMS", ...Object.keys(receipt.hashes)].sort();
+    if (JSON.stringify(Object.keys(receipt).sort())
+      !== JSON.stringify([...baseKeys, "files"].sort())
+      || JSON.stringify(receipt.files) !== JSON.stringify(expectedFiles)) return undefined;
+  } else if (kind === "verify") {
+    if (JSON.stringify(Object.keys(receipt).sort())
+      !== JSON.stringify([...baseKeys, "toolCount"].sort()) || receipt.toolCount !== 9) return undefined;
+  } else return undefined;
+  return receipt;
+}
+
+function validArtifactHashes(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const names = Object.keys(value).sort();
+  return names.length === 3 && names.includes("provenance.json")
+    && names.some((name) => /^gpt-codex-hwp-[0-9A-Za-z.+-]+\.zip$/u.test(name))
+    && names.some((name) => /^gpt-codex-hwp-[0-9A-Za-z.+-]+\.spdx\.json$/u.test(name))
+    && Object.values(value).every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/u.test(hash));
+}
+
+function matchingArtifactReceipts(build, verify) {
+  return build.commit === verify.commit && build.tree === verify.tree
+    && build.reproducibleEpoch === verify.reproducibleEpoch
+    && build.runtimeFiles === verify.runtimeFiles
+    && build.productionPackages === verify.productionPackages
+    && JSON.stringify(build.hashes) === JSON.stringify(verify.hashes);
+}
+
+async function tempIdentity(path) {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory()) throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  return Object.freeze({ dev: info.dev, ino: info.ino, canonical: await realpath(path) });
+}
+
+async function removeOwnedTemp(path, identity) {
+  if (identity === undefined) throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory() || info.dev !== identity.dev
+    || info.ino !== identity.ino || await realpath(path) !== identity.canonical) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  await rm(path, { recursive: true, force: true });
+}
+
+async function withinDeadline(promise, deadlineAt, clock) {
+  if (deadlineAt === Number.POSITIVE_INFINITY) return await promise;
+  const remaining = Math.ceil(deadlineAt - clock());
+  if (remaining <= 0) throw releaseError("RELEASE_VERIFY_TIMEOUT");
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(releaseError("RELEASE_VERIFY_TIMEOUT")), remaining);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function releaseStageDefinitions(root) {
@@ -226,9 +425,12 @@ function releaseStageDefinitions(root) {
     ], root, none),
     npmStage("runtime-diff", ["run", "runtime:check"], root, none),
     documentBenchmarkStage(root, none),
-    nodeStage("release-artifacts", [
-      "packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
-    ], root, none),
+    Object.freeze({
+      name: "release-artifacts",
+      kind: "release-artifacts",
+      cwd: root,
+      env: none,
+    }),
   ];
   if (JSON.stringify(stages.map((stage) => stage.name))
     !== JSON.stringify(REQUIRED_RELEASE_STAGES)) {
