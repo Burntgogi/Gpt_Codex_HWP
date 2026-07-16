@@ -74,6 +74,9 @@ test("release verification package scripts use the exact public entry points", a
     sourcePackage.scripts["release:artifacts"],
     "node release-scripts/build-release-artifacts.mjs",
   );
+  const releaseSource = await readFile(join(ROOT, "scripts", "release-verify.mjs"), "utf8");
+  assert.match(releaseSource, /clock: \(\) => performance\.now\(\),/u);
+  assert.doesNotMatch(releaseSource, /clock: performance\.now,/u);
 });
 
 test("release verification runs the exact required stage contract in order", async () => {
@@ -226,6 +229,7 @@ test("release artifacts stage owns a fresh output, verifies it independently, an
     cwd: ROOT,
     env: {},
   }, {
+    deadlineAt: performance.now() + 10_000,
     createTemp: async () => "OWNED_TEMP",
     runCommand: async (command) => {
       events.push(command);

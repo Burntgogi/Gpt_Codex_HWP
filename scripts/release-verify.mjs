@@ -136,7 +136,7 @@ export async function runStageCommand(stage, options = {}) {
     const deadlineAt = started + timeoutMs;
     return await runReleaseArtifactsStage(stage, {
       deadlineAt,
-      clock: performance.now,
+      clock: () => performance.now(),
       runCommand: async (logical) => {
         const remainingTimeoutMs = Math.ceil(
           deadlineAt - performance.now() - RELEASE_CLEANUP_RESERVE_MS,
@@ -206,7 +206,7 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
     cwd,
     env: stage.env,
   }));
-  const clock = options.clock ?? performance.now;
+  const clock = options.clock ?? (() => performance.now());
   const deadlineAt = options.deadlineAt ?? Number.POSITIVE_INFINITY;
   if (typeof createTemp !== "function"
     || (removeTemp !== undefined && typeof removeTemp !== "function")
