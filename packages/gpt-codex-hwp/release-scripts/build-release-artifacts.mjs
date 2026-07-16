@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
@@ -7,6 +7,7 @@ import {
   open,
   readdir,
   realpath,
+  rename,
   rm,
 } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
@@ -71,10 +72,11 @@ export async function buildReleaseArtifacts(options = {}) {
   const runtimeAllowlist = await trackedRuntimeAllowlist(root, source.commit);
   if (runtimeAllowlist.length === 0) throw releaseError("RELEASE_ARTIFACTS_INPUT_MISSING");
 
-  let ownsOutput = false;
   let outputIdentity;
   const outputHandles = [];
   const privateRoot = await mkdtemp(join(tmpdir(), `${PRODUCT}-release-stage-`));
+  const privateRootIdentity = await privateDirectoryIdentity(privateRoot);
+  let completed = false;
   try {
     const stageRoot = join(privateRoot, "runtime");
     await prepareRuntime({ root, stageRoot });
@@ -145,7 +147,6 @@ export async function buildReleaseArtifacts(options = {}) {
     await assertSourceUnchanged(root, source);
     await assertOutputParentUnchanged(outputPolicy);
     await mkdir(output, { recursive: false });
-    ownsOutput = true;
     outputIdentity = await directoryIdentity(output);
     await assertOutputBoundary(outputPolicy, output, outputIdentity);
     const outputRecords = [...artifacts, ["SHA256SUMS", Buffer.from(checksums, "utf8")]];
@@ -191,6 +192,7 @@ export async function buildReleaseArtifacts(options = {}) {
     await assertOutputBoundary(outputPolicy, output, outputIdentity);
     await closeOutputHandles(outputHandles);
     await assertOutputBoundary(outputPolicy, output, outputIdentity);
+    completed = true;
     return Object.freeze({
       status: "passed",
       schemaVersion: 1,
@@ -206,10 +208,9 @@ export async function buildReleaseArtifacts(options = {}) {
     });
   } catch (error) {
     await closeOutputHandles(outputHandles);
-    if (ownsOutput) await removeOwnedDirectory(output, outputIdentity, outputPolicy);
     throw normalizeReleaseError(error);
   } finally {
-    await rm(privateRoot, { recursive: true, force: true });
+    if (completed) await removeSuccessfulPrivateRoot(privateRoot, privateRootIdentity);
   }
 }
 
@@ -898,17 +899,29 @@ async function directoryIdentity(path) {
   return Object.freeze({ dev: info.dev, ino: info.ino, canonical: await realpath(path) });
 }
 
-async function removeOwnedDirectory(path, identity, policy) {
-  if (!isRecord(identity)) return;
-  try { await assertOutputParentUnchanged(policy); } catch { return; }
-  let current;
-  try { current = await lstat(path); } catch { return; }
-  if (current.isSymbolicLink() || !current.isDirectory()
-    || current.dev !== identity.dev || current.ino !== identity.ino
-    || comparablePath(await realpath(path)) !== comparablePath(identity.canonical)) {
-    return;
+async function privateDirectoryIdentity(path) {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw releaseError("RELEASE_ARTIFACTS_BUILD_FAILED");
   }
-  await rm(path, { recursive: true, force: true });
+  return Object.freeze({ dev: info.dev, ino: info.ino, canonical: await realpath(path) });
+}
+
+async function removeSuccessfulPrivateRoot(path, identity) {
+  const before = await privateDirectoryIdentity(path);
+  if (before.dev !== identity.dev || before.ino !== identity.ino
+    || comparablePath(before.canonical) !== comparablePath(identity.canonical)) {
+    throw releaseError("RELEASE_ARTIFACTS_BUILD_FAILED");
+  }
+  const quarantine = join(dirname(path), `.gpt-codex-hwp-release-stage-quarantine-${randomUUID()}`);
+  await rename(path, quarantine);
+  const quarantined = await privateDirectoryIdentity(quarantine);
+  const expectedCanonical = join(dirname(identity.canonical), basename(quarantine));
+  if (quarantined.dev !== identity.dev || quarantined.ino !== identity.ino
+    || comparablePath(quarantined.canonical) !== comparablePath(expectedCanonical)) {
+    throw releaseError("RELEASE_ARTIFACTS_BUILD_FAILED");
+  }
+  await rm(quarantine, { recursive: true, force: false });
 }
 
 function canonicalRepositoryUrl(value) {

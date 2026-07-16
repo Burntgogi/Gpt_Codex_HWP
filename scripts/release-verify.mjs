@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { mkdtempSync } from "node:fs";
-import { lstat, realpath, rm } from "node:fs/promises";
+import { lstat, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -255,7 +256,7 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
   } catch {
     status = "failed";
   } finally {
-    if (ownedTemp !== undefined) {
+    if (ownedTemp !== undefined && status === "passed") {
       try {
         if (removeTemp !== undefined) {
           await removeTemp(ownedTemp);
@@ -324,14 +325,113 @@ async function tempIdentity(path) {
   return Object.freeze({ dev: info.dev, ino: info.ino, canonical: await realpath(path) });
 }
 
-async function removeOwnedTemp(path, identity) {
+async function removeOwnedTemp(path, identity, hooks = {}) {
   if (identity === undefined) throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
-  const info = await lstat(path);
-  if (info.isSymbolicLink() || !info.isDirectory() || info.dev !== identity.dev
-    || info.ino !== identity.ino || await realpath(path) !== identity.canonical) {
+  if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)
+    || (hooks.afterQuarantine !== undefined && typeof hooks.afterQuarantine !== "function")) {
     throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
   }
-  await rm(path, { recursive: true, force: true });
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory() || info.dev !== identity.dev
+    || info.ino !== identity.ino || !samePath(await realpath(path), identity.canonical)) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  const tree = await snapshotOwnedTemp(path);
+  const quarantine = join(dirname(path), `.gpt-codex-hwp-release-quarantine-${randomUUID()}`);
+  await rename(path, quarantine);
+  await hooks.afterQuarantine?.(quarantine);
+  const canonicalQuarantine = join(dirname(identity.canonical), basename(quarantine));
+  await assertOwnedTempDirectory(quarantine, identity, canonicalQuarantine);
+  const rootEntries = await readdir(quarantine);
+  const expectedRootEntries = tree.artifacts === undefined ? [] : ["artifacts"];
+  if (JSON.stringify(rootEntries.sort()) !== JSON.stringify(expectedRootEntries)) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  if (tree.artifacts !== undefined) {
+    await removeOwnedArtifactDirectory(
+      join(quarantine, "artifacts"),
+      tree.artifacts,
+      join(canonicalQuarantine, "artifacts"),
+    );
+  }
+  await assertOwnedTempDirectory(quarantine, identity, canonicalQuarantine);
+  if ((await readdir(quarantine)).length !== 0) throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  await rmdir(quarantine);
+}
+
+async function assertOwnedTempDirectory(path, identity, expectedCanonical = identity.canonical) {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory() || info.dev !== identity.dev
+    || info.ino !== identity.ino || !samePath(await realpath(path), expectedCanonical)) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+}
+
+async function snapshotOwnedTemp(path) {
+  const rootEntries = await readdir(path);
+  if (rootEntries.length > 1 || (rootEntries.length === 1 && rootEntries[0] !== "artifacts")) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  return Object.freeze({
+    artifacts: rootEntries.length === 0
+      ? undefined
+      : await snapshotOwnedArtifactDirectory(join(path, "artifacts")),
+  });
+}
+
+async function snapshotOwnedArtifactDirectory(path) {
+  const identity = await tempIdentity(path);
+  const entries = await readdir(path);
+  if (entries.length > 4 || entries.some((name) => !isReleaseArtifactName(name))) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  const files = [];
+  for (const name of entries) {
+    const file = join(path, name);
+    const info = await lstat(file);
+    if (info.isSymbolicLink() || !info.isFile()) throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+    files.push(Object.freeze({ name, dev: info.dev, ino: info.ino, size: info.size }));
+  }
+  return Object.freeze({ identity, files: Object.freeze(files) });
+}
+
+async function removeOwnedArtifactDirectory(path, snapshot, expectedCanonical) {
+  await assertOwnedTempDirectory(path, snapshot.identity, expectedCanonical);
+  const entries = (await readdir(path)).sort();
+  const expected = snapshot.files.map(({ name }) => name).sort();
+  if (JSON.stringify(entries) !== JSON.stringify(expected)) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  for (const record of snapshot.files) {
+    await assertOwnedTempDirectory(path, snapshot.identity, expectedCanonical);
+    const file = join(path, record.name);
+    const info = await lstat(file);
+    if (info.isSymbolicLink() || !info.isFile() || info.dev !== record.dev
+      || info.ino !== record.ino || info.size !== record.size) {
+      throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+    }
+    await unlink(file);
+  }
+  await assertOwnedTempDirectory(path, snapshot.identity, expectedCanonical);
+  if ((await readdir(path)).length !== 0) throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  await rmdir(path);
+}
+
+function isReleaseArtifactName(name) {
+  return name === "SHA256SUMS" || name === "provenance.json"
+    || /^gpt-codex-hwp-[0-9A-Za-z.+-]+\.(?:zip|spdx\.json)$/u.test(name);
+}
+
+function samePath(left, right) {
+  const normalizedLeft = resolve(left).replace(/[\\/]+$/u, "");
+  const normalizedRight = resolve(right).replace(/[\\/]+$/u, "");
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+export async function removeOwnedTempForTest(path, identity, hooks) {
+  return await removeOwnedTemp(path, identity, hooks);
 }
 
 async function withinDeadline(promise, deadlineAt, clock) {

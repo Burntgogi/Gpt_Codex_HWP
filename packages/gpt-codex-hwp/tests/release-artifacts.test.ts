@@ -8,6 +8,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -259,6 +260,50 @@ test("release artifacts reject unsafe source and output states", async (t) => {
       /RELEASE_ARTIFACTS_ENTRY_UNSAFE/u,
     );
   });
+});
+
+test("release artifact builder never deletes caller output after it takes ownership", async () => {
+  const source = await readFile(
+    new URL("../release-scripts/build-release-artifacts.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /removeOwnedDirectory\s*\(/u);
+  assert.doesNotMatch(source, /\brm\s*\(\s*output\b/u);
+});
+
+test("release artifact builder never deletes a private staging replacement on failure", async (t) => {
+  const fixture = await createReleaseFixture(t);
+  const victim = join(fixture.parent, "private-stage-victim");
+  const sentinel = join(victim, "sentinel.txt");
+  await mkdir(victim);
+  await writeFile(sentinel, "preserve", "utf8");
+  let savedPrivateRoot;
+  let replacementSentinel;
+  t.after(async () => {
+    if (savedPrivateRoot !== undefined) await rm(savedPrivateRoot, { recursive: true, force: true });
+    if (replacementSentinel !== undefined) {
+      await rm(dirname(replacementSentinel), { recursive: true, force: true });
+    }
+  });
+  await assert.rejects(
+    buildReleaseArtifacts({
+      root: fixture.root,
+      output: join(fixture.parent, "private-stage-failure-output"),
+      sourceDateEpoch: REPRODUCIBLE_EPOCH,
+      versions: VERSIONS,
+      prepareRuntime: async ({ stageRoot }) => {
+        const privateRoot = dirname(stageRoot);
+        savedPrivateRoot = `${privateRoot}-saved`;
+        await rename(privateRoot, savedPrivateRoot);
+        await rename(victim, privateRoot);
+        replacementSentinel = join(privateRoot, "sentinel.txt");
+        throw new Error("injected staging failure");
+      },
+    }),
+    /RELEASE_ARTIFACTS_BUILD_FAILED/u,
+  );
+  assert.equal(await readFile(replacementSentinel, "utf8"), "preserve");
+  assert.equal((await lstat(savedPrivateRoot)).isDirectory(), true);
 });
 
 test("release artifacts require the exact configured Git identity", async (t) => {

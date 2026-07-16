@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, unlink, writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -264,7 +266,7 @@ test("release artifacts stage owns a fresh output, verifies it independently, an
   ]);
 });
 
-test("release artifacts stage rejects missing receipts and still cleans owned temp", async () => {
+test("release artifacts stage rejects missing receipts and preserves owned temp evidence", async () => {
   const events = [];
   const result = await runReleaseArtifactsStage({
     name: "release-artifacts",
@@ -277,10 +279,10 @@ test("release artifacts stage rejects missing receipts and still cleans owned te
     removeTemp: async (path) => { events.push(path); },
   });
   assert.deepEqual(result, { status: "failed" });
-  assert.deepEqual(events, ["OWNED_TEMP"]);
+  assert.deepEqual(events, []);
 });
 
-test("release artifacts stage awaits late temp creation and cleanup after its deadline", async () => {
+test("release artifacts stage preserves late temp evidence after its deadline", async () => {
   const events = [];
   const result = await runReleaseArtifactsStage({
     name: "release-artifacts", kind: "release-artifacts", cwd: ROOT, env: {},
@@ -292,11 +294,12 @@ test("release artifacts stage awaits late temp creation and cleanup after its de
     clock: () => 11,
   });
   assert.deepEqual(result, { status: "failed" });
-  assert.deepEqual(events, ["created", "removed:LATE_OWNED_TEMP"]);
+  assert.deepEqual(events, ["created"]);
 });
 
-test("release artifacts stage owns and removes a real temp before an expired deadline", async () => {
+test("release artifacts stage preserves a real temp after an expired deadline", async (t) => {
   const owned = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-expired-"));
+  t.after(() => rm(owned, { recursive: true, force: true }));
   const result = await runReleaseArtifactsStage({
     name: "release-artifacts", kind: "release-artifacts", cwd: ROOT, env: {},
   }, {
@@ -306,7 +309,108 @@ test("release artifacts stage owns and removes a real temp before an expired dea
     clock: () => 2,
   });
   assert.deepEqual(result, { status: "failed" });
-  await assert.rejects(readFile(owned), /ENOENT/u);
+  assert.equal((await lstat(owned)).isDirectory(), true);
+});
+
+test("release temp cleanup quarantines first and never deletes a swapped replacement", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-cleanup-race-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const owned = join(parent, "owned");
+  const savedOwned = join(parent, "saved-owned");
+  await mkdir(owned);
+  const info = await lstat(owned);
+  const identity = { dev: info.dev, ino: info.ino, canonical: await realpath(owned) };
+  const module = await import(
+    `${new URL("../scripts/release-verify.mjs", import.meta.url).href}?cleanup-race=${Date.now()}`
+  );
+  assert.equal(typeof module.removeOwnedTempForTest, "function");
+  let replacement;
+  await assert.rejects(
+    module.removeOwnedTempForTest(owned, identity, {
+      afterQuarantine: async (quarantine) => {
+        await rename(quarantine, savedOwned);
+        await mkdir(quarantine);
+        replacement = join(quarantine, "sentinel.txt");
+        await writeFile(replacement, "preserve", "utf8");
+      },
+    }),
+    { code: "RELEASE_VERIFY_TEMP_INVALID" },
+  );
+  assert.equal(await readFile(replacement, "utf8"), "preserve");
+  assert.equal((await lstat(savedOwned)).isDirectory(), true);
+});
+
+test("release temp cleanup preserves a file swapped after quarantine", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-file-race-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const owned = join(parent, "owned");
+  const artifacts = join(owned, "artifacts");
+  const savedArtifact = join(parent, "saved-provenance.json");
+  await mkdir(artifacts, { recursive: true });
+  await writeFile(join(artifacts, "provenance.json"), "owned", "utf8");
+  const info = await lstat(owned);
+  const identity = { dev: info.dev, ino: info.ino, canonical: await realpath(owned) };
+  const { removeOwnedTempForTest } = await import(
+    `${new URL("../scripts/release-verify.mjs", import.meta.url).href}?file-race=${Date.now()}`
+  );
+  let replacement;
+  await assert.rejects(
+    removeOwnedTempForTest(owned, identity, {
+      afterQuarantine: async (quarantine) => {
+        const quarantinedArtifact = join(quarantine, "artifacts", "provenance.json");
+        await rename(quarantinedArtifact, savedArtifact);
+        replacement = quarantinedArtifact;
+        await writeFile(replacement, "preserve", "utf8");
+      },
+    }),
+    { code: "RELEASE_VERIFY_TEMP_INVALID" },
+  );
+  assert.equal(await readFile(replacement, "utf8"), "preserve");
+  assert.equal(await readFile(savedArtifact, "utf8"), "owned");
+});
+
+test("release temp cleanup follows platform path case semantics", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-case-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const owned = join(parent, "owned");
+  await mkdir(owned);
+  const info = await lstat(owned);
+  const identity = { dev: info.dev, ino: info.ino, canonical: await realpath(owned) };
+  const { removeOwnedTempForTest } = await import(
+    `${new URL("../scripts/release-verify.mjs", import.meta.url).href}?case=${Date.now()}`
+  );
+  const cleanupPath = process.platform === "win32" ? owned.toUpperCase() : owned;
+  await removeOwnedTempForTest(cleanupPath, identity);
+  await assert.rejects(lstat(owned), { code: "ENOENT" });
+});
+
+test("release temp cleanup accepts a canonical ancestor alias", async (t) => {
+  const realParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-real-parent-"));
+  const aliasParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-alias-parent-"));
+  const alias = join(aliasParent, "temp-alias");
+  t.after(async () => {
+    try { await unlink(alias); } catch {}
+    await rm(aliasParent, { recursive: true, force: true });
+    await rm(realParent, { recursive: true, force: true });
+  });
+  try {
+    await symlink(realParent, alias, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      t.skip("directory alias creation is unavailable");
+      return;
+    }
+    throw error;
+  }
+  const owned = join(alias, "owned");
+  await mkdir(owned);
+  const info = await lstat(owned);
+  const identity = { dev: info.dev, ino: info.ino, canonical: await realpath(owned) };
+  const { removeOwnedTempForTest } = await import(
+    `${new URL("../scripts/release-verify.mjs", import.meta.url).href}?canonical-alias=${Date.now()}`
+  );
+  await removeOwnedTempForTest(owned, identity);
+  await assert.rejects(lstat(join(realParent, "owned")), { code: "ENOENT" });
 });
 
 for (const failure of [

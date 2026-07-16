@@ -393,7 +393,9 @@ export async function readOwnedRegularFile(boundary, path, label, maxBytes = MAX
   try {
     await options.afterOpen?.();
     const opened = await handle.stat();
-    if (!opened.isFile() || !sameIdentity(opened, before)) {
+    if (!opened.isFile() || !sameIdentity(opened, before)
+      || opened.size !== before.size || opened.mtimeMs !== before.mtimeMs
+      || opened.ctimeMs !== before.ctimeMs) {
       throw codedError("PUBLIC_FILE_CHANGED", label);
     }
     await assertOpenedOwnedPathUnchanged(boundary, resolvedPath, opened, label);
