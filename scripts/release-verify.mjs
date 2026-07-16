@@ -219,13 +219,13 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
   let status = "failed";
   try {
     ownedTemp = await createTemp();
-    if (deadlineAt !== Number.POSITIVE_INFINITY && clock() >= deadlineAt) {
-      throw releaseError("RELEASE_VERIFY_TIMEOUT");
-    }
     if (typeof ownedTemp !== "string" || ownedTemp.length === 0) {
       throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
     }
-    if (options.createTemp === undefined) ownedIdentity = await tempIdentity(ownedTemp);
+    if (removeTemp === undefined) ownedIdentity = await tempIdentity(ownedTemp);
+    if (deadlineAt !== Number.POSITIVE_INFINITY && clock() >= deadlineAt) {
+      throw releaseError("RELEASE_VERIFY_TIMEOUT");
+    }
     const output = join(ownedTemp, "artifacts");
     const build = await runCommand({
       tool: "node",

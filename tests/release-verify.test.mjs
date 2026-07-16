@@ -293,6 +293,20 @@ test("release artifacts stage awaits late temp creation and cleanup after its de
   assert.deepEqual(events, ["created", "removed:LATE_OWNED_TEMP"]);
 });
 
+test("release artifacts stage owns and removes a real temp before an expired deadline", async () => {
+  const owned = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-expired-"));
+  const result = await runReleaseArtifactsStage({
+    name: "release-artifacts", kind: "release-artifacts", cwd: ROOT, env: {},
+  }, {
+    createTemp: async () => owned,
+    runCommand: async () => { throw new Error("must not run"); },
+    deadlineAt: 1,
+    clock: () => 2,
+  });
+  assert.deepEqual(result, { status: "failed" });
+  await assert.rejects(readFile(owned), /ENOENT/u);
+});
+
 for (const failure of [
   { label: "skipped", result: { status: "skipped" }, expectedStatus: "skipped" },
   { label: "missing", result: undefined, expectedStatus: "failed" },
