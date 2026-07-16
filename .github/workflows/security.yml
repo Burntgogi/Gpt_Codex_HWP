@@ -35,6 +35,10 @@ jobs:
         run: npm audit --omit=dev --prefix plugins/gpt-codex-hwp
       - name: Verify projected runtime is current
         run: npm run runtime:check
+      - name: Configure neutral release identity
+        run: |
+          git config --local user.name "Gpt_Codex_HWP contributors"
+          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
       - name: Build candidate artifacts
         run: npm run release:artifacts -- --output release-artifacts
       - name: Verify candidate artifacts

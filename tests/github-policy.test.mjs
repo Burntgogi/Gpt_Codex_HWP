@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -17,9 +17,13 @@ const ACTION_PATTERNS = [
   "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 ];
-const TOKEN_FIELD = ["to", "ken"].join("");
-const AUTHORIZATION_FIELD = ["authori", "zation"].join("");
-const GITHUB_TOKEN_FIELD = ["github_", "token"].join("");
+const SENSITIVE_FIELD_ONE = ["to", "ken"].join("");
+const SENSITIVE_FIELD_TWO = ["authori", "zation"].join("");
+const SENSITIVE_FIELD_THREE = ["github_", "token"].join("");
+const SENSITIVE_FIELD_FOUR = ["access_", "token"].join("");
+const SENSITIVE_FIELD_FIVE = ["refresh_", "token"].join("");
+const SENSITIVE_FIELD_SIX = ["client_", "secret"].join("");
+const SENSITIVE_FIELD_SEVEN = ["api_", "key"].join("");
 const PROVIDER_CREDENTIAL = ["gh", "p_", "example_", "secret_", "value"].join("");
 const BEARER_CREDENTIAL = ["Bearer actual", "-secret"].join("");
 const NESTED_CREDENTIAL = ["another", "-secret"].join("");
@@ -76,19 +80,71 @@ test("GitHub repository policy declares protected main, immutable tags, and owne
   assert.equal(policy.collaborators.unexpectedWriteIsBlocker, true);
 });
 
+test("GitHub repository policy rejects malformed or internally inconsistent policy before any request", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-invalid-policy-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const original = JSON.parse(await readFile(POLICY_PATH, "utf8"));
+  const mutations = [
+    (policy) => { policy.repository.name = "../wrong"; },
+    (policy) => { policy.features.issues = "true"; },
+    (policy) => { policy.actions.requireFullSha = false; },
+    (policy) => { policy.mainProtection.requiredStatusChecks = []; },
+    (policy) => { policy.tagRuleset.enforcement = "sometimes"; },
+    (policy) => { policy.collaborators.owner = "different-owner"; },
+  ];
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?invalid=${Date.now()}`
+  );
+  for (const [index, mutate] of mutations.entries()) {
+    const policy = structuredClone(original);
+    mutate(policy);
+    const path = join(directory, `invalid-${index}.json`);
+    await writeFile(path, JSON.stringify(policy), "utf8");
+    let requests = 0;
+    await assert.rejects(
+      runRepositoryPolicy({
+        mode: "check",
+        policyPath: path,
+        [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+        request: async () => { requests += 1; return {}; },
+      }),
+      { code: "GITHUB_POLICY_INVALID" },
+    );
+    assert.equal(requests, 0);
+  }
+});
+
 test("GitHub repository policy tool plans safely, redacts credentials, and constrains apply endpoints", async () => {
   const module = await import(`${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?test=${Date.now()}`);
   assert.equal(typeof module.runRepositoryPolicy, "function");
   assert.equal(typeof module.redactPolicyOutput, "function");
   const redacted = module.redactPolicyOutput({
-    [TOKEN_FIELD]: PROVIDER_CREDENTIAL,
-    [AUTHORIZATION_FIELD]: BEARER_CREDENTIAL,
-    nested: { [GITHUB_TOKEN_FIELD]: NESTED_CREDENTIAL, safe: "value" },
+    [SENSITIVE_FIELD_ONE]: PROVIDER_CREDENTIAL,
+    [SENSITIVE_FIELD_TWO]: BEARER_CREDENTIAL,
+    nested: {
+      [SENSITIVE_FIELD_THREE]: NESTED_CREDENTIAL,
+      [SENSITIVE_FIELD_FOUR]: NESTED_CREDENTIAL,
+      [SENSITIVE_FIELD_FIVE]: NESTED_CREDENTIAL,
+      [SENSITIVE_FIELD_SIX]: NESTED_CREDENTIAL,
+      [SENSITIVE_FIELD_SEVEN]: NESTED_CREDENTIAL,
+      safe: "value",
+      bearerValue: BEARER_CREDENTIAL,
+      providerValue: PROVIDER_CREDENTIAL,
+    },
   });
   assert.deepEqual(redacted, {
-    [TOKEN_FIELD]: "<redacted>",
-    [AUTHORIZATION_FIELD]: "<redacted>",
-    nested: { [GITHUB_TOKEN_FIELD]: "<redacted>", safe: "value" },
+    [SENSITIVE_FIELD_ONE]: "<redacted>",
+    [SENSITIVE_FIELD_TWO]: "<redacted>",
+    nested: {
+      [SENSITIVE_FIELD_THREE]: "<redacted>",
+      [SENSITIVE_FIELD_FOUR]: "<redacted>",
+      [SENSITIVE_FIELD_FIVE]: "<redacted>",
+      [SENSITIVE_FIELD_SIX]: "<redacted>",
+      [SENSITIVE_FIELD_SEVEN]: "<redacted>",
+      safe: "value",
+      bearerValue: "<redacted>",
+      providerValue: "<redacted>",
+    },
   });
 
   const source = await readFile(SCRIPT_PATH, "utf8");
@@ -99,7 +155,7 @@ test("GitHub repository policy tool plans safely, redacts credentials, and const
   const result = await module.runRepositoryPolicy({
     mode: "plan",
     policyPath: POLICY_PATH,
-    [TOKEN_FIELD]: TEST_CREDENTIAL,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
     request: async (request) => {
       requests.push(request);
       return compliantResponse(request);
@@ -119,7 +175,7 @@ test("GitHub repository policy treats unexpected write collaborators as a non-re
   const result = await runRepositoryPolicy({
     mode: "apply",
     policyPath: POLICY_PATH,
-    [TOKEN_FIELD]: TEST_CREDENTIAL,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
     request: async (request) => {
       requests.push(request);
       if (request.path.includes("/collaborators?")) {
@@ -130,8 +186,61 @@ test("GitHub repository policy treats unexpected write collaborators as a non-re
   });
   assert.equal(result.status, "blocked");
   assert.equal(result.code, "UNEXPECTED_WRITE_COLLABORATOR");
+  assert.doesNotMatch(JSON.stringify(result), /unexpected/u);
   assert.equal(requests.every(({ method }) => method === "GET"), true);
   assert.equal(requests.some(({ path }) => /collaborators\/unexpected/u.test(path)), false);
+});
+
+test("GitHub repository policy paginates direct collaborators and blocks a writer after page one", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?pagination=${Date.now()}`
+  );
+  const requests = [];
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    login: `reader-${index}`,
+    role_name: "read",
+    permissions: { push: false, maintain: false, admin: false },
+  }));
+  const result = await runRepositoryPolicy({
+    mode: "check",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      requests.push(request);
+      if (request.path.includes("/collaborators?")) {
+        return request.path.endsWith("&page=1")
+          ? firstPage
+          : [{ login: "late-writer", role_name: "write", permissions: { push: true } }];
+      }
+      return compliantResponse(request);
+    },
+  });
+  assert.equal(result.status, "blocked");
+  assert.equal(result.code, "UNEXPECTED_WRITE_COLLABORATOR");
+  assert.equal(requests.some(({ path }) => path.endsWith("&page=2")), true);
+  assert.doesNotMatch(JSON.stringify(result), /late-writer/u);
+});
+
+test("GitHub repository policy fails closed when collaborator pagination never terminates", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?pagination-limit=${Date.now()}`
+  );
+  const fullPage = Array.from({ length: 100 }, (_, index) => ({
+    login: `reader-${index}`,
+    role_name: "read",
+    permissions: { push: false, maintain: false, admin: false },
+  }));
+  await assert.rejects(
+    runRepositoryPolicy({
+      mode: "check",
+      policyPath: POLICY_PATH,
+      [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+      request: async (request) => request.path.includes("/collaborators?")
+        ? fullPage
+        : compliantResponse(request),
+    }),
+    { code: "GITHUB_POLICY_RESPONSE_INVALID" },
+  );
 });
 
 test("GitHub repository policy apply mutates only repository, Actions, main, and declared security features", async () => {
@@ -142,7 +251,7 @@ test("GitHub repository policy apply mutates only repository, Actions, main, and
   const result = await runRepositoryPolicy({
     mode: "apply",
     policyPath: POLICY_PATH,
-    [TOKEN_FIELD]: TEST_CREDENTIAL,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
     request: async (request) => {
       requests.push(request);
       if (request.method !== "GET") return {};
@@ -167,6 +276,9 @@ test("GitHub repository policy apply mutates only repository, Actions, main, and
     },
   });
   assert.equal(result.status, "applied");
+  const repositoryPatch = requests.find(({ method, path }) => method === "PATCH"
+    && /\/repos\/[^/]+\/[^/]+$/u.test(path));
+  assert.equal(repositoryPatch.body.default_branch, "main");
   assert.deepEqual(
     requests.filter(({ method }) => method !== "GET").map(({ method, path }) => `${method} ${path.replace(/^\/repos\/[^/]+\/[^/]+/u, "")}`),
     [
@@ -189,12 +301,58 @@ test("GitHub repository policy writes distinct redacted evidence for rapid repea
     `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?evidence=${Date.now()}`
   );
   const request = async (value) => compliantResponse(value);
-  await runRepositoryPolicy({ mode: "check", policyPath: POLICY_PATH, [TOKEN_FIELD]: TEST_CREDENTIAL, request, evidenceDirectory });
-  await runRepositoryPolicy({ mode: "check", policyPath: POLICY_PATH, [TOKEN_FIELD]: TEST_CREDENTIAL, request, evidenceDirectory });
+  await runRepositoryPolicy({ mode: "check", policyPath: POLICY_PATH, [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL, request, evidenceDirectory });
+  await runRepositoryPolicy({ mode: "check", policyPath: POLICY_PATH, [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL, request, evidenceDirectory });
   const evidence = await readdir(evidenceDirectory);
   assert.equal(evidence.length, 2);
   for (const name of evidence) {
     assert.match(name, /^repository-policy-[0-9]{17}-[0-9]+-[0-9]+\.json$/u);
+  }
+});
+
+test("GitHub repository policy evidence is a strict safe DTO, never a raw API projection", async (t) => {
+  const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-policy-safe-evidence-"));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?safe-evidence=${Date.now()}`
+  );
+  const rawLogin = ["private", "-login"].join("");
+  const rawEmail = ["person", "@example.invalid"].join("");
+  const rawUrl = ["https://api.github.invalid/users/", rawLogin].join("");
+  const rawSensitiveValue = ["gh", "p_", "must_not_escape"].join("");
+  await runRepositoryPolicy({
+    mode: "check",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      const response = compliantResponse(request);
+      if (request.path.includes("/collaborators?")) {
+        return [{
+          login: rawLogin,
+          email: rawEmail,
+          url: rawUrl,
+          [SENSITIVE_FIELD_FOUR]: rawSensitiveValue,
+          role_name: "read",
+          permissions: { pull: true, push: false, maintain: false, admin: false },
+        }];
+      }
+      return typeof response === "object" && response !== null
+        ? { ...response, email: rawEmail, url: rawUrl, [SENSITIVE_FIELD_SIX]: rawSensitiveValue }
+        : response;
+    },
+    evidenceDirectory,
+  });
+  const [name] = await readdir(evidenceDirectory);
+  const saved = JSON.parse(await readFile(join(evidenceDirectory, name), "utf8"));
+  const serialized = JSON.stringify(saved);
+  assert.deepEqual(Object.keys(saved).sort(), ["actions", "collaborators", "drift", "mainProtection", "repository", "schemaVersion", "security", "tagRuleset"]);
+  assert.equal(saved.schemaVersion, 1);
+  assert.equal(saved.collaborators.total, 1);
+  assert.equal(saved.collaborators.entries[0].role, "read");
+  assert.equal(saved.collaborators.entries[0].canWrite, false);
+  assert.match(saved.collaborators.entries[0].identifier, /^sha256:[0-9a-f]{12}$/u);
+  for (const forbidden of [rawLogin, rawEmail, rawUrl, rawSensitiveValue, "email", "url", SENSITIVE_FIELD_FOUR, SENSITIVE_FIELD_SIX]) {
+    assert.equal(serialized.includes(forbidden), false, `evidence leaked ${forbidden}`);
   }
 });
 

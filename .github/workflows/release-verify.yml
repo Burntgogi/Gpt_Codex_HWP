@@ -26,8 +26,19 @@ jobs:
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Install runtime dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Verify candidate identity and repository tests
-        run: npm run test:repository
+      - name: Configure neutral release identity
+        run: |
+          git config --local user.name "Gpt_Codex_HWP contributors"
+          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
+      - name: Generate fresh sequential large-document evidence
+        env:
+          HWP_BENCH_LARGE: "1"
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
+      - name: Run the complete fail-closed release gate
+        env:
+          HWP_BENCH_REQUIRE_LARGE: "1"
+          HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
+        run: npm run release:verify
       - name: Build checksummed candidate outputs
         run: npm run release:artifacts -- --output release-artifacts
       - name: Verify candidate outputs
