@@ -14,6 +14,11 @@ import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
 import {
+  runWithToolExecutionContext,
+  toDocumentEngineExecutionContext,
+  type ToolExecutionContext,
+} from "../shared/tool-context.js";
+import {
   MAX_FILL_VALUES,
   ResourceLimitError,
   assertFillValueBudget,
@@ -48,6 +53,7 @@ export interface HwpFillFormInput {
 export async function handleHwpPatchDocument(
   input: HwpPatchDocumentInput,
   facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
   let outputPath: string | undefined;
@@ -103,7 +109,11 @@ export async function handleHwpPatchDocument(
       );
     }
 
-    const patchResult = await facade.patch(snapshot, input.edited_markdown);
+    const patchResult = await facade.patch(
+      snapshot,
+      input.edited_markdown,
+      toDocumentEngineExecutionContext(context),
+    );
     try {
       const metadata = readPatchMetadata(patchResult.resultMetadata);
       const complete = patchIsComplete(metadata);
@@ -186,6 +196,7 @@ export async function handleHwpPatchDocument(
 export async function handleHwpFillForm(
   input: HwpFillFormInput,
   facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
   let outputPath: string | undefined;
@@ -263,6 +274,7 @@ export async function handleHwpFillForm(
       snapshot,
       input.fields,
       fillOptions,
+      toDocumentEngineExecutionContext(context),
     );
     try {
       const metadata = readFillMetadata(fillResult.resultMetadata);
@@ -324,7 +336,10 @@ export async function handleHwpFillForm(
   }
 }
 
-export function registerHwpPatchDocument(server: McpServer): void {
+export function registerHwpPatchDocument(
+  server: McpServer,
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_PATCH_DOCUMENT_TOOL_NAME,
     {
@@ -338,11 +353,17 @@ export function registerHwpPatchDocument(server: McpServer): void {
       },
       annotations: { readOnlyHint: false },
     },
-    (args) => handleHwpPatchDocument(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpPatchDocument(args, facade, context),
+    ),
   );
 }
 
-export function registerHwpFillForm(server: McpServer): void {
+export function registerHwpFillForm(
+  server: McpServer,
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_FILL_FORM_TOOL_NAME,
     {
@@ -368,7 +389,10 @@ export function registerHwpFillForm(server: McpServer): void {
       },
       annotations: { readOnlyHint: false },
     },
-    (args) => handleHwpFillForm(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpFillForm(args, facade, context),
+    ),
   );
 }
 

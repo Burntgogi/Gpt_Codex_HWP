@@ -9,6 +9,11 @@ import {
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import {
+  runWithToolExecutionContext,
+  toDocumentEngineExecutionContext,
+  type ToolExecutionContext,
+} from "../shared/tool-context.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 
 export const HWP_DETECT_FORMAT_TOOL_NAME = "hwp_detect_format";
@@ -27,6 +32,7 @@ interface FormatDetails {
 export async function handleHwpDetectFormat(
   input: HwpDetectFormatInput,
   documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string;
 
@@ -38,7 +44,10 @@ export async function handleHwpDetectFormat(
         options: {},
       }),
     });
-    const detected = await documentEngine.detect(snapshot);
+    const detected = await documentEngine.detect(
+      snapshot,
+      toDocumentEngineExecutionContext(context),
+    );
     const details: FormatDetails = {
       file_path: filePath,
       file_size_bytes: detected.snapshotMetadata.sizeBytes,
@@ -68,7 +77,10 @@ export async function handleHwpDetectFormat(
   }
 }
 
-export function registerHwpDetectFormat(server: McpServer): void {
+export function registerHwpDetectFormat(
+  server: McpServer,
+  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_DETECT_FORMAT_TOOL_NAME,
     {
@@ -82,7 +94,10 @@ export function registerHwpDetectFormat(server: McpServer): void {
         readOnlyHint: true,
       },
     },
-    (args) => handleHwpDetectFormat(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpDetectFormat(args, documentEngine, context),
+    ),
   );
 }
 

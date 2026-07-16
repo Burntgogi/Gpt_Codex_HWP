@@ -115,13 +115,35 @@ function matchRanges(text, pattern) {
 
 function hasLiteralCredentialAssignment(text) {
   const assignment = /(?:^|[\s,{;])["']?([A-Za-z][A-Za-z0-9_-]*)["']?\s*[:=]\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;\r\n]+))/gmu;
+  const mcpProgressNotificationRanges = matchRanges(
+    text,
+    /\{\s*method\s*:\s*["']notifications\/progress["']\s*,\s*params\s*:\s*\{[\s\S]{0,1024}?\}\s*,?\s*\}/gu,
+  );
   for (const match of text.matchAll(assignment)) {
     if (!isCredentialKey(match[1])) continue;
     const value = match[2] ?? match[3] ?? match[4];
     if (isAllowedCredentialReference(value)) continue;
+    if (isMcpProgressTokenReference(match, mcpProgressNotificationRanges)) {
+      continue;
+    }
     return true;
   }
   return hasLiteralEnvironmentAssignment(text);
+}
+
+function isMcpProgressTokenReference(match, notificationRanges) {
+  if (
+    match[1] !== "progressToken" ||
+    match[2] !== undefined ||
+    match[3] !== undefined ||
+    !/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(match[4] ?? "") ||
+    !/progressToken\s*:/u.test(match[0])
+  ) {
+    return false;
+  }
+  return notificationRanges.some(
+    ([start, end]) => match.index >= start && match.index < end,
+  );
 }
 
 function hasLiteralEnvironmentAssignment(text) {

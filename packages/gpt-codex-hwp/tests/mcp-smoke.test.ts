@@ -11,7 +11,7 @@ import packageJson from "../package.json" with { type: "json" };
 
 const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-test("built MCP server initializes, lists tools, and exits without stderr", { timeout: 15_000 }, async () => {
+test("built MCP server initializes and registers exactly nine tools without stderr", { timeout: 15_000 }, async () => {
   const configuredServerPath = process.env.HWP_MCP_SERVER_PATH?.trim();
   const serverPath = configuredServerPath
     ? resolve(configuredServerPath)

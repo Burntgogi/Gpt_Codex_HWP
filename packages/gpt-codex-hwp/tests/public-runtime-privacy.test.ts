@@ -72,6 +72,45 @@ test("public runtime privacy accepts a redacted credential placeholder", async (
   await assert.doesNotReject(assertPublicRuntimePrivacy(root));
 });
 
+test("public runtime privacy permits only the typed MCP progress token field", async (t) => {
+  const acceptedRoot = await temporaryRuntime(t, "privacy-mcp-progress-");
+  await writeFile(
+    join(acceptedRoot, "runtime.js"),
+    [
+      fragments("const progressId = request.params._meta.progress", "Token;"),
+      "await sendNotification({",
+      "  method: \"notifications/progress\",",
+      fragments("  params: { progress", "Token", ": progressId, progress: 1, total: 2, message: \"Processing document.\" },"),
+      "});",
+    ].join("\n"),
+  );
+  await assert.doesNotReject(assertPublicRuntimePrivacy(acceptedRoot));
+
+  for (const [name, contents] of [
+    [
+      "literal protocol credential",
+      fragments("sendNotification({ method: \"notifications/progress\", params: { progress", "Token", ": \"literal-token\", progress: 1 } });"),
+    ],
+    [
+      "out-of-context token field",
+      fragments("const progressId = request.params.id; const value = { progress", "Token", ": progressId };"),
+    ],
+    [
+      "other credential field in protocol object",
+      fragments("sendNotification({ method: \"notifications/progress\", params: { github", "Token", ": \"literal-token\", progress: 1 } });"),
+    ],
+  ] as const) {
+    await t.test(name, async (subtest) => {
+      const root = await temporaryRuntime(subtest, "privacy-mcp-progress-reject-");
+      await writeFile(join(root, "runtime.js"), contents);
+      await assert.rejects(
+        assertPublicRuntimePrivacy(root),
+        /literal credential.*runtime\.js/iu,
+      );
+    });
+  }
+});
+
 test("public runtime privacy scanner covers key, credential, and home-path variants", async (t) => {
   const rejected = [
     ["encrypted key", privateKeyHeader("ENCRYPTED")],

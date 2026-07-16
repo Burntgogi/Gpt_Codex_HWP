@@ -75,7 +75,10 @@ export async function writeDocumentRenderResultExclusively(
     requireNotAborted(options.signal);
     await writeFilesExclusively(
       [{ path: outputPath, data: result.svg }],
-      { sourcePaths: options.sourcePaths },
+      {
+        sourcePaths: options.sourcePaths,
+        beforeOpen: () => requireRenderOutputOpenAuthorized(options),
+      },
     );
     return result.metadata;
   }
@@ -113,7 +116,10 @@ async function writeRenderSpool(
       fd: handle.fd,
       offset: validated.svgOffset,
       sizeBytes: validated.svgBytes,
-    }, { sourcePaths: options.sourcePaths });
+    }, {
+      sourcePaths: options.sourcePaths,
+      beforeOpen: () => requireRenderOutputOpenAuthorized(options),
+    });
     return validated.metadata;
   } catch (error: unknown) {
     if (isSafePublicError(error)) throw error;
@@ -125,6 +131,13 @@ async function writeRenderSpool(
       throw protocolError();
     }
   }
+}
+
+async function requireRenderOutputOpenAuthorized(
+  options: DocumentRenderOutputOptions,
+): Promise<void> {
+  await options.beforeOpen?.();
+  requireNotAborted(options.signal);
 }
 
 async function validateRenderSpool(

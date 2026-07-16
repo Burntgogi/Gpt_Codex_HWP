@@ -474,8 +474,10 @@ export function createDocumentEngineFacade(
       ): Promise<readonly string[]> {
         if (committed || cleaned) throw engineProtocolError();
         if (!validation.payload.ok) throw engineProtocolError();
+        requireNotAborted(context.signal);
         const companions = options.companionFiles ?? [];
         const beforeOpen = async (): Promise<void> => {
+          requireNotAborted(context.signal);
           if (range !== undefined && spoolResult !== undefined &&
             await hashFdRange(range.fd, range.sizeBytes) !==
               spoolResult.metadata.sha256) {
@@ -662,6 +664,13 @@ function engineProtocolError(): Error {
   const error = new Error("The isolated engine returned an invalid HWPX result.");
   Object.assign(error, { code: "ENGINE_PROTOCOL_ERROR" });
   return error;
+}
+
+function requireNotAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted !== true) return;
+  const error = new Error("The request was cancelled.");
+  Object.assign(error, { code: "REQUEST_CANCELLED" });
+  throw error;
 }
 
 export { writeDocumentRenderResultExclusively };

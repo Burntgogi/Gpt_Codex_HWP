@@ -616,6 +616,43 @@ test("validated render spool preserves an existing output without partial replac
   }
 });
 
+test("MCP cancellation reaches the spooled preview exclusive-open boundary", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task7-spool-cancel-"));
+  const sourcePath = join(root, "source.hwpx");
+  const outputPath = join(root, "cancelled.svg");
+  const resultRoot = join(root, "result-spools");
+  const abort = new AbortController();
+  await writeFile(sourcePath, "owned source");
+  await mkdir(resultRoot);
+  try {
+    const { writeDocumentRenderResultExclusively: writeRender } = await import(
+      "../src/shared/document-engine.js"
+    );
+    const spool = await fixtureRenderSpool(
+      sourcePath,
+      resultRoot,
+      ["spool-base64", testRenderSpool('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString("base64")],
+      "task7-cancelled-spool-render",
+    );
+    await assert.rejects(
+      writeRender({
+        payload: spool,
+        snapshotMetadata: {} as never,
+        async verifySourceUnchanged() {},
+      }, outputPath, {
+        sourcePaths: [sourcePath],
+        signal: abort.signal,
+        beforeOpen: async () => abort.abort(),
+      }),
+      (error: unknown) => (error as { code?: string }).code === "REQUEST_CANCELLED",
+    );
+    await assertMissing(outputPath);
+    assert.deepEqual(await readdir(resultRoot), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function unitTestChildSupervisor(child: {
   exitCode: number | null;
   signalCode: string | null;

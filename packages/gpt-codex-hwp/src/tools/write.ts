@@ -13,6 +13,11 @@ import {
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import {
+  runWithToolExecutionContext,
+  toDocumentEngineExecutionContext,
+  type ToolExecutionContext,
+} from "../shared/tool-context.js";
 import type { DocumentResultPayload, SafeJsonValue } from "../workers/document-protocol.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 
@@ -36,6 +41,7 @@ export interface HwpValidateInput {
 export async function handleHwpGenerateHwpx(
   input: HwpGenerateHwpxInput,
   facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let outputPath: string | undefined;
   let previewPath: string | undefined;
@@ -70,6 +76,7 @@ export async function handleHwpGenerateHwpx(
         ...(input.preset === undefined ? {} : { preset: input.preset }),
         ...(previewPath === undefined ? {} : { renderPreview: true }),
       },
+      toDocumentEngineExecutionContext(context),
     );
     try {
       const checked = generatedResult.validation;
@@ -146,6 +153,7 @@ export async function handleHwpGenerateHwpx(
 export async function handleHwpValidate(
   input: HwpValidateInput,
   facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
 
@@ -173,7 +181,11 @@ export async function handleHwpValidate(
         await snapshot.cleanup();
       }
     }
-    const validationResult = await facade.validate(snapshot);
+    const validationResult = await facade.validate(
+      snapshot,
+      {},
+      toDocumentEngineExecutionContext(context),
+    );
     const validation = validationResult.payload;
     const issues = validation.issues.map((issue) => ({ ...issue }));
     const ok = validation.ok;
@@ -198,7 +210,10 @@ export async function handleHwpValidate(
   }
 }
 
-export function registerHwpGenerateHwpx(server: McpServer): void {
+export function registerHwpGenerateHwpx(
+  server: McpServer,
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_GENERATE_HWPX_TOOL_NAME,
     {
@@ -233,11 +248,17 @@ export function registerHwpGenerateHwpx(server: McpServer): void {
         readOnlyHint: false,
       },
     },
-    (args) => handleHwpGenerateHwpx(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpGenerateHwpx(args, facade, context),
+    ),
   );
 }
 
-export function registerHwpValidate(server: McpServer): void {
+export function registerHwpValidate(
+  server: McpServer,
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_VALIDATE_TOOL_NAME,
     {
@@ -251,7 +272,10 @@ export function registerHwpValidate(server: McpServer): void {
         readOnlyHint: true,
       },
     },
-    (args) => handleHwpValidate(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpValidate(args, facade, context),
+    ),
   );
 }
 

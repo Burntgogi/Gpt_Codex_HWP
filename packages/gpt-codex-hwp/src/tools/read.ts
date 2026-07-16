@@ -24,6 +24,12 @@ import {
 } from "../shared/markdown-output.js";
 import { writeFilesExclusively } from "../shared/output.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import {
+  requireToolNotCancelled,
+  runWithToolExecutionContext,
+  toDocumentEngineExecutionContext,
+  type ToolExecutionContext,
+} from "../shared/tool-context.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 import {
   MAX_MCP_RESPONSE_BYTES,
@@ -53,6 +59,7 @@ interface ReadWarning {
 export async function handleHwpRead(
   input: HwpReadInput,
   documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string;
 
@@ -80,7 +87,11 @@ export async function handleHwpRead(
         await snapshot.cleanup();
       }
     }
-    const engineResult = await documentEngine.parse(snapshot, parseOptions);
+    const engineResult = await documentEngine.parse(
+      snapshot,
+      parseOptions,
+      toDocumentEngineExecutionContext(context),
+    );
     const parsed = engineResult.payload;
     let delivery: MarkdownDeliveryPlan;
     try {
@@ -109,6 +120,7 @@ export async function handleHwpRead(
           input.output_dir,
           filePath,
           warnings,
+          context,
         )
       : [];
     const metadata: Record<string, unknown> = {
@@ -162,7 +174,10 @@ export async function handleHwpRead(
     if (delivery.outputPath !== undefined) {
       await writeFilesExclusively(
         [{ path: delivery.outputPath, data: parsed.markdown }],
-        { sourcePaths: [filePath] },
+        {
+          sourcePaths: [filePath],
+          beforeOpen: async () => requireToolNotCancelled(context),
+        },
       );
     }
     return successResult;
@@ -193,7 +208,10 @@ export async function handleHwpRead(
   }
 }
 
-export function registerHwpRead(server: McpServer): void {
+export function registerHwpRead(
+  server: McpServer,
+  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_READ_TOOL_NAME,
     {
@@ -228,7 +246,10 @@ export function registerHwpRead(server: McpServer): void {
         readOnlyHint: false,
       },
     },
-    (args) => handleHwpRead(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpRead(args, documentEngine, context),
+    ),
   );
 }
 
@@ -241,6 +262,7 @@ async function collectImageAssets(
   outputDir: string | undefined,
   sourceFilePath: string,
   warnings: ReadWarning[],
+  context?: ToolExecutionContext,
 ): Promise<string[]> {
   const filenames = uniqueSafeFilenames(images);
 
@@ -253,6 +275,7 @@ async function collectImageAssets(
     return filenames;
   }
 
+  requireToolNotCancelled(context);
   const resolvedOutputDir = resolveLocalPath(outputDir, "output_dir");
   const resolvedSourceFilePath = resolveLocalPath(
     sourceFilePath,
@@ -270,6 +293,7 @@ async function collectImageAssets(
         filenames[index]!,
         outputDirectory,
         resolvedSourceFilePath,
+        context,
       ),
     );
   }
@@ -390,6 +414,7 @@ async function writeImageAssetExclusively(
   baseFilename: string,
   outputDirectory: OutputDirectoryIdentity,
   sourceFilePath: string,
+  context?: ToolExecutionContext,
 ): Promise<string> {
   let attempt = 1;
 
@@ -403,6 +428,7 @@ async function writeImageAssetExclusively(
     }
 
     await assertCanonicalDirectoryIdentity(outputDirectory);
+    requireToolNotCancelled(context);
 
     let handle;
     try {

@@ -33,6 +33,12 @@ import {
 } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import {
+  requireToolNotCancelled,
+  runWithToolExecutionContext,
+  toDocumentEngineExecutionContext,
+  type ToolExecutionContext,
+} from "../shared/tool-context.js";
 import type { DocumentResultPayload, SafeJsonValue } from "../workers/document-protocol.js";
 
 export const HWP_CREATE_SVG_ASSET_TOOL_NAME = "hwp_create_svg_asset";
@@ -83,6 +89,7 @@ const defaultSvgDependencies: SvgAssetDependencies = {
 export async function handleHwpCreateSvgAsset(
   input: HwpCreateSvgAssetInput,
   dependencyOverrides: Partial<SvgAssetDependencies> = {},
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let svgPath: string | undefined;
   let pngPath: string | undefined;
@@ -108,7 +115,7 @@ export async function handleHwpCreateSvgAsset(
         await writeFilesExclusively([
           { path: svgPath, data: svg },
           { path: pngPath, data: png },
-        ]);
+        ], { beforeOpen: async () => requireToolNotCancelled(context) });
         return toolSuccess("Created standalone SVG and PNG assets.", {
           svg_path: svgPath,
           png_path: pngPath,
@@ -119,7 +126,10 @@ export async function handleHwpCreateSvgAsset(
           throw error;
         }
         await preflightOutputPath(pngPath, []);
-        await writeFilesExclusively([{ path: svgPath, data: svg }]);
+        await writeFilesExclusively(
+          [{ path: svgPath, data: svg }],
+          { beforeOpen: async () => requireToolNotCancelled(context) },
+        );
         return toolSuccess("Created the SVG asset; PNG rendering was skipped.", {
           svg_path: svgPath,
           warnings: [`PNG rendering failed: ${errorMessage(error)}`],
@@ -127,7 +137,10 @@ export async function handleHwpCreateSvgAsset(
       }
     }
 
-    await writeFilesExclusively([{ path: svgPath, data: svg }]);
+    await writeFilesExclusively(
+      [{ path: svgPath, data: svg }],
+      { beforeOpen: async () => requireToolNotCancelled(context) },
+    );
     return toolSuccess("Created standalone SVG asset.", {
       svg_path: svgPath,
       warnings: [],
@@ -146,6 +159,7 @@ export async function handleHwpCreateSvgAsset(
 export async function handleHwpInsertImage(
   input: HwpInsertImageInput,
   facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
   let imagePath: string | undefined;
@@ -211,6 +225,7 @@ export async function handleHwpInsertImage(
             ? {}
             : { anchorOccurrence: input.anchor_occurrence }),
         },
+        toDocumentEngineExecutionContext(context),
       );
     } catch (error: unknown) {
       await Promise.allSettled([
@@ -293,7 +308,10 @@ export async function openImageInsertionSnapshots(
   }
 }
 
-export function registerHwpCreateSvgAsset(server: McpServer): void {
+export function registerHwpCreateSvgAsset(
+  server: McpServer,
+  dependencyOverrides: Partial<SvgAssetDependencies> = {},
+): void {
   server.registerTool(
     HWP_CREATE_SVG_ASSET_TOOL_NAME,
     {
@@ -313,11 +331,21 @@ export function registerHwpCreateSvgAsset(server: McpServer): void {
       },
       annotations: { readOnlyHint: false },
     },
-    (args) => handleHwpCreateSvgAsset(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpCreateSvgAsset(
+        args,
+        dependencyOverrides,
+        context,
+      ),
+    ),
   );
 }
 
-export function registerHwpInsertImage(server: McpServer): void {
+export function registerHwpInsertImage(
+  server: McpServer,
+  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_INSERT_IMAGE_TOOL_NAME,
     {
@@ -335,7 +363,10 @@ export function registerHwpInsertImage(server: McpServer): void {
       },
       annotations: { readOnlyHint: false },
     },
-    (args) => handleHwpInsertImage(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpInsertImage(args, facade, context),
+    ),
   );
 }
 

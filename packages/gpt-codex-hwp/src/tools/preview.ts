@@ -11,6 +11,11 @@ import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
 import {
+  runWithToolExecutionContext,
+  toDocumentEngineExecutionContext,
+  type ToolExecutionContext,
+} from "../shared/tool-context.js";
+import {
   MAX_HIGHLIGHT_TERMS,
   assertHighlightBudget,
 } from "../shared/resource-limits.js";
@@ -28,6 +33,7 @@ export interface HwpRenderPreviewInput {
 export async function handleHwpRenderPreview(
   input: HwpRenderPreviewInput,
   documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
   let outputPath: string | undefined;
@@ -68,11 +74,18 @@ export async function handleHwpRenderPreview(
       }
     }
 
-    const rendered = await documentEngine.render(snapshot, renderOptions);
+    const rendered = await documentEngine.render(
+      snapshot,
+      renderOptions,
+      toDocumentEngineExecutionContext(context),
+    );
     const metadata = safeRecord(await writeDocumentRenderResultExclusively(
       rendered,
       outputPath,
-      { sourcePaths: [filePath] },
+      {
+        sourcePaths: [filePath],
+        ...(context === undefined ? {} : { signal: context.signal }),
+      },
     ));
     if (metadata?.backend === "rhwp") {
       const warnings = [
@@ -134,7 +147,10 @@ export async function handleHwpRenderPreview(
   }
 }
 
-export function registerHwpRenderPreview(server: McpServer): void {
+export function registerHwpRenderPreview(
+  server: McpServer,
+  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+): void {
   server.registerTool(
     HWP_RENDER_PREVIEW_TOOL_NAME,
     {
@@ -161,7 +177,10 @@ export function registerHwpRenderPreview(server: McpServer): void {
         readOnlyHint: false,
       },
     },
-    (args) => handleHwpRenderPreview(args),
+    (args, extra) => runWithToolExecutionContext(
+      extra,
+      (context) => handleHwpRenderPreview(args, documentEngine, context),
+    ),
   );
 }
 
