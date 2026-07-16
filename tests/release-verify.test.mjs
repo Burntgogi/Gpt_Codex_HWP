@@ -953,6 +953,45 @@ function nodeStage(name, source) {
 
 function expectedStageCommands() {
   const noEvidence = undefined;
+  const documentBenchmarkArgs = [
+    "--prefix",
+    "packages/gpt-codex-hwp",
+    "run",
+    "benchmark:documents",
+    "--",
+    "--sizes",
+    "10",
+    "--output",
+    `.superpowers/benchmarks/release-10m-${process.pid}.json`,
+  ];
+  const documentBenchmark = process.env.HWP_BENCH_REQUIRE_LARGE === "1"
+    ? {
+        name: "document-benchmark",
+        tool: undefined,
+        args: undefined,
+        commands: [
+          { tool: "npm", args: documentBenchmarkArgs },
+          {
+            tool: "node",
+            args: [
+              "packages/gpt-codex-hwp/benchmarks/document-engine-benchmark.mjs",
+              "--validate-large",
+              process.env.HWP_BENCH_LARGE_EVIDENCE
+                ?? ".superpowers/benchmarks/large.json",
+            ],
+          },
+        ],
+        env: {},
+        evidence: noEvidence,
+      }
+    : {
+        name: "document-benchmark",
+        tool: "npm",
+        args: documentBenchmarkArgs,
+        commands: undefined,
+        env: {},
+        evidence: noEvidence,
+      };
   const realHwpEvidence = {
     kind: "node-test-summary",
     tests: 1,
@@ -1128,24 +1167,7 @@ function expectedStageCommands() {
       env: {},
       evidence: noEvidence,
     },
-    {
-      name: "document-benchmark",
-      tool: "npm",
-      args: [
-        "--prefix",
-        "packages/gpt-codex-hwp",
-        "run",
-        "benchmark:documents",
-        "--",
-        "--sizes",
-        "10",
-        "--output",
-        `.superpowers/benchmarks/release-10m-${process.pid}.json`,
-      ],
-      commands: undefined,
-      env: {},
-      evidence: noEvidence,
-    },
+    documentBenchmark,
     {
       name: "release-artifacts",
       tool: undefined,
