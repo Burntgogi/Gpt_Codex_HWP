@@ -8,6 +8,10 @@
 
 Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
+## v0.2.0 Release Candidate
+
+`v0.2.0` is an unpublished release candidate that strengthens the public-source boundary, security controls, reproducible artifacts, and protected GitHub release gates. Its candidate workflow builds, verifies, and attests the ZIP, SBOM, and provenance without creating a tag or GitHub release. Development and local verification are Windows x64 based; macOS Apple Silicon remains a compatibility target, but without a current exact-head `macOS arm64` remote receipt or physical Mac validation it remains unverified. Do not describe or recommend this candidate as a release until all three required checks and whole-release verification finish.
+
 ## v0.1.4 Release
 
 `v0.1.4` is the current release and has completed final Windows x64 validation. See the [English release notes](RELEASE_NOTES.en.md) for highlights, verification evidence, and installation or upgrade cautions; [Korean release notes](RELEASE_NOTES.md) are provided alongside them. Pin the `v0.1.4` tag instead of installing from the moving `main` branch.

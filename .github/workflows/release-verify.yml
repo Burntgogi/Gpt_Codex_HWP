@@ -1,0 +1,68 @@
+name: Release candidate verification
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build verified v0.2.0 candidate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install source dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Install runtime dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Verify candidate identity and repository tests
+        run: npm run test:repository
+      - name: Build checksummed candidate outputs
+        run: npm run release:artifacts -- --output release-artifacts
+      - name: Verify candidate outputs
+        run: npm run verify:release-artifacts -- --artifacts release-artifacts
+      - name: Require checksum manifest and clean tree
+        run: |
+          node -e "require('node:fs').accessSync('release-artifacts/SHA256SUMS')"
+          git diff --exit-code -- .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: gpt-codex-hwp-v0.2.0-candidate
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 7
+
+  attest:
+    name: Attest verified v0.2.0 subjects
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7.0.0
+        with:
+          name: gpt-codex-hwp-v0.2.0-candidate
+          path: release-artifacts
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.0
+        with:
+          subject-path: release-artifacts/gpt-codex-hwp-0.2.0.zip
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.0
+        with:
+          subject-path: release-artifacts/gpt-codex-hwp-0.2.0.spdx.json
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.0
+        with:
+          subject-path: release-artifacts/provenance.json

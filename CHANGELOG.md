@@ -4,8 +4,12 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 ## [Unreleased]
 
-- Public-source hardening and governance work is in development and remains
-  subject to release verification.
+- Prepared the unpublished 0.2.0 release candidate identity without changing
+  immutable v0.1.0-v0.1.4 release bytes.
+- Added SHA-pinned Windows x64, macOS arm64, and Security policy gates plus a
+  non-publishing artifact attestation workflow and declarative repository policy.
+- Public-source hardening and governance work remains subject to exact-head
+  remote receipts and whole-release verification.
 
 ## [0.1.4] - 2026-07-13
 

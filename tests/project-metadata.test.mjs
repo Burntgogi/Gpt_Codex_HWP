@@ -22,7 +22,7 @@ const GENERATED_PATH = join(
 );
 const BASE_ROOT_PACKAGE = {
   name: "gpt-codex-hwp-repository",
-  version: "0.1.4",
+  version: "0.2.0",
   license: "Apache-2.0",
   config: {
     productId: "gpt-codex-hwp",
@@ -39,8 +39,10 @@ test("root metadata is validated, frozen, and synchronized", async () => {
 
   assert.equal(metadata.productId, "gpt-codex-hwp");
   assert.equal(metadata.displayName, "Gpt_Codex_HWP");
-  assert.equal(metadata.version, "0.1.4");
-  assert.equal(pluginVersion(metadata), "0.1.4+codex.20260713023606");
+  assert.equal(metadata.version, "0.2.0");
+  assert.match(metadata.codexBuildId, /^[0-9]{14}$/u);
+  assert.ok(metadata.codexBuildId > "20260713023606");
+  assert.equal(pluginVersion(metadata), `0.2.0+codex.${metadata.codexBuildId}`);
   assert.equal(metadata.legacyUninstallSelector, "hwp-korean-docs@hwp-local");
   assert.equal(Object.isFrozen(metadata), true);
   assert.equal(
@@ -48,7 +50,7 @@ test("root metadata is validated, frozen, and synchronized", async () => {
     `export const PROJECT_METADATA = Object.freeze({\n` +
       `  productId: "gpt-codex-hwp",\n` +
       `  displayName: "Gpt_Codex_HWP",\n` +
-      `  version: "0.1.4",\n` +
+      `  version: "0.2.0",\n` +
       `} as const);\n`,
   );
   await assert.doesNotReject(syncProjectMetadata({ root: ROOT, check: true }));
@@ -125,14 +127,14 @@ test("metadata synchronization updates declared targets and preserves historical
 
   const sourcePackage = await readJson(join(fixture, "packages", "gpt-codex-hwp", "package.json"));
   assert.equal(sourcePackage.name, "gpt-codex-hwp");
-  assert.equal(sourcePackage.version, "0.1.4");
+  assert.equal(sourcePackage.version, "0.2.0");
   assert.equal(sourcePackage.license, "Apache-2.0");
 
   const sourceLock = await readJson(join(fixture, "packages", "gpt-codex-hwp", "package-lock.json"));
   assert.equal(sourceLock.name, "gpt-codex-hwp");
-  assert.equal(sourceLock.version, "0.1.4");
+  assert.equal(sourceLock.version, "0.2.0");
   assert.equal(sourceLock.packages[""].name, "gpt-codex-hwp");
-  assert.equal(sourceLock.packages[""].version, "0.1.4");
+  assert.equal(sourceLock.packages[""].version, "0.2.0");
   assert.equal(sourceLock.packages[""].license, "Apache-2.0");
 
   const skill = await readFile(

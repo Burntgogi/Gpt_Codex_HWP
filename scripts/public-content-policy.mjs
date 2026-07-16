@@ -135,7 +135,7 @@ export function classifyPublicContent(input, options = {}) {
   if (hasPrivateKeyHeader(normalized)) findings.push(finding("private key", label));
   if (hasLiteralNpmCredential(normalized)) findings.push(finding("literal credential", label));
   if (hasMixedCredentialReference(normalized)) findings.push(finding("literal credential", label));
-  if (hasLiteralCredentialAssignment(normalized, scope)) findings.push(finding("literal credential", label));
+  if (hasLiteralCredentialAssignment(normalized, scope, label)) findings.push(finding("literal credential", label));
   if (hasConcreteHomePath(normalized)) findings.push(finding("personal home path", label));
   if (extension === ".map" && hasAbsoluteSourceMapPath(normalized)) {
     findings.push(finding("absolute source map path", label));
@@ -570,7 +570,7 @@ function hasLiteralNpmCredential(text) {
   return false;
 }
 
-function hasLiteralCredentialAssignment(text, scope) {
+function hasLiteralCredentialAssignment(text, scope, label) {
   const patterns = [
     {
       pattern: /(?:^|[\s,{;])["']?([A-Za-z][A-Za-z0-9_-]*)["']?\s*[:=]\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;\r\n]+))/gmu,
@@ -601,11 +601,21 @@ function hasLiteralCredentialAssignment(text, scope) {
       if (isProtocolProgressReference({ match, key, value, scope, notificationRanges, sourceMetaRanges })) {
         continue;
       }
+      if (isWorkflowIdTokenPermission({ text, match, key, value, scope, label })) continue;
       if (isGenericTestVariableDeclaration(text, match, key, value, quoted, scope)) continue;
       if (!isAllowedCredentialReference(value, scope)) return true;
     }
   }
   return false;
+}
+
+function isWorkflowIdTokenPermission({ text, match, key, value, scope, label }) {
+  if (scope !== "source" || key !== "id-token" || !["write", "none"].includes(value)) return false;
+  if (typeof label !== "string" || !/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/u.test(label)) return false;
+  const lineStart = text.lastIndexOf("\n", match.index - 1) + 1;
+  const lineEnd = text.indexOf("\n", match.index);
+  const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd).trim();
+  return /^id-token:\s*(?:write|none)(?:\s+#.*)?$/u.test(line);
 }
 
 function isCredentialKey(key) {

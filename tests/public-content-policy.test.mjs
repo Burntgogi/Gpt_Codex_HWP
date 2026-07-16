@@ -141,6 +141,27 @@ test("credential references must occupy the whole assigned expression", () => {
   ));
 });
 
+test("GitHub workflow OIDC permissions allow only exact non-secret access levels", () => {
+  const workflowPermission = (value) => fragments("id", "-to", "ken", ": ", value);
+  for (const value of ["write", "none"]) {
+    assert.doesNotThrow(() => assertPublicContentBuffer(
+      Buffer.from(workflowPermission(value)),
+      { label: ".github/workflows/release.yml", scope: "source" },
+    ));
+  }
+
+  const rejected = [
+    { contents: workflowPermission("literal-value"), label: ".github/workflows/release.yml" },
+    { contents: workflowPermission("write"), label: "docs/release.yml" },
+    { contents: fragments("api", "-to", "ken", ": write"), label: ".github/workflows/release.yml" },
+  ];
+  for (const { contents, label } of rejected) {
+    assert.throws(() => assertPublicContentBuffer(
+      Buffer.from(contents), { label, scope: "source" },
+    ));
+  }
+});
+
 test("public content policy enforces exact binary, file, aggregate, link, and entry contracts", async (t) => {
   assert.ok(PUBLIC_BINARY_ALLOWLIST.some((record) =>
     record.size === 8704 && record.sha256 === "61538931d2e2cf38f35050618ce7698960823938884d0d8977812c94587e85fd"));

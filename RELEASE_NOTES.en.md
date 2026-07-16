@@ -1,14 +1,14 @@
-# Gpt_Codex_HWP v0.1.4 Release Notes
+# Gpt_Codex_HWP v0.2.0 Release Candidate Notes
 
-- Status: final release
-- Prepared: 2026-07-13
-- Validated platform: Windows x64
+- Status: release candidate (unpublished)
+- Prepared: 2026-07-16
+- Validation: Windows x64 local verification in progress; physical Mac unverified
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
 ## Overview
 
-v0.1.4 is the final release that treats HWP as a safe read-only input format and writes every new or edited document as HWPX. The public runtime includes only the Kordoc Core required for document workflows; optional PDF, OCR, ONNX, and formula engines are excluded. The public surface remains exactly nine tools.
+v0.2.0 is an unpublished release candidate that treats HWP as a safe read-only input format and writes every new or edited document as HWPX. The public runtime includes only the Kordoc Core required for document workflows; optional PDF, OCR, ONNX, and formula engines are excluded. The public surface remains exactly nine tools. This candidate adds public-tree and Git-history scans, least-privilege CI, and reproducible ZIP, SBOM, and provenance verification and attestation gates without creating a tag or release.
 
 ## Highlights
 
@@ -28,6 +28,8 @@ v0.1.4 is the final release that treats HWP as a safe read-only input format and
 
 ## Verification results
 
+The figures below are the prior v0.1.4 baseline, not final exact-head v0.2.0 receipts. v0.2.0 remains a candidate until the `Windows x64`, `macOS arm64`, and `Security policy` remote checks plus full local release verification all complete.
+
 - Node tests: 330 passed out of 334, with 4 expected platform/privilege skips and 0 failures
 - Python safe-edit tests: 16/16 passed
 - Production `npm audit`: 0 known vulnerabilities
@@ -38,7 +40,7 @@ v0.1.4 is the final release that treats HWP as a safe read-only input format and
 
 ## Installation and upgrade
 
-After the GitHub release is published, pin the `v0.1.4` tag instead of the moving `main` branch. Validate the returned `installedPath` and plugin ID, then run the following commands only from that validated directory:
+Only after candidate verification finishes and the owner publishes the GitHub release, pin the immutable `v0.2.0` tag instead of the moving `main` branch. Validate the returned `installedPath` and plugin ID, then run the following commands only from that validated directory:
 
 ```powershell
 npm ci --omit=dev --ignore-scripts
@@ -60,4 +62,4 @@ Restart Codex or open a new task and verify exactly nine tools. Do not remove an
 
 Project code is distributed under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and other third-party components remain subject to their original copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for pinned versions, usage scopes, and notices.
 
-These are the final `v0.1.4` release notes. Install from the immutable `v0.1.4` tag rather than the moving `main` branch.
+These are unpublished `v0.2.0` release candidate notes. Do not install the candidate until verification finishes and the owner publishes an immutable `v0.2.0` tag and release. Use an existing immutable tag rather than the moving `main` branch for currently published installations.

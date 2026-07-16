@@ -1,6 +1,6 @@
 {
   "name": "gpt-codex-hwp-repository",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -12,11 +12,14 @@
     "developerName": "Gpt_Codex_HWP contributors",
     "marketplaceName": "gpt-codex-hwp-local",
     "legacyUninstallSelector": "hwp-korean-docs@hwp-local",
-    "codexBuildId": "20260713023606"
+    "codexBuildId": "20260716134251"
   },
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",
     "doctor": "node scripts/doctor.mjs",
+    "github:policy:check": "node scripts/github-repository-policy.mjs --check",
+    "github:policy:plan": "node scripts/github-repository-policy.mjs --plan",
+    "github:policy:apply": "node scripts/github-repository-policy.mjs --apply",
     "security:scan-tree": "node scripts/public-content-policy.mjs --tree",
     "security:scan-history": "node scripts/scan-public-history.mjs",
     "sync:metadata": "node scripts/sync-project-metadata.mjs --write",

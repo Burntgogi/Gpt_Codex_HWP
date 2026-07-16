@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
@@ -28,9 +29,9 @@ jobs:
       - name: Assert Windows x64 runtime
         run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
       - name: Fresh source dependency install
-        run: npm ci --prefix packages/gpt-codex-hwp
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Fresh runtime dependency install
-        run: npm ci --prefix plugins/gpt-codex-hwp --omit=dev
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Verify metadata and dependency ownership
         run: |
           npm run check:metadata
@@ -47,6 +48,8 @@ jobs:
         run: npm run verify:compact-runtime
       - name: Verify projected runtime is current
         run: npm run runtime:check
+      - name: Scan public tree
+        run: npm run security:scan-tree
       - name: Reject generated repository changes
         run: git diff --exit-code -- .
 
@@ -61,6 +64,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
@@ -70,9 +74,9 @@ jobs:
       - name: Assert macOS arm64 runtime
         run: node -e "if (process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
       - name: Fresh source dependency install
-        run: npm ci --prefix packages/gpt-codex-hwp
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Fresh runtime dependency install
-        run: npm ci --prefix plugins/gpt-codex-hwp --omit=dev
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Verify metadata and dependency ownership
         run: |
           npm run check:metadata
@@ -89,5 +93,7 @@ jobs:
         run: npm run verify:compact-runtime
       - name: Verify projected runtime is current
         run: npm run runtime:check
+      - name: Scan public tree
+        run: npm run security:scan-tree
       - name: Reject generated repository changes
         run: git diff --exit-code -- .
