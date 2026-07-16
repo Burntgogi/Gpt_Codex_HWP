@@ -9,7 +9,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PROJECT_METADATA } from "./generated/project-metadata.js";
 import { registerTools } from "./tools/index.js";
-import { terminateDocumentProcessTreeByPid } from "./workers/document-child-client.js";
+import { encodeBoundedJsonFrame } from "./workers/bounded-frame.js";
+import { superviseDocumentProcessTree, terminateDocumentProcessTreeByPid, } from "./workers/document-child-client.js";
+import { DOCTOR_RUNNER_MAX_FRAME_BYTES, DOCTOR_RUNNER_READY, DOCTOR_RUNNER_SCHEMA_VERSION, } from "./workers/doctor-command-runner.js";
 export const DOCTOR_SCHEMA_VERSION = 1;
 const EXPECTED_TOOL_NAMES = Object.freeze([
     "hwp_detect_format",
@@ -367,8 +369,11 @@ async function safeRun(dependencies, command, args) {
     }
 }
 export function executeBoundedCommand(specification, runtimeRoot, dependencies = {}) {
+    const platform = dependencies.platform ?? process.platform;
+    if (platform === "win32") {
+        return executeWindowsBoundedCommand(specification, runtimeRoot, dependencies);
+    }
     return new Promise((resolvePromise) => {
-        const platform = dependencies.platform ?? process.platform;
         const spawnProcess = dependencies.spawnProcess ?? spawn;
         const terminateProcessTree = dependencies.terminateProcessTree
             ?? ((pid) => terminateDocumentProcessTreeByPid(pid));
@@ -381,7 +386,7 @@ export function executeBoundedCommand(specification, runtimeRoot, dependencies =
             cwd: runtimeRoot,
             shell: false,
             windowsHide: true,
-            detached: platform !== "win32",
+            detached: true,
             stdio: ["ignore", "pipe", "pipe"],
         });
         const append = (current, chunk) => {
@@ -407,18 +412,6 @@ export function executeBoundedCommand(specification, runtimeRoot, dependencies =
         const timer = setTimeout(() => {
             if (settled)
                 return;
-            if (child.exitCode !== null) {
-                finish({
-                    code: child.exitCode,
-                    signal: child.signalCode,
-                    timedOut: false,
-                    truncated,
-                    terminationFailed: false,
-                    stdout: stdout.toString("utf8"),
-                    stderr: stderr.toString("utf8"),
-                });
-                return;
-            }
             timedOut = true;
             void (async () => {
                 let treeGone = false;
@@ -470,6 +463,199 @@ export function executeBoundedCommand(specification, runtimeRoot, dependencies =
             });
         });
     });
+}
+async function executeWindowsBoundedCommand(specification, runtimeRoot, dependencies) {
+    const spawnProcess = dependencies.spawnProcess ?? spawn;
+    const superviseProcessTree = dependencies.superviseProcessTree ?? superviseDocumentProcessTree;
+    const runnerPath = dependencies.runnerPath ?? resolveDoctorRunnerPath();
+    const frame = encodeBoundedJsonFrame({
+        schemaVersion: DOCTOR_RUNNER_SCHEMA_VERSION,
+        command: specification.command,
+        args: [...specification.args],
+    }, DOCTOR_RUNNER_MAX_FRAME_BYTES);
+    const child = spawnProcess(process.execPath, [runnerPath], {
+        cwd: runtimeRoot,
+        shell: false,
+        windowsHide: true,
+        detached: false,
+        stdio: ["pipe", "pipe", "pipe", "pipe"],
+    });
+    let truncated = false;
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    const append = (current, chunk) => {
+        const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const remaining = specification.maxOutputBytes - stdout.byteLength - stderr.byteLength;
+        if (remaining <= 0) {
+            truncated = true;
+            return current;
+        }
+        if (incoming.byteLength > remaining)
+            truncated = true;
+        return Buffer.concat([current, incoming.subarray(0, Math.max(0, remaining))]);
+    };
+    child.stdout?.on("data", (chunk) => { stdout = append(stdout, chunk); });
+    child.stderr?.on("data", (chunk) => { stderr = append(stderr, chunk); });
+    const terminalPromise = new Promise((resolveTerminal) => {
+        let terminal = false;
+        const finish = (code, signal) => {
+            if (terminal)
+                return;
+            terminal = true;
+            resolveTerminal(Object.freeze({ code, signal }));
+        };
+        child.once("error", () => finish(null, null));
+        child.once("close", (code, signal) => finish(code, signal));
+    });
+    const supervisorReceiptPromise = receipt(superviseProcessTree(child));
+    const readyStream = child.stdio[3];
+    const readyReceiptPromise = receipt(readyStream === null || readyStream === undefined || !("on" in readyStream)
+        ? Promise.reject(new Error("doctor runner control pipe unavailable"))
+        : waitForDoctorRunnerReady(readyStream, Math.min(specification.timeoutMs, 2_000)));
+    let deadlineTimer;
+    const deadlinePromise = new Promise((resolveDeadline) => {
+        deadlineTimer = setTimeout(() => resolveDeadline(Object.freeze({ kind: "deadline" })), specification.timeoutMs);
+    });
+    const startupPromise = Promise.all([supervisorReceiptPromise, readyReceiptPromise]).then(([supervisor, ready]) => Object.freeze({ kind: "startup", supervisor, ready }));
+    const startupResult = await Promise.race([startupPromise, deadlinePromise]);
+    if (startupResult.kind === "deadline") {
+        const [supervisor] = await Promise.all([supervisorReceiptPromise, readyReceiptPromise]);
+        const gone = await terminateGatedRunner(child, supervisor);
+        destroyChildPipes(child, !gone);
+        return commandResult(null, null, true, truncated, !gone, stdout, stderr);
+    }
+    if (!startupResult.supervisor.ok || !startupResult.ready.ok) {
+        if (deadlineTimer !== undefined)
+            clearTimeout(deadlineTimer);
+        const gone = await terminateGatedRunner(child, startupResult.supervisor);
+        destroyChildPipes(child, !gone);
+        return commandResult(null, null, false, truncated, !gone, stdout, stderr);
+    }
+    const input = child.stdin;
+    if (input === null) {
+        if (deadlineTimer !== undefined)
+            clearTimeout(deadlineTimer);
+        const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+        destroyChildPipes(child, !gone);
+        return commandResult(null, null, false, truncated, !gone, stdout, stderr);
+    }
+    const dispatchPromise = new Promise((resolveDispatch) => {
+        input.end(frame, (error) => resolveDispatch(Object.freeze({
+            kind: "dispatch",
+            ok: error == null,
+        })));
+    });
+    const dispatchResult = await Promise.race([dispatchPromise, terminalPromise, deadlinePromise]);
+    if ("kind" in dispatchResult && dispatchResult.kind === "deadline") {
+        const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+        destroyChildPipes(child, !gone);
+        return commandResult(null, null, true, truncated, !gone, stdout, stderr);
+    }
+    if (!("kind" in dispatchResult)) {
+        if (deadlineTimer !== undefined)
+            clearTimeout(deadlineTimer);
+        const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+        destroyChildPipes(child, !gone);
+        return commandResult(dispatchResult.code, dispatchResult.signal, false, truncated, !gone, stdout, stderr);
+    }
+    if (dispatchResult.kind !== "dispatch" || !dispatchResult.ok) {
+        if (deadlineTimer !== undefined)
+            clearTimeout(deadlineTimer);
+        const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+        destroyChildPipes(child, !gone);
+        return commandResult(null, null, false, truncated, !gone, stdout, stderr);
+    }
+    const completion = await Promise.race([terminalPromise, deadlinePromise]);
+    if (deadlineTimer !== undefined)
+        clearTimeout(deadlineTimer);
+    const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+    destroyChildPipes(child, !gone);
+    if ("kind" in completion)
+        return commandResult(null, null, true, truncated, !gone, stdout, stderr);
+    return commandResult(completion.code, completion.signal, false, truncated, !gone, stdout, stderr);
+}
+function waitForDoctorRunnerReady(stream, timeoutMs) {
+    return new Promise((resolveReady, rejectReady) => {
+        let settled = false;
+        let bytes = Buffer.alloc(0);
+        const finish = (error) => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timer);
+            stream.removeListener("data", onData);
+            stream.removeListener("end", onEnd);
+            stream.removeListener("error", onError);
+            if (error !== undefined)
+                rejectReady(error);
+            else
+                resolveReady();
+        };
+        const onData = (chunk) => {
+            bytes = Buffer.concat([bytes, chunk]);
+            if (bytes.byteLength > Buffer.byteLength(DOCTOR_RUNNER_READY, "utf8")) {
+                finish(new Error("invalid doctor runner READY frame"));
+            }
+        };
+        const onEnd = () => {
+            if (bytes.toString("utf8") !== DOCTOR_RUNNER_READY) {
+                finish(new Error("invalid doctor runner READY frame"));
+            }
+            else
+                finish();
+        };
+        const onError = () => finish(new Error("doctor runner READY pipe failed"));
+        const timer = setTimeout(() => finish(new Error("doctor runner READY timed out")), timeoutMs);
+        stream.on("data", onData);
+        stream.once("end", onEnd);
+        stream.once("error", onError);
+    });
+}
+async function terminateGatedRunner(child, supervisor) {
+    if (supervisor.ok)
+        return supervisor.value.terminate().catch(() => false);
+    if (child.pid === undefined)
+        return child.exitCode !== null;
+    return terminateDocumentProcessTreeByPid(child.pid).catch(() => false);
+}
+function destroyChildPipes(child, unref) {
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    const control = child.stdio[3];
+    if (control !== null && control !== undefined && "destroy" in control
+        && typeof control.destroy === "function")
+        control.destroy();
+    if (unref) {
+        try {
+            child.unref();
+        }
+        catch { }
+    }
+}
+function commandResult(code, signal, timedOut, truncated, terminationFailed, stdout, stderr) {
+    return Object.freeze({
+        code,
+        signal,
+        timedOut,
+        truncated,
+        terminationFailed,
+        stdout: stdout.toString("utf8"),
+        stderr: stderr.toString("utf8"),
+    });
+}
+async function receipt(promise) {
+    try {
+        return Object.freeze({ ok: true, value: await promise });
+    }
+    catch {
+        return Object.freeze({ ok: false });
+    }
+}
+function resolveDoctorRunnerPath() {
+    return fileURLToPath(new URL(import.meta.url.endsWith(".ts")
+        ? "../dist/workers/doctor-command-runner.js"
+        : "./workers/doctor-command-runner.js", import.meta.url));
 }
 async function resolveNpmCommand() {
     const executableDirectory = dirname(process.execPath);

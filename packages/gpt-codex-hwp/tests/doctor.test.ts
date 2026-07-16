@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -16,6 +16,7 @@ import {
   type BoundedCommandSpec,
   type DoctorDependencies,
 } from "../src/doctor.js";
+import { DOCTOR_RUNNER_READY } from "../src/workers/doctor-command-runner.js";
 
 const TOOL_NAMES = [
   "hwp_detect_format",
@@ -317,6 +318,106 @@ test("doctor bounded command injects detached group termination and fails closed
   }
 });
 
+test("doctor timeout still terminates the tree after root exit when close was not observed", async () => {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    unref(): void;
+  };
+  child.pid = 4343;
+  child.exitCode = 0;
+  child.signalCode = null;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.unref = () => undefined;
+  const terminationCalls: number[] = [];
+
+  const result = await doctorModule.executeBoundedCommand(
+    commandSpecification(20),
+    process.cwd(),
+    {
+      platform: "linux",
+      spawnProcess: () => child,
+      terminateProcessTree: async (pid: number) => {
+        terminationCalls.push(pid);
+        return true;
+      },
+    },
+  );
+
+  assert.deepEqual(terminationCalls, [4343]);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.terminationFailed, false);
+  assert.equal(result.code, null);
+});
+
+test("Windows doctor gate sends no command before Job readiness and verifies cleanup on normal close", async () => {
+  const child = fakeWindowsRunner(4444);
+  const input: Buffer[] = [];
+  child.stdin.on("data", (chunk: Buffer) => input.push(chunk));
+  child.stdin.once("finish", () => setImmediate(() => child.emit("close", 0, null)));
+  let resolveSupervisor!: (value: { terminate(): Promise<boolean> }) => void;
+  const supervisorReady = new Promise<{ terminate(): Promise<boolean> }>((resolve) => {
+    resolveSupervisor = resolve;
+  });
+  let terminationCalls = 0;
+  const execution = doctorModule.executeBoundedCommand(commandSpecification(500), process.cwd(), {
+    platform: "win32",
+    runnerPath: "fixed-doctor-runner.js",
+    spawnProcess: (() => child) as typeof import("node:child_process").spawn,
+    superviseProcessTree: () => supervisorReady,
+  });
+  child.stdio[3].end(DOCTOR_RUNNER_READY);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(Buffer.concat(input).byteLength, 0);
+  resolveSupervisor({
+    terminate: async () => {
+      terminationCalls += 1;
+      return true;
+    },
+  });
+
+  const result = await execution;
+  assert.ok(Buffer.concat(input).byteLength > 4);
+  assert.equal(terminationCalls, 1);
+  assert.equal(result.code, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.terminationFailed, false);
+});
+
+test("Windows doctor gate rejects abnormal READY without dispatch and still finalizes the supervisor", async () => {
+  for (const [index, ready] of [
+    "GPT_CODEX_HWP_DOCTOR_RUNNER WRONG\n",
+    `${DOCTOR_RUNNER_READY}X`,
+  ].entries()) {
+    const child = fakeWindowsRunner(4545 + index);
+    const input: Buffer[] = [];
+    child.stdin.on("data", (chunk: Buffer) => input.push(chunk));
+    let terminationCalls = 0;
+    const execution = doctorModule.executeBoundedCommand(commandSpecification(500), process.cwd(), {
+      platform: "win32",
+      runnerPath: "fixed-doctor-runner.js",
+      spawnProcess: (() => child) as typeof import("node:child_process").spawn,
+      superviseProcessTree: async () => ({
+        terminate: async () => {
+          terminationCalls += 1;
+          return true;
+        },
+      }),
+    });
+    child.stdio[3].end(ready);
+
+    const result = await execution;
+    assert.equal(Buffer.concat(input).byteLength, 0);
+    assert.equal(terminationCalls, 1);
+    assert.equal(result.code, null);
+    assert.equal(result.terminationFailed, false);
+  }
+});
+
 test("doctor bounded command removes a real descendant after timeout", { timeout: 10_000 }, async (t) => {
   const execute = (doctorModule as unknown as {
     executeBoundedCommand?: (
@@ -347,6 +448,97 @@ test("doctor bounded command removes a real descendant after timeout", { timeout
   const descendantPid = Number.parseInt(String(result.stdout).trim(), 10);
   assert.equal(Number.isSafeInteger(descendantPid), true);
   await waitUntilProcessGone(descendantPid);
+});
+
+test("doctor timeout terminates a grandchild after its parent exits but inherited pipes remain open", { timeout: 10_000 }, async (t) => {
+  if (process.platform === "win32") {
+    t.skip("Windows does not retain this inherited anonymous-pipe close condition.");
+    return;
+  }
+  const execute = doctorModule.executeBoundedCommand;
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-orphaned-tree-"));
+  const fixturePath = join(temporaryRoot, "orphaned-tree.mjs");
+  const sentinelPath = join(temporaryRoot, "late-sentinel.txt");
+  let descendantPid = 0;
+  t.after(async () => {
+    if (descendantPid > 0) {
+      try { process.kill(descendantPid, "SIGKILL"); } catch {}
+      await waitUntilProcessGone(descendantPid).catch(() => undefined);
+    }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  });
+  await writeFile(fixturePath, [
+    'import { spawn } from "node:child_process";',
+    'const descendantSource = [',
+    '  `const { writeFileSync } = require("node:fs");`,',
+    '  `process.on("SIGTERM", () => {});`,',
+    '  `setTimeout(() => writeFileSync(process.argv[1], "late\\n"), 1500);`,',
+    '  `setInterval(() => {}, 1000);`,',
+    '].join("\\n");',
+    'const descendant = spawn(process.execPath, ["-e", descendantSource, process.argv[2]], {',
+    '  stdio: ["ignore", "inherit", "inherit"],',
+    '});',
+    'process.stdout.write(String(descendant.pid) + "\\n");',
+  ].join("\n"));
+
+  const startedAt = Date.now();
+  const result = await execute({
+    ...commandSpecification(500),
+    command: process.execPath,
+    args: [fixturePath, sentinelPath],
+  }, temporaryRoot);
+  const elapsedMs = Date.now() - startedAt;
+  descendantPid = Number.parseInt(String(result.stdout).trim(), 10);
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.terminationFailed, false);
+  assert.ok(elapsedMs < 6_000, `bounded command took ${elapsedMs}ms`);
+  assert.equal(Number.isSafeInteger(descendantPid), true);
+  await waitUntilProcessGone(descendantPid);
+  await new Promise((resolve) => setTimeout(resolve, 1_600));
+  await assert.rejects(access(sentinelPath), { code: "ENOENT" });
+});
+
+test("Windows doctor Job removes a grandchild after the command parent exits", { timeout: 15_000 }, async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows Job verification is only available on Windows.");
+    return;
+  }
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-windows-job-tree-"));
+  const fixturePath = join(temporaryRoot, "windows-job-tree.mjs");
+  const sentinelPath = join(temporaryRoot, "late-sentinel.txt");
+  let descendantPid = 0;
+  t.after(async () => {
+    if (descendantPid > 0) {
+      try { process.kill(descendantPid, "SIGKILL"); } catch {}
+      await waitUntilProcessGone(descendantPid).catch(() => undefined);
+    }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  });
+  await writeFile(fixturePath, [
+    'import { spawn } from "node:child_process";',
+    'const descendantSource = [',
+    '  `const { writeFileSync } = require("node:fs");`,',
+    '  `setTimeout(() => writeFileSync(process.argv[1], "late\\n"), 2500);`,',
+    '  `setInterval(() => {}, 1000);`,',
+    '].join("\\n");',
+    'const descendant = spawn(process.execPath, ["-e", descendantSource, process.argv[2]], { stdio: "ignore" });',
+    'process.stdout.write(String(descendant.pid) + "\\n");',
+  ].join("\n"));
+
+  const result = await doctorModule.executeBoundedCommand({
+    ...commandSpecification(5_000),
+    command: process.execPath,
+    args: [fixturePath, sentinelPath],
+  }, temporaryRoot);
+  descendantPid = Number.parseInt(String(result.stdout).trim(), 10);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.terminationFailed, false);
+  assert.equal(result.code, 0);
+  assert.equal(Number.isSafeInteger(descendantPid), true);
+  await waitUntilProcessGone(descendantPid);
+  await new Promise((resolve) => setTimeout(resolve, 2_600));
+  await assert.rejects(access(sentinelPath), { code: "ENOENT" });
 });
 
 test("doctor contract rejects unsupported arguments and emits JSON only in json mode", async () => {
@@ -462,6 +654,28 @@ function commandSpecification(timeoutMs: number): BoundedCommandSpec {
     timeoutMs,
     maxOutputBytes: 64 * 1024,
   };
+}
+
+function fakeWindowsRunner(pid: number): EventEmitter & {
+  pid: number;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  stdin: PassThrough;
+  stdout: PassThrough;
+  stderr: PassThrough;
+  stdio: [PassThrough, PassThrough, PassThrough, PassThrough];
+  unref(): void;
+} {
+  const child = new EventEmitter() as ReturnType<typeof fakeWindowsRunner>;
+  child.pid = pid;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdio = [child.stdin, child.stdout, child.stderr, new PassThrough()];
+  child.unref = () => undefined;
+  return child;
 }
 
 async function waitUntilProcessGone(pid: number): Promise<void> {
