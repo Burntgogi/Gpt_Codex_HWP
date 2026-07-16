@@ -185,6 +185,7 @@ async function stageRuntime({ projectRoot, stage }) {
   for (const name of ROOT_DOCUMENTS) {
     await copyRegularFile(join(projectRoot, name), join(stage, name), name);
   }
+  await copyRegularFile(join(sourceRoot, ".npmrc"), join(stage, ".npmrc"), ".npmrc");
 
   await writeJsonExclusive(join(stage, ".codex-plugin", "plugin.json"), renderPluginManifest(metadata, rootPackage.license));
   await writeJsonExclusive(join(stage, ".mcp.json"), renderMcpConfiguration(metadata));

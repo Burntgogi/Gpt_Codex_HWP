@@ -51,6 +51,7 @@ const GENERATED_FILES = [
   "package-lock.json",
   "package.json",
 ];
+const PACKAGE_RUNTIME_FILES = [".npmrc"];
 const SKILL_ICON_FILES = [
   "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
   "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
@@ -80,6 +81,7 @@ test("runtime projection contains the exact sorted allowlist and no special entr
   const actual = await regularEntries(actualRoot);
   const expected = [
     ...GENERATED_FILES,
+    ...PACKAGE_RUNTIME_FILES,
     ...ROOT_DOCUMENTS,
     ...await prefixedFiles(join(SOURCE, "assets"), "assets"),
     ...await prefixedFiles(join(actualRoot, "dist"), "dist"),
@@ -96,6 +98,16 @@ test("runtime projection contains the exact sorted allowlist and no special entr
     assert.equal(segments.some((segment) => FORBIDDEN_SEGMENTS.has(segment)), false, path);
     assert.equal(FORBIDDEN_EXTENSIONS.has(extname(path).toLowerCase()), false, path);
   }
+});
+
+test("package-local npm policy is projected byte-for-byte into the public runtime", async () => {
+  const [rootPolicy, sourcePolicy, runtimePolicy] = await Promise.all([
+    readFile(join(ROOT, ".npmrc")),
+    readFile(join(SOURCE, ".npmrc")),
+    readFile(join(actualRoot, ".npmrc")),
+  ]);
+  assert.deepEqual(sourcePolicy, rootPolicy);
+  assert.deepEqual(runtimePolicy, sourcePolicy);
 });
 
 test("runtime copies exactly the two declared skill icons from package assets", async () => {

@@ -158,6 +158,8 @@ The final serialized MCP result is capped at 8 MiB. For source files above 8 MiB
 
 ## Safety
 
+For vulnerabilities, follow the GitHub private-reporting process in [SECURITY.md](SECURITY.md); never attach secrets, private documents, or personal data to a public issue. See [Security Boundaries](docs/SECURITY-BOUNDARIES.md) for the complete trust model, including document-content and isolation limits.
+
 - Input and output paths must differ, and existing output files are never overwritten.
 - Signed, encrypted, DRM-protected, or distribution-protected documents are refused without bypassing protection.
 - Path aliases, hard links, symbolic links, Windows junctions, and ZIP path traversal are defended against.

@@ -158,6 +158,8 @@ codex plugin remove hwp-korean-docs@hwp-local
 
 ## 안전
 
+취약점은 공개 이슈에 비밀·개인 문서·개인정보를 첨부하지 말고 [SECURITY.md](SECURITY.md)의 GitHub 비공개 신고 절차를 이용하십시오. 문서 내용과 격리 수준을 포함한 정확한 신뢰 모델은 [보안 경계](docs/SECURITY-BOUNDARIES.md)에 설명되어 있습니다.
+
 - 입력 경로와 출력 경로는 달라야 하며 기존 출력 파일을 덮어쓰지 않습니다.
 - 서명, 암호화, DRM, 배포용 보호가 감지된 문서는 보호를 우회하지 않고 거부합니다.
 - 경로 별칭, 하드링크, 심볼릭 링크, Windows junction, ZIP 경로 순회를 방어합니다.

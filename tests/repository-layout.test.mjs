@@ -7,6 +7,14 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const SOURCE = join(ROOT, "packages", "gpt-codex-hwp");
+const RUNTIME = join(ROOT, "plugins", "gpt-codex-hwp");
+const NPM_POLICY = Object.freeze({
+  "ignore-scripts": "true",
+  audit: "false",
+  "package-lock": "true",
+  "save-exact": "true",
+  "engine-strict": "true",
+});
 
 test("public repository contains source and a separate compact runtime projection", async () => {
   for (const path of [
@@ -91,21 +99,16 @@ test("security boundary documentation repository exclusions cover private and ge
   );
 });
 
-test("security boundary documentation npm installs are hook-free and reproducible", async () => {
-  const npmrc = await readFile(join(ROOT, ".npmrc"), "utf8");
-  const settings = new Map(
-    npmrc
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
-      .map((line) => line.split("=", 2)),
-  );
+test("security boundary documentation hook-free package installs use one effective npm policy", async () => {
+  const roots = [ROOT, SOURCE, RUNTIME];
+  const policies = await Promise.all(roots.map((root) => readFile(join(root, ".npmrc"), "utf8")));
+  assert.equal(new Set(policies).size, 1, "root, source, and runtime .npmrc files must be byte-identical");
 
-  assert.equal(settings.get("ignore-scripts"), "true");
-  assert.equal(settings.get("audit"), "false");
-  assert.equal(settings.get("package-lock"), "true");
-  assert.equal(settings.get("save-exact"), "true");
-  assert.equal(settings.get("engine-strict"), "true");
+  for (const root of roots) {
+    for (const [key, expected] of Object.entries(NPM_POLICY)) {
+      assert.equal(effectiveNpmConfig(root, key), expected, `${relative(ROOT, root) || "."}: ${key}`);
+    }
+  }
 });
 
 function isIgnored(path) {
@@ -115,6 +118,19 @@ function isIgnored(path) {
   });
   assert.ok([0, 1].includes(result.status), result.stderr || `git check-ignore failed for ${path}`);
   return result.status === 0;
+}
+
+function effectiveNpmConfig(root, key) {
+  const windows = process.platform === "win32";
+  const result = spawnSync(
+    windows ? "cmd.exe" : "npm",
+    windows
+      ? ["/d", "/s", "/c", "npm.cmd", "config", "get", key]
+      : ["config", "get", key],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr || `npm config get ${key} failed`);
+  return result.stdout.trim();
 }
 
 async function regularFiles(root) {

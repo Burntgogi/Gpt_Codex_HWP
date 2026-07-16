@@ -11,7 +11,7 @@ const BINARY_EXTENSIONS = new Set([
   ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".otf", ".png", ".tif", ".tiff",
   ".ttf", ".webp", ".woff", ".woff2",
 ]);
-const TEXT_FILENAMES = new Set(["LICENSE", "NOTICE"]);
+const TEXT_FILENAMES = new Set([".npmrc", "LICENSE", "NOTICE"]);
 const TEXT_RUNTIME_PATHS = new Set(["dist/workers/windows-job-supervisor.ps1"]);
 const PLACEHOLDER_USERS = new Set(["example", "user", "username", "your-user", "your_username"]);
 
@@ -43,6 +43,9 @@ export async function assertPublicRuntimePrivacy(runtimeRoot, limits = {}) {
     if (hasConcreteHomePath(text)) fail("personal home path", relativePath);
     if (hasPrivateKeyHeader(text)) {
       fail("private key", relativePath);
+    }
+    if (filename === ".npmrc" && hasLiteralNpmCredential(text)) {
+      fail("literal credential", relativePath);
     }
     if (hasLiteralCredentialAssignment(text)) fail("literal credential", relativePath);
   }
@@ -159,6 +162,15 @@ function hasLiteralEnvironmentAssignment(text) {
       const value = match[2] ?? match[3] ?? match[4];
       if (!isAllowedCredentialReference(value)) return true;
     }
+  }
+  return false;
+}
+
+function hasLiteralNpmCredential(text) {
+  const assignment = /^\s*(?:\/\/[^\s=]+\/:)?(?:_authToken|_auth|username|_password|password)\s*=\s*(.*?)\s*$/gimu;
+  for (const match of text.matchAll(assignment)) {
+    const value = match[1].replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, "$1$2").trim();
+    if (value !== "" && !isAllowedCredentialReference(value)) return true;
   }
   return false;
 }

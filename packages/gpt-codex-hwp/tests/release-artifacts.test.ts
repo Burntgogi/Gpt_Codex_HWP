@@ -31,6 +31,7 @@ const executeFile = promisify(execFile);
 const EPOCH = 1_700_000_000;
 const REPRODUCIBLE_EPOCH = EPOCH + 2;
 const VERSIONS = { node: "v22.22.2", npm: "10.9.7", zlib: process.versions.zlib, tool: "1" };
+const NPMRC_POLICY = "engine-strict=true\nsave-exact=true\npackage-lock=true\nfund=false\nignore-scripts=true\naudit=false\n";
 const TOOL_NAMES = [
   "hwp_create_svg_asset",
   "hwp_detect_format",
@@ -103,6 +104,10 @@ test("release artifacts are deterministic and independently verifiable", async (
 
   const archive = inspectReleaseZipForTest(await readFile(join(first, "gpt-codex-hwp-0.1.4.zip")));
   assert.deepEqual(archive.map((entry) => entry.name), fixture.runtimeFiles);
+  assert.equal(
+    Buffer.from(archive.find((entry) => entry.name === ".npmrc")?.bytes ?? []).toString("utf8"),
+    NPMRC_POLICY,
+  );
   assert.equal(archive.every((entry) => entry.mode === 0o100644), true);
   assert.equal(archive.every((entry) => entry.epoch === REPRODUCIBLE_EPOCH), true);
   assert.equal(archive.every((entry) => entry.compression === "deflate"), true);
@@ -575,6 +580,7 @@ async function createReleaseFixture(t: test.TestContext) {
     lockfileVersion: 3,
     packages: {},
   });
+  await writeFile(join(runtimeRoot, ".npmrc"), NPMRC_POLICY);
   await writeJson(join(runtimeRoot, ".mcp.json"), { mcpServers: { "gpt-codex-hwp": { command: "node" } } });
   await writeFile(join(runtimeRoot, "README.md"), "# Public runtime\n");
   await writeFile(

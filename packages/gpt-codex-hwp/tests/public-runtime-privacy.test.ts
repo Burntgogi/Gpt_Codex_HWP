@@ -199,6 +199,18 @@ test("public runtime privacy scanner enforces exact budgets and staged file type
     await assert.rejects(assertPublicRuntimePrivacy(root), /source map.*runtime\.js\.map/iu);
   });
 
+  await t.test("package-local npm policy is scanned and literal registry credentials are rejected", async (subtest) => {
+    const root = await temporaryRuntime(subtest, "privacy-npmrc-");
+    const npmrc = join(root, ".npmrc");
+    await writeFile(
+      npmrc,
+      "engine-strict=true\nsave-exact=true\npackage-lock=true\nfund=false\nignore-scripts=true\naudit=false\n",
+    );
+    await assert.doesNotReject(assertPublicRuntimePrivacy(root));
+    await writeFile(npmrc, "//registry.npmjs.org/:_authToken=literal-secret\n");
+    await assert.rejects(assertPublicRuntimePrivacy(root), /literal credential.*\.npmrc/iu);
+  });
+
   await t.test("only the fixed supervisor PowerShell path is accepted", async (subtest) => {
     const root = await temporaryRuntime(subtest, "privacy-powershell-path-");
     await mkdir(join(root, "dist", "workers"), { recursive: true });

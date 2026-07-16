@@ -39,7 +39,7 @@ const TOOL_NAMES = Object.freeze([
 const ALLOWED_EXTENSIONS = new Set([
   ".cjs", ".cts", ".js", ".json", ".md", ".png", ".ps1", ".py", ".ts", ".yaml",
 ]);
-const ALLOWED_EXTENSIONLESS = new Set(["LICENSE", "NOTICE"]);
+const ALLOWED_EXTENSIONLESS = new Set([".npmrc", "LICENSE", "NOTICE"]);
 const MAX_FILES = 10_000;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
