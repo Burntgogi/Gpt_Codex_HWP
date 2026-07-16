@@ -81,7 +81,11 @@ export async function buildReleaseArtifacts(options = {}) {
       const committed = await readGitBlob(
         root, source.commit, `${RUNTIME_PREFIX}${entry.path}`, MAX_FILE_BYTES,
       );
-      if (!committed.equals(entry.bytes)) throw releaseError("RELEASE_ARTIFACTS_RUNTIME_CONTENT");
+      const projected = await readRegularFileBounded(
+        join(root, "plugins", PRODUCT, ...entry.path.split("/")), MAX_FILE_BYTES,
+      );
+      if (!projected.equals(entry.bytes)) throw releaseError("RELEASE_ARTIFACTS_RUNTIME_CONTENT");
+      entry.bytes = committed;
     }
     const kordoc = await readKordocProvenance(stageRoot);
     const archiveEntries = runtimeEntries.map(({ path, bytes }) => ({ name: path, bytes }));
