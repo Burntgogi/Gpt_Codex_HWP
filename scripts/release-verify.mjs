@@ -28,6 +28,7 @@ export const REQUIRED_RELEASE_STAGES = Object.freeze([
   "audit",
   "privacy",
   "runtime-diff",
+  "document-benchmark",
   "release-artifacts",
 ]);
 
@@ -224,6 +225,7 @@ function releaseStageDefinitions(root) {
       "tests/public-runtime-privacy.test.ts",
     ], root, none),
     npmStage("runtime-diff", ["run", "runtime:check"], root, none),
+    documentBenchmarkStage(root, none),
     nodeStage("release-artifacts", [
       "packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
     ], root, none),
@@ -233,6 +235,33 @@ function releaseStageDefinitions(root) {
     throw releaseError("RELEASE_VERIFY_STAGE_CONTRACT_INVALID");
   }
   return Object.freeze(stages);
+}
+
+function documentBenchmarkStage(root, env) {
+  const small = fixedCommand("npm", [
+    "--prefix",
+    "packages/gpt-codex-hwp",
+    "run",
+    "benchmark:documents",
+    "--",
+    "--sizes",
+    "10",
+    "--output",
+    `.superpowers/benchmarks/release-10m-${process.pid}.json`,
+  ]);
+  if (process.env.HWP_BENCH_REQUIRE_LARGE !== "1") {
+    return npmStage("document-benchmark", small.args, root, env);
+  }
+  const evidencePath = process.env.HWP_BENCH_LARGE_EVIDENCE
+    ?? ".superpowers/benchmarks/large.json";
+  return compositeStage("document-benchmark", [
+    small,
+    fixedCommand("node", [
+      "packages/gpt-codex-hwp/benchmarks/document-engine-benchmark.mjs",
+      "--validate-large",
+      evidencePath,
+    ]),
+  ], root, env);
 }
 
 function npmStage(name, args, cwd, env, evidence) {

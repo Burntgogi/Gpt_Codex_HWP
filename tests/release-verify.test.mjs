@@ -30,6 +30,7 @@ const EXPECTED_STAGES = [
   "audit",
   "privacy",
   "runtime-diff",
+  "document-benchmark",
   "release-artifacts",
 ];
 const VERSIONS = Object.freeze({
@@ -50,7 +51,10 @@ test("release verification package scripts use the exact public entry points", a
     rootPackage.scripts["verify:compact-runtime"],
     "node packages/gpt-codex-hwp/release-scripts/verify-compact-runtime.mjs",
   );
-  assert.equal(sourcePackage.scripts.build, "tsc -p tsconfig.json");
+  assert.equal(
+    sourcePackage.scripts.build,
+    "tsc -p tsconfig.json && node scripts/copy-build-assets.mjs",
+  );
   assert.equal(sourcePackage.scripts.test, "node --import tsx --test --test-concurrency=1 tests/*.test.ts");
   assert.equal(sourcePackage.scripts["test:python"], "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit");
   assert.equal(
@@ -867,6 +871,24 @@ function expectedStageCommands() {
       name: "runtime-diff",
       tool: "npm",
       args: ["run", "runtime:check"],
+      commands: undefined,
+      env: {},
+      evidence: noEvidence,
+    },
+    {
+      name: "document-benchmark",
+      tool: "npm",
+      args: [
+        "--prefix",
+        "packages/gpt-codex-hwp",
+        "run",
+        "benchmark:documents",
+        "--",
+        "--sizes",
+        "10",
+        "--output",
+        `.superpowers/benchmarks/release-10m-${process.pid}.json`,
+      ],
       commands: undefined,
       env: {},
       evidence: noEvidence,

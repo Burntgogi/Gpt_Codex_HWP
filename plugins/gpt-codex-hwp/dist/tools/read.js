@@ -1,52 +1,45 @@
-import { createHash } from "node:crypto";
 import { lstat, mkdir, open, realpath, stat, } from "node:fs/promises";
 import { extname, join, parse as parsePath, resolve } from "node:path";
-import { parse, } from "kordoc";
 import { z } from "zod";
+import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { readFileBounded } from "../shared/files.js";
 import { MarkdownDeliveryError, planMarkdownDelivery, } from "../shared/markdown-output.js";
 import { writeFilesExclusively } from "../shared/output.js";
-import { inspectExactDocumentProtection } from "../shared/protection.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 import { MAX_MCP_RESPONSE_BYTES, serializedBytes, } from "../shared/resource-limits.js";
-import { detectPreciseDocumentFormat } from "./rhwp-backend.js";
 export const HWP_READ_TOOL_NAME = "hwp_read";
-export async function handleHwpRead(input, parseDocument = parse) {
+export async function handleHwpRead(input, documentEngine = defaultDocumentEngineFacade, context) {
     let filePath;
     try {
         filePath = resolveLocalPath(input.file_path, "file_path");
-        const pristineBytes = Uint8Array.from(await readFileBounded(filePath, "source document"));
-        const preciseFormat = await detectPreciseDocumentFormat(exactArrayBuffer(pristineBytes));
-        if (preciseFormat !== "hwp" && preciseFormat !== "hwpx") {
-            return toolError("Only HWP and HWPX documents are supported.", {
-                code: "UNSUPPORTED_FORMAT",
-                file_path: filePath,
-                file_type: preciseFormat,
-                supported_formats: ["hwp", "hwpx"],
-            });
-        }
-        const protection = await inspectExactDocumentProtection(pristineBytes, preciseFormat);
-        if (protection !== undefined) {
-            return toolError(`Could not read the protected document: ${protection.error}`, {
-                code: protection.code,
-                error: protection.error,
-                file_path: filePath,
-                file_type: preciseFormat,
-            });
-        }
-        const parsed = await parseDocument(exactArrayBuffer(pristineBytes), {
-            filePath,
-            pages: input.pages,
+        const parseOptions = {
+            ...(input.pages === undefined ? {} : { pages: input.pages }),
+        };
+        const snapshot = await openDocumentSnapshot(filePath, {
+            workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+                input: {},
+                options: parseOptions,
+            }),
         });
-        if (!parsed.success) {
-            return toolError(`Could not read the document: ${parsed.error}`, {
-                code: parsed.code ?? "PARSE_ERROR",
-                error: parsed.error,
-                file_path: filePath,
-                file_type: parsed.fileType,
-            });
+        if (snapshot.metadata.shallowFormat.candidate === "unknown") {
+            try {
+                await snapshot.verifySourceUnchanged();
+                return toolError("Only HWP and HWPX documents are supported.", {
+                    code: "UNSUPPORTED_FORMAT",
+                    file_path: filePath,
+                    file_type: "unknown",
+                    supported_formats: ["hwp", "hwpx"],
+                });
+            }
+            finally {
+                await snapshot.cleanup();
+            }
         }
+        const engineResult = await documentEngine.parse(snapshot, parseOptions, toDocumentEngineExecutionContext(context));
+        const parsed = engineResult.payload;
         let delivery;
         try {
             delivery = planMarkdownDelivery(parsed.markdown, input.markdown_output_path);
@@ -65,7 +58,7 @@ export async function handleHwpRead(input, parseDocument = parse) {
         const warnings = copyWarnings(parsed.warnings);
         const shouldExtractImages = input.extract_images ?? input.output_dir !== undefined;
         const assets = shouldExtractImages
-            ? await collectImageAssets(parsed.images ?? [], input.output_dir, filePath, warnings)
+            ? await collectImageAssets(parsed.images ?? [], input.output_dir, filePath, warnings, context)
             : [];
         const metadata = {
             ...(parsed.metadata ?? {}),
@@ -90,9 +83,7 @@ export async function handleHwpRead(input, parseDocument = parse) {
                 markdown_characters: delivery.characters,
                 markdown_bytes: delivery.bytes,
                 recommended_chunk_characters: delivery.recommendedChunkCharacters,
-                source_fingerprint: createHash("sha256")
-                    .update(pristineBytes)
-                    .digest("hex"),
+                source_fingerprint: engineResult.snapshotMetadata.sha256,
             });
         }
         const summary = delivery.outputPath === undefined
@@ -111,14 +102,26 @@ export async function handleHwpRead(input, parseDocument = parse) {
             });
         }
         if (delivery.outputPath !== undefined) {
-            await writeFilesExclusively([{ path: delivery.outputPath, data: parsed.markdown }], { sourcePaths: [filePath] });
+            await writeFilesExclusively([{ path: delivery.outputPath, data: parsed.markdown }], {
+                sourcePaths: [filePath],
+                beforeOpen: async () => requireToolNotCancelled(context),
+            });
         }
         return successResult;
     }
     catch (error) {
         const message = errorMessage(error);
+        const code = errorCode(error, "READ_ERROR");
+        if (code === "UNSUPPORTED_FORMAT") {
+            return toolError("Only HWP and HWPX documents are supported.", {
+                code,
+                error: message,
+                file_path: safeResolvedPath(input.file_path),
+                supported_formats: ["hwp", "hwpx"],
+            });
+        }
         const details = {
-            code: errorCode(error, "READ_ERROR"),
+            code,
             error: message,
             file_path: safeResolvedPath(input.file_path),
         };
@@ -129,7 +132,7 @@ export async function handleHwpRead(input, parseDocument = parse) {
         return toolError(`Could not read the document: ${message}`, details);
     }
 }
-export function registerHwpRead(server) {
+export function registerHwpRead(server, documentEngine = defaultDocumentEngineFacade) {
     server.registerTool(HWP_READ_TOOL_NAME, {
         title: "Read HWP document",
         description: "Read the exact requested local HWP/HWPX document as Markdown with metadata, warnings, and optional extracted images.",
@@ -158,12 +161,12 @@ export function registerHwpRead(server) {
         annotations: {
             readOnlyHint: false,
         },
-    }, (args) => handleHwpRead(args));
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpRead(args, documentEngine, context)));
 }
 function copyWarnings(warnings) {
     return (warnings ?? []).map((warning) => ({ ...warning }));
 }
-async function collectImageAssets(images, outputDir, sourceFilePath, warnings) {
+async function collectImageAssets(images, outputDir, sourceFilePath, warnings, context) {
     const filenames = uniqueSafeFilenames(images);
     if (outputDir === undefined) {
         warnings.push({
@@ -172,12 +175,13 @@ async function collectImageAssets(images, outputDir, sourceFilePath, warnings) {
         });
         return filenames;
     }
+    requireToolNotCancelled(context);
     const resolvedOutputDir = resolveLocalPath(outputDir, "output_dir");
     const resolvedSourceFilePath = resolveLocalPath(sourceFilePath, "file_path");
     const outputDirectory = await prepareCanonicalOutputDirectory(resolvedOutputDir);
     const paths = [];
     for (const [index, image] of images.entries()) {
-        paths.push(await writeImageAssetExclusively(image, filenames[index], outputDirectory, resolvedSourceFilePath));
+        paths.push(await writeImageAssetExclusively(image, filenames[index], outputDirectory, resolvedSourceFilePath, context));
     }
     return paths;
 }
@@ -253,7 +257,7 @@ function absolutePathComponents(path) {
     }
     return components;
 }
-async function writeImageAssetExclusively(image, baseFilename, outputDirectory, sourceFilePath) {
+async function writeImageAssetExclusively(image, baseFilename, outputDirectory, sourceFilePath, context) {
     let attempt = 1;
     while (true) {
         const filename = filenameForAttempt(baseFilename, attempt);
@@ -263,6 +267,7 @@ async function writeImageAssetExclusively(image, baseFilename, outputDirectory, 
             continue;
         }
         await assertCanonicalDirectoryIdentity(outputDirectory);
+        requireToolNotCancelled(context);
         let handle;
         try {
             handle = await open(outputPath, "wx");
@@ -277,7 +282,7 @@ async function writeImageAssetExclusively(image, baseFilename, outputDirectory, 
         let closed = false;
         try {
             await handle.stat({ bigint: true });
-            await handle.writeFile(image.data);
+            await handle.writeFile(new Uint8Array(image.bytes));
             await handle.close();
             closed = true;
             return outputPath;
@@ -377,8 +382,4 @@ function errorCode(error, fallback) {
         return error.code;
     }
     return fallback;
-}
-function exactArrayBuffer(bytes) {
-    const copy = Uint8Array.from(bytes);
-    return copy.buffer;
 }

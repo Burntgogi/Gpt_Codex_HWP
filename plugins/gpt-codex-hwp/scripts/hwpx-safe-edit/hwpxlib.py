@@ -206,7 +206,19 @@ def inspect_archive(path: str | os.PathLike[str]) -> Archive:
         raise UnsafeZipError(
             f"HWPX archive exceeds the {MAX_ARCHIVE_BYTES}-byte safety limit."
         )
-    raw = safe_path.read_bytes()
+    return inspect_archive_bytes(safe_path.read_bytes())
+
+
+def inspect_archive_bytes(value: bytes | bytearray | memoryview) -> Archive:
+    raw = bytes(value)
+    if raw[:4] == b"\xd0\xcf\x11\xe0":
+        raise NotHwpxError("Legacy binary HWP is not supported by the HWPX safe editor.")
+    if raw[:4] != b"PK\x03\x04":
+        raise NotHwpxError("The input is not a ZIP-based HWPX document.")
+    if len(raw) > MAX_ARCHIVE_BYTES:
+        raise UnsafeZipError(
+            f"HWPX archive exceeds the {MAX_ARCHIVE_BYTES}-byte safety limit."
+        )
     if len(raw) < 22:
         raise UnsafeZipError("Truncated ZIP archive.")
 
@@ -403,7 +415,22 @@ def repack_preserve_bytes(
     changed: Mapping[str, bytes],
     added: Mapping[str, bytes] | None = None,
 ) -> bytes:
-    archive = inspect_archive(src)
+    return repack_archive_preserve_bytes(inspect_archive(src), changed, added)
+
+
+def repack_preserve_byte_data(
+    src: bytes | bytearray | memoryview,
+    changed: Mapping[str, bytes],
+    added: Mapping[str, bytes] | None = None,
+) -> bytes:
+    return repack_archive_preserve_bytes(inspect_archive_bytes(src), changed, added)
+
+
+def repack_archive_preserve_bytes(
+    archive: Archive,
+    changed: Mapping[str, bytes],
+    added: Mapping[str, bytes] | None = None,
+) -> bytes:
     additions = dict(added or {})
     original = archive.by_name
     missing = set(changed) - set(original)

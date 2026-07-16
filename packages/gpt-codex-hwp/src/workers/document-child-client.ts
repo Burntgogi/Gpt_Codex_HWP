@@ -814,9 +814,10 @@ async function createWindowsJobSupervisor(
           }
           frameObserver?.(gone);
           if (!/^GPT_CODEX_HWP_JOB GONE 0 [12]$/u.test(gone)) return false;
-          const exitCode = await waitWithTimeout(exitReceipt, 1_000);
-          terminationComplete = exitCode === 0;
-          if (terminationComplete) helper.kill();
+          terminationComplete = await finalizeVerifiedWindowsSupervisor({
+            exitReceipt,
+            forceClose: () => helper.kill(),
+          });
           return terminationComplete;
         } catch {
           return false;
@@ -825,6 +826,46 @@ async function createWindowsJobSupervisor(
         }
       })();
       return activeTermination;
+    },
+  };
+}
+
+export async function finalizeVerifiedWindowsSupervisor({
+  exitReceipt,
+  forceClose,
+  gracefulExitMs = 1_000,
+  forcedExitMs = 5_000,
+}: {
+  readonly exitReceipt: Promise<number | null>;
+  readonly forceClose: () => boolean;
+  readonly gracefulExitMs?: number;
+  readonly forcedExitMs?: number;
+}): Promise<boolean> {
+  const gracefulExit = await waitWithTimeout(exitReceipt, gracefulExitMs);
+  if (gracefulExit !== undefined) return true;
+  let closeRequested = false;
+  try {
+    closeRequested = forceClose();
+  } catch {
+    closeRequested = false;
+  }
+  const forcedExit = await waitWithTimeout(exitReceipt, forcedExitMs);
+  return forcedExit !== undefined && (closeRequested || forcedExit === 0);
+}
+
+export async function superviseDocumentProcessTree(
+  child: ChildProcess,
+): Promise<ChildLifecycleSupervisor> {
+  if (child.pid === undefined) throw new Error("child pid unavailable");
+  if (process.platform === "win32") {
+    return createWindowsJobSupervisor(child, 5_000, undefined, true);
+  }
+  let terminationComplete = false;
+  return {
+    async terminate(): Promise<boolean> {
+      if (terminationComplete) return true;
+      terminationComplete = await terminateProcessTree(child);
+      return terminationComplete;
     },
   };
 }
