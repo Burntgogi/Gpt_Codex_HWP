@@ -1196,7 +1196,8 @@ test("installed runtime verifies provenance, npm ls, and all nine tools", { time
 
   const sampleBefore = createHash("sha256").update(await readFile(fixture.path)).digest("hex");
   const report = await verifyCompactRuntime({ sourceRoot: REPOSITORY_ROOT });
-  assert.equal(report.serverVersion, "0.1.4");
+  const sourcePackage = JSON.parse(await readFile(join(SOURCE_ROOT, "package.json"), "utf8"));
+  assert.equal(report.serverVersion, sourcePackage.version);
   assert.deepEqual(report.toolNames, TOOL_NAMES);
   assert.deepEqual(Object.keys(report.toolSmokes), TOOL_NAMES);
   assert.ok(Object.values(report.toolSmokes).every((status) => status === "passed"));

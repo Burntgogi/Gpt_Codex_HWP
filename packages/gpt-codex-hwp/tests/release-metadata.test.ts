@@ -11,6 +11,7 @@ const SOURCE_ROOT = dirname(TEST_ROOT);
 const REPOSITORY_ROOT = dirname(dirname(SOURCE_ROOT));
 const RUNTIME_ROOT = join(REPOSITORY_ROOT, "plugins", "gpt-codex-hwp");
 const MIGRATION_PATH = join(TEST_ROOT, "release-test-migration.json");
+const PREVIOUS_RELEASE_TAG = "v0.1.4";
 const SPLIT_SUITES = new Set([
   "kordoc-core-runtime.test.ts",
   "runtime-projection.test.ts",
@@ -257,6 +258,11 @@ test("the staged runtime documents secure agent-assisted GitHub installation", a
     () => assertSecureAgentInstallSection(missingMarketplaceIdentity, metadata),
     /marketplaceName/u,
   );
+  const staleRelease = sections[0].replaceAll(PREVIOUS_RELEASE_TAG, "v0.1.3");
+  assert.throws(
+    () => assertSecureAgentInstallSection(staleRelease, metadata),
+    /verified release tag/u,
+  );
 });
 
 test("release migration ledger accounts for every pinned legacy invariant", async () => {
@@ -393,7 +399,22 @@ function assertSecureAgentInstallSection(
     .map((match) => match[1]!);
   assert.equal(referencedTags.length, 1, "the marketplace source must pin exactly one version tag");
   const recommendedTag = referencedTags[0]!;
-  assert.equal(recommendedTag, `v${metadata.version}`, "the marketplace source must pin the current metadata version");
+  const candidateTag = `v${metadata.version}`;
+  assert.equal(
+    recommendedTag === candidateTag || recommendedTag === PREVIOUS_RELEASE_TAG,
+    true,
+    "the marketplace source must pin a verified release tag",
+  );
+  if (recommendedTag === PREVIOUS_RELEASE_TAG) {
+    assert.match(
+      section,
+      new RegExp(
+        `(?:${escapeRegExp(PREVIOUS_RELEASE_TAG)}.*현재 권장 릴리즈|${escapeRegExp(PREVIOUS_RELEASE_TAG)}.*current recommended release)`,
+        "iu",
+      ),
+      "the predecessor tag is allowed only while documented as the current recommended release",
+    );
+  }
   const requiredText = [
     "Burntgogi/Gpt_Codex_HWP",
     `--ref ${recommendedTag}`,
