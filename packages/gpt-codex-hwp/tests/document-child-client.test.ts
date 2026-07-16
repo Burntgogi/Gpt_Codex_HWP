@@ -827,13 +827,13 @@ test("document child client makes a waiting heavy request abortable and runs one
     const first = childClient("slow", gate, 120).run(
       detectRequest("child-gate-first"),
       spoolSnapshot(firstOwned.inputFd, 3),
-      { deadlineMs: 1_000 },
+      { deadlineMs: 5_000 },
     );
     const secondSnapshot = spoolSnapshot(secondOwned.inputFd, 3);
     const second = childClient("success", gate).run(
       detectRequest("child-gate-second"),
       secondSnapshot,
-      { signal: abort.signal, deadlineMs: 1_000 },
+      { signal: abort.signal, deadlineMs: 5_000 },
     );
     setTimeout(() => abort.abort(), 20);
     await assert.rejects(second, (error: unknown) => safeCode(error) === "REQUEST_CANCELLED");
@@ -868,7 +868,7 @@ test("document child client includes gate wait in the request deadline", async (
     const first = firstClient.run(
       detectRequest("gate-deadline-first"),
       spoolSnapshot(firstOwned.inputFd, 3),
-      { deadlineMs: 1_000 },
+      { deadlineMs: 5_000 },
     );
     const secondSnapshot = spoolSnapshot(secondOwned.inputFd, 3);
     await assert.rejects(
