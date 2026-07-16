@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { access, readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
@@ -52,6 +53,69 @@ test("public source contains no private planning or user-document paths", async 
     .filter((path) => /(^|\/)(docs\/superpowers|artifacts|tmp|node_modules)(\/|$)|\.(?:hwp|hwpx)$/iu.test(path));
   assert.deepEqual(forbidden, []);
 });
+
+test("security boundary documentation repository exclusions cover private and generated files", () => {
+  const ignored = [
+    ".env",
+    ".env.local",
+    "secrets/private.pem",
+    "secrets/private.key",
+    "secrets/signing.p12",
+    "secrets/signing.pfx",
+    "secrets/certificate.cer",
+    "secrets/certificate.crt",
+    "credentials.json",
+    "config/local.json",
+    ".worktrees/security-review/file.txt",
+    "coverage/lcov.info",
+    "build/output.bin",
+    "release-receipts/receipt.json",
+    "benchmark-output/result.json",
+    "release-staging/archive.zip",
+    "package/__pycache__/cache.pyc",
+    ".pytest_cache/state",
+    ".venv/pyvenv.cfg",
+    "node_modules/package/index.js",
+    "private-document.hwp",
+    "private-document.hwpx",
+  ];
+
+  for (const path of ignored) {
+    assert.equal(isIgnored(path), true, `${path} must be ignored`);
+  }
+  assert.equal(isIgnored(".env.example"), false, ".env.example must remain publishable");
+  assert.equal(
+    isIgnored("packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp"),
+    false,
+    "the pinned public fixture must remain publishable",
+  );
+});
+
+test("security boundary documentation npm installs are hook-free and reproducible", async () => {
+  const npmrc = await readFile(join(ROOT, ".npmrc"), "utf8");
+  const settings = new Map(
+    npmrc
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => line.split("=", 2)),
+  );
+
+  assert.equal(settings.get("ignore-scripts"), "true");
+  assert.equal(settings.get("audit"), "false");
+  assert.equal(settings.get("package-lock"), "true");
+  assert.equal(settings.get("save-exact"), "true");
+  assert.equal(settings.get("engine-strict"), "true");
+});
+
+function isIgnored(path) {
+  const result = spawnSync("git", ["check-ignore", "--no-index", "--quiet", path], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.ok([0, 1].includes(result.status), result.stderr || `git check-ignore failed for ${path}`);
+  return result.status === 0;
+}
 
 async function regularFiles(root) {
   const output = [];
