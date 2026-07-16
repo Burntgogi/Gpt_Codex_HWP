@@ -282,7 +282,7 @@ function renderRuntimePackage(metadata, license, sourcePackage) {
     version: metadata.version,
     type: "module",
     private: true,
-    scripts: { start: "node dist/mcp.js" },
+    scripts: { doctor: "node dist/doctor.js", start: "node dist/mcp.js" },
     dependencies: sourcePackage.dependencies,
     engines: sourcePackage.engines,
     optionalDependencies: sourcePackage.optionalDependencies,
@@ -325,7 +325,10 @@ async function assertRuntimeContract(runtimeRoot, metadata, runtimePackage) {
   if (runtimePackage.name !== metadata.productId || runtimePackage.version !== metadata.version) {
     throw runtimeBuildError("Runtime package identity does not match project metadata");
   }
-  if (JSON.stringify(runtimePackage.scripts) !== JSON.stringify({ start: "node dist/mcp.js" })) {
+  if (JSON.stringify(runtimePackage.scripts) !== JSON.stringify({
+    doctor: "node dist/doctor.js",
+    start: "node dist/mcp.js",
+  })) {
     throw runtimeBuildError("Runtime package exposes an unexpected script");
   }
   if (Object.hasOwn(runtimePackage, "devDependencies")) {

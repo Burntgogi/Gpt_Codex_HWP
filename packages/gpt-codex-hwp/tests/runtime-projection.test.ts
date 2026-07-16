@@ -36,6 +36,7 @@ test("public runtime projection stages only branded executable files", { timeout
     "assets/gpt-codex-hwp-icon.png",
     "assets/gpt-codex-hwp-icon-64.png",
     "assets/gpt-codex-hwp-icon-128.png",
+    "dist/doctor.js",
     "dist/mcp.js",
     "dist/workers/windows-job-supervisor.ps1",
     "scripts/hwpx-safe-edit/hwpxlib.py",
@@ -74,7 +75,10 @@ test("public runtime projection stages only branded executable files", { timeout
   const packageJson = JSON.parse(await readFile(join(output, "package.json"), "utf8"));
   assert.equal(packageJson.name, metadata.productId);
   assert.equal(packageJson.version, metadata.version);
-  assert.deepEqual(packageJson.scripts, { start: "node dist/mcp.js" });
+  assert.deepEqual(packageJson.scripts, {
+    doctor: "node dist/doctor.js",
+    start: "node dist/mcp.js",
+  });
   assert.equal(packageJson.devDependencies, undefined);
 
   const packageLock = JSON.parse(await readFile(join(output, "package-lock.json"), "utf8"));

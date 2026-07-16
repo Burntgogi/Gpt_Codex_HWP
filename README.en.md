@@ -67,7 +67,7 @@ The final release passed 330 of 334 Node tests with 4 expected platform/privileg
 
 A user can ask a Codex agent:
 
-> Install release `v0.1.4` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and verify all nine MCP tools in a new task.
+> Install release `v0.1.4` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
@@ -85,7 +85,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. It must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, and `dist/mcp.js`. Never evaluate a JSON string as a command or run npm from an unexpected path.
+4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. It must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, and `dist/mcp.js`. Never evaluate a JSON string as a command or run npm from an unexpected path.
 5. From that exact validated path, install and audit the lockfile-based production dependencies. On Windows x64, confirm that `node_modules` is at most 64 MiB.
 
 ```powershell
@@ -95,12 +95,15 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
   npm audit --omit=dev
   if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
+  npm run doctor -- --json
+  if ($LASTEXITCODE -ne 0) { throw "doctor found a required failure" }
 } finally {
   Pop-Location
 }
 ```
 
-6. Restart Codex or open a new task and verify exactly these nine tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`. If verification fails, do not remove an older working plugin; report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
+6. `doctor` is diagnostic only: it does not install or repair anything and is not an MCP tool. Its JSON contains only safe status codes, booleans, versions, and counts; missing optional capabilities such as Python, rhwp, or the pinned test fixture remain separate from required failures.
+7. Restart Codex or open a new task and verify exactly these nine tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`. If verification fails, do not remove an older working plugin; report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
 
 ## Installation and Migration
 
@@ -210,9 +213,10 @@ Install platform-specific native dependencies separately in each runtime environ
 ```bash
 npm ci --omit=dev --ignore-scripts
 npm audit --omit=dev
+npm run doctor -- --json
 ```
 
-This command uses the lockfile to install runtime dependencies, including Sharp, for the current OS and CPU. It does not install font files. Kordoc Core provides only the pinned runtime required by HWP/HWPX workflows; optional PDF, OCR, ONNX, and formula-engine dependencies are not installed. The verified Windows x64 `node_modules` budget is at most 64 MiB.
+The first two commands use the lockfile to install and audit runtime dependencies, including Sharp, for the current OS and CPU. The final command diagnoses the environment without installation, repair, or MCP registration. The installation does not include font files. Kordoc Core provides only the pinned runtime required by HWP/HWPX workflows; optional PDF, OCR, ONNX, and formula-engine dependencies are not installed. The verified Windows x64 `node_modules` budget is at most 64 MiB.
 
 ## Open-Source Acknowledgements
 

@@ -92,6 +92,7 @@ test("runtime projection contains the exact sorted allowlist and no special entr
   ].sort(comparePaths);
 
   assert.deepEqual(actual.map(({ path }) => path), expected);
+  assert.ok(actual.some(({ path }) => path === "dist/doctor.js"));
   assert.ok(actual.every(({ kind }) => kind === "file"));
   for (const { path } of actual) {
     const segments = path.split("/");

@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "doctor": "node dist/doctor.js",
     "start": "node dist/mcp.js"
   },
   "dependencies": {

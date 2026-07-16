@@ -409,16 +409,23 @@ function assertSecureAgentInstallSection(
     ".codex-plugin/plugin.json",
     "package.json",
     "package-lock.json",
+    "dist/doctor.js",
     "dist/mcp.js",
     "npm ci --omit=dev --ignore-scripts",
     "npm audit --omit=dev",
+    "npm run doctor -- --json",
     "64 MiB",
   ];
   for (const text of requiredText) {
     assert.match(section, new RegExp(escapeRegExp(text), "u"), `agent-install section must contain ${text}`);
   }
 
-  assert.equal(section.match(/--json/gu)?.length, 2, "both Codex CLI calls must request JSON");
+  assert.equal(section.match(/--json/gu)?.length, 3, "Codex CLI calls and doctor must request JSON");
+  assert.match(
+    section,
+    /진단 전용.*설치나 복구.*MCP 도구가 (?:아니|아닙)|diagnostic only.*does not install or repair.*not an MCP tool/isu,
+    "doctor must be documented as diagnostic-only, non-repairing, and non-MCP",
+  );
   assert.match(
     section,
     new RegExp(`marketplaceName.*${escapeRegExp(metadata.marketplaceName)}`, "iu"),

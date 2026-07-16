@@ -67,7 +67,10 @@ test("dependency contract pins exact direct source and runtime metadata", async 
   assert.deepEqual(runtimePackage.dependencies, EXPECTED_DEPENDENCIES);
   assert.deepEqual(runtimePackage.optionalDependencies, EXPECTED_OPTIONAL_DEPENDENCIES);
   assert.equal(Object.hasOwn(runtimePackage, "devDependencies"), false);
-  assert.deepEqual(runtimePackage.scripts, { start: "node dist/mcp.js" });
+  assert.deepEqual(runtimePackage.scripts, {
+    doctor: "node dist/doctor.js",
+    start: "node dist/mcp.js",
+  });
   assert.equal(rootPackage.scripts?.["verify:dependencies"], "node scripts/verify-installed-dependencies.mjs");
   assert.equal(
     rootPackage.scripts?.["verify:source-dependencies"],

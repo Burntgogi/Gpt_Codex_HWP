@@ -67,7 +67,7 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
-> `Burntgogi/Gpt_Codex_HWP`의 `v0.1.4` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 새 작업에서 MCP 도구 9개를 확인해 주세요.
+> `Burntgogi/Gpt_Codex_HWP`의 `v0.1.4` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 설치된 경로에서 `doctor`를 실행한 다음 새 작업에서 MCP 도구 9개를 확인해 주세요.
 
 1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
 2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
@@ -85,7 +85,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp@gpt-codex-hwp-local`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/mcp.js`가 모두 있어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
+4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp@gpt-codex-hwp-local`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, `dist/mcp.js`가 모두 있어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
 5. 검증한 정확한 경로에서 잠금 파일 기반 운영 의존성을 설치하고 감사합니다. Windows x64에서 `node_modules`는 64 MiB 이하인지 확인합니다.
 
 ```powershell
@@ -95,12 +95,15 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
   npm audit --omit=dev
   if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
+  npm run doctor -- --json
+  if ($LASTEXITCODE -ne 0) { throw "doctor found a required failure" }
 } finally {
   Pop-Location
 }
 ```
 
-6. Codex를 재시작하거나 새 작업을 열고 문서에 나열된 정확히 9개 도구(`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`)를 확인합니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
+6. `doctor`는 진단 전용이며 설치나 복구를 수행하지 않고 MCP 도구가 아닙니다. JSON에는 안전한 상태 코드, 불리언, 버전과 개수만 포함되며 Python·rhwp·고정 테스트 fixture 같은 선택 기능의 부재는 필수 실패와 분리됩니다.
+7. Codex를 재시작하거나 새 작업을 열고 문서에 나열된 정확히 9개 도구(`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`)를 확인합니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
 
 ## 설치 및 마이그레이션
 
@@ -210,9 +213,10 @@ HWPX는 `HANGUL`, `LATIN`, `HANJA`, `JAPANESE`, `OTHER`, `SYMBOL`, `USER` 언어
 ```bash
 npm ci --omit=dev --ignore-scripts
 npm audit --omit=dev
+npm run doctor -- --json
 ```
 
-이 명령은 잠금 파일을 사용해 Sharp를 포함한 런타임 의존성을 현재 OS와 CPU에 맞게 설치합니다. 글꼴 파일은 설치하지 않습니다. Kordoc Core는 HWP/HWPX 작업에 필요한 고정 런타임만 제공하며 PDF, OCR, ONNX, 수식 엔진 선택 의존성을 설치하지 않습니다. 검증된 Windows x64의 `node_modules` 예산은 64 MiB 이하입니다.
+앞의 두 명령은 잠금 파일을 사용해 Sharp를 포함한 런타임 의존성을 현재 OS와 CPU에 맞게 설치하고 감사합니다. 마지막 명령은 설치·복구나 MCP 등록 없이 환경을 진단합니다. 글꼴 파일은 설치하지 않습니다. Kordoc Core는 HWP/HWPX 작업에 필요한 고정 런타임만 제공하며 PDF, OCR, ONNX, 수식 엔진 선택 의존성을 설치하지 않습니다. 검증된 Windows x64의 `node_modules` 예산은 64 MiB 이하입니다.
 
 ## 오픈 소스 감사
 
