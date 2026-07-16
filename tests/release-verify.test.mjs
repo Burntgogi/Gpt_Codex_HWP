@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  createCanonicalReleaseTemp,
   REQUIRED_RELEASE_STAGES,
   runCli,
   runReleaseArtifactsStage,
@@ -411,6 +412,32 @@ test("release temp cleanup accepts a canonical ancestor alias", async (t) => {
   );
   await removeOwnedTempForTest(owned, identity);
   await assert.rejects(lstat(join(realParent, "owned")), { code: "ENOENT" });
+});
+
+test("release artifact staging canonicalizes a temporary-directory ancestor alias", async (t) => {
+  const realParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-stage-real-parent-"));
+  const aliasParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-stage-alias-parent-"));
+  const alias = join(aliasParent, "temp-alias");
+  let created;
+  t.after(async () => {
+    if (created !== undefined) await rm(created, { recursive: true, force: true });
+    try { await unlink(alias); } catch {}
+    await rm(aliasParent, { recursive: true, force: true });
+    await rm(realParent, { recursive: true, force: true });
+  });
+  try {
+    await symlink(realParent, alias, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+      t.skip(`directory alias creation is unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+
+  created = await createCanonicalReleaseTemp(alias);
+  assert.equal(dirname(created), await realpath(realParent));
+  assert.equal(await realpath(dirname(created)), dirname(created));
 });
 
 for (const failure of [

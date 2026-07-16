@@ -2,8 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { mkdtempSync } from "node:fs";
-import { lstat, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -200,8 +199,7 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
   }
   const cwd = requiredRoot(stage.cwd);
   stageEnvironment(stage.env);
-  const createTemp = options.createTemp ?? (() =>
-    mkdtempSync(join(tmpdir(), "gpt-codex-hwp-release-verify-")));
+  const createTemp = options.createTemp ?? (() => createCanonicalReleaseTemp());
   const removeTemp = options.removeTemp;
   const runCommand = options.runCommand ?? ((logical) => runStageCommand({
     name: "release-artifacts-command",
@@ -268,6 +266,26 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
     }
   }
   return Object.freeze({ status });
+}
+
+export async function createCanonicalReleaseTemp(parent = tmpdir()) {
+  const requestedParent = requiredRoot(parent);
+  let canonicalParent;
+  let info;
+  try {
+    canonicalParent = await realpath(requestedParent);
+    info = await lstat(canonicalParent);
+  } catch {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
+  try {
+    return await mkdtemp(join(canonicalParent, "gpt-codex-hwp-release-verify-"));
+  } catch {
+    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
+  }
 }
 
 function parseArtifactStageReceipt(result, kind) {

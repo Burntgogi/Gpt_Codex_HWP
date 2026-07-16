@@ -1,10 +1,34 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
+  buildPlatformReceipt,
+  collectPlatformExpectation,
+  createPlatformReceipt,
+  DEFAULT_PLATFORM_CHECKSUM_PATH,
+  DEFAULT_PLATFORM_RECEIPT_PATH,
+  hashTrackedRuntimeAtHead,
   PINNED_HWP_FIXTURE_SHA256,
   REQUIRED_PLATFORM_STAGES,
+  runPlatformReceiptCli,
   validatePlatformReceipt,
+  verifyPlatformReceiptFile,
+  writePlatformReceiptChecksum,
 } from "../scripts/platform-receipts.mjs";
 
 const EXPECTED = Object.freeze({
@@ -40,6 +64,25 @@ function validReceipt() {
     hwpxRoundTrip: true,
     runtimeSha256: EXPECTED.runtimeSha256,
     skippedRequiredGates: 0,
+  };
+}
+
+function validReleaseReceipt(platform = EXPECTED.platform, arch = EXPECTED.arch) {
+  return {
+    schemaVersion: 1,
+    status: "passed",
+    platform,
+    arch,
+    node: "v22.22.2",
+    npm: "10.9.7",
+    python: "3.12.11",
+    stages: REQUIRED_PLATFORM_STAGES.map((name, index) => ({
+      name,
+      status: "passed",
+      elapsedMs: index + 1,
+    })),
+    toolCount: 9,
+    fixtureSha256: PINNED_HWP_FIXTURE_SHA256,
   };
 }
 
@@ -162,3 +205,402 @@ test("platform receipt errors do not echo untrusted evidence", () => {
     },
   );
 });
+
+test("platform receipt derives strict evidence only from a complete passed release receipt", () => {
+  const receipt = buildPlatformReceipt(validReleaseReceipt(), EXPECTED);
+
+  assert.deepEqual(receipt, validReceipt());
+
+  for (const mutate of [
+    (value) => { value.status = "failed"; },
+    (value) => { value.stages.pop(); },
+    (value) => { value.stages[0].status = "skipped"; },
+    (value) => { value.toolCount = 8; },
+    (value) => { value.logs = "private diagnostic output"; },
+  ]) {
+    const releaseReceipt = validReleaseReceipt();
+    mutate(releaseReceipt);
+    assert.throws(
+      () => buildPlatformReceipt(releaseReceipt, EXPECTED),
+      /PLATFORM_RECEIPT_RELEASE_INVALID/u,
+    );
+  }
+});
+
+test("platform expectation binds exact clean HEAD tree version platform and runtime projection", async (t) => {
+  const root = await createRepository(t);
+  const firstHead = git(root, "rev-parse", "HEAD");
+  const firstTree = git(root, "rev-parse", "HEAD^{tree}");
+
+  const first = await collectPlatformExpectation({
+    root,
+    expectedCommit: firstHead,
+    platform: "win32",
+    arch: "x64",
+  });
+  assert.equal(first.commit, firstHead);
+  assert.equal(first.tree, firstTree);
+  assert.equal(first.version, "0.2.0");
+  assert.equal(first.platform, "win32");
+  assert.equal(first.arch, "x64");
+  assert.match(first.runtimeSha256, /^[a-f0-9]{64}$/u);
+
+  await writeFile(join(root, "plugins", "gpt-codex-hwp", "runtime.txt"), "runtime\r\n", "utf8");
+  assert.equal(
+    await hashTrackedRuntimeAtHead(root, firstHead),
+    first.runtimeSha256,
+    "runtime hash must bind HEAD blobs rather than checkout line endings",
+  );
+  await writeFile(join(root, "plugins", "gpt-codex-hwp", "runtime.txt"), "runtime\n", "utf8");
+  assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
+
+  await assert.rejects(
+    collectPlatformExpectation({
+      root,
+      expectedCommit: "f".repeat(40),
+      platform: "win32",
+      arch: "x64",
+    }),
+    /PLATFORM_RECEIPT_HEAD_MISMATCH/u,
+  );
+
+  await writeFile(join(root, "plugins", "gpt-codex-hwp", "runtime.txt"), "changed\n", "utf8");
+  await assert.rejects(
+    collectPlatformExpectation({
+      root,
+      expectedCommit: firstHead,
+      platform: "win32",
+      arch: "x64",
+    }),
+    /PLATFORM_RECEIPT_SOURCE_DIRTY/u,
+  );
+  git(root, "add", ".");
+  git(root, "commit", "-m", "change runtime");
+
+  const secondHead = git(root, "rev-parse", "HEAD");
+  const second = await collectPlatformExpectation({
+    root,
+    expectedCommit: secondHead,
+    platform: "win32",
+    arch: "x64",
+  });
+  assert.notEqual(second.runtimeSha256, first.runtimeSha256);
+});
+
+test("platform expectation canonicalizes a repository-root path alias", async (t) => {
+  const root = await createRepository(t);
+  const aliasParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-platform-alias-"));
+  const alias = join(aliasParent, "repository");
+  t.after(async () => {
+    await unlink(alias).catch(() => {});
+    await rm(aliasParent, { recursive: true, force: true });
+  });
+  try {
+    await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+      t.skip(`path aliases unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const expectation = await collectPlatformExpectation({
+    root: alias,
+    expectedCommit,
+    platform: "win32",
+    arch: "x64",
+  });
+  assert.equal(expectation.commit, expectedCommit);
+  assert.match(expectation.runtimeSha256, /^[a-f0-9]{64}$/u);
+});
+
+test("platform expectation rejects tracked files reached through a directory junction", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows directory junctions are unavailable on this platform");
+    return;
+  }
+
+  const root = await createRepository(t);
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const pluginsPath = join(root, "plugins");
+  const outsideRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-platform-junction-"));
+  const outsidePluginsPath = join(outsideRoot, "plugins");
+  let junctionCreated = false;
+
+  await rename(pluginsPath, outsidePluginsPath);
+  try {
+    try {
+      await symlink(outsidePluginsPath, pluginsPath, "junction");
+      junctionCreated = true;
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+        t.skip(`directory junctions unavailable: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
+
+    assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
+    await assert.rejects(
+      collectPlatformExpectation({
+        root,
+        expectedCommit,
+        platform: "win32",
+        arch: "x64",
+      }),
+      /PLATFORM_RECEIPT_SOURCE_DIRTY/u,
+    );
+  } finally {
+    if (junctionCreated) await unlink(pluginsPath);
+    await rename(outsidePluginsPath, pluginsPath);
+    await rm(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test("platform expectation rejects assume-unchanged and skip-worktree index flags", async (t) => {
+  const root = await createRepository(t);
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const runtimePath = "plugins/gpt-codex-hwp/runtime.txt";
+
+  for (const [setFlag, clearFlag] of [
+    ["--assume-unchanged", "--no-assume-unchanged"],
+    ["--skip-worktree", "--no-skip-worktree"],
+  ]) {
+    git(root, "update-index", setFlag, "--", runtimePath);
+    await assert.rejects(
+      collectPlatformExpectation({
+        root,
+        expectedCommit,
+        platform: "win32",
+        arch: "x64",
+      }),
+      /PLATFORM_RECEIPT_INDEX_INVALID/u,
+      setFlag,
+    );
+    git(root, "update-index", clearFlag, "--", runtimePath);
+  }
+});
+
+test("platform expectation rejects fsmonitor-valid tracked files hidden by a v1 hook", async (t) => {
+  const root = await createRepository(t);
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const runtimePath = "plugins/gpt-codex-hwp/runtime.txt";
+  const hookPath = join(root, ".git", "hooks", "fsmonitor-no-changes");
+  await writeFile(hookPath, "#!/bin/sh\nexit 0\n", { encoding: "utf8", mode: 0o755 });
+  git(root, "config", "core.fsmonitor", ".git/hooks/fsmonitor-no-changes");
+  git(root, "config", "core.fsmonitorHookVersion", "1");
+  git(root, "update-index", "--fsmonitor");
+  git(root, "update-index", "--fsmonitor-valid", "--", runtimePath);
+  await writeFile(join(root, ...runtimePath.split("/")), "changed\n", "utf8");
+
+  assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
+  assert.match(git(root, "ls-files", "-v", "--", runtimePath), /^H /u);
+  assert.match(git(root, "ls-files", "-f", "--", runtimePath), /^h /u);
+  await assert.rejects(
+    collectPlatformExpectation({
+      root,
+      expectedCommit,
+      platform: "win32",
+      arch: "x64",
+    }),
+    /PLATFORM_RECEIPT_INDEX_INVALID/u,
+  );
+});
+
+test("platform expectation rejects same-size tracked bytes hidden by restored stat data", async (t) => {
+  const root = await createRepository(t);
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const runtimePath = "plugins/gpt-codex-hwp/runtime.txt";
+  const absoluteRuntimePath = join(root, ...runtimePath.split("/"));
+  const cachedTime = new Date("2001-01-01T00:00:00.000Z");
+  git(root, "config", "core.trustctime", "false");
+  git(root, "config", "core.checkStat", "minimal");
+  await utimes(absoluteRuntimePath, cachedTime, cachedTime);
+  git(root, "update-index", "--refresh");
+  const cachedStat = await stat(absoluteRuntimePath);
+  await writeFile(absoluteRuntimePath, "changed\n", "utf8");
+  await utimes(absoluteRuntimePath, cachedStat.atime, cachedStat.mtime);
+
+  assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
+  assert.match(git(root, "ls-files", "-v", "--", runtimePath), /^H /u);
+  assert.match(git(root, "ls-files", "-f", "--", runtimePath), /^H /u);
+  await assert.rejects(
+    collectPlatformExpectation({
+      root,
+      expectedCommit,
+      platform: "win32",
+      arch: "x64",
+    }),
+    /PLATFORM_RECEIPT_SOURCE_DIRTY/u,
+  );
+});
+
+test("platform expectation rejects Git replacement semantics before binding evidence", async (t) => {
+  const root = await createRepository(t);
+  const original = git(root, "rev-parse", "HEAD");
+  await writeFile(join(root, "plugins", "gpt-codex-hwp", "runtime.txt"), "replacement\n", "utf8");
+  git(root, "add", ".");
+  git(root, "commit", "-m", "replacement tree");
+  const replacement = git(root, "rev-parse", "HEAD");
+  git(root, "reset", "--hard", original);
+  git(root, "replace", original, replacement);
+  git(root, "reset", "--hard", original);
+
+  await assert.rejects(
+    collectPlatformExpectation({
+      root,
+      expectedCommit: original,
+      platform: "win32",
+      arch: "x64",
+    }),
+    /PLATFORM_RECEIPT_REPOSITORY_SEMANTICS_INVALID/u,
+  );
+});
+
+test("platform receipt production writes exclusively then verifies and checksums independently", async (t) => {
+  const root = await createRepository(t);
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const runVerification = async () => validReleaseReceipt("win32", "x64");
+
+  const created = await createPlatformReceipt({
+    root,
+    expectedCommit,
+    platform: "win32",
+    arch: "x64",
+    runVerification,
+  });
+  const verified = await verifyPlatformReceiptFile({
+    root,
+    expectedCommit,
+    platform: "win32",
+    arch: "x64",
+  });
+  assert.deepEqual(verified, created);
+
+  const checksum = await writePlatformReceiptChecksum({
+    root,
+    expectedCommit,
+    platform: "win32",
+    arch: "x64",
+  });
+  assert.match(checksum, /^[a-f0-9]{64}  platform-receipt\.json\n$/u);
+  assert.equal(
+    await readFile(join(root, DEFAULT_PLATFORM_CHECKSUM_PATH), "utf8"),
+    checksum,
+  );
+
+  await assert.rejects(
+    createPlatformReceipt({
+      root,
+      expectedCommit,
+      platform: "win32",
+      arch: "x64",
+      runVerification,
+    }),
+    /PLATFORM_RECEIPT_OUTPUT_EXISTS/u,
+  );
+  assert.match(
+    await readFile(join(root, DEFAULT_PLATFORM_RECEIPT_PATH), "utf8"),
+    /"sourceUnchanged": true/u,
+  );
+});
+
+test("platform receipt creation rejects a pre-existing Windows junction output directory", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows directory junctions are unavailable on this platform");
+    return;
+  }
+
+  const root = await createRepository(t);
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const outputRoot = join(root, "release-receipts");
+  const outsideRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-platform-output-junction-"));
+  let junctionCreated = false;
+
+  try {
+    try {
+      await symlink(outsideRoot, outputRoot, "junction");
+      junctionCreated = true;
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+        t.skip(`directory junctions unavailable: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
+
+    let result = "accepted";
+    try {
+      await createPlatformReceipt({
+        root,
+        expectedCommit,
+        platform: "win32",
+        arch: "x64",
+        runVerification: async () => validReleaseReceipt("win32", "x64"),
+      });
+    } catch (error) {
+      result = error?.code;
+    }
+    const escapedWrite = await readFile(join(outsideRoot, "platform-receipt.json"))
+      .then(() => true, (error) => {
+        if (error?.code === "ENOENT") return false;
+        throw error;
+      });
+
+    assert.deepEqual(
+      { result, escapedWrite },
+      { result: "PLATFORM_RECEIPT_OUTPUT_INVALID", escapedWrite: false },
+    );
+  } finally {
+    if (junctionCreated) await unlink(outputRoot);
+    await rm(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test("platform receipt CLI fails with stable redacted diagnostics", async () => {
+  const marker = "private-user-workspace-marker";
+  let stdout = "";
+  let stderr = "";
+  let exitCode;
+
+  const result = await runPlatformReceiptCli({
+    args: ["verify"],
+    env: {},
+    root: `C:/${marker}`,
+    stdout: { write: (value) => { stdout += value; } },
+    stderr: { write: (value) => { stderr += value; } },
+    setExitCode: (value) => { exitCode = value; },
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(stdout, "");
+  assert.equal(stderr, "PLATFORM_RECEIPT_EXPECTED_HEAD_INVALID\n");
+  assert.doesNotMatch(stderr, new RegExp(marker, "u"));
+  assert.equal(exitCode, 1);
+});
+
+async function createRepository(t) {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-platform-receipt-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  git(root, "init", "--initial-branch=main");
+  git(root, "config", "user.name", "Gpt_Codex_HWP contributors");
+  git(root, "config", "user.email", "224273819+Burntgogi@users.noreply.github.com");
+  await mkdir(join(root, "plugins", "gpt-codex-hwp"), { recursive: true });
+  await writeFile(join(root, "package.json"), '{"version":"0.2.0"}\n', "utf8");
+  await writeFile(join(root, "plugins", "gpt-codex-hwp", "runtime.txt"), "runtime\n", "utf8");
+  await writeFile(join(root, ".gitattributes"), "*.txt text\n", "utf8");
+  await writeFile(join(root, ".gitignore"), "release-receipts/\n", "utf8");
+  git(root, "add", ".");
+  git(root, "commit", "-m", "fixture");
+  return root;
+}
+
+function git(root, ...args) {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+  }).trim();
+}

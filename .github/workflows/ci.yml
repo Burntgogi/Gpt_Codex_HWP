@@ -14,10 +14,16 @@ jobs:
     permissions:
       contents: read
     env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       HWP_REQUIRE_RHWP: "1"
+      HWP_BENCH_LARGE: "1"
+      HWP_BENCH_REQUIRE_LARGE: "1"
+      HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -28,30 +34,35 @@ jobs:
           python-version: "3.12"
       - name: Assert Windows x64 runtime
         run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
+      - name: Assert exact feature head
+        run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_SOURCE_REPOSITORY !== 'Burntgogi/Gpt_Codex_HWP') process.exit(1); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
+      - name: Configure neutral release identity
+        run: |
+          git config --local user.name "Gpt_Codex_HWP contributors"
+          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
+          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
       - name: Fresh source dependency install
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Fresh runtime dependency install
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Verify metadata and dependency ownership
-        run: |
-          npm run check:metadata
-          npm run verify:dependencies
-      - name: Run Node tests
-        run: npm test
-      - name: Run Python tests
-        run: npm run test:python
-      - name: Verify real HWP read-only path
-        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="rhwp fixture integrity|real external HWP" tests/hwp-fixture-integrity.test.ts tests/rhwp-backend.test.ts
-      - name: Verify HWPX generation round trip
-        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="hwp_generate_hwpx creates a valid, readable document and forced-reflow SVG preview" tests/hwp-plugin.test.ts
-      - name: Verify compact runtime and nine MCP tools
-        run: npm run verify:compact-runtime
-      - name: Verify projected runtime is current
-        run: npm run runtime:check
-      - name: Scan public tree
-        run: npm run security:scan-tree
+      - name: Generate fresh large-document evidence
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
+      - name: Run full release gate and create platform receipt
+        run: node scripts/platform-receipts.mjs create
+      - name: Independently verify platform receipt
+        run: node scripts/platform-receipts.mjs verify
+      - name: Checksum platform receipt
+        run: node scripts/platform-receipts.mjs checksum
       - name: Reject generated repository changes
         run: git diff --exit-code -- .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: gpt-codex-hwp-windows-x64-platform-receipt
+          path: |
+            release-receipts/platform-receipt.json
+            release-receipts/platform-receipt.sha256
+          if-no-files-found: error
+          retention-days: 7
 
   macos:
     name: macOS arm64
@@ -59,10 +70,16 @@ jobs:
     permissions:
       contents: read
     env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       HWP_REQUIRE_RHWP: "1"
+      HWP_BENCH_LARGE: "1"
+      HWP_BENCH_REQUIRE_LARGE: "1"
+      HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -73,27 +90,32 @@ jobs:
           python-version: "3.12"
       - name: Assert macOS arm64 runtime
         run: node -e "if (process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
+      - name: Assert exact feature head
+        run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_SOURCE_REPOSITORY !== 'Burntgogi/Gpt_Codex_HWP') process.exit(1); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
+      - name: Configure neutral release identity
+        run: |
+          git config --local user.name "Gpt_Codex_HWP contributors"
+          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
+          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
       - name: Fresh source dependency install
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Fresh runtime dependency install
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Verify metadata and dependency ownership
-        run: |
-          npm run check:metadata
-          npm run verify:dependencies
-      - name: Run Node tests
-        run: npm test
-      - name: Run Python tests
-        run: npm run test:python
-      - name: Verify real HWP read-only path
-        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="rhwp fixture integrity|real external HWP" tests/hwp-fixture-integrity.test.ts tests/rhwp-backend.test.ts
-      - name: Verify HWPX generation round trip
-        run: npm --prefix packages/gpt-codex-hwp run test:focused -- --test-reporter=tap --test-name-pattern="hwp_generate_hwpx creates a valid, readable document and forced-reflow SVG preview" tests/hwp-plugin.test.ts
-      - name: Verify compact runtime and nine MCP tools
-        run: npm run verify:compact-runtime
-      - name: Verify projected runtime is current
-        run: npm run runtime:check
-      - name: Scan public tree
-        run: npm run security:scan-tree
+      - name: Generate fresh large-document evidence
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
+      - name: Run full release gate and create platform receipt
+        run: node scripts/platform-receipts.mjs create
+      - name: Independently verify platform receipt
+        run: node scripts/platform-receipts.mjs verify
+      - name: Checksum platform receipt
+        run: node scripts/platform-receipts.mjs checksum
       - name: Reject generated repository changes
         run: git diff --exit-code -- .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: gpt-codex-hwp-macos-arm64-platform-receipt
+          path: |
+            release-receipts/platform-receipt.json
+            release-receipts/platform-receipt.sha256
+          if-no-files-found: error
+          retention-days: 7

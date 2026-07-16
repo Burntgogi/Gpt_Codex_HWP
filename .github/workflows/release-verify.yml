@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    env:
+      RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -30,6 +32,7 @@ jobs:
         run: |
           git config --local user.name "Gpt_Codex_HWP contributors"
           git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
+          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
       - name: Generate fresh sequential large-document evidence
         env:
           HWP_BENCH_LARGE: "1"
@@ -40,17 +43,17 @@ jobs:
           HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
         run: npm run release:verify
       - name: Build checksummed candidate outputs
-        run: npm run release:artifacts -- --output release-artifacts
+        run: npm run release:artifacts -- --output "$RELEASE_ARTIFACT_DIR"
       - name: Verify candidate outputs
-        run: npm run verify:release-artifacts -- --artifacts release-artifacts
+        run: npm run verify:release-artifacts -- --artifacts "$RELEASE_ARTIFACT_DIR"
       - name: Require checksum manifest and clean tree
         run: |
-          node -e "require('node:fs').accessSync('release-artifacts/SHA256SUMS')"
+          node -e "require('node:fs').accessSync(require('node:path').join(process.env.RELEASE_ARTIFACT_DIR, 'SHA256SUMS'))"
           git diff --exit-code -- .
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: gpt-codex-hwp-v0.2.0-candidate
-          path: release-artifacts/
+          path: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts/
           if-no-files-found: error
           retention-days: 7
 

@@ -48,7 +48,12 @@ test("CI pins every action to its approved immutable revision", async () => {
     assert.match(revision, /^[0-9a-f]{40}$/u, `${action} is not pinned to a full commit SHA`);
     assert.equal(revision, ACTION_PINS[action], `${action} uses an unapproved revision`);
   }
-  for (const action of ["actions/checkout", "actions/setup-node", "actions/setup-python"]) {
+  for (const action of [
+    "actions/checkout",
+    "actions/setup-node",
+    "actions/setup-python",
+    "actions/upload-artifact",
+  ]) {
     assert.equal(uses.filter((match) => match[1] === action).length, 2, `${action} must run in both jobs`);
   }
   assert.equal(countMatches(workflow, /^\s+persist-credentials: false$/gmu), 2);
@@ -58,7 +63,7 @@ test("CI pins every action to its approved immutable revision", async () => {
   assert.doesNotMatch(workflow, /^\s+cache:/gmu);
 });
 
-test("both CI jobs require the exact platform and all document gates", async () => {
+test("both CI jobs bind full release receipts to the exact feature head and upload only receipts", async () => {
   const workflow = await readFile(WORKFLOW_PATH, "utf8");
   const jobs = [
     ["Windows x64", jobSection(workflow, "windows", "macos"), "win32", "x64"],
@@ -68,20 +73,86 @@ test("both CI jobs require the exact platform and all document gates", async () 
   for (const [label, section, platform, arch] of jobs) {
     assert.match(section, new RegExp(`process\\.platform[^\\n]+[\"']${platform}[\"']`, "u"), `${label} platform assertion`);
     assert.match(section, new RegExp(`process\\.arch[^\\n]+[\"']${arch}[\"']`, "u"), `${label} architecture assertion`);
+    assert.match(
+      section,
+      /^      EXPECTED_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}$/mu,
+      `${label} exact feature-head expectation`,
+    );
+    assert.match(
+      section,
+      /^      EXPECTED_SOURCE_REPOSITORY: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \|\| github\.repository \}\}$/mu,
+      `${label} owner-only source expectation`,
+    );
     assert.match(section, /^      HWP_REQUIRE_RHWP: "1"$/mu, `${label} must fail when rhwp is unavailable`);
+    assert.match(section, /^      HWP_BENCH_LARGE: "1"$/mu, `${label} large benchmark opt-in`);
+    assert.match(section, /^      HWP_BENCH_REQUIRE_LARGE: "1"$/mu, `${label} large evidence required`);
+    assert.match(
+      section,
+      /^      HWP_BENCH_LARGE_EVIDENCE: "\.superpowers\/benchmarks\/release-large\.json"$/mu,
+      `${label} fixed large-evidence path`,
+    );
+    assert.match(
+      section,
+      /^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}$/mu,
+      `${label} exact checkout ref`,
+    );
+    assert.match(
+      section,
+      /process\.env\.EXPECTED_HEAD_SHA[^\n]+rev-parse[^\n]+HEAD/u,
+      `${label} checked-out HEAD assertion`,
+    );
+    assert.match(
+      section,
+      /process\.env\.EXPECTED_SOURCE_REPOSITORY[^\n]+Burntgogi\/Gpt_Codex_HWP/u,
+      `${label} rejects fork source provenance`,
+    );
+    assert.doesNotMatch(section, /^          repository: .*head\.repo/mu, `${label} cannot relabel a fork checkout`);
     assert.match(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/u, `${label} fresh source install`);
     assert.match(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev(?:\s|$)/u, `${label} fresh runtime install`);
-    assert.match(section, /npm test(?:\s|$)/u, `${label} Node tests`);
-    assert.match(section, /npm run test:python(?:\s|$)/u, `${label} Python tests`);
-    assert.match(section, /rhwp fixture integrity\|real external HWP/u, `${label} real-HWP gate`);
-    assert.match(section, /hwp_generate_hwpx creates a valid, readable document and forced-reflow SVG preview/u, `${label} HWPX gate`);
-    assert.match(section, /npm run verify:compact-runtime(?:\s|$)/u, `${label} nine-tool/runtime gate`);
-    assert.match(section, /npm run runtime:check(?:\s|$)/u, `${label} runtime projection gate`);
-    assert.match(section, /npm run security:scan-tree(?:\s|$)/u, `${label} public-tree security gate`);
+    assert.match(section, /git config --local user\.name "Gpt_Codex_HWP contributors"/u, `${label} neutral Git name`);
+    assert.match(section, /git config --local user\.email "224273819\+Burntgogi@users\.noreply\.github\.com"/u, `${label} neutral Git email`);
+    assert.match(
+      section,
+      /git remote set-url origin "https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\.git"/u,
+      `${label} canonical release provenance remote`,
+    );
+    assert.match(
+      section,
+      /benchmark:documents -- --sizes 100,256,512 --output \.superpowers\/benchmarks\/release-large\.json/u,
+      `${label} fresh 100/256/512 MiB evidence`,
+    );
+    assert.match(section, /platform-receipts\.mjs create(?:\s|$)/u, `${label} receipt creation`);
+    assert.match(section, /platform-receipts\.mjs verify(?:\s|$)/u, `${label} independent receipt verification`);
+    assert.match(section, /platform-receipts\.mjs checksum(?:\s|$)/u, `${label} receipt checksum`);
+    assert.match(section, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/u, `${label} pinned upload`);
+    assert.match(section, /^          if-no-files-found: error$/mu, `${label} missing receipt fails`);
+    assert.match(section, /^          retention-days: 7$/mu, `${label} bounded receipt retention`);
+    assert.match(
+      section,
+      /^          path: \|\r?\n            release-receipts\/platform-receipt\.json\r?\n            release-receipts\/platform-receipt\.sha256$/mu,
+      `${label} uploads only the receipt and checksum`,
+    );
     assert.match(section, /git diff --exit-code -- \./u, `${label} generated-diff gate`);
+
+    const exactHead = section.indexOf("Assert exact feature head");
+    const largeEvidence = section.indexOf("benchmark:documents -- --sizes 100,256,512");
+    const canonicalRemote = section.indexOf("git remote set-url origin");
+    const create = section.indexOf("platform-receipts.mjs create");
+    const verify = section.indexOf("platform-receipts.mjs verify");
+    const checksum = section.indexOf("platform-receipts.mjs checksum");
+    const upload = section.indexOf("actions/upload-artifact@");
+    assert.equal(
+      exactHead >= 0 && exactHead < canonicalRemote && canonicalRemote < largeEvidence && largeEvidence < create
+        && create < verify && verify < checksum && checksum < upload,
+      true,
+      `${label} receipt evidence order`,
+    );
   }
 
   assert.doesNotMatch(workflow, /\b(?:cp|copy|Copy-Item|rsync)\b[^\n]*node_modules/iu);
+  assert.equal(countMatches(workflow, /platform-receipts\.mjs create/gu), 2);
+  assert.equal(countMatches(workflow, /platform-receipts\.mjs verify/gu), 2);
+  assert.equal(countMatches(workflow, /platform-receipts\.mjs checksum/gu), 2);
 });
 
 test("workflow policy: security is the least-privilege stable Security policy gate", async () => {
@@ -92,7 +163,22 @@ test("workflow policy: security is the least-privilege stable Security policy ga
   const job = jobSection(workflow, "security");
   assert.match(job, /^    name: Security policy$/mu);
   assert.match(job, /^    permissions:\n      contents: read$/mu);
+  assert.match(
+    job,
+    /^      EXPECTED_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}$/mu,
+  );
+  assert.match(
+    job,
+    /^      EXPECTED_SOURCE_REPOSITORY: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \|\| github\.repository \}\}$/mu,
+  );
+  assert.match(
+    job,
+    /^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}$/mu,
+  );
   assert.match(job, /^\s+fetch-depth: 0$/mu);
+  assert.match(job, /process\.env\.EXPECTED_HEAD_SHA[^\n]+rev-parse[^\n]+HEAD/u);
+  assert.match(job, /process\.env\.EXPECTED_SOURCE_REPOSITORY[^\n]+Burntgogi\/Gpt_Codex_HWP/u);
+  assert.doesNotMatch(job, /^          repository: .*head\.repo/mu);
   assert.match(job, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp/u);
   assert.match(job, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev/u);
   assert.match(job, /npm run security:scan-tree/u);
@@ -104,6 +190,11 @@ test("workflow policy: security is the least-privilege stable Security policy ga
   assert.match(job, /npm run verify:release-artifacts/u);
   assert.match(job, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
   assert.match(job, /git config --local user\.email "224273819\+Burntgogi@users\.noreply\.github\.com"/u);
+  assert.match(job, /git remote set-url origin "https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\.git"/u);
+  assert.match(job, /^      RELEASE_ARTIFACT_DIR: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts$/mu);
+  assert.match(job, /release:artifacts -- --output "\$RELEASE_ARTIFACT_DIR"/u);
+  assert.match(job, /verify:release-artifacts -- --artifacts "\$RELEASE_ARTIFACT_DIR"/u);
+  assert.doesNotMatch(job, /--(?:output|artifacts) release-artifacts(?:\s|$)/u);
   assert.match(job, /git diff --exit-code -- \./u);
   assertPinnedActions(workflow);
 });
@@ -120,6 +211,8 @@ test("workflow policy: release verification uploads checksummed candidates and o
   assert.match(build, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev/u);
   assert.match(build, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
   assert.match(build, /git config --local user\.email "224273819\+Burntgogi@users\.noreply\.github\.com"/u);
+  assert.match(build, /git remote set-url origin "https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\.git"/u);
+  assert.match(build, /^      RELEASE_ARTIFACT_DIR: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts$/mu);
   assert.match(build, /^          HWP_BENCH_LARGE: "1"$/mu);
   assert.match(build, /benchmark:documents -- --sizes 100,256,512 --output \.superpowers\/benchmarks\/release-large\.json/u);
   assert.match(build, /^          HWP_BENCH_REQUIRE_LARGE: "1"$/mu);
@@ -127,8 +220,12 @@ test("workflow policy: release verification uploads checksummed candidates and o
   assert.match(build, /npm run release:verify/u);
   assert.match(build, /npm run release:artifacts/u);
   assert.match(build, /npm run verify:release-artifacts/u);
+  assert.match(build, /release:artifacts -- --output "\$RELEASE_ARTIFACT_DIR"/u);
+  assert.match(build, /verify:release-artifacts -- --artifacts "\$RELEASE_ARTIFACT_DIR"/u);
+  assert.doesNotMatch(build, /--(?:output|artifacts) release-artifacts(?:\s|$)/u);
   assert.match(build, /SHA256SUMS/u);
   assert.match(build, /actions\/upload-artifact@/u);
+  assert.match(build, /^          path: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts\/$/mu);
   const largeEvidence = build.indexOf("benchmark:documents -- --sizes 100,256,512");
   const releaseGate = build.indexOf("npm run release:verify");
   const artifactBuild = build.indexOf("npm run release:artifacts");
