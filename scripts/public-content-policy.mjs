@@ -13,6 +13,8 @@ const DEFAULT_PROCESS_TIMEOUT_MS = 120_000;
 const MAX_PROCESS_TIMEOUT_MS = 15 * 60 * 1_000;
 const DEFAULT_TERMINATION_TIMEOUT_MS = 20_000;
 const MAX_TERMINATION_TIMEOUT_MS = 60_000;
+const ALLOWED_PUBLIC_DOCUMENT_PATH =
+  "packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp";
 const WINDOWS_RUNNER = fileURLToPath(new URL("./public-scan-command-runner.mjs", import.meta.url));
 const WINDOWS_SUPERVISOR = fileURLToPath(new URL(
   "../packages/gpt-codex-hwp/src/workers/windows-job-supervisor.ps1",
@@ -85,6 +87,7 @@ const REMEDIATIONS = Object.freeze({
   "literal credential": "Use an environment reference or a clearly redacted placeholder.",
   "non-regular file": "Replace the entry with a regular public file.",
   "personal home path": "Replace the personal path with a platform-neutral placeholder.",
+  "private repository path": "Move private planning, evidence, generated data, or user documents out of the public repository.",
   "private key": "Revoke the key and remove it from every public object.",
   "provider credential": "Revoke the credential and remove it from every public object.",
   "source map": "Remove the source map from the public runtime.",
@@ -209,6 +212,10 @@ export async function scanTrackedPublicTree(options = {}) {
   for (const name of names) {
     if (!safeRepositoryPath(name)) {
       findings.push(finding("non-regular file", name));
+      continue;
+    }
+    if (isPrivateRepositoryPath(name)) {
+      findings.push(finding("private repository path", name));
       continue;
     }
     const path = resolve(root, ...name.split("/"));
@@ -817,6 +824,14 @@ function safeRepositoryPath(name) {
     && !name.includes("\0") && !name.includes("\\") && !name.startsWith("/")
     && !/^[A-Za-z]:/u.test(name)
     && name.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+export function isPrivateRepositoryPath(path, objectKind = "blob") {
+  if (typeof path !== "string") return true;
+  if (path === ALLOWED_PUBLIC_DOCUMENT_PATH && objectKind === "blob") return false;
+  const normalized = path.normalize("NFKC").toLowerCase();
+  return /(?:^|\/)(?:\.superpowers|docs\/superpowers)(?:\/|$)|(?:^|\/)(?:artifacts|tmp|node_modules)(?:\/|$)|(?:^|\/)[^/]*\.(?:hwp|hwpx)(?:\/|$)/u
+    .test(normalized);
 }
 
 function insideRoot(root, path) {

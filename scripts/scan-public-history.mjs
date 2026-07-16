@@ -1,3 +1,4 @@
+import { lstat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -6,6 +7,7 @@ import {
   classifyPublicLabel,
   formatPublicFindings,
   isApprovedOwnerIdentity,
+  isPrivateRepositoryPath,
   publicFinding,
   publicScanFailure,
   runBoundedProcess,
@@ -44,6 +46,8 @@ export async function scanPublicHistory(options = {}) {
     options.neutralObjectAllowlist ?? new Set(IMMUTABLE_NEUTRAL_OBJECT_IDS),
   );
 
+  await rejectGitGrafts(runGit, root);
+
   const shallow = await invokeGit(runGit, root, ["rev-parse", "--is-shallow-repository"]);
   if (shallow.code !== 0 || shallow.stderr.length !== 0
     || shallow.stdout.toString("utf8") !== "false\n") throw historyFailure();
@@ -63,6 +67,14 @@ export async function scanPublicHistory(options = {}) {
 
   const findings = [];
   for (const ref of refs) {
+    if (ref.name.startsWith("refs/replace/")) {
+      findings.push(historyFinding(
+        "Git semantic override",
+        `ref:${ref.objectId}`,
+        ref.objectId,
+        "ref",
+      ));
+    }
     const refFindings = classifyPublicContent(Buffer.from(ref.name, "utf8"), {
       label: `ref:${ref.objectId}`,
     });
@@ -76,9 +88,12 @@ export async function scanPublicHistory(options = {}) {
   const blobs = new Map();
   const trees = new Map();
   const rootTrees = new Set();
+  const objectTypes = new Map();
+  const tagTargets = new Map();
   await readObjectsBatch(root, objectIds, async ({ objectId, type, bytes }) => {
     totalBytes += bytes.length;
     if (totalBytes > MAX_HISTORY_BYTES) throw historyFailure();
+    objectTypes.set(objectId, type);
     if (type === "blob") {
       blobs.set(objectId, bytes);
     } else if (type === "commit" || type === "tag") {
@@ -90,6 +105,7 @@ export async function scanPublicHistory(options = {}) {
       });
       findings.push(...metadata.findings);
       if (metadata.rootTree !== undefined) rootTrees.add(metadata.rootTree);
+      if (metadata.tagTarget !== undefined) tagTargets.set(objectId, metadata.tagTarget);
     } else if (type === "tree") {
       const tree = scanTreeObject(objectId, bytes);
       findings.push(...tree.findings);
@@ -99,10 +115,21 @@ export async function scanPublicHistory(options = {}) {
     }
   });
 
-  const blobPaths = associateBlobPaths(rootTrees, trees, blobs);
+  addTaggedRootTrees(tagTargets, objectTypes, rootTrees);
+  const associations = associateRepositoryPaths(rootTrees, trees, blobs);
+  findings.push(...associations.findings);
+  const { blobPaths } = associations;
   for (const [objectId, bytes] of blobs) {
     const paths = blobPaths.get(objectId) ?? new Set([`blob:${objectId}`]);
     for (const label of paths) {
+      if (isPrivateRepositoryPath(label)) {
+        findings.push(historyFinding(
+          "private repository path",
+          label,
+          objectId,
+          "blob",
+        ));
+      }
       const blobFindings = classifyPublicContent(bytes, { label });
       findings.push(...blobFindings.map((item) => Object.freeze({
         ...item,
@@ -133,6 +160,8 @@ function scanGitMetadata({ objectId, type, bytes, neutralObjectAllowlist }) {
   const observed = new Set();
   const findings = [];
   let rootTree;
+  let tagObject;
+  let tagType;
   for (const header of headers) {
     const separator = header.indexOf(" ");
     if (separator === 0) {
@@ -161,6 +190,16 @@ function scanGitMetadata({ objectId, type, bytes, neutralObjectAllowlist }) {
       if (rootTree !== undefined || !/^[a-f0-9]{40}$/u.test(value)) throw historyFailure();
       rootTree = value;
     }
+    if (type === "tag" && name === "object") {
+      if (tagObject !== undefined || !/^[a-f0-9]{40}$/u.test(value)) throw historyFailure();
+      tagObject = value;
+    }
+    if (type === "tag" && name === "type") {
+      if (tagType !== undefined || !["blob", "commit", "tag", "tree"].includes(value)) {
+        throw historyFailure();
+      }
+      tagType = value;
+    }
     const headerFindings = classifyPublicContent(Buffer.from(value, "utf8"), {
       label: `${type}:${objectId}`,
     });
@@ -169,7 +208,11 @@ function scanGitMetadata({ objectId, type, bytes, neutralObjectAllowlist }) {
       findings.push(historyFinding("sensitive Git metadata", `${type}:${objectId}`, objectId, type));
     }
   }
-  if (observed.size !== identityHeaders.size || (type === "commit" && rootTree === undefined)) {
+  if (
+    observed.size !== identityHeaders.size
+    || (type === "commit" && rootTree === undefined)
+    || (type === "tag" && (tagObject === undefined || tagType === undefined))
+  ) {
     throw historyFailure();
   }
   const messageFindings = classifyPublicContent(Buffer.from(message, "utf8"), {
@@ -178,7 +221,10 @@ function scanGitMetadata({ objectId, type, bytes, neutralObjectAllowlist }) {
   if (messageFindings.length > 0) {
     findings.push(historyFinding("sensitive Git metadata", `${type}:${objectId}`, objectId, type));
   }
-  return Object.freeze({ findings: Object.freeze(findings), rootTree });
+  const tagTarget = type === "tag"
+    ? Object.freeze({ objectId: tagObject, type: tagType })
+    : undefined;
+  return Object.freeze({ findings: Object.freeze(findings), rootTree, tagTarget });
 }
 
 function scanTreeObject(objectId, bytes) {
@@ -198,7 +244,9 @@ function scanTreeObject(objectId, bytes) {
     catch { throw historyFailure(); }
     if (name === "." || name === ".." || name.includes("/") || name.includes("\\")) throw historyFailure();
     const childId = bytes.subarray(nul + 1, nul + 21).toString("hex");
-    const kind = /^(?:0?40000)$/u.test(mode) ? "tree" : mode === "160000" ? "gitlink" : "blob";
+    const kind = /^(?:0?40000)$/u.test(mode) ? "tree"
+      : mode === "160000" ? "gitlink"
+        : ["100644", "100755"].includes(mode) ? "blob" : "non-regular";
     entriesFound.push(Object.freeze({ name, objectId: childId, kind }));
     const nameFindings = classifyPublicLabel(name);
     const contentFindings = classifyPublicContent(Buffer.from(name, "utf8"), {
@@ -215,9 +263,57 @@ function scanTreeObject(objectId, bytes) {
   return Object.freeze({ findings: Object.freeze(findings), entries: Object.freeze(entriesFound) });
 }
 
-function associateBlobPaths(rootTrees, trees, blobs) {
+export function addTaggedRootTrees(tagTargets, objectTypes, rootTrees) {
+  if (!(tagTargets instanceof Map) || !(objectTypes instanceof Map) || !(rootTrees instanceof Set)) {
+    throw historyFailure();
+  }
+  const resolved = new Map();
+  let traversalSteps = 0;
+  for (const tagObjectId of tagTargets.keys()) {
+    if (resolved.has(tagObjectId)) {
+      const terminal = resolved.get(tagObjectId);
+      if (terminal.type === "tree") rootTrees.add(terminal.objectId);
+      continue;
+    }
+    const chain = [];
+    const chainSet = new Set();
+    let currentTag = tagObjectId;
+    let terminal;
+    while (true) {
+      if (resolved.has(currentTag)) {
+        terminal = resolved.get(currentTag);
+        break;
+      }
+      if (chainSet.has(currentTag)) throw historyFailure();
+      chainSet.add(currentTag);
+      chain.push(currentTag);
+      const target = tagTargets.get(currentTag);
+      if (target === undefined || objectTypes.get(target.objectId) !== target.type) {
+        throw historyFailure();
+      }
+      traversalSteps += 1;
+      if (traversalSteps > tagTargets.size || traversalSteps > MAX_OBJECTS) {
+        throw historyFailure();
+      }
+      if (target.type !== "tag") {
+        terminal = target;
+        break;
+      }
+      currentTag = target.objectId;
+    }
+    for (let index = chain.length - 1; index >= 0; index -= 1) {
+      resolved.set(chain[index], terminal);
+    }
+    if (terminal.type === "tree") rootTrees.add(terminal.objectId);
+  }
+  return Object.freeze({ traversalSteps, resolvedTags: resolved.size });
+}
+
+function associateRepositoryPaths(rootTrees, trees, blobs) {
   if (rootTrees.size === 0) throw historyFailure();
   const blobPaths = new Map();
+  const findings = [];
+  const findingKeys = new Set();
   const visited = new Set();
   const pending = [...rootTrees].map((treeId) => Object.freeze({ treeId, prefix: "" }));
   let associations = 0;
@@ -233,6 +329,18 @@ function associateBlobPaths(rootTrees, trees, blobs) {
       if (path.length > 4096) throw historyFailure();
       associations += 1;
       if (associations > MAX_PATH_ASSOCIATIONS) throw historyFailure();
+      if (isPrivateRepositoryPath(path, entry.kind)) {
+        const key = `${treeId}\0${path}`;
+        if (!findingKeys.has(key)) {
+          findingKeys.add(key);
+          findings.push(historyFinding(
+            "private repository path",
+            path,
+            treeId,
+            "tree",
+          ));
+        }
+      }
       if (entry.kind === "tree") {
         pending.push(Object.freeze({ treeId: entry.objectId, prefix: path }));
       } else if (entry.kind === "blob") {
@@ -246,7 +354,7 @@ function associateBlobPaths(rootTrees, trees, blobs) {
       }
     }
   }
-  return blobPaths;
+  return Object.freeze({ blobPaths, findings: Object.freeze(findings) });
 }
 
 function parseIdentity(value) {
@@ -321,7 +429,10 @@ async function readObjectsBatch(root, objectIds, visit) {
   const input = Buffer.from(`${objectIds.join("\n")}\n`, "ascii");
   let lifecycle;
   try {
-    lifecycle = await startBoundedProcess("git", ["-C", root, "cat-file", "--batch"], {
+    lifecycle = await startBoundedProcess("git", [
+      "--no-replace-objects", "-C", root, "cat-file", "--batch",
+    ], {
+      env: gitEnvironment(),
       input,
       timeoutMs: 15 * 60 * 1_000,
     });
@@ -421,10 +532,37 @@ function validateNeutralAllowlist(value) {
   return value;
 }
 
+async function rejectGitGrafts(runGit, root) {
+  const result = await invokeGit(runGit, root, [
+    "rev-parse", "--path-format=absolute", "--git-path", "info/grafts",
+  ]);
+  if (result.code !== 0 || result.stderr.length !== 0) throw historyFailure();
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(result.stdout); }
+  catch { throw historyFailure(); }
+  const match = /^([^\u0000\r\n]{1,4096})\r?\n$/u.exec(text);
+  if (match === null) throw historyFailure();
+  try { await lstat(resolve(root, match[1])); }
+  catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw historyFailure();
+  }
+  throw historyFailure();
+}
+
 async function defaultRunGit(root, args) {
-  return await runBoundedProcess("git", ["-C", root, ...args], {
+  return await runBoundedProcess("git", ["--no-replace-objects", "-C", root, ...args], {
+    env: gitEnvironment(),
     maxOutputBytes: MAX_COMMAND_BYTES,
   });
+}
+
+function gitEnvironment() {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !/^GIT_/iu.test(name)),
+  );
+  env.GIT_NO_REPLACE_OBJECTS = "1";
+  return env;
 }
 
 async function invokeGit(runGit, root, args) {
@@ -446,7 +584,9 @@ function historyFinding(category, label, objectId, objectType) {
     objectType,
     remediation: category === "personal identity"
       ? "Rewrite only unpublished objects with the approved noreply identity."
-      : "Remove the sensitive Git metadata from every unpublished object and ref.",
+      : category === "private repository path"
+        ? "Remove the private path from every unpublished tree and object, then rescan."
+        : "Remove the sensitive Git metadata from every unpublished object and ref.",
   });
 }
 

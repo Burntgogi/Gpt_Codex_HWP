@@ -5,6 +5,8 @@ import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { isPrivateRepositoryPath } from "../scripts/public-content-policy.mjs";
+
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const SOURCE = join(ROOT, "packages", "gpt-codex-hwp");
 const RUNTIME = join(ROOT, "plugins", "gpt-codex-hwp");
@@ -59,6 +61,17 @@ test("public source contains no private planning or user-document paths", async 
     .map((path) => relative(ROOT, path).replaceAll("\\", "/"))
     .filter((path) => path !== allowedFixture)
     .filter((path) => /(^|\/)(docs\/superpowers|artifacts|tmp|node_modules)(\/|$)|\.(?:hwp|hwpx)$/iu.test(path));
+  assert.deepEqual(forbidden, []);
+});
+
+test("public HEAD tracks no private planning, evidence, or user-document paths", () => {
+  const result = spawnSync("git", ["ls-tree", "-rz", "--name-only", "HEAD"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || "git ls-tree failed");
+  const forbidden = result.stdout.split("\0").filter(Boolean)
+    .filter((path) => isPrivateRepositoryPath(path));
   assert.deepEqual(forbidden, []);
 });
 

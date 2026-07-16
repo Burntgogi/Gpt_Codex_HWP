@@ -22,13 +22,16 @@ import {
   readOwnedRegularFile,
   runBoundedProcess,
   scanPublicDirectory,
+  scanTrackedPublicTree,
   terminatePosixProcessGroup,
   walkOwnedRegularFiles,
 } from "../scripts/public-content-policy.mjs";
-import { scanPublicHistory } from "../scripts/scan-public-history.mjs";
+import { addTaggedRootTrees, scanPublicHistory } from "../scripts/scan-public-history.mjs";
 import { REQUIRED_RELEASE_STAGES } from "../scripts/release-verify.mjs";
 
 const OWNER_EMAIL = fragments("224273819+Burntgogi", "@users.noreply.github.com");
+const APPROVED_HWP_FIXTURE_PATH =
+  "packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp";
 
 test("public content policy detects secrets, personal paths, and unsafe metadata without disclosure", async (t) => {
   const rejected = [
@@ -336,6 +339,244 @@ test("Git history binds binary approval to every reachable tree path", async (t)
   assert.ok(result.findings.some((finding) =>
     finding.category === "binary not allowlisted"
     && finding.label === "copied/gpt-codex-hwp-banner.png"));
+});
+
+test("Git history rejects private evidence paths after their files are deleted", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-private-path-");
+  await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+  const privatePath = ".superpowers/sdd/private-review.md";
+  await commitFile(root, privatePath, "safe but private evidence\n", "private evidence", OWNER_EMAIL);
+  git(root, ["rm", "-q", "--", privatePath]);
+  git(root, ["commit", "-qm", "remove private evidence"]);
+
+  const result = await scanPublicHistory({ root });
+  assert.ok(result.findings.some((finding) =>
+    finding.category === "private repository path"
+    && finding.label === privatePath));
+});
+
+test("Git history associates private paths reachable only from an annotated tree tag", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-tree-tag-");
+  await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+  const blob = gitInput(root, ["hash-object", "-w", "--stdin"], "safe but private evidence\n").trim();
+  const sddTree = gitInput(root, ["mktree"], `100644 blob ${blob}\treport.md\n`).trim();
+  const privateTree = gitInput(root, ["mktree"], `040000 tree ${sddTree}\tsdd\n`).trim();
+  const rootTree = gitInput(root, ["mktree"], `040000 tree ${privateTree}\t.superpowers\n`).trim();
+  git(root, ["tag", "-a", "private-tree", "-m", "private tree tag", rootTree]);
+
+  const result = await scanPublicHistory({ root });
+  assert.ok(result.findings.some((finding) =>
+    finding.category === "private repository path"
+    && finding.label === ".superpowers/sdd/report.md"));
+});
+
+test("Git history checks private tree and gitlink entry paths even without blobs", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-non-blob-path-");
+  const parent = await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+  const emptyTree = gitInput(root, ["mktree"], "").trim();
+  const rootTree = gitInput(root, ["mktree"], [
+    `040000 tree ${emptyTree}\tempty.hwpx`,
+    `160000 commit ${parent}\tlinked.hwpx`,
+    "",
+  ].join("\n")).trim();
+  const commit = gitInput(root, ["commit-tree", rootTree, "-p", parent], "private non-blob paths\n").trim();
+  git(root, ["reset", "--hard", "-q", commit]);
+
+  const result = await scanPublicHistory({ root });
+  for (const path of ["empty.hwpx", "linked.hwpx"]) {
+    assert.ok(result.findings.some((finding) =>
+      finding.category === "private repository path"
+      && finding.label === path), path);
+  }
+});
+
+test("Git history rejects the approved fixture path when it is a tree or gitlink", async (t) => {
+  const cases = [
+    { kind: "tree", mode: "040000", type: "tree" },
+    { kind: "gitlink", mode: "160000", type: "commit" },
+  ];
+  for (const { kind, mode, type } of cases) {
+    const root = await temporaryGitRepository(t, `public-history-fixture-${kind}-`);
+    const parent = await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+    const objectId = kind === "tree" ? gitInput(root, ["mktree"], "").trim() : parent;
+    const rootTree = treeWithEntryAtPath(
+      root,
+      APPROVED_HWP_FIXTURE_PATH,
+      mode,
+      type,
+      objectId,
+    );
+    const commit = gitInput(
+      root,
+      ["commit-tree", rootTree, "-p", parent],
+      `fixture ${kind}\n`,
+    ).trim();
+    git(root, ["reset", "--hard", "-q", commit]);
+
+    const result = await scanPublicHistory({ root });
+    assert.ok(result.findings.some((finding) =>
+      finding.category === "private repository path"
+      && finding.label === APPROVED_HWP_FIXTURE_PATH), kind);
+  }
+});
+
+test("Git history document exception requires the allowlisted bytes in a regular blob entry", async (t) => {
+  const fixture = await readFile(new URL(
+    `../${APPROVED_HWP_FIXTURE_PATH}`,
+    import.meta.url,
+  ));
+  const cases = [
+    { expected: "passed", mode: "100644", bytes: fixture },
+    { expected: "binary not allowlisted", mode: "100644", bytes: Buffer.from("not the fixture\n") },
+    { expected: "private repository path", mode: "120000", bytes: fixture },
+  ];
+  for (const [index, { expected, mode, bytes }] of cases.entries()) {
+    const root = await temporaryGitRepository(t, `public-history-fixture-blob-${index}-`);
+    const parent = await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+    const blob = gitInput(root, ["hash-object", "-w", "--stdin"], bytes).trim();
+    const rootTree = treeWithEntryAtPath(
+      root,
+      APPROVED_HWP_FIXTURE_PATH,
+      mode,
+      "blob",
+      blob,
+    );
+    const commit = gitInput(root, ["commit-tree", rootTree, "-p", parent], "fixture blob\n").trim();
+    git(root, ["reset", "--hard", "-q", commit]);
+
+    const result = await scanPublicHistory({ root });
+    if (expected === "passed") {
+      assert.equal(result.findings.length, 0);
+    } else {
+      assert.ok(result.findings.some((finding) =>
+        finding.category === expected && finding.label === APPROVED_HWP_FIXTURE_PATH), expected);
+    }
+  }
+});
+
+test("Git history disables and rejects replacement refs that hide a private tree", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-replace-ref-");
+  const base = await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+  const privatePath = ".superpowers/sdd/private-review.md";
+  const privateCommit = await commitFile(
+    root,
+    privatePath,
+    "safe but private evidence\n",
+    "private evidence",
+    OWNER_EMAIL,
+  );
+  const baseTree = git(root, ["rev-parse", `${base}^{tree}`]).trim();
+  const cleanReplacement = gitInput(
+    root,
+    ["commit-tree", baseTree, "-p", base],
+    "clean replacement\n",
+  ).trim();
+  git(root, ["replace", privateCommit, cleanReplacement]);
+  git(root, ["reset", "--hard", "-q", privateCommit]);
+
+  const result = await scanPublicHistory({ root });
+  assert.ok(result.findings.some((finding) =>
+    finding.category === "private repository path"
+    && finding.label === privatePath));
+  assert.ok(result.findings.some((finding) => finding.category === "Git semantic override"));
+});
+
+test("Git history fails closed when info/grafts exists", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-grafts-");
+  await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+  git(root, ["config", "advice.graftFileDeprecated", "false"]);
+  await writeFile(join(root, ".git", "info", "grafts"), "");
+
+  await assert.rejects(scanPublicHistory({ root }), /history scan failed/iu);
+});
+
+test("annotated tag chains are memoized within a linear traversal budget", () => {
+  const tags = 20_000;
+  const tree = "f".repeat(40);
+  const tagTargets = new Map();
+  const objectTypes = new Map([[tree, "tree"]]);
+  for (let index = 0; index < tags; index += 1) {
+    const objectId = index.toString(16).padStart(40, "0");
+    const nextObjectId = index + 1 === tags
+      ? tree
+      : (index + 1).toString(16).padStart(40, "0");
+    const type = index + 1 === tags ? "tree" : "tag";
+    tagTargets.set(objectId, Object.freeze({ objectId: nextObjectId, type }));
+    objectTypes.set(objectId, "tag");
+  }
+  const rootTrees = new Set();
+
+  const receipt = addTaggedRootTrees(tagTargets, objectTypes, rootTrees);
+
+  assert.deepEqual(rootTrees, new Set([tree]));
+  assert.deepEqual(receipt, { traversalSteps: tags, resolvedTags: tags });
+});
+
+test("tracked public tree rejects benign content stored under a private evidence path", async (t) => {
+  const root = await temporaryGitRepository(t, "public-tree-private-path-");
+  await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+  const privatePath = "nested/.superpowers/sdd/private-review.md";
+  await commitFile(root, privatePath, "safe but private evidence\n", "private evidence", OWNER_EMAIL);
+
+  await assert.rejects(
+    scanTrackedPublicTree({ root }),
+    (error) => {
+      assert.ok(error.findings.some((finding) =>
+        finding.category === "private repository path"
+        && finding.label === privatePath));
+      return true;
+    },
+  );
+});
+
+test("tracked public tree binds the document exception to the exact raw fixture path", async (t) => {
+  const fixture = await readFile(new URL(
+    `../${APPROVED_HWP_FIXTURE_PATH}`,
+    import.meta.url,
+  ));
+  const exactRoot = await temporaryGitRepository(t, "public-tree-exact-hwp-");
+  await commitFile(exactRoot, APPROVED_HWP_FIXTURE_PATH, fixture, "approved fixture", OWNER_EMAIL);
+  await assert.doesNotReject(scanTrackedPublicTree({ root: exactRoot }));
+
+  const aliases = [
+    APPROVED_HWP_FIXTURE_PATH.toUpperCase(),
+    "packages/gpt-codex-hwp/tests/fixtures/rhwp/ｒｅ－０１－ｈａｎｇｕｌ－ｏｎｌｙ－ｈａｎｃｏｍ．ｈｗｐ",
+  ];
+  for (const [index, alias] of aliases.entries()) {
+    const root = await temporaryGitRepository(t, `public-tree-hwp-alias-${index}-`);
+    await commitFile(root, alias, fixture, "fixture alias", OWNER_EMAIL);
+    await assert.rejects(
+      scanTrackedPublicTree({ root }),
+      (error) => {
+        assert.ok(error.findings.some((finding) =>
+          finding.category === "private repository path"
+          && finding.label === alias.normalize("NFKC")), alias);
+        return true;
+      },
+    );
+  }
+});
+
+test("tracked public tree rejects descendants beneath document-extension segments", async (t) => {
+  const root = await temporaryGitRepository(t, "public-tree-document-directory-");
+  const privatePaths = [
+    "exports/report.hwp/child.txt",
+    "exports/report.hwpx/nested/child.txt",
+  ];
+  for (const path of privatePaths) {
+    await commitFile(root, path, "safe but private evidence\n", "document directory", OWNER_EMAIL);
+  }
+
+  await assert.rejects(
+    scanTrackedPublicTree({ root }),
+    (error) => {
+      for (const path of privatePaths) {
+        assert.ok(error.findings.some((finding) =>
+          finding.category === "private repository path" && finding.label === path), path);
+      }
+      return true;
+    },
+  );
 });
 
 test("Git history requires exact names and scans every header plus ref label", async (t) => {
@@ -651,6 +892,23 @@ function gitInput(root, args, input) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", input });
   assert.equal(result.status, 0, `git ${args[0]} failed`);
   return result.stdout;
+}
+
+function treeWithEntryAtPath(root, path, mode, type, objectId) {
+  const parts = path.split("/");
+  let tree = gitInput(
+    root,
+    ["mktree"],
+    `${mode} ${type} ${objectId}\t${parts.pop()}\n`,
+  ).trim();
+  while (parts.length > 0) {
+    tree = gitInput(
+      root,
+      ["mktree"],
+      `040000 tree ${tree}\t${parts.pop()}\n`,
+    ).trim();
+  }
+  return tree;
 }
 
 function processExists(pid) {
