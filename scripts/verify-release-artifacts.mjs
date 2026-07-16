@@ -27,6 +27,7 @@ const ALLOWED_EXTENSIONS = new Set([
   ".cjs", ".cts", ".js", ".json", ".md", ".png", ".ps1", ".py", ".ts", ".yaml",
 ]);
 const ALLOWED_EXTENSIONLESS = new Set([".npmrc", "LICENSE", "NOTICE"]);
+const ALLOWED_EXACT_PATHS = new Set(["scripts/kordoc-runtime-verifier.mjs"]);
 const MAX_FILES = 10_000;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
@@ -739,7 +740,8 @@ function validateArchiveName(name) {
     || name.startsWith("/") || /^[A-Za-z]:/u.test(name)
     || segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
     || segments.some((segment) => !/^[A-Za-z0-9._@+-]+$/u.test(segment))
-    || (!ALLOWED_EXTENSIONS.has(extension) && !ALLOWED_EXTENSIONLESS.has(base))) {
+    || (!ALLOWED_EXTENSIONS.has(extension) && !ALLOWED_EXTENSIONLESS.has(base)
+      && !ALLOWED_EXACT_PATHS.has(name))) {
     throw verificationError("RELEASE_ARTIFACTS_ENTRY_UNSAFE");
   }
 }

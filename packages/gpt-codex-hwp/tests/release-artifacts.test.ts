@@ -533,6 +533,20 @@ test("release artifacts ZIP construction rejects hostile names and collisions", 
   );
 });
 
+test("release artifacts allow only the pinned runtime verifier as an MJS entry", () => {
+  const verifierPath = "scripts/kordoc-runtime-verifier.mjs";
+  const archive = buildDeterministicZip([
+    { name: verifierPath, bytes: Buffer.from("export {};\n") },
+  ], EPOCH);
+  assert.deepEqual(inspectReleaseZipForTest(archive).map((entry) => entry.name), [verifierPath]);
+  assert.throws(
+    () => buildDeterministicZip([
+      { name: "dist/unexpected.mjs", bytes: Buffer.from("export {};\n") },
+    ], EPOCH),
+    /RELEASE_ARTIFACTS_ENTRY_UNSAFE/u,
+  );
+});
+
 test("release artifacts verifier fails closed on tampering and unexpected output", async (t) => {
   const fixture = await createReleaseFixture(t);
   const output = join(fixture.parent, "verified-output");
