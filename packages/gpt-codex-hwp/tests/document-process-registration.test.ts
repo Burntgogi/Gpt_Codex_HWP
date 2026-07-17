@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
@@ -184,6 +185,88 @@ test("document child gate rejects EOF partial extended and incorrect START witho
   }
 });
 
+test("document child registration accepts a matching ACK and closes channels before payload", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-accepted-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const markerPath = join(temporaryRoot, "marker.json");
+  const payloadArgument = `registered-${randomUUID()}`;
+  const child = spawnGatedFixture(markerPath, payloadArgument, "both");
+  t.after(() => terminate(child));
+
+  const registration = await receiveRegisterFrame(child);
+  assert.deepEqual(registration, {
+    schemaVersion: 1,
+    type: "register",
+    nonce: registration.nonce,
+    pid: child.pid,
+    parentPid: process.pid,
+  });
+  await assertFileMissing(markerPath, 100);
+  sendAck(child, {
+    schemaVersion: 1,
+    type: "ack",
+    nonce: registration.nonce,
+    status: "accepted",
+  });
+  await assertFileMissing(markerPath, 100);
+
+  const startWriter = child.stdio[7] as Writable | null;
+  assert.notEqual(startWriter, null);
+  startWriter!.write(DOCUMENT_START_FRAME);
+  await waitForFile(markerPath);
+  assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), [
+    FIXTURE_ENTRY,
+    markerPath,
+    payloadArgument,
+  ]);
+
+  startWriter!.end();
+  const result = await waitForClose(child);
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
+test("document child registration rejects rejected and wrong-nonce ACKs before payload", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-rejected-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+
+  for (const ackCase of ["rejected", "wrong-nonce"] as const) {
+    const markerPath = join(temporaryRoot, `${ackCase}.json`);
+    const child = spawnGatedFixture(markerPath, ackCase, "both");
+    t.after(() => terminate(child));
+    const registration = await receiveRegisterFrame(child);
+    assert.equal(registration.pid, child.pid, ackCase);
+    assert.equal(registration.parentPid, process.pid, ackCase);
+    sendAck(child, {
+      schemaVersion: 1,
+      type: "ack",
+      nonce: ackCase === "wrong-nonce" ? randomUUID() : registration.nonce,
+      status: ackCase === "rejected" ? "rejected" : "accepted",
+    });
+
+    const result = await waitForClose(child);
+    await assert.rejects(access(markerPath), { code: "ENOENT" }, ackCase);
+    assert.notEqual(result.code, 0, ackCase);
+    assert.equal(result.stdout, "", ackCase);
+    assert.equal(result.stderr, "", ackCase);
+  }
+});
+
+test("document child registration rejects a one-present descriptor pair", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-mismatch-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const markerPath = join(temporaryRoot, "marker.json");
+  const child = spawnGatedFixture(markerPath, "fd8-only", "registration-only");
+  t.after(() => terminate(child));
+
+  const result = await waitForClose(child);
+  await assert.rejects(access(markerPath), { code: "ENOENT" });
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
 function rawFrame(value: unknown): Buffer {
   return Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
 }
@@ -195,11 +278,29 @@ function without(
   return Object.fromEntries(Object.entries(value).filter(([candidate]) => candidate !== key));
 }
 
-function spawnGatedFixture(markerPath: string, payloadArgument: string): ChildProcess {
+type RegistrationMode = "absent" | "both" | "registration-only";
+
+function spawnGatedFixture(
+  markerPath: string,
+  payloadArgument: string,
+  registrationMode: RegistrationMode = "absent",
+): ChildProcess {
   // Windows Node 22 requires an ESM URL for an absolute --import specifier.
   const startGateSpecifier = process.platform === "win32"
     ? pathToFileURL(START_GATE).href
     : START_GATE;
+  const stdio: Array<"ignore" | "pipe"> = [
+    "ignore",
+    "pipe",
+    "pipe",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    "pipe",
+  ];
+  if (registrationMode !== "absent") stdio.push("pipe");
+  if (registrationMode === "both") stdio.push("pipe");
   return spawn(process.execPath, [
     "--import",
     "tsx",
@@ -212,8 +313,61 @@ function spawnGatedFixture(markerPath: string, payloadArgument: string): ChildPr
     detached: true,
     shell: false,
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", "pipe"],
+    stdio,
   });
+}
+
+async function receiveRegisterFrame(child: ChildProcess): Promise<RegisterFrame> {
+  const registration = child.stdio[8] as Readable | null;
+  assert.notEqual(registration, null);
+  return await new Promise((resolvePromise, rejectPromise) => {
+    let encoded = Buffer.alloc(0);
+    const timeout = setTimeout(() => {
+      cleanup();
+      rejectPromise(new Error("timed out waiting for registration frame"));
+    }, 5_000);
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      registration!.removeListener("data", onData);
+      registration!.removeListener("end", onEnd);
+      registration!.removeListener("error", onError);
+    };
+    const fail = (error: unknown): void => {
+      cleanup();
+      rejectPromise(error);
+    };
+    const onData = (chunk: Buffer): void => {
+      encoded = Buffer.concat([encoded, chunk]);
+      if (encoded.byteLength > MAX_REGISTRATION_FRAME_BYTES) {
+        fail(new Error("registration frame exceeded its bound"));
+        return;
+      }
+      const newline = encoded.indexOf(0x0a);
+      if (newline === -1) return;
+      if (newline !== encoded.byteLength - 1) {
+        fail(new Error("registration frame had trailing data"));
+        return;
+      }
+      try {
+        const frame = parseRegisterFrame(encoded);
+        cleanup();
+        resolvePromise(frame);
+      } catch (error: unknown) {
+        fail(error);
+      }
+    };
+    const onEnd = (): void => fail(new Error("registration channel ended before a frame"));
+    const onError = (error: Error): void => fail(error);
+    registration!.on("data", onData);
+    registration!.once("end", onEnd);
+    registration!.once("error", onError);
+  });
+}
+
+function sendAck(child: ChildProcess, frame: AckFrame): void {
+  const acknowledgement = child.stdio[9] as Writable | null;
+  assert.notEqual(acknowledgement, null);
+  acknowledgement!.end(encodeAckFrame(frame));
 }
 
 async function assertFileMissing(path: string, durationMs: number): Promise<void> {
