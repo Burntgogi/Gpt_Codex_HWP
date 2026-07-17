@@ -4,12 +4,15 @@ import { z } from "zod";
 
 import {
   defaultDocumentEngineFacade,
+  prepareDocumentRenderOutput,
   type DocumentEngineFacade,
-  writeDocumentRenderResultExclusively,
 } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { toolError, toolSuccess } from "../shared/result.js";
+import {
+  commitBudgetedToolSuccess,
+  toolError,
+} from "../shared/result.js";
 import {
   runWithToolExecutionContext,
   toDocumentEngineExecutionContext,
@@ -79,50 +82,61 @@ export async function handleHwpRenderPreview(
       renderOptions,
       toDocumentEngineExecutionContext(context),
     );
-    const metadata = safeRecord(await writeDocumentRenderResultExclusively(
-      rendered,
-      outputPath,
-      {
-        sourcePaths: [filePath],
-        ...(context === undefined ? {} : { signal: context.signal }),
-      },
-    ));
-    if (metadata?.backend === "rhwp") {
-      const warnings = [
-        "rhwp uses a Unicode-width heuristic in Node; font metrics and line wrapping may differ from Hancom.",
-        "This SVG is a preview only; Hancom GUI visual fidelity has not been verified.",
-      ];
-      if (input.reflow !== undefined) {
-        warnings.push("The rhwp backend does not apply the Kordoc reflow option.");
-      }
-      if ((input.highlight?.length ?? 0) > 0) {
-        warnings.push("The rhwp backend does not apply requested text highlights.");
-      }
-      return toolSuccess("Rendered an SVG preview with the optional rhwp backend.", {
-        output_svg_path: outputPath,
-        backend: "rhwp",
-        ...(typeof metadata.version === "string"
-          ? { backend_version: metadata.version }
-          : {}),
-        ...(safePositiveInteger(metadata.pageCount) === undefined
-          ? {}
-          : { page_count: safePositiveInteger(metadata.pageCount) }),
-        degraded_font_metrics: true,
-        warnings,
-      });
-    }
-
-    return toolSuccess("Rendered HWPX SVG preview.", {
-      output_svg_path: outputPath,
-      ...(safePositiveInteger(metadata?.pageCount) === undefined
-        ? {}
-        : { page_count: safePositiveInteger(metadata?.pageCount) }),
-      ...(safeDimensions(metadata) === undefined
-        ? {}
-        : { dimensions: safeDimensions(metadata) }),
-      warnings: safeStringArray(metadata?.warnings),
-      stats: safeRecord(metadata?.stats) ?? {},
+    const prepared = await prepareDocumentRenderOutput(rendered, {
+      ...(context === undefined ? {} : { signal: context.signal }),
     });
+    try {
+      const metadata = safeRecord(prepared.metadata);
+      let summary: string;
+      let details: Record<string, unknown>;
+      if (metadata?.backend === "rhwp") {
+        const warnings = [
+          "rhwp uses a Unicode-width heuristic in Node; font metrics and line wrapping may differ from Hancom.",
+          "This SVG is a preview only; Hancom GUI visual fidelity has not been verified.",
+        ];
+        if (input.reflow !== undefined) {
+          warnings.push("The rhwp backend does not apply the Kordoc reflow option.");
+        }
+        if ((input.highlight?.length ?? 0) > 0) {
+          warnings.push("The rhwp backend does not apply requested text highlights.");
+        }
+        summary = "Rendered an SVG preview with the optional rhwp backend.";
+        details = {
+          output_svg_path: outputPath,
+          backend: "rhwp",
+          ...(typeof metadata.version === "string"
+            ? { backend_version: metadata.version }
+            : {}),
+          ...(safePositiveInteger(metadata.pageCount) === undefined
+            ? {}
+            : { page_count: safePositiveInteger(metadata.pageCount) }),
+          degraded_font_metrics: true,
+          warnings,
+        };
+      } else {
+        summary = "Rendered HWPX SVG preview.";
+        details = {
+          output_svg_path: outputPath,
+          ...(safePositiveInteger(metadata?.pageCount) === undefined
+            ? {}
+            : { page_count: safePositiveInteger(metadata?.pageCount) }),
+          ...(safeDimensions(metadata) === undefined
+            ? {}
+            : { dimensions: safeDimensions(metadata) }),
+          warnings: safeStringArray(metadata?.warnings),
+          stats: safeRecord(metadata?.stats) ?? {},
+        };
+      }
+
+      return await commitBudgetedToolSuccess(summary, details, async () => {
+        await prepared.writeExclusively(outputPath!, {
+          sourcePaths: [filePath!],
+          ...(context === undefined ? {} : { signal: context.signal }),
+        });
+      });
+    } finally {
+      await prepared.cleanup();
+    }
   } catch (error: unknown) {
     const message = errorMessage(error);
     const code = errorCode(error, "HWPX_PREVIEW_ERROR");

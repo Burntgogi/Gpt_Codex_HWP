@@ -12,7 +12,10 @@ import {
 } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { toolError, toolSuccess } from "../shared/result.js";
+import {
+  commitBudgetedToolSuccess,
+  toolError,
+} from "../shared/result.js";
 import {
   runWithToolExecutionContext,
   toDocumentEngineExecutionContext,
@@ -147,11 +150,7 @@ export async function handleHwpPatchDocument(
         );
       }
 
-      await patchResult.writeOutputExclusively(outputPath, {
-        sourcePaths: [filePath],
-      });
-
-      return toolSuccess(
+      return await commitBudgetedToolSuccess(
         "Patched and semantically verified the HWPX document.",
         {
           output_path: outputPath,
@@ -160,6 +159,11 @@ export async function handleHwpPatchDocument(
           skipped: metadata.skipped,
           verification: metadata.verification,
           complete,
+        },
+        async () => {
+          await patchResult.writeOutputExclusively(outputPath!, {
+            sourcePaths: [filePath!],
+          });
         },
       );
     } finally {
@@ -293,18 +297,22 @@ export async function handleHwpFillForm(
         );
       }
 
-      await fillResult.writeOutputExclusively(outputPath, {
-        sourcePaths: [filePath],
-      });
-
-      return toolSuccess(`Filled ${filled.length} HWPX fields.`, {
-        output_path: outputPath,
-        filled_count: filled.length,
-        filled: presentFilledFields(filled, input.mask_values !== false),
-        unmatched,
-        rejected,
-        validation: presentedValidation,
-      });
+      return await commitBudgetedToolSuccess(
+        `Filled ${filled.length} HWPX fields.`,
+        {
+          output_path: outputPath,
+          filled_count: filled.length,
+          filled: presentFilledFields(filled, input.mask_values !== false),
+          unmatched,
+          rejected,
+          validation: presentedValidation,
+        },
+        async () => {
+          await fillResult.writeOutputExclusively(outputPath!, {
+            sourcePaths: [filePath!],
+          });
+        },
+      );
     } finally {
       await fillResult.cleanup();
     }

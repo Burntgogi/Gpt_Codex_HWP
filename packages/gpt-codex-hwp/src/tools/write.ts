@@ -12,7 +12,11 @@ import {
 } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { toolError, toolSuccess } from "../shared/result.js";
+import {
+  commitBudgetedToolSuccess,
+  toolError,
+  toolSuccess,
+} from "../shared/result.js";
 import {
   runWithToolExecutionContext,
   toDocumentEngineExecutionContext,
@@ -101,17 +105,6 @@ export async function handleHwpGenerateHwpx(
         ? undefined
         : previewDetails(preview);
 
-      await generatedResult.writeOutputExclusively(outputPath, {
-        ...(previewPath === undefined || preview === undefined
-          ? {}
-          : {
-              companionFiles: [{
-                path: previewPath,
-                data: preview.svg,
-              }],
-            }),
-      });
-
       const fontNormalization = readFontNormalization(
         generatedResult.resultMetadata,
       );
@@ -128,7 +121,22 @@ export async function handleHwpGenerateHwpx(
         details.preview = presentedPreview;
       }
 
-      return toolSuccess("Generated HWPX document.", details);
+      return await commitBudgetedToolSuccess(
+        "Generated HWPX document.",
+        details,
+        async () => {
+          await generatedResult.writeOutputExclusively(outputPath!, {
+            ...(previewPath === undefined || preview === undefined
+              ? {}
+              : {
+                  companionFiles: [{
+                    path: previewPath,
+                    data: preview.svg,
+                  }],
+                }),
+          });
+        },
+      );
     } finally {
       await generatedResult.cleanup();
     }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,6 +17,7 @@ import {
 } from "../src/tools/patch.js";
 import { handleHwpInsertImage } from "../src/tools/assets.js";
 import { createDocumentEngineFacade } from "../src/shared/document-engine.js";
+import { openDocumentSnapshot } from "../src/shared/document-snapshot.js";
 
 test("write worker safety routes generation through one path-free facade request", async () => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task6-generate-"));
@@ -509,6 +510,86 @@ test("generation validates preview metadata before opening either output", async
     await assert.rejects(readFile(outputPath), { code: "ENOENT" });
     await assert.rejects(readFile(previewPath), { code: "ENOENT" });
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the common HWPX mutation writer rechecks cancellation after source verification", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-common-writer-cancel-"));
+  const sourcePath = join(root, "source.hwpx");
+  const outputDir = join(root, "prepared-output");
+  const outputPath = join(outputDir, "patched.hwpx");
+  const source = new Uint8Array(await markdownToHwpx("# source"));
+  const patched = new Uint8Array(await markdownToHwpx("# patched"));
+  await writeFile(sourcePath, source);
+  const controller = new AbortController();
+  const ownedSnapshot = await openDocumentSnapshot(sourcePath);
+  const abortingSnapshot = {
+    transport: ownedSnapshot.transport,
+    metadata: ownedSnapshot.metadata,
+    ...("takeTransferable" in ownedSnapshot
+      ? { takeTransferable: () => ownedSnapshot.takeTransferable() }
+      : { takeSpoolHandle: () => ownedSnapshot.takeSpoolHandle() }),
+    async verifySourceUnchanged() {
+      await ownedSnapshot.verifySourceUnchanged();
+      try {
+        await access(outputDir);
+        controller.abort();
+      } catch (error: unknown) {
+        if ((error as { code?: string }).code !== "ENOENT") throw error;
+      }
+    },
+    cleanup: () => ownedSnapshot.cleanup(),
+  };
+  const facade = createDocumentEngineFacade({
+    isolatedEngine: {
+      async run(
+        request: { operation: string },
+        snapshot?: { cleanup(): Promise<void> },
+      ) {
+        await snapshot?.cleanup();
+        if (request.operation === "patchHwpx") {
+          return {
+            bytes: exactArrayBuffer(patched),
+            metadata: {
+              operation: "patchHwpx",
+              applied: 1,
+              skipped: [],
+              verification: {
+                stats: { added: 0, removed: 0, modified: 1, unchanged: 0 },
+                diffs: [],
+              },
+            },
+          };
+        }
+        if (request.operation === "validateHwpx") {
+          return { ok: true, issues: [], entryCount: 1 };
+        }
+        throw new Error(`unexpected operation: ${request.operation}`);
+      },
+    } as never,
+    requestIdFactory: () => "common-writer-cancel",
+  });
+
+  try {
+    const authorized = await facade.patch(
+      abortingSnapshot as never,
+      "# patched",
+      { signal: controller.signal },
+    );
+    try {
+      await assert.rejects(
+        authorized.writeOutputExclusively(outputPath, {
+          sourcePaths: [sourcePath],
+        }),
+        (error: unknown) => (error as { code?: string }).code === "REQUEST_CANCELLED",
+      );
+      await assert.rejects(readFile(outputPath), { code: "ENOENT" });
+    } finally {
+      await authorized.cleanup();
+    }
+  } finally {
+    await ownedSnapshot.cleanup();
     await rm(root, { recursive: true, force: true });
   }
 });

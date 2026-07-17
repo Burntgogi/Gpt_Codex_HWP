@@ -9,6 +9,7 @@ import type {
   SpoolDocumentSnapshot,
 } from "./document-snapshot.js";
 import {
+  prepareDocumentRenderOutput,
   writeDocumentRenderResultExclusively,
   type AuthorizedDocumentRenderResult,
 } from "./document-render-output.js";
@@ -49,6 +50,7 @@ export interface DocumentEngineExecutionContext {
 export interface DocumentFacadeResult<Operation extends DocumentEngineOperation> {
   readonly payload: DocumentResultPayload<Operation>;
   readonly snapshotMetadata: Readonly<DocumentSnapshotMetadata>;
+  readonly verifySourceUnchanged: () => Promise<void>;
 }
 
 export interface DocumentFacadeRenderResult extends AuthorizedDocumentRenderResult {
@@ -151,6 +153,7 @@ export function createDocumentEngineFacade(
           return {
             payload: { format: "unknown" },
             snapshotMetadata: snapshot.metadata,
+            verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
           };
         } finally {
           await snapshot.cleanup();
@@ -281,7 +284,11 @@ export function createDocumentEngineFacade(
     );
     const payload = await decodeResult(operation, result);
     await snapshot.verifySourceUnchanged();
-    return { payload, snapshotMetadata: snapshot.metadata };
+    return {
+      payload,
+      snapshotMetadata: snapshot.metadata,
+      verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
+    };
   }
 
   async function runGenerate(
@@ -484,6 +491,7 @@ export function createDocumentEngineFacade(
             throw engineProtocolError();
           }
           await verifySourceUnchanged();
+          requireNotAborted(context.signal);
         };
         let written: readonly string[];
         if (range === undefined) {
@@ -673,7 +681,10 @@ function requireNotAborted(signal: AbortSignal | undefined): void {
   throw error;
 }
 
-export { writeDocumentRenderResultExclusively };
+export {
+  prepareDocumentRenderOutput,
+  writeDocumentRenderResultExclusively,
+};
 
 function toRunOptions(
   context: DocumentEngineExecutionContext,

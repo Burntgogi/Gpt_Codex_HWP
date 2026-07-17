@@ -43,7 +43,7 @@ export interface AuthorizedDocumentRenderResult {
   verifySourceUnchanged(): Promise<void>;
 }
 
-export interface DocumentRenderOutputOptions extends ExclusiveOutputOptions {
+export interface DocumentRenderValidationOptions {
   readonly signal?: AbortSignal;
   /** Unit-test-only fault injection for exercising descriptor read failures. */
   readonly unitTestReadInto?: (
@@ -54,44 +54,99 @@ export interface DocumentRenderOutputOptions extends ExclusiveOutputOptions {
   ) => Promise<number>;
 }
 
+export interface DocumentRenderOutputOptions extends ExclusiveOutputOptions {
+  readonly signal?: AbortSignal;
+}
+
+interface DocumentRenderWriterOptions extends DocumentRenderOutputOptions,
+  DocumentRenderValidationOptions {}
+
+export interface PreparedDocumentRenderOutput {
+  readonly metadata?: SafeJsonValue;
+  writeExclusively(
+    outputPath: string,
+    options?: DocumentRenderOutputOptions,
+  ): Promise<void>;
+  cleanup(): Promise<void>;
+}
+
+export async function prepareDocumentRenderOutput(
+  rendered: AuthorizedDocumentRenderResult,
+  options: DocumentRenderValidationOptions = {},
+): Promise<PreparedDocumentRenderOutput> {
+  const result = rendered.payload;
+  if (isIntegrityVerifiedResultSpool(result)) {
+    return prepareRenderSpool(rendered, result, options);
+  }
+
+  try {
+    assertSafeSvgString(result.svg);
+    const svgBytes = Buffer.byteLength(result.svg, "utf8");
+    if (svgBytes > MAX_PREVIEW_SVG_BYTES) {
+      throw previewTooLargeError(svgBytes);
+    }
+    requireNotAborted(options.signal);
+  } catch (error: unknown) {
+    if (isSafePublicError(error)) throw error;
+    throw protocolError();
+  }
+
+  let cleaned = false;
+  let committed = false;
+  return {
+    ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
+    async writeExclusively(
+      outputPath: string,
+      commitOptions: DocumentRenderOutputOptions = {},
+    ): Promise<void> {
+      if (cleaned || committed) throw protocolError();
+      requireNotAborted(commitOptions.signal);
+      await writeFilesExclusively(
+        [{ path: outputPath, data: result.svg }],
+        {
+          sourcePaths: commitOptions.sourcePaths,
+          expectedDirectoryIdentities:
+            commitOptions.expectedDirectoryIdentities,
+          beforeOpen: () => authorizeRenderOutputOpen(rendered, commitOptions),
+        },
+      );
+      committed = true;
+    },
+    async cleanup(): Promise<void> {
+      cleaned = true;
+    },
+  };
+}
+
 export async function writeDocumentRenderResultExclusively(
   rendered: AuthorizedDocumentRenderResult,
   outputPath: string,
-  options: DocumentRenderOutputOptions = {},
+  options: DocumentRenderWriterOptions = {},
 ): Promise<SafeJsonValue | undefined> {
-  const result = rendered.payload;
-  if (!isIntegrityVerifiedResultSpool(result)) {
-    try {
-      assertSafeSvgString(result.svg);
-      const svgBytes = Buffer.byteLength(result.svg, "utf8");
-      if (svgBytes > MAX_PREVIEW_SVG_BYTES) {
-        throw previewTooLargeError(svgBytes);
-      }
-    } catch (error: unknown) {
-      if (isSafePublicError(error)) throw error;
-      throw protocolError();
-    }
-    requireNotAborted(options.signal);
-    await rendered.verifySourceUnchanged();
-    requireNotAborted(options.signal);
-    await writeFilesExclusively(
-      [{ path: outputPath, data: result.svg }],
-      {
-        sourcePaths: options.sourcePaths,
-        beforeOpen: () => requireRenderOutputOpenAuthorized(options),
-      },
-    );
-    return result.metadata;
+  const prepared = await prepareDocumentRenderOutput(rendered, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.unitTestReadInto === undefined
+      ? {}
+      : { unitTestReadInto: options.unitTestReadInto }),
+  });
+  try {
+    await prepared.writeExclusively(outputPath, {
+      sourcePaths: options.sourcePaths,
+      beforeOpen: options.beforeOpen,
+      expectedDirectoryIdentities: options.expectedDirectoryIdentities,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    return prepared.metadata;
+  } finally {
+    await prepared.cleanup();
   }
-  return writeRenderSpool(rendered, result, outputPath, options);
 }
 
-async function writeRenderSpool(
+async function prepareRenderSpool(
   rendered: AuthorizedDocumentRenderResult,
   spool: IntegrityVerifiedResultSpool<"render">,
-  outputPath: string,
-  options: DocumentRenderOutputOptions,
-): Promise<SafeJsonValue | undefined> {
+  options: DocumentRenderValidationOptions,
+): Promise<PreparedDocumentRenderOutput> {
   if (spool.metadata.operation !== "render" ||
     spool.metadata.encoding !== "render-result-v1" ||
     !Number.isSafeInteger(spool.metadata.sizeBytes) ||
@@ -100,6 +155,17 @@ async function writeRenderSpool(
     await spool.cleanup().catch(() => undefined);
     throw protocolError();
   }
+
+  let cleaned = false;
+  const cleanup = async (): Promise<void> => {
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      await spool.cleanup();
+    } catch {
+      throw protocolError();
+    }
+  };
 
   try {
     const handle = spool.takeHandle();
@@ -110,34 +176,58 @@ async function writeRenderSpool(
       options.signal,
       options.unitTestReadInto ?? readInto,
     );
-    requireNotAborted(options.signal);
-    await rendered.verifySourceUnchanged();
-    requireNotAborted(options.signal);
-    await writeFileRangeExclusively(outputPath, {
-      fd: handle.fd,
-      offset: validated.svgOffset,
-      sizeBytes: validated.svgBytes,
-    }, {
-      sourcePaths: options.sourcePaths,
-      beforeOpen: () => requireRenderOutputOpenAuthorized(options),
-    });
-    return validated.metadata;
+    let committed = false;
+    return {
+      ...(validated.metadata === undefined ? {} : { metadata: validated.metadata }),
+      async writeExclusively(
+        outputPath: string,
+        commitOptions: DocumentRenderOutputOptions = {},
+      ): Promise<void> {
+        if (cleaned || committed) throw protocolError();
+        requireNotAborted(commitOptions.signal);
+        await writeFileRangeExclusively(outputPath, {
+          fd: handle.fd,
+          offset: validated.svgOffset,
+          sizeBytes: validated.svgBytes,
+        }, {
+          sourcePaths: commitOptions.sourcePaths,
+          expectedDirectoryIdentities:
+            commitOptions.expectedDirectoryIdentities,
+          beforeOpen: () => authorizeRenderOutputOpen(rendered, commitOptions),
+        });
+        committed = true;
+      },
+      cleanup,
+    };
   } catch (error: unknown) {
-    if (isSafePublicError(error)) throw error;
-    throw protocolError();
-  } finally {
     try {
-      await spool.cleanup();
+      await cleanup();
     } catch {
       throw protocolError();
     }
+    if (isSafePublicError(error)) throw error;
+    throw protocolError();
   }
 }
 
-async function requireRenderOutputOpenAuthorized(
+async function verifyRenderSourceUnchanged(
+  rendered: AuthorizedDocumentRenderResult,
+): Promise<void> {
+  try {
+    await rendered.verifySourceUnchanged();
+  } catch (error: unknown) {
+    if (isSafePublicError(error)) throw error;
+    throw protocolError();
+  }
+}
+
+async function authorizeRenderOutputOpen(
+  rendered: AuthorizedDocumentRenderResult,
   options: DocumentRenderOutputOptions,
 ): Promise<void> {
   await options.beforeOpen?.();
+  requireNotAborted(options.signal);
+  await verifyRenderSourceUnchanged(rendered);
   requireNotAborted(options.signal);
 }
 

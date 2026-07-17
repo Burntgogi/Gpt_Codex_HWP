@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +23,8 @@ import JSZip from "jszip";
 import { markdownToHwpx } from "kordoc";
 
 import { openDocumentSnapshot } from "../src/shared/document-snapshot.js";
+import { prepareDocumentRenderOutput } from "../src/shared/document-render-output.js";
+import { captureExistingOutputDirectoryIdentity } from "../src/shared/output.js";
 import { handleHwpDetectFormat } from "../src/tools/detect.js";
 import { handleHwpRead } from "../src/tools/read.js";
 import { handleHwpRenderPreview } from "../src/tools/preview.js";
@@ -582,6 +596,310 @@ test("render spool validation and cancellation create no output and always clean
   }
 });
 
+test("preview releases each taken render spool exactly once across every terminal path", { timeout: 60_000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-render-spool-cleanup-"));
+  const sourcePath = join(root, "source.hwpx");
+  const resultRoot = join(root, "result-spools");
+  await writeFile(sourcePath, Buffer.from(await markdownToHwpx("# Spool cleanup")));
+  await mkdir(resultRoot);
+
+  const safeSvg = '<svg xmlns="http://www.w3.org/2000/svg"><text>ok</text></svg>';
+  const safeBytes = testRenderSpool(safeSvg);
+  try {
+    await t.test("prepare failure", async () => {
+      const truncated = testRenderSpool(safeSvg, { declaredSvgBytesDelta: 1 });
+      const tracked = await trackedFixtureRenderSpool(
+        sourcePath,
+        resultRoot,
+        truncated,
+        "cleanup-prepare-failure",
+      );
+      const outputPath = join(root, "prepare-failure.svg");
+      const result = await handleHwpRenderPreview(
+        { file_path: sourcePath, output_svg_path: outputPath },
+        renderSpoolFacade(tracked.spool),
+      );
+
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent?.code, "ENGINE_PROTOCOL_ERROR");
+      assert.deepEqual(tracked.counts(), { unlink: 1, rmdir: 1 });
+      await assertMissing(outputPath);
+    });
+
+    await t.test("response-budget failure", async () => {
+      const tracked = await trackedFixtureRenderSpool(
+        sourcePath,
+        resultRoot,
+        safeBytes,
+        "cleanup-budget-failure",
+      );
+      const oversizedOutputPath = join(root, `${"p".repeat(4_300_000)}.svg`);
+      const result = await handleHwpRenderPreview(
+        { file_path: sourcePath, output_svg_path: oversizedOutputPath },
+        renderSpoolFacade(tracked.spool),
+      );
+
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent?.code, "RESPONSE_TOO_LARGE");
+      assert.deepEqual(tracked.counts(), { unlink: 1, rmdir: 1 });
+    });
+
+    await t.test("commit failure", async () => {
+      const tracked = await trackedFixtureRenderSpool(
+        sourcePath,
+        resultRoot,
+        safeBytes,
+        "cleanup-commit-failure",
+      );
+      const outputPath = join(root, "existing.svg");
+      await writeFile(outputPath, "sentinel");
+      const result = await handleHwpRenderPreview(
+        { file_path: sourcePath, output_svg_path: outputPath },
+        renderSpoolFacade(tracked.spool),
+      );
+
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent?.code, "OUTPUT_CONFLICT");
+      assert.equal(await readFile(outputPath, "utf8"), "sentinel");
+      assert.deepEqual(tracked.counts(), { unlink: 1, rmdir: 1 });
+    });
+
+    await t.test("success", async () => {
+      const tracked = await trackedFixtureRenderSpool(
+        sourcePath,
+        resultRoot,
+        safeBytes,
+        "cleanup-success",
+      );
+      const outputPath = join(root, "success.svg");
+      const result = await handleHwpRenderPreview(
+        { file_path: sourcePath, output_svg_path: outputPath },
+        renderSpoolFacade(tracked.spool),
+      );
+
+      assert.equal(result.isError, false);
+      assert.equal(await readFile(outputPath, "utf8"), safeSvg);
+      assert.deepEqual(tracked.counts(), { unlink: 1, rmdir: 1 });
+    });
+
+    assert.deepEqual(await readdir(resultRoot), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("read and inline or spooled preview reverify the source at the writer open boundary", { timeout: 60_000 }, async (t) => {
+  const safeSvg = '<svg xmlns="http://www.w3.org/2000/svg"><text>safe</text></svg>';
+
+  await t.test("read", async () => {
+    const fixture = await sourceSwapFixture("read");
+    try {
+      const outputPath = join(fixture.outputDir, "document.md");
+      const result = await handleHwpRead({
+        file_path: fixture.sourcePath,
+        markdown_output_path: outputPath,
+      }, {
+        async parse(snapshot) {
+          const snapshotMetadata = snapshot.metadata;
+          const verifySourceUnchanged = swapSourceAfterOutputPreparation(
+            snapshot.verifySourceUnchanged,
+            fixture,
+          );
+          try {
+            await snapshot.verifySourceUnchanged();
+            return {
+              payload: { fileType: "hwpx", markdown: "safe markdown" },
+              snapshotMetadata,
+              verifySourceUnchanged,
+            } as never;
+          } finally {
+            await snapshot.cleanup();
+          }
+        },
+      } as never);
+
+      assert.equal(result.isError, true);
+      await assertMissing(outputPath);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  await t.test("inline preview", async () => {
+    const fixture = await sourceSwapFixture("inline-preview");
+    try {
+      const outputPath = join(fixture.outputDir, "preview.svg");
+      const result = await handleHwpRenderPreview({
+        file_path: fixture.sourcePath,
+        output_svg_path: outputPath,
+      }, {
+        async render(snapshot) {
+          const snapshotMetadata = snapshot.metadata;
+          const verifySourceUnchanged = swapSourceAfterOutputPreparation(
+            snapshot.verifySourceUnchanged,
+            fixture,
+          );
+          try {
+            await snapshot.verifySourceUnchanged();
+            return {
+              payload: { svg: safeSvg },
+              snapshotMetadata,
+              verifySourceUnchanged,
+            };
+          } finally {
+            await snapshot.cleanup();
+          }
+        },
+      } as never);
+
+      assert.equal(result.isError, true);
+      await assertMissing(outputPath);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  await t.test("spooled preview", async () => {
+    const fixture = await sourceSwapFixture("spooled-preview");
+    const resultRoot = join(fixture.root, "result-spools");
+    await mkdir(resultRoot);
+    try {
+      const spool = await fixtureRenderSpool(
+        fixture.sourcePath,
+        resultRoot,
+        ["spool-base64", testRenderSpool(safeSvg).toString("base64")],
+        "source-swap-spooled-preview",
+      );
+      const outputPath = join(fixture.outputDir, "preview.svg");
+      const result = await handleHwpRenderPreview({
+        file_path: fixture.sourcePath,
+        output_svg_path: outputPath,
+      }, {
+        async render(snapshot) {
+          const snapshotMetadata = snapshot.metadata;
+          const verifySourceUnchanged = swapSourceAfterOutputPreparation(
+            snapshot.verifySourceUnchanged,
+            fixture,
+          );
+          try {
+            await snapshot.verifySourceUnchanged();
+            return { payload: spool, snapshotMetadata, verifySourceUnchanged } as never;
+          } finally {
+            await snapshot.cleanup();
+          }
+        },
+      } as never);
+
+      assert.equal(result.isError, true);
+      await assertMissing(outputPath);
+      assert.deepEqual(await readdir(resultRoot), []);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
+test("inline and spooled render writers enforce the same expected directory identity", { timeout: 60_000 }, async (t) => {
+  for (const kind of ["inline", "spooled"] as const) {
+    await t.test(kind, async () => {
+      const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-render-identity-${kind}-`));
+      const sourcePath = join(root, "source.hwpx");
+      const outputDir = join(root, "output");
+      const displacedDir = join(root, "output-displaced");
+      const outputPath = join(outputDir, "preview.svg");
+      const resultRoot = join(root, "result-spools");
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>identity</text></svg>';
+      await writeFile(sourcePath, Buffer.from(await markdownToHwpx("# identity")));
+      await mkdir(outputDir);
+      await mkdir(resultRoot);
+      try {
+        const identity = await captureExistingOutputDirectoryIdentity(outputDir);
+        assert.ok(identity);
+        const payload = kind === "inline"
+          ? { svg }
+          : await fixtureRenderSpool(
+              sourcePath,
+              resultRoot,
+              ["spool-base64", testRenderSpool(svg).toString("base64")],
+              "render-expected-directory-identity",
+            );
+        const prepared = await prepareDocumentRenderOutput({
+          payload: payload as never,
+          async verifySourceUnchanged() {},
+        });
+        try {
+          await rename(outputDir, displacedDir);
+          await mkdir(outputDir);
+          await assert.rejects(
+            prepared.writeExclusively(outputPath, {
+              expectedDirectoryIdentities: [identity],
+            }),
+            (error: unknown) => (error as { code?: string }).code === "OUTPUT_CONFLICT",
+          );
+          await assertMissing(outputPath);
+          await assertMissing(join(displacedDir, "preview.svg"));
+        } finally {
+          await prepared.cleanup();
+        }
+        assert.deepEqual(await readdir(resultRoot), []);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("inline and spooled render writers verify the source after caller beforeOpen", { timeout: 60_000 }, async (t) => {
+  for (const kind of ["inline", "spooled"] as const) {
+    await t.test(kind, async () => {
+      const fixture = await sourceSwapFixture(`caller-before-open-${kind}`);
+      const resultRoot = join(fixture.root, "result-spools");
+      const outputPath = join(fixture.outputDir, "preview.svg");
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>caller</text></svg>';
+      await mkdir(resultRoot);
+      const sourceSnapshot = await openDocumentSnapshot(fixture.sourcePath);
+      let checks = 0;
+      try {
+        const payload = kind === "inline"
+          ? { svg }
+          : await fixtureRenderSpool(
+              fixture.sourcePath,
+              resultRoot,
+              ["spool-base64", testRenderSpool(svg).toString("base64")],
+              "render-caller-before-open",
+            );
+        const prepared = await prepareDocumentRenderOutput({
+          payload: payload as never,
+          async verifySourceUnchanged() {
+            checks += 1;
+            await sourceSnapshot.verifySourceUnchanged();
+          },
+        });
+        try {
+          await assert.rejects(
+            prepared.writeExclusively(outputPath, {
+              sourcePaths: [fixture.sourcePath],
+              async beforeOpen() {
+                await writeFile(fixture.sourcePath, fixture.replacement);
+              },
+            }),
+            (error: unknown) =>
+              (error as { code?: string }).code === "ENGINE_PROTOCOL_ERROR",
+          );
+          assert.equal(checks, 1);
+          await assertMissing(outputPath);
+        } finally {
+          await prepared.cleanup();
+        }
+        assert.deepEqual(await readdir(resultRoot), []);
+      } finally {
+        await sourceSnapshot.cleanup();
+        await fixture.cleanup();
+      }
+    });
+  }
+});
+
 test("validated render spool preserves an existing output without partial replacement", { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-render-conflict-"));
   const sourcePath = join(root, "source.hwpx");
@@ -672,6 +990,10 @@ async function fixtureRenderSpool(
   spoolRoot: string,
   childArguments: readonly string[],
   requestId: string,
+  outputSpoolCleanupHooks?: Readonly<{
+    unlink?: (path: string) => Promise<void>;
+    rmdir?: (path: string) => Promise<void>;
+  }>,
 ): Promise<unknown> {
   const source = await readFile(sourcePath);
   const handle = await open(sourcePath, "r");
@@ -681,6 +1003,9 @@ async function fixtureRenderSpool(
     childArguments,
     spoolRoot,
     jobSupervisorFactory: unitTestChildSupervisor,
+    ...(outputSpoolCleanupHooks === undefined
+      ? {}
+      : { outputSpoolCleanupHooks }),
   });
   return child.run({
     protocolVersion: 1,
@@ -704,6 +1029,104 @@ async function fixtureRenderSpool(
       await handle.close();
     },
   } as never);
+}
+
+async function trackedFixtureRenderSpool(
+  sourcePath: string,
+  spoolRoot: string,
+  bytes: Buffer,
+  requestId: string,
+): Promise<{
+  readonly spool: unknown;
+  counts(): Readonly<{ unlink: number; rmdir: number }>;
+}> {
+  let unlinkCount = 0;
+  let rmdirCount = 0;
+  const spool = await fixtureRenderSpool(
+    sourcePath,
+    spoolRoot,
+    ["spool-base64", bytes.toString("base64")],
+    requestId,
+    {
+      async unlink(path) {
+        unlinkCount += 1;
+        await unlink(path);
+      },
+      async rmdir(path) {
+        rmdirCount += 1;
+        await rmdir(path);
+      },
+    },
+  );
+  return {
+    spool,
+    counts: () => ({ unlink: unlinkCount, rmdir: rmdirCount }),
+  };
+}
+
+function renderSpoolFacade(spool: unknown): Parameters<typeof handleHwpRenderPreview>[1] {
+  return {
+    async render(snapshot) {
+      const snapshotMetadata = snapshot.metadata;
+      try {
+        await snapshot.verifySourceUnchanged();
+        return {
+          payload: spool,
+          snapshotMetadata,
+          async verifySourceUnchanged() {},
+        } as never;
+      } finally {
+        await snapshot.cleanup();
+      }
+    },
+  } as never;
+}
+
+async function sourceSwapFixture(label: string): Promise<{
+  readonly root: string;
+  readonly sourcePath: string;
+  readonly outputDir: string;
+  readonly replacement: Uint8Array;
+  cleanup(): Promise<void>;
+}> {
+  const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-source-swap-${label}-`));
+  const sourcePath = join(root, "source.hwpx");
+  await writeFile(sourcePath, Buffer.from(await markdownToHwpx(`# ${label} source`)));
+  return {
+    root,
+    sourcePath,
+    outputDir: join(root, "prepared-output"),
+    replacement: new Uint8Array(await markdownToHwpx(`# ${label} replacement`)),
+    async cleanup() { await rm(root, { recursive: true, force: true }); },
+  };
+}
+
+function swapSourceAfterOutputPreparation(
+  verifySourceUnchanged: () => Promise<void>,
+  fixture: Readonly<{
+    sourcePath: string;
+    outputDir: string;
+    replacement: Uint8Array;
+  }>,
+): () => Promise<void> {
+  let swapped = false;
+  return async () => {
+    if (!swapped && await pathExists(fixture.outputDir)) {
+      swapped = true;
+      await writeFile(fixture.sourcePath, fixture.replacement);
+    }
+    await verifySourceUnchanged();
+  };
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error: unknown) {
+    if ((error as { code?: string }).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function testRenderSpool(

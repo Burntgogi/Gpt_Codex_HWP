@@ -255,6 +255,7 @@ function testReadFacade(parseDocument: ParseDocument): object {
       },
       options: { pages?: string },
     ) {
+      const verifySourceUnchanged = () => snapshot.verifySourceUnchanged();
       let parsed: ParseResult;
       try {
         parsed = await parseDocument(new ArrayBuffer(0), {
@@ -264,7 +265,7 @@ function testReadFacade(parseDocument: ParseDocument): object {
       } finally {
         await snapshot.cleanup();
       }
-      await snapshot.verifySourceUnchanged();
+      await verifySourceUnchanged();
       if (!parsed.success) {
         const error = new Error(parsed.error) as Error & { code: string };
         error.code = parsed.code ?? "PARSE_ERROR";
@@ -287,6 +288,7 @@ function testReadFacade(parseDocument: ParseDocument): object {
           })),
         },
         snapshotMetadata: snapshot.metadata,
+        verifySourceUnchanged,
       };
     },
   };

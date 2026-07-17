@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { toolError, toolSuccess } from "../src/shared/result.js";
+import {
+  commitBudgetedToolSuccess,
+  toolError,
+  toolSuccess,
+} from "../src/shared/result.js";
 import {
   MAX_MCP_RESPONSE_BYTES,
   serializedBytes,
@@ -95,6 +99,76 @@ test("oversized tool errors collapse to the same bounded non-recursive fallback"
     )),
     maximum_response_bytes: MAX_MCP_RESPONSE_BYTES,
   });
+});
+
+test("commitBudgetedToolSuccess commits exactly at eight MiB and not one byte over", async () => {
+  let summary = "S";
+  let baseBytes = serializedBytes(uncheckedToolResult(summary, { padding: "" }, false));
+  while ((MAX_MCP_RESPONSE_BYTES - baseBytes) % 2 !== 0) {
+    summary += "S";
+    baseBytes = serializedBytes(uncheckedToolResult(summary, { padding: "" }, false));
+  }
+  const paddingCharacters = (MAX_MCP_RESPONSE_BYTES - baseBytes) / 2;
+  assert.ok(Number.isSafeInteger(paddingCharacters) && paddingCharacters > 0);
+
+  let exactCommits = 0;
+  const exact = await commitBudgetedToolSuccess(
+    summary,
+    { padding: "x".repeat(paddingCharacters) },
+    async () => { exactCommits += 1; },
+  );
+  assert.equal(exact.isError, false);
+  assert.equal(serializedBytes(exact), MAX_MCP_RESPONSE_BYTES);
+  assert.equal(exactCommits, 1);
+
+  let oversizedCommits = 0;
+  const oversized = await commitBudgetedToolSuccess(
+    summary,
+    { padding: "x".repeat(paddingCharacters + 1) },
+    async () => { oversizedCommits += 1; },
+  );
+  assert.equal(oversized.isError, true);
+  assert.equal(oversized.structuredContent?.code, "RESPONSE_TOO_LARGE");
+  assert.equal(oversizedCommits, 0);
+});
+
+test("commitBudgetedToolSuccess snapshots details before the commit callback mutates its caller", async () => {
+  const details = { nested: { status: "planned" }, values: [1, 2] };
+  const result = await commitBudgetedToolSuccess(
+    "Committed an output.",
+    details,
+    async () => {
+      details.nested.status = "mutated";
+      details.values.push(3);
+      Object.assign(details, { late: "addition" });
+    },
+  );
+
+  assert.deepEqual(result.structuredContent, {
+    nested: { status: "planned" },
+    values: [1, 2],
+  });
+  assert.equal(Object.isFrozen(result.structuredContent), true);
+  assert.equal(
+    Object.isFrozen((result.structuredContent as { nested: object }).nested),
+    true,
+  );
+});
+
+test("commitBudgetedToolSuccess propagates the exact commit error", async () => {
+  const expected = Object.assign(new Error("exclusive write failed"), {
+    code: "OUTPUT_CONFLICT",
+  });
+  let commits = 0;
+
+  await assert.rejects(
+    commitBudgetedToolSuccess("Committed an output.", {}, async () => {
+      commits += 1;
+      throw expected;
+    }),
+    (error: unknown) => error === expected,
+  );
+  assert.equal(commits, 1);
 });
 
 function uncheckedToolResult(
