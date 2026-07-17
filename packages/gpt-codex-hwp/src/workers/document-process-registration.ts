@@ -216,8 +216,7 @@ export function createProcessRegistrationCoordinator(options: Readonly<{
       fail("channel");
       return;
     }
-    if (frame.parentPid !== options.casePid ||
-      nonces.has(frame.nonce) || pids.has(frame.pid) ||
+    if (nonces.has(frame.nonce) || pids.has(frame.pid) ||
       nonces.size >= MAX_REGISTERED_DOCUMENT_GROUPS ||
       inFlightRegistrations !== 0) {
       fail("channel");
@@ -230,7 +229,12 @@ export function createProcessRegistrationCoordinator(options: Readonly<{
       let retained = false;
       try {
         if (state === "failed" || state === "sealed") return;
-        const expectedParentPid = state === "open" ? options.casePid : undefined;
+        const commitState = currentState();
+        if (commitState === "open" && frame.parentPid !== options.casePid) {
+          fail("channel");
+          throw new Error("registration frame parent mismatch");
+        }
+        const expectedParentPid = commitState === "open" ? options.casePid : undefined;
         const registration = Promise.resolve().then(() =>
           options.supervisor.registerRoot(frame.pid, expectedParentPid));
         const ownedRegistration = registration.then((identity) => {
@@ -275,6 +279,10 @@ export function createProcessRegistrationCoordinator(options: Readonly<{
       return;
     }
     if (state === "failed") return;
+    if (inFlightRegistrations !== 0) {
+      fail("channel");
+      return;
+    }
     let offset = 0;
     while (offset < bytes.byteLength) {
       const newline = bytes.indexOf(0x0a, offset);
@@ -291,6 +299,10 @@ export function createProcessRegistrationCoordinator(options: Readonly<{
         pendingFrame = Buffer.alloc(0);
         reserveAndQueue(complete);
         if (currentState() === "failed") return;
+        if (offset < bytes.byteLength && inFlightRegistrations !== 0) {
+          fail("channel");
+          return;
+        }
       }
     }
   };

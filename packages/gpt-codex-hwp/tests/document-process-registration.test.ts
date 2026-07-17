@@ -495,6 +495,98 @@ for (const closingWins of [false, true]) {
   });
 }
 
+test("registration closing reparent retains with no parent constraint and rejects before cleanup", async (t) => {
+  await t.test("closing accepts a reparented inherited-channel frame", async () => {
+    const casePid = 6_110;
+    const frame = registerFrame(6_111, 1);
+    const expectedParents: Array<number | undefined> = [];
+    const retained: number[] = [];
+    let cleanupCalls = 0;
+    const acknowledgements: AckFrame[] = [];
+    const registrationInput = new PassThrough();
+    const coordinator = createProcessRegistrationCoordinator({
+      casePid,
+      registrationInput,
+      acknowledgementOutput: ackRecorder((acknowledgement, callback) => {
+        acknowledgements.push(acknowledgement);
+        callback();
+      }),
+      supervisor: {
+        async registerRoot(pid, expectedParentPid) {
+          expectedParents.push(expectedParentPid);
+          retained.push(pid);
+          return registeredIdentity(pid, frame.parentPid);
+        },
+        async terminate() {
+          cleanupCalls += 1;
+          return { gone: true, proof: "registered-groups-empty" };
+        },
+      },
+      deadlineAt: performance.now() + 5_000,
+      caseExited: Promise.resolve(),
+    });
+    coordinator.start();
+    await coordinator.beginClosing();
+    registrationInput.write(encodeRegisterFrame(frame));
+    await waitFor(() => acknowledgements.length === 1, 250);
+    registrationInput.end();
+    await coordinator.seal();
+
+    assert.deepEqual(expectedParents, [undefined]);
+    assert.deepEqual(retained, [frame.pid]);
+    assert.deepEqual(acknowledgements, [{
+      schemaVersion: 1,
+      type: "ack",
+      nonce: frame.nonce,
+      status: "rejected",
+    }]);
+    assert.deepEqual(await coordinator.terminateRegisteredGroups(), {
+      gone: true,
+      proof: "registered-groups-empty",
+    });
+    assert.equal(cleanupCalls, 1);
+  });
+
+  await t.test("open rejects the same wrong-parent frame without ACK", async () => {
+    const casePid = 6_120;
+    const frame = registerFrame(6_121, 1);
+    let registrationCalls = 0;
+    let acknowledgements = 0;
+    const registrationInput = new PassThrough();
+    const coordinator = createProcessRegistrationCoordinator({
+      casePid,
+      registrationInput,
+      acknowledgementOutput: ackRecorder((_acknowledgement, callback) => {
+        acknowledgements += 1;
+        callback();
+      }),
+      supervisor: {
+        async registerRoot(pid) {
+          registrationCalls += 1;
+          return registeredIdentity(pid, frame.parentPid);
+        },
+        async terminate() {
+          return { gone: true, proof: "registered-groups-empty" };
+        },
+      },
+      deadlineAt: performance.now() + 5_000,
+      caseExited: Promise.resolve(),
+    });
+    coordinator.start();
+    registrationInput.write(encodeRegisterFrame(frame));
+    await waitFor(() => coordinator.state === "failed");
+    registrationInput.end();
+
+    assert.equal(registrationCalls, 0);
+    assert.equal(acknowledgements, 0);
+    assert.deepEqual(await coordinator.terminateRegisteredGroups(), {
+      gone: false,
+      proof: "unverified",
+      reason: "channel",
+    });
+  });
+});
+
 test("registration coordinator linearizes retained groups and waits for serialized ACK callbacks", async () => {
   const casePid = 6_200;
   const first = registerFrame(6_201, casePid);
@@ -856,6 +948,96 @@ test("registration overlapping pre-ACK bootstrap poisons the sequential transpor
     gone: false,
     proof: "unverified",
     reason: "channel",
+  });
+});
+
+test("registration strict trailing transport never accepts a frame followed by partial bytes", async (t) => {
+  await t.test("same chunk", async () => {
+    const casePid = 6_370;
+    const frame = registerFrame(6_371, casePid);
+    let acknowledgements = 0;
+    let registrationCalls = 0;
+    const registrationInput = new PassThrough();
+    const coordinator = createProcessRegistrationCoordinator({
+      casePid,
+      registrationInput,
+      acknowledgementOutput: ackRecorder((_acknowledgement, callback) => {
+        acknowledgements += 1;
+        callback();
+      }),
+      supervisor: {
+        async registerRoot(pid) {
+          registrationCalls += 1;
+          return registeredIdentity(pid, casePid);
+        },
+        async terminate() {
+          return { gone: true, proof: "registered-groups-empty" };
+        },
+      },
+      deadlineAt: performance.now() + 5_000,
+      caseExited: Promise.resolve(),
+    });
+    coordinator.start();
+    registrationInput.write(Buffer.concat([
+      Buffer.from(encodeRegisterFrame(frame)),
+      Buffer.from("{partial"),
+    ]));
+
+    await waitFor(() => coordinator.state === "failed");
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    assert.equal(acknowledgements, 0);
+    assert.equal(registrationCalls, 0);
+    registrationInput.end();
+  });
+
+  await t.test("before ACK while held open", async () => {
+    const casePid = 6_380;
+    const frame = registerFrame(6_381, casePid);
+    const identityEntered = deferred<void>();
+    const releaseIdentity = deferred<void>();
+    let acknowledgements = 0;
+    let retained = false;
+    let cleanupCalls = 0;
+    const registrationInput = new PassThrough();
+    const coordinator = createProcessRegistrationCoordinator({
+      casePid,
+      registrationInput,
+      acknowledgementOutput: ackRecorder((_acknowledgement, callback) => {
+        acknowledgements += 1;
+        callback();
+      }),
+      supervisor: {
+        async registerRoot(pid) {
+          identityEntered.resolve();
+          await releaseIdentity.promise;
+          retained = true;
+          return registeredIdentity(pid, casePid);
+        },
+        async terminate() {
+          cleanupCalls += 1;
+          return retained
+            ? { gone: true, proof: "registered-groups-empty" }
+            : { gone: false, proof: "unverified", reason: "registration" };
+        },
+      },
+      deadlineAt: performance.now() + 5_000,
+      caseExited: Promise.resolve(),
+    });
+    coordinator.start();
+    registrationInput.write(encodeRegisterFrame(frame));
+    await identityEntered.promise;
+    registrationInput.write(Buffer.from("{partial"));
+
+    await waitFor(() => coordinator.state === "failed");
+    releaseIdentity.resolve();
+    await waitFor(() => retained && cleanupCalls >= 1);
+    assert.equal(acknowledgements, 0);
+    registrationInput.end();
+    assert.deepEqual(await coordinator.terminateRegisteredGroups(), {
+      gone: false,
+      proof: "unverified",
+      reason: "channel",
+    });
   });
 });
 

@@ -1287,6 +1287,15 @@ interface PosixProcessRecord {
   readonly rssBytes: number;
 }
 
+export interface PosixProcessTelemetryTestRecord {
+  readonly pid: number;
+  readonly parentPid: number;
+  readonly processGroupId: number;
+  readonly identity: string;
+  readonly startOrder: number;
+  readonly rssBytes: number;
+}
+
 interface RetainedPosixProcess extends PosixProcessRecord {
   readonly depth: number;
 }
@@ -1298,6 +1307,17 @@ export interface PosixProcessTelemetryTracker {
   disableTelemetry(): void;
   telemetryAvailable(): boolean;
   processTreeRss(): Readonly<{ baselineBytes: number; peakBytes: number }>;
+}
+
+export function createPosixProcessTelemetryTrackerForTest(
+  rootPid: number,
+  platform: "linux" | "darwin",
+  snapshots: Readonly<{
+    root(): Promise<PosixProcessTelemetryTestRecord | undefined>;
+    tree(): Promise<readonly PosixProcessTelemetryTestRecord[]>;
+  }>,
+): PosixProcessTelemetryTracker {
+  return new PosixProcessTreeTracker(rootPid, platform, snapshots);
 }
 
 export interface PosixTelemetryIntervalHandle {
@@ -1532,16 +1552,25 @@ class PosixProcessTreeTracker {
   #peakBytes = 0;
   #telemetryAvailable = true;
 
-  constructor(rootPid: number, platform: "linux" | "darwin") {
+  constructor(
+    rootPid: number,
+    platform: "linux" | "darwin",
+    readonly snapshots?: Readonly<{
+      root(): Promise<PosixProcessTelemetryTestRecord | undefined>;
+      tree(): Promise<readonly PosixProcessTelemetryTestRecord[]>;
+    }>,
+  ) {
     this.#rootPid = rootPid;
     this.#platform = platform;
   }
 
   async initialize(): Promise<void> {
-    const root = this.#platform === "linux"
-      ? await snapshotLinuxProcess(this.#rootPid)
-      : (await snapshotPosixProcesses(this.#platform))
-        .find((record) => record.pid === this.#rootPid);
+    const root = this.snapshots === undefined
+      ? this.#platform === "linux"
+        ? await snapshotLinuxProcess(this.#rootPid)
+        : (await snapshotPosixProcesses(this.#platform))
+          .find((record) => record.pid === this.#rootPid)
+      : await this.snapshots.root();
     if (root === undefined || root.rssBytes <= 0) {
       throw new Error("root process identity or RSS unavailable");
     }
@@ -1564,8 +1593,13 @@ class PosixProcessTreeTracker {
       throw new Error("telemetry root is not a process-group leader");
     }
     const key = posixIdentityKey(identity);
-    if (this.#retained.has(key)) {
-      throw new Error("telemetry root already retained");
+    const sampled = this.#retained.get(key);
+    if (sampled !== undefined) {
+      if (!samePosixStableIdentity(sampled, identity)) {
+        throw new Error("telemetry root identity mismatch");
+      }
+      this.#replaceRetained(Object.freeze({ ...sampled, depth: 0 }));
+      return;
     }
     this.#retain(Object.freeze({
       ...identity,
@@ -1575,6 +1609,7 @@ class PosixProcessTreeTracker {
   }
 
   async #snapshot(): Promise<PosixProcessRecord[]> {
+    if (this.snapshots !== undefined) return [...await this.snapshots.tree()];
     return this.#platform === "linux"
       ? snapshotLinuxRetainedTree(this.#retained)
       : snapshotPosixProcesses(this.#platform, this.#retained);
@@ -1639,6 +1674,30 @@ class PosixProcessTreeTracker {
     this.#retainedByPid.set(record.pid, identities);
   }
 
+  #replaceRetained(record: RetainedPosixProcess): void {
+    const key = posixIdentityKey(record);
+    const identities = this.#retainedByPid.get(record.pid);
+    const index = identities?.findIndex((candidate) =>
+      posixIdentityKey(candidate) === key) ?? -1;
+    if (index < 0 || identities === undefined) {
+      throw new Error("retained process identity index mismatch");
+    }
+    const replacement = [...identities];
+    replacement[index] = record;
+    this.#retained.set(key, record);
+    this.#retainedByPid.set(record.pid, replacement);
+  }
+
+}
+
+function samePosixStableIdentity(
+  left: Pick<PosixProcessRecord, "pid" | "processGroupId" | "identity" | "startOrder">,
+  right: Pick<PosixProcessRecord, "pid" | "processGroupId" | "identity" | "startOrder">,
+): boolean {
+  return left.pid === right.pid &&
+    left.processGroupId === right.processGroupId &&
+    left.identity === right.identity &&
+    left.startOrder === right.startOrder;
 }
 
 function posixIdentityKey(record: Pick<PosixProcessRecord, "pid" | "identity">): string {

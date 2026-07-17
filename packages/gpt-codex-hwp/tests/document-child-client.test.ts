@@ -1940,7 +1940,7 @@ test("macOS identity-only cleanup enforces the 4096-record cap", async () => {
 type TestPosixTelemetryTracker = Readonly<{
   initialize(): Promise<void>;
   registerRoot?(identity: RegisteredProcessGroupIdentity): void;
-  sample(): Promise<void>;
+  sample(): Promise<unknown>;
   disableTelemetry(): void;
   telemetryAvailable(): boolean;
   processTreeRss(): Readonly<{ baselineBytes: number; peakBytes: number }>;
@@ -1974,6 +1974,123 @@ const createPosixProcessTreeSupervisorForTest = (
     }>>;
   }
 ).createPosixProcessTreeSupervisorForTest;
+
+type TestPosixTelemetryRecord = Readonly<{
+  pid: number;
+  parentPid: number;
+  processGroupId: number;
+  identity: string;
+  startOrder: number;
+  rssBytes: number;
+}>;
+
+const createPosixProcessTelemetryTrackerForTest = (
+  childClientModule as unknown as {
+    createPosixProcessTelemetryTrackerForTest(
+      rootPid: number,
+      platform: "linux" | "darwin",
+      snapshots: Readonly<{
+        root(): Promise<TestPosixTelemetryRecord | undefined>;
+        tree(): Promise<readonly TestPosixTelemetryRecord[]>;
+      }>,
+    ): TestPosixTelemetryTracker;
+  }
+).createPosixProcessTelemetryTrackerForTest;
+
+test("production POSIX telemetry tracker promotes an exactly sampled nested root", async () => {
+  const rootPid = 8_100;
+  const root = Object.freeze({
+    pid: rootPid,
+    parentPid: 1,
+    processGroupId: rootPid,
+    identity: "root:8100",
+    startOrder: 81_000,
+    rssBytes: 100,
+  });
+  const nested = Object.freeze({
+    pid: 8_200,
+    parentPid: rootPid,
+    processGroupId: 8_200,
+    identity: "nested:8200",
+    startOrder: 82_000,
+    rssBytes: 40,
+  });
+  const grandchild = Object.freeze({
+    pid: 8_201,
+    parentPid: nested.pid,
+    processGroupId: nested.processGroupId,
+    identity: "grandchild:8201",
+    startOrder: 82_001,
+    rssBytes: 20,
+  });
+  const coveringSampleStarted = telemetryDeferred<void>();
+  const releaseCoveringSample = telemetryDeferred<void>();
+  let treeSnapshots = 0;
+  const tracker = createPosixProcessTelemetryTrackerForTest(rootPid, "linux", {
+    async root() { return root; },
+    async tree() {
+      treeSnapshots += 1;
+      if (treeSnapshots === 1) return [root, nested];
+      if (treeSnapshots === 2) {
+        coveringSampleStarted.resolve();
+        await releaseCoveringSample.promise;
+        return [root, nested];
+      }
+      return [grandchild];
+    },
+  });
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+      tracker,
+      scheduleInterval: () => ({ unref() {} }),
+      clearScheduledInterval: () => {},
+      deferProcessTreeTelemetryStop: true,
+    },
+  );
+  assert.equal(await supervisor.processTreeTelemetryReady, true);
+  assert.deepEqual(supervisor.processTreeRss?.(), {
+    baselineBytes: 140,
+    peakBytes: 140,
+  });
+  const nestedAuthority = Object.freeze({
+    pid: nested.pid,
+    parentPid: nested.parentPid,
+    processGroupId: nested.processGroupId,
+    identity: nested.identity,
+    startOrder: nested.startOrder,
+  });
+
+  supervisor.registerProcessTreeTelemetryRoot!(nestedAuthority);
+  await coveringSampleStarted.promise;
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  assert.throws(() => tracker.registerRoot({
+    ...nestedAuthority,
+    startOrder: nestedAuthority.startOrder + 1,
+  }), /identity mismatch/u);
+  assert.throws(() => supervisor.registerProcessTreeTelemetryRoot!(nestedAuthority));
+
+  releaseCoveringSample.resolve();
+  await waitFor(() => supervisor.processTreeRss?.()?.peakBytes === 140);
+  assert.deepEqual(supervisor.processTreeRss?.(), {
+    baselineBytes: 140,
+    peakBytes: 140,
+  });
+  const live = await tracker.sample() as readonly Readonly<{
+    pid: number;
+    rssBytes: number;
+    depth: number;
+  }>[];
+  assert.deepEqual(live, [{ ...grandchild, depth: 1 }]);
+  assert.deepEqual(tracker.processTreeRss(), {
+    baselineBytes: 140,
+    peakBytes: 140,
+  });
+  await supervisor.terminate();
+  supervisor.finishProcessTreeTelemetry!();
+});
 
 test("POSIX telemetry initialize cannot delay registered readiness or termination", async () => {
   const rootPid = 8_101;
