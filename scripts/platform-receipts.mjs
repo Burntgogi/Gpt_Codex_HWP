@@ -6,6 +6,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 
 import { REQUIRED_RELEASE_STAGES, runReleaseVerification } from "./release-verify.mjs";
+import {
+  noReplaceGitArguments,
+  releaseSubprocessEnvironment,
+} from "./release-subprocess-environment.mjs";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SHA1_PATTERN = /^[a-f0-9]{40}$/u;
@@ -53,6 +57,7 @@ const EXPECTATION_KEYS = Object.freeze([
 ]);
 const RELEASE_RECEIPT_KEYS = Object.freeze([
   "arch",
+  "commit",
   "fixtureSha256",
   "node",
   "npm",
@@ -62,6 +67,7 @@ const RELEASE_RECEIPT_KEYS = Object.freeze([
   "stages",
   "status",
   "toolCount",
+  "tree",
 ]);
 const TOOLCHAIN_KEYS = Object.freeze(["node", "npm", "python"]);
 const STAGE_KEYS = Object.freeze(["elapsedMs", "name", "status"]);
@@ -140,8 +146,12 @@ export function validatePlatformReceipt(receipt, expected) {
 export function buildPlatformReceipt(releaseReceipt, expected) {
   assertExactObject(releaseReceipt, RELEASE_RECEIPT_KEYS, "PLATFORM_RECEIPT_RELEASE_INVALID");
   if (
-    releaseReceipt.schemaVersion !== 1
+    releaseReceipt.schemaVersion !== 2
     || releaseReceipt.status !== "passed"
+    || !SHA1_PATTERN.test(releaseReceipt.commit)
+    || !SHA1_PATTERN.test(releaseReceipt.tree)
+    || releaseReceipt.commit !== expected?.commit
+    || releaseReceipt.tree !== expected?.tree
     || releaseReceipt.platform !== expected?.platform
     || releaseReceipt.arch !== expected?.arch
     || releaseReceipt.toolCount !== 9
@@ -722,10 +732,10 @@ async function runGit(root, args, options = {}) {
     throw receiptError("PLATFORM_RECEIPT_GIT_INVALID");
   }
   return await new Promise((resolvePromise, reject) => {
-    const child = execFile("git", ["--no-replace-objects", ...args], {
+    const child = execFile("git", noReplaceGitArguments(args), {
       cwd: root,
       encoding: "buffer",
-      env: gitEnvironment(),
+      env: releaseSubprocessEnvironment(),
       maxBuffer: maxOutputBytes,
       timeout: 30_000,
       windowsHide: true,
@@ -743,15 +753,6 @@ async function runGit(root, args, options = {}) {
     });
     if (input !== undefined) child.stdin?.end(input);
   });
-}
-
-function gitEnvironment() {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (/^GIT_/iu.test(key)) delete env[key];
-  }
-  env.GIT_NO_REPLACE_OBJECTS = "1";
-  return env;
 }
 
 async function writeExclusive(root, relativePath, bytes, existsCode) {

@@ -61,9 +61,16 @@ const FORBIDDEN_EXTENSIONS = new Set([
 ]);
 const SWAP_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
 
-export async function buildRuntime({ root, outputRoot, swapId = randomUUID(), fileSystem = {} }) {
+export async function buildRuntime({
+  root,
+  outputRoot,
+  swapId = randomUUID(),
+  fileSystem = {},
+  subprocessEnvironment,
+}) {
   const projectRoot = resolveRequiredPath(root, "root");
   const output = resolveRequiredPath(outputRoot, "outputRoot");
+  const childEnvironment = validatedSubprocessEnvironment(subprocessEnvironment);
   const rename = fileSystem.rename ?? nativeRename;
   const removeOwnedPath = fileSystem.rm ?? nativeRm;
   if (typeof rename !== "function") throw runtimeBuildError("fileSystem.rename must be a function");
@@ -89,7 +96,11 @@ export async function buildRuntime({ root, outputRoot, swapId = randomUUID(), fi
   try {
     await mkdir(stage, { recursive: false });
     ownsStage = true;
-    const files = await stageRuntime({ projectRoot, stage });
+    const files = await stageRuntime({
+      projectRoot,
+      stage,
+      subprocessEnvironment: childEnvironment,
+    });
 
     if (outputState === "directory") {
       await rename(output, backup);
@@ -146,7 +157,7 @@ export async function compareRuntime({ expectedRoot, actualRoot }) {
   return Object.freeze({ files: expected.length });
 }
 
-async function stageRuntime({ projectRoot, stage }) {
+async function stageRuntime({ projectRoot, stage, subprocessEnvironment }) {
   const sourceRoot = join(projectRoot, "packages", "gpt-codex-hwp");
   const metadata = await loadProjectMetadata(projectRoot);
   const rootPackage = await readJson(join(projectRoot, "package.json"), "package.json");
@@ -159,7 +170,7 @@ async function stageRuntime({ projectRoot, stage }) {
     "packages/gpt-codex-hwp/package-lock.json",
   );
 
-  await compileFreshTypeScript(sourceRoot, join(stage, "dist"));
+  await compileFreshTypeScript(sourceRoot, join(stage, "dist"), subprocessEnvironment);
   await copyTree(join(sourceRoot, "assets"), join(stage, "assets"), "assets");
   for (const name of PYTHON_RUNTIME_FILES) {
     const relativePath = `scripts/hwpx-safe-edit/${name}`;
@@ -208,7 +219,7 @@ async function stageRuntime({ projectRoot, stage }) {
   return files;
 }
 
-async function compileFreshTypeScript(sourceRoot, outputRoot) {
+async function compileFreshTypeScript(sourceRoot, outputRoot, subprocessEnvironment) {
   await assertPathAbsent(outputRoot, "Fresh TypeScript output path already exists");
   const compiler = join(sourceRoot, "node_modules", "typescript", "bin", "tsc");
   const compilerInfo = await lstat(compiler);
@@ -227,7 +238,7 @@ async function compileFreshTypeScript(sourceRoot, outputRoot) {
     "false",
     "--inlineSourceMap",
     "false",
-  ], sourceRoot);
+  ], sourceRoot, subprocessEnvironment);
   const supervisorAsset = "workers/windows-job-supervisor.ps1";
   await copyRegularFile(
     join(sourceRoot, "src", ...supervisorAsset.split("/")),
@@ -437,10 +448,11 @@ async function readJson(path, label) {
   }
 }
 
-function runCommand(command, args, cwd) {
+function runCommand(command, args, cwd, subprocessEnvironment) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd,
+      ...(subprocessEnvironment === undefined ? {} : { env: subprocessEnvironment }),
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -491,6 +503,26 @@ function resolveRequiredPath(value, name) {
     throw runtimeBuildError(`${name} must be a non-empty path`);
   }
   return resolve(value);
+}
+
+function validatedSubprocessEnvironment(value) {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw runtimeBuildError("subprocessEnvironment must be a string record");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw runtimeBuildError("subprocessEnvironment must be a string record");
+  }
+  const environment = Object.create(null);
+  for (const [key, entry] of Object.entries(value)) {
+    if (key.length === 0 || /[=\0]/u.test(key)
+      || typeof entry !== "string" || entry.includes("\0")) {
+      throw runtimeBuildError("subprocessEnvironment must contain safe string entries");
+    }
+    environment[key] = entry;
+  }
+  return Object.freeze(environment);
 }
 
 function sha256(bytes) {

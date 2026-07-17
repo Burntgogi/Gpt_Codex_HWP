@@ -67,10 +67,16 @@ function validReceipt() {
   };
 }
 
-function validReleaseReceipt(platform = EXPECTED.platform, arch = EXPECTED.arch) {
+function validReleaseReceipt(
+  platform = EXPECTED.platform,
+  arch = EXPECTED.arch,
+  identity = EXPECTED,
+) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "passed",
+    commit: identity.commit,
+    tree: identity.tree,
     platform,
     arch,
     node: "v22.22.2",
@@ -213,6 +219,9 @@ test("platform receipt derives strict evidence only from a complete passed relea
 
   for (const mutate of [
     (value) => { value.status = "failed"; },
+    (value) => { value.schemaVersion = 1; },
+    (value) => { value.commit = "d".repeat(40); },
+    (value) => { value.tree = "e".repeat(40); },
     (value) => { value.stages.pop(); },
     (value) => { value.stages[0].status = "skipped"; },
     (value) => { value.toolCount = 8; },
@@ -462,7 +471,12 @@ test("platform expectation rejects Git replacement semantics before binding evid
 test("platform receipt production writes exclusively then verifies and checksums independently", async (t) => {
   const root = await createRepository(t);
   const expectedCommit = git(root, "rev-parse", "HEAD");
-  const runVerification = async () => validReleaseReceipt("win32", "x64");
+  const expectedTree = git(root, "rev-parse", "HEAD^{tree}");
+  const runVerification = async () => validReleaseReceipt(
+    "win32",
+    "x64",
+    { commit: expectedCommit, tree: expectedTree },
+  );
 
   const created = await createPlatformReceipt({
     root,
@@ -507,6 +521,33 @@ test("platform receipt production writes exclusively then verifies and checksums
   );
 });
 
+test("platform receipt rejects a mismatched release identity before writing", async (t) => {
+  const root = await createRepository(t);
+  const expectedCommit = git(root, "rev-parse", "HEAD");
+  const expectedTree = git(root, "rev-parse", "HEAD^{tree}");
+  const mismatched = validReleaseReceipt(
+    "win32",
+    "x64",
+    { commit: expectedCommit, tree: expectedTree },
+  );
+  mismatched.tree = "f".repeat(40);
+
+  await assert.rejects(
+    createPlatformReceipt({
+      root,
+      expectedCommit,
+      platform: "win32",
+      arch: "x64",
+      runVerification: async () => mismatched,
+    }),
+    /PLATFORM_RECEIPT_RELEASE_INVALID/u,
+  );
+  await assert.rejects(
+    readFile(join(root, DEFAULT_PLATFORM_RECEIPT_PATH), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
 test("platform receipt creation rejects a pre-existing Windows junction output directory", async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows directory junctions are unavailable on this platform");
@@ -515,6 +556,7 @@ test("platform receipt creation rejects a pre-existing Windows junction output d
 
   const root = await createRepository(t);
   const expectedCommit = git(root, "rev-parse", "HEAD");
+  const expectedTree = git(root, "rev-parse", "HEAD^{tree}");
   const outputRoot = join(root, "release-receipts");
   const outsideRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-platform-output-junction-"));
   let junctionCreated = false;
@@ -538,7 +580,11 @@ test("platform receipt creation rejects a pre-existing Windows junction output d
         expectedCommit,
         platform: "win32",
         arch: "x64",
-        runVerification: async () => validReleaseReceipt("win32", "x64"),
+        runVerification: async () => validReleaseReceipt(
+          "win32",
+          "x64",
+          { commit: expectedCommit, tree: expectedTree },
+        ),
       });
     } catch (error) {
       result = error?.code;

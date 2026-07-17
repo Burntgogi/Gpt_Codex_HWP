@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import {
   mkdir,
-  mkdtemp,
+  realpath,
   rename,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
@@ -28,6 +28,7 @@ import {
 } from "../scripts/public-content-policy.mjs";
 import { addTaggedRootTrees, scanPublicHistory } from "../scripts/scan-public-history.mjs";
 import { REQUIRED_RELEASE_STAGES } from "../scripts/release-verify.mjs";
+import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 const OWNER_EMAIL = fragments("224273819+Burntgogi", "@users.noreply.github.com");
 const APPROVED_HWP_FIXTURE_PATH =
@@ -846,6 +847,64 @@ test("public content policy is mandatory in root scripts and release ordering", 
   assert.ok(tree >= 0 && history > tree && artifacts > history);
 });
 
+test("public content fixtures canonicalize an injected aliased temp parent", async (t) => {
+  const alias = await temporaryDirectoryAlias(t, "public-canonical-parent-");
+  if (alias === undefined) return;
+  await assert.rejects(
+    temporaryDirectory(t, "../escaped-fixture-", alias.path),
+    { code: "CANONICAL_TEMP_PREFIX_INVALID" },
+  );
+  const root = await temporaryDirectory(t, "owned-fixture-", alias.path);
+  assert.equal(dirname(root), alias.canonicalParent);
+  assert.equal(dirname(await realpath(root)), alias.canonicalParent);
+  assert.match(root, /owned-fixture-[A-Za-z0-9]{6}$/u);
+  await writeFile(join(root, "safe.txt"), "safe\n");
+  await assert.doesNotReject(scanPublicDirectory(root));
+  const boundary = await createOwnedBoundary(root);
+  assert.equal(boundary.root, boundary.canonicalRoot);
+});
+
+test("canonical temp helper rejects invalid prefixes and non-directory parents", async (t) => {
+  const parent = await temporaryDirectory(t, "canonical-contract-parent-");
+  const notDirectory = join(parent, "not-a-directory.txt");
+  await writeFile(notDirectory, "safe\n");
+  for (const prefix of [
+    "missing-suffix",
+    `${"a".repeat(81)}-`,
+    "nested/prefix-",
+    "nested\\prefix-",
+  ]) {
+    await assert.rejects(
+      createCanonicalTemporaryDirectory({ parent, prefix }),
+      { code: "CANONICAL_TEMP_PREFIX_INVALID" },
+    );
+  }
+  await assert.rejects(
+    createCanonicalTemporaryDirectory({ parent: notDirectory, prefix: "valid-prefix-" }),
+    { code: "CANONICAL_TEMP_PARENT_INVALID" },
+  );
+  let unexpectedNullRoot;
+  t.after(async () => {
+    if (unexpectedNullRoot !== undefined) {
+      await rm(unexpectedNullRoot, { recursive: true, force: true });
+    }
+  });
+  await assert.rejects(
+    async () => {
+      unexpectedNullRoot = await createCanonicalTemporaryDirectory({
+        parent: null,
+        prefix: "null-parent-invalid-",
+      });
+    },
+    { code: "CANONICAL_TEMP_PARENT_INVALID" },
+  );
+  const defaultRoot = await createCanonicalTemporaryDirectory({
+    prefix: "undefined-parent-default-",
+  });
+  t.after(async () => rm(defaultRoot, { recursive: true, force: true }));
+  assert.equal(dirname(defaultRoot), await realpath(tmpdir()));
+});
+
 function fragments(...parts) {
   return parts.join("");
 }
@@ -860,10 +919,29 @@ function captureThrown(operation) {
   assert.fail("operation did not throw");
 }
 
-async function temporaryDirectory(t, prefix) {
-  const root = await mkdtemp(join(tmpdir(), prefix));
+async function temporaryDirectory(t, prefix, parent) {
+  const root = await createCanonicalTemporaryDirectory({ parent, prefix });
   t.after(async () => rm(root, { recursive: true, force: true }));
   return root;
+}
+
+async function temporaryDirectoryAlias(t, prefix) {
+  const base = await createCanonicalTemporaryDirectory({ prefix });
+  const canonicalParent = join(base, "canonical");
+  const path = join(base, "alias");
+  await mkdir(canonicalParent);
+  try {
+    await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    await rm(base, { recursive: true, force: true });
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes(error?.code)) {
+      t.skip(`directory aliases are unavailable (${error.code})`);
+      return undefined;
+    }
+    throw error;
+  }
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  return { canonicalParent: await realpath(canonicalParent), path };
 }
 
 async function temporaryGitRepository(t, prefix) {

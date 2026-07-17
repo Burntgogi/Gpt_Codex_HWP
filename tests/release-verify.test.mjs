@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  collectReleaseSourceIdentity,
   createCanonicalReleaseTemp,
   REQUIRED_RELEASE_STAGES,
   runCli,
@@ -17,6 +18,11 @@ import {
   runStageCommand,
   terminateProcessTree,
 } from "../scripts/release-verify.mjs";
+import {
+  noReplaceGitArguments,
+  releaseSubprocessEnvironment,
+} from "../scripts/release-subprocess-environment.mjs";
+import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE_SHA256 =
@@ -43,6 +49,201 @@ const VERSIONS = Object.freeze({
   node: "v22.22.2",
   npm: "10.9.7",
   python: "3.12.0",
+});
+const SOURCE_IDENTITY = Object.freeze({
+  commit: "d".repeat(40),
+  tree: "e".repeat(40),
+});
+const collectStableSourceIdentity = async () => SOURCE_IDENTITY;
+const passedReleaseStage = (stage) => stage.name === "release-artifacts"
+  ? { status: "passed", ...SOURCE_IDENTITY }
+  : { status: "passed" };
+
+test("release subprocess environments scrub Git semantics and Node test context", async (t) => {
+  const inherited = {
+    PATH: process.env.PATH ?? "",
+    NODE_TEST_CONTEXT: "child-v8",
+    Git_Dir: "hostile-dir",
+    GIT_WORK_TREE: "hostile-worktree",
+    GIT_OBJECT_DIRECTORY: "hostile-objects",
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: "hostile-alternates",
+    GIT_REPLACE_REF_BASE: "hostile-replacements",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.hooksPath",
+    GIT_CONFIG_VALUE_0: "hostile-hooks",
+    SAFE_RELEASE_VALUE: "preserved",
+  };
+  const environment = releaseSubprocessEnvironment(inherited);
+  assert.equal(Object.getPrototypeOf(environment), null);
+  assert.deepEqual(Object.entries(environment), [
+    ["PATH", inherited.PATH],
+    ["SAFE_RELEASE_VALUE", "preserved"],
+    ["GIT_NO_REPLACE_OBJECTS", "1"],
+  ]);
+  assert.deepEqual(
+    noReplaceGitArguments(["rev-parse", "HEAD"]),
+    ["--no-replace-objects", "rev-parse", "HEAD"],
+  );
+  assert.deepEqual(
+    noReplaceGitArguments(["--no-replace-objects", "show", "HEAD:file"]),
+    ["--no-replace-objects", "show", "HEAD:file"],
+  );
+  assert.throws(
+    () => releaseSubprocessEnvironment({}, { GIT_DIR: "hostile" }),
+    /RELEASE_SUBPROCESS_ENV_OVERRIDE_INVALID/u,
+  );
+
+  const original = new Map();
+  for (const [key, value] of Object.entries(inherited)) {
+    original.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  t.after(() => {
+    for (const [key, value] of original) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  const childProbe = [
+    "const keys = Object.keys(process.env)",
+    "const forbidden = keys.filter((key) => /^GIT_/i.test(key) && key !== 'GIT_NO_REPLACE_OBJECTS')",
+    "if (forbidden.length || process.env.GIT_NO_REPLACE_OBJECTS !== '1' || process.env.NODE_TEST_CONTEXT !== undefined) process.exit(9)",
+  ].join(";");
+  assert.deepEqual(await runStageCommand(nodeStage("scrubbed-env", childProbe), {
+    timeoutMs: 2_000,
+    maxOutputBytes: 1_024,
+  }), { status: "passed" });
+  await assert.rejects(
+    runStageCommand({ ...nodeStage("forbidden-override", ""), env: { GIT_DIR: "hostile" } }),
+    { code: "RELEASE_VERIFY_STAGE_INVALID" },
+  );
+});
+
+test("release subprocess environments preserve exact null-prototype record keys", () => {
+  const inherited = Object.create(null);
+  inherited.__proto__ = "inherited-prototype-name";
+  inherited.constructor = "inherited-constructor-name";
+  inherited.SAFE_RELEASE_VALUE = "inherited-safe-value";
+  const overrides = Object.create(null);
+  overrides.__proto__ = "override-prototype-name";
+  overrides.constructor = "override-constructor-name";
+  overrides.SAFE_RELEASE_VALUE = "override-safe-value";
+
+  const environment = releaseSubprocessEnvironment(inherited, overrides);
+  const expected = Object.create(null);
+  expected.__proto__ = "override-prototype-name";
+  expected.constructor = "override-constructor-name";
+  expected.SAFE_RELEASE_VALUE = "override-safe-value";
+  expected.GIT_NO_REPLACE_OBJECTS = "1";
+  assert.equal(Object.getPrototypeOf(environment), null);
+  assert.deepEqual(environment, expected);
+  assert.equal(Object.getPrototypeOf({}), Object.prototype);
+  assert.equal(Object.hasOwn(Object.prototype, "SAFE_RELEASE_VALUE"), false);
+
+  const invalidInherited = Object.create(null);
+  invalidInherited.SAFE_RELEASE_VALUE = { unexpected: true };
+  assert.throws(
+    () => releaseSubprocessEnvironment(invalidInherited),
+    /RELEASE_SUBPROCESS_ENV_INHERITED_INVALID/u,
+  );
+  const invalidOverride = Object.create(null);
+  invalidOverride.SAFE_RELEASE_VALUE = { unexpected: true };
+  assert.throws(
+    () => releaseSubprocessEnvironment(Object.create(null), invalidOverride),
+    /RELEASE_SUBPROCESS_ENV_OVERRIDE_INVALID/u,
+  );
+});
+
+test("release verification binds schema 2 receipts to independent source identity", async () => {
+  const observations = [];
+  const receipt = await runReleaseVerification({
+    root: ROOT,
+    platform: "test-platform",
+    arch: "test-arch",
+    versions: VERSIONS,
+    resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: async () => {
+      observations.push("observed");
+      return SOURCE_IDENTITY;
+    },
+    runStage: async (stage) => stage.name === "release-artifacts"
+      ? { status: "passed", ...SOURCE_IDENTITY }
+      : { status: "passed" },
+  });
+  assert.deepEqual(observations, ["observed", "observed"]);
+  assert.equal(receipt.schemaVersion, 2);
+  assert.equal(receipt.status, "passed");
+  assert.equal(receipt.commit, SOURCE_IDENTITY.commit);
+  assert.equal(receipt.tree, SOURCE_IDENTITY.tree);
+
+  const mismatched = await runReleaseVerification({
+    root: ROOT,
+    platform: "test-platform",
+    arch: "test-arch",
+    versions: VERSIONS,
+    resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: async () => SOURCE_IDENTITY,
+    runStage: async (stage) => stage.name === "release-artifacts"
+      ? { status: "passed", commit: "a".repeat(40), tree: "b".repeat(40) }
+      : { status: "passed" },
+  });
+  assert.equal(mismatched.status, "failed");
+  assert.equal(mismatched.commit, null);
+  assert.equal(mismatched.tree, null);
+
+  let observation = 0;
+  const changedAfterStages = await runReleaseVerification({
+    root: ROOT,
+    platform: "test-platform",
+    arch: "test-arch",
+    versions: VERSIONS,
+    resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: async () => observation++ === 0
+      ? SOURCE_IDENTITY
+      : { commit: "f".repeat(40), tree: "a".repeat(40) },
+    runStage: async (stage) => passedReleaseStage(stage),
+  });
+  assert.equal(changedAfterStages.status, "failed");
+  assert.equal(changedAfterStages.commit, null);
+  assert.equal(changedAfterStages.tree, null);
+});
+
+test("release source identity ignores replacement refs and hostile Git selectors", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-identity-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const git = async (...args) => {
+    const { execFile } = await import("node:child_process");
+    return await new Promise((resolvePromise, reject) => {
+      execFile("git", args, { cwd: root, encoding: "utf8" }, (error, stdout) => {
+        if (error) reject(error); else resolvePromise(stdout.trim());
+      });
+    });
+  };
+  await git("init", "--initial-branch=main");
+  await git("config", "user.name", "Fixture");
+  await git("config", "user.email", "fixture@example.invalid");
+  await writeFile(join(root, "identity.txt"), "original\n", "utf8");
+  await git("add", ".");
+  await git("commit", "-m", "original");
+  const original = await git("rev-parse", "HEAD");
+  const originalTree = await git("rev-parse", "HEAD^{tree}");
+  await writeFile(join(root, "identity.txt"), "replacement\n", "utf8");
+  await git("add", ".");
+  await git("commit", "-m", "replacement");
+  const replacement = await git("rev-parse", "HEAD");
+  await git("reset", "--hard", original);
+  await git("replace", original, replacement);
+
+  const inheritedGitDir = process.env.GIT_DIR;
+  process.env.GIT_DIR = join(root, ".git", "does-not-exist");
+  t.after(() => {
+    if (inheritedGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = inheritedGitDir;
+  });
+  assert.deepEqual(await collectReleaseSourceIdentity(root), {
+    commit: original,
+    tree: originalTree,
+  });
 });
 
 test("release verification package scripts use the exact public entry points", async () => {
@@ -92,9 +293,10 @@ test("release verification runs the exact required stage contract in order", asy
     arch: "test-arch",
     versions: VERSIONS,
     resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: collectStableSourceIdentity,
     runStage: async (stage) => {
       calls.push(stage);
-      return { status: "passed" };
+      return passedReleaseStage(stage);
     },
   });
 
@@ -117,6 +319,8 @@ test("release verification runs the exact required stage contract in order", asy
   assert.deepEqual(Object.keys(receipt), [
     "schemaVersion",
     "status",
+    "commit",
+    "tree",
     "platform",
     "arch",
     "node",
@@ -126,8 +330,10 @@ test("release verification runs the exact required stage contract in order", asy
     "toolCount",
     "fixtureSha256",
   ]);
-  assert.equal(receipt.schemaVersion, 1);
+  assert.equal(receipt.schemaVersion, 2);
   assert.equal(receipt.status, "passed");
+  assert.equal(receipt.commit, SOURCE_IDENTITY.commit);
+  assert.equal(receipt.tree, SOURCE_IDENTITY.tree);
   assert.equal(receipt.platform, "test-platform");
   assert.equal(receipt.arch, "test-arch");
   assert.equal(receipt.node, VERSIONS.node);
@@ -149,9 +355,10 @@ test("release stages install source dependencies and keep temp nine-tools as run
     arch: "test-arch",
     versions: VERSIONS,
     resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: collectStableSourceIdentity,
     runStage: async (stage) => {
       calls.push(stage);
-      return { status: "passed" };
+      return passedReleaseStage(stage);
     },
   });
 
@@ -235,6 +442,10 @@ test("release artifacts stage owns a fresh output, verifies it independently, an
     env: {},
   }, {
     deadlineAt: performance.now() + 10_000,
+    expectedSourceIdentity: {
+      commit: buildReceipt.commit,
+      tree: buildReceipt.tree,
+    },
     createTemp: async () => "OWNED_TEMP",
     runCommand: async (command) => {
       events.push(command);
@@ -243,7 +454,11 @@ test("release artifacts stage owns a fresh output, verifies it independently, an
     },
     removeTemp: async (path) => { events.push({ cleanup: path }); },
   });
-  assert.deepEqual(result, { status: "passed" });
+  assert.deepEqual(result, {
+    status: "passed",
+    commit: buildReceipt.commit,
+    tree: buildReceipt.tree,
+  });
   assert.deepEqual(events, [
     {
       tool: "node",
@@ -279,8 +494,55 @@ test("release artifacts stage rejects missing receipts and preserves owned temp 
     runCommand: async () => ({ status: "passed", stdout: "", stderr: "" }),
     removeTemp: async (path) => { events.push(path); },
   });
-  assert.deepEqual(result, { status: "failed" });
+  assert.deepEqual(result, { status: "failed", commit: null, tree: null });
   assert.deepEqual(events, []);
+});
+
+test("release artifact receipts must match independent identity, not only each other", async () => {
+  const hashes = {
+    "gpt-codex-hwp-0.1.4.spdx.json": "a".repeat(64),
+    "gpt-codex-hwp-0.1.4.zip": "b".repeat(64),
+    "provenance.json": "c".repeat(64),
+  };
+  const childIdentity = { commit: "a".repeat(40), tree: "b".repeat(40) };
+  const common = {
+    schemaVersion: 1,
+    status: "passed",
+    ...childIdentity,
+    reproducibleEpoch: 1_700_000_000,
+    hashes,
+    runtimeFiles: 102,
+    productionPackages: 10,
+  };
+  const buildReceipt = {
+    ...common,
+    files: [
+      "SHA256SUMS",
+      "gpt-codex-hwp-0.1.4.spdx.json",
+      "gpt-codex-hwp-0.1.4.zip",
+      "provenance.json",
+    ],
+  };
+  const verifyReceipt = { ...common, toolCount: 9 };
+  let invocation = 0;
+  let cleaned = false;
+  const result = await runReleaseArtifactsStage({
+    name: "release-artifacts",
+    kind: "release-artifacts",
+    cwd: ROOT,
+    env: {},
+  }, {
+    expectedSourceIdentity: SOURCE_IDENTITY,
+    createTemp: async () => "OWNED_MISMATCH_TEMP",
+    runCommand: async () => ({
+      status: "passed",
+      stdout: `${JSON.stringify(invocation++ === 0 ? buildReceipt : verifyReceipt)}\n`,
+      stderr: "",
+    }),
+    removeTemp: async () => { cleaned = true; },
+  });
+  assert.deepEqual(result, { status: "failed", commit: null, tree: null });
+  assert.equal(cleaned, false);
 });
 
 test("release artifacts stage preserves late temp evidence after its deadline", async () => {
@@ -294,7 +556,7 @@ test("release artifacts stage preserves late temp evidence after its deadline", 
     deadlineAt: 10,
     clock: () => 11,
   });
-  assert.deepEqual(result, { status: "failed" });
+  assert.deepEqual(result, { status: "failed", commit: null, tree: null });
   assert.deepEqual(events, ["created"]);
 });
 
@@ -309,7 +571,7 @@ test("release artifacts stage preserves a real temp after an expired deadline", 
     deadlineAt: 1,
     clock: () => 2,
   });
-  assert.deepEqual(result, { status: "failed" });
+  assert.deepEqual(result, { status: "failed", commit: null, tree: null });
   assert.equal((await lstat(owned)).isDirectory(), true);
 });
 
@@ -386,8 +648,12 @@ test("release temp cleanup follows platform path case semantics", async (t) => {
 });
 
 test("release temp cleanup accepts a canonical ancestor alias", async (t) => {
-  const realParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-real-parent-"));
-  const aliasParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-alias-parent-"));
+  const realParent = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-release-real-parent-",
+  });
+  const aliasParent = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-release-alias-parent-",
+  });
   const alias = join(aliasParent, "temp-alias");
   t.after(async () => {
     try { await unlink(alias); } catch {}
@@ -415,8 +681,12 @@ test("release temp cleanup accepts a canonical ancestor alias", async (t) => {
 });
 
 test("release artifact staging canonicalizes a temporary-directory ancestor alias", async (t) => {
-  const realParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-stage-real-parent-"));
-  const aliasParent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-stage-alias-parent-"));
+  const realParent = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-stage-real-parent-",
+  });
+  const aliasParent = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-stage-alias-parent-",
+  });
   const alias = join(aliasParent, "temp-alias");
   let created;
   t.after(async () => {
@@ -458,6 +728,7 @@ for (const failure of [
       arch: "test-arch",
       versions: VERSIONS,
       resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+      collectSourceIdentity: collectStableSourceIdentity,
       runStage: async (stage) => {
         calls.push(stage.name);
         return calls.length === failAt ? failure.result : { status: "passed" };
@@ -486,8 +757,9 @@ test("release verification redacts command output, document data, paths, and env
     arch: "test-arch",
     versions: VERSIONS,
     resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
-    runStage: async () => ({
-      status: "passed",
+    collectSourceIdentity: collectStableSourceIdentity,
+    runStage: async (stage) => ({
+      ...passedReleaseStage(stage),
       stdout: "PRIVATE_STDOUT DOCUMENT_BODY",
       stderr: "PRIVATE_STDERR",
       path: "PRIVATE_WORKSPACE_PATH",
@@ -510,6 +782,7 @@ test("release verification converts runner exceptions to a redacted failure", as
     arch: "test-arch",
     versions: VERSIONS,
     resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: collectStableSourceIdentity,
     runStage: async () => {
       throw new Error(secret);
     },
@@ -523,8 +796,10 @@ test("release verification converts runner exceptions to a redacted failure", as
 
 test("release verification CLI emits only the receipt and exits nonzero on failure", async () => {
   const failedReceipt = Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "failed",
+    commit: null,
+    tree: null,
     platform: "test-platform",
     arch: "test-arch",
     node: VERSIONS.node,
@@ -949,9 +1224,10 @@ test("actual npm-wrapped real-HWP and HWPX stages satisfy their evidence oracles
     arch: "test-arch",
     versions: VERSIONS,
     resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: collectStableSourceIdentity,
     runStage: async (stage) => {
       captured.push(stage);
-      return { status: "passed" };
+      return passedReleaseStage(stage);
     },
   });
   const focused = captured.filter((stage) =>

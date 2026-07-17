@@ -1,13 +1,19 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { lstat, mkdtemp, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
+import { lstat, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { resolveHwpFixture } from "../packages/gpt-codex-hwp/release-scripts/hwp-fixture.mjs";
+import { createCanonicalTemporaryDirectory } from "./canonical-temp.mjs";
+import {
+  noReplaceGitArguments,
+  releaseSubprocessEnvironment,
+} from "./release-subprocess-environment.mjs";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_STAGE_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -18,6 +24,8 @@ const TASKKILL_TIMEOUT_MS = 2_000;
 const MAX_STAGE_COMMANDS = 4;
 const RELEASE_CLEANUP_RESERVE_MS = 10_000;
 const TOOL_COUNT = 9;
+const executeFile = promisify(execFile);
+const GIT_IDENTITY_PATTERN = /^[a-f0-9]{40}$/u;
 
 export const REQUIRED_RELEASE_STAGES = Object.freeze([
   "metadata",
@@ -59,6 +67,12 @@ export async function runReleaseVerification(options = {}) {
     throw releaseError("RELEASE_VERIFY_FIXTURE_INVALID");
   }
 
+  const collectSourceIdentity = options.collectSourceIdentity ?? collectReleaseSourceIdentity;
+  if (typeof collectSourceIdentity !== "function") {
+    throw releaseError("RELEASE_VERIFY_SOURCE_IDENTITY_INVALID");
+  }
+  const beforeIdentity = validatedSourceIdentity(await collectSourceIdentity(root));
+
   const now = options.now ?? Date.now;
   if (typeof now !== "function") throw releaseError("RELEASE_VERIFY_CLOCK_INVALID");
   const injectedRunner = options.runStage;
@@ -68,6 +82,7 @@ export async function runReleaseVerification(options = {}) {
   const runStage = injectedRunner ?? ((stage) => runStageCommand(stage, {
     timeoutMs: DEFAULT_STAGE_TIMEOUT_MS,
     maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+    expectedSourceIdentity: beforeIdentity,
   }));
 
   const stages = [];
@@ -80,9 +95,14 @@ export async function runReleaseVerification(options = {}) {
       outcome = { status: "failed" };
     }
     const elapsedMs = Math.max(0, Math.round(safeNow(now) - started));
-    const status = normalizedStageStatus(outcome);
+    let status = normalizedStageStatus(outcome);
+    if (stage.name === "release-artifacts" && status === "passed"
+      && !sameSourceIdentity(optionalPassedSourceIdentity(outcome), beforeIdentity)) {
+      status = "failed";
+    }
     stages.push(Object.freeze({ name: stage.name, status, elapsedMs }));
     if (status !== "passed") {
+      await observeFinalSourceIdentity(collectSourceIdentity, root);
       return releaseReceipt({
         status: "failed",
         platform,
@@ -90,8 +110,22 @@ export async function runReleaseVerification(options = {}) {
         versions,
         stages,
         fixtureSha256,
+        sourceIdentity: null,
       });
     }
+  }
+
+  const afterIdentity = await observeFinalSourceIdentity(collectSourceIdentity, root);
+  if (!sameSourceIdentity(beforeIdentity, afterIdentity)) {
+    return releaseReceipt({
+      status: "failed",
+      platform,
+      arch,
+      versions,
+      stages,
+      fixtureSha256,
+      sourceIdentity: null,
+    });
   }
 
   return releaseReceipt({
@@ -101,6 +135,7 @@ export async function runReleaseVerification(options = {}) {
     versions,
     stages,
     fixtureSha256,
+    sourceIdentity: beforeIdentity,
   });
 }
 
@@ -133,12 +168,16 @@ export async function runStageCommand(stage, options = {}) {
     );
     const cwd = requiredRoot(stage.cwd);
     const env = stageEnvironment(stage.env);
+    const expectedSourceIdentity = validatedSourceIdentity(
+      options.expectedSourceIdentity ?? await collectReleaseSourceIdentity(cwd),
+    );
     const outputBudget = { used: 0, limit: maxOutputBytes };
     const started = performance.now();
     const deadlineAt = started + timeoutMs;
     return await runReleaseArtifactsStage(stage, {
       deadlineAt,
       clock: () => performance.now(),
+      expectedSourceIdentity,
       runCommand: async (logical) => {
         const remainingTimeoutMs = Math.ceil(
           deadlineAt - performance.now() - RELEASE_CLEANUP_RESERVE_MS,
@@ -215,6 +254,14 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
     || (deadlineAt !== Number.POSITIVE_INFINITY && !Number.isFinite(deadlineAt))) {
     throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
   }
+  let expectedSourceIdentity;
+  try {
+    expectedSourceIdentity = validatedSourceIdentity(
+      options.expectedSourceIdentity ?? await collectReleaseSourceIdentity(cwd),
+    );
+  } catch {
+    return failedArtifactStageOutcome();
+  }
   let ownedTemp;
   let ownedIdentity;
   let status = "failed";
@@ -237,20 +284,24 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
       ],
     });
     const buildReceipt = parseArtifactStageReceipt(build, "build");
-    if (buildReceipt === undefined) return Object.freeze({ status: "failed" });
-    const verify = await runCommand({
-      tool: "node",
-      args: [
-        "scripts/verify-release-artifacts.mjs",
-        "--artifacts",
-        output,
-        "--root",
-        cwd,
-      ],
-    });
-    const verifyReceipt = parseArtifactStageReceipt(verify, "verify");
-    status = verifyReceipt !== undefined && matchingArtifactReceipts(buildReceipt, verifyReceipt)
-      ? "passed" : "failed";
+    if (buildReceipt !== undefined) {
+      const verify = await runCommand({
+        tool: "node",
+        args: [
+          "scripts/verify-release-artifacts.mjs",
+          "--artifacts",
+          output,
+          "--root",
+          cwd,
+        ],
+      });
+      const verifyReceipt = parseArtifactStageReceipt(verify, "verify");
+      status = verifyReceipt !== undefined
+        && matchingArtifactReceipts(buildReceipt, verifyReceipt)
+        && sameSourceIdentity(buildReceipt, expectedSourceIdentity)
+        && sameSourceIdentity(verifyReceipt, expectedSourceIdentity)
+        ? "passed" : "failed";
+    }
   } catch {
     status = "failed";
   } finally {
@@ -265,24 +316,18 @@ export async function runReleaseArtifactsStage(stage, options = {}) {
       catch { status = "failed"; }
     }
   }
-  return Object.freeze({ status });
+  return status === "passed"
+    ? passedArtifactStageOutcome(expectedSourceIdentity)
+    : failedArtifactStageOutcome();
 }
 
 export async function createCanonicalReleaseTemp(parent = tmpdir()) {
   const requestedParent = requiredRoot(parent);
-  let canonicalParent;
-  let info;
   try {
-    canonicalParent = await realpath(requestedParent);
-    info = await lstat(canonicalParent);
-  } catch {
-    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
-  }
-  if (info.isSymbolicLink() || !info.isDirectory()) {
-    throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
-  }
-  try {
-    return await mkdtemp(join(canonicalParent, "gpt-codex-hwp-release-verify-"));
+    return await createCanonicalTemporaryDirectory({
+      parent: requestedParent,
+      prefix: "gpt-codex-hwp-release-verify-",
+    });
   } catch {
     throw releaseError("RELEASE_VERIFY_TEMP_INVALID");
   }
@@ -335,6 +380,83 @@ function matchingArtifactReceipts(build, verify) {
     && build.runtimeFiles === verify.runtimeFiles
     && build.productionPackages === verify.productionPackages
     && JSON.stringify(build.hashes) === JSON.stringify(verify.hashes);
+}
+
+function passedArtifactStageOutcome(sourceIdentity) {
+  const identity = validatedSourceIdentity(sourceIdentity);
+  return Object.freeze({ status: "passed", commit: identity.commit, tree: identity.tree });
+}
+
+function failedArtifactStageOutcome() {
+  return Object.freeze({ status: "failed", commit: null, tree: null });
+}
+
+function validatedSourceIdentity(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "commit,tree"
+    || typeof value.commit !== "string" || !GIT_IDENTITY_PATTERN.test(value.commit)
+    || typeof value.tree !== "string" || !GIT_IDENTITY_PATTERN.test(value.tree)) {
+    throw releaseError("RELEASE_VERIFY_SOURCE_IDENTITY_INVALID");
+  }
+  return Object.freeze({ commit: value.commit, tree: value.tree });
+}
+
+function optionalPassedSourceIdentity(value) {
+  try {
+    return validatedSourceIdentity({ commit: value?.commit, tree: value?.tree });
+  } catch {
+    return undefined;
+  }
+}
+
+function sameSourceIdentity(left, right) {
+  return left !== undefined && right !== undefined
+    && left?.commit === right?.commit && left?.tree === right?.tree;
+}
+
+async function observeFinalSourceIdentity(collector, root) {
+  try {
+    return validatedSourceIdentity(await collector(root));
+  } catch {
+    return undefined;
+  }
+}
+
+export async function collectReleaseSourceIdentity(root = PROJECT_ROOT) {
+  const cwd = requiredRoot(root);
+  const commit = releaseGitIdentity(await releaseGit(cwd, ["rev-parse", "--verify", "HEAD"]));
+  const tree = releaseGitIdentity(await releaseGit(
+    cwd,
+    ["rev-parse", "--verify", `${commit}^{tree}`],
+  ));
+  return Object.freeze({ commit, tree });
+}
+
+async function releaseGit(root, args) {
+  try {
+    const result = await executeFile("git", noReplaceGitArguments(args), {
+      cwd: root,
+      encoding: "utf8",
+      env: releaseSubprocessEnvironment(),
+      maxBuffer: 4 * 1024,
+      timeout: VERSION_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    if (result.stderr !== "") throw releaseError("RELEASE_VERIFY_GIT_INVALID");
+    return result.stdout;
+  } catch {
+    throw releaseError("RELEASE_VERIFY_GIT_INVALID");
+  }
+}
+
+function releaseGitIdentity(value) {
+  const lines = String(value).split(/\r?\n/u);
+  if (lines.at(-1) !== "") throw releaseError("RELEASE_VERIFY_GIT_INVALID");
+  lines.pop();
+  if (lines.length !== 1 || !GIT_IDENTITY_PATTERN.test(lines[0])) {
+    throw releaseError("RELEASE_VERIFY_GIT_INVALID");
+  }
+  return lines[0];
 }
 
 async function tempIdentity(path) {
@@ -700,10 +822,21 @@ function hasExactPassedTarget(output, targetName) {
   return output.split(/\r?\n/u).filter((line) => line === expectedLine).length === 1;
 }
 
-function releaseReceipt({ status, platform, arch, versions, stages, fixtureSha256 }) {
+function releaseReceipt({
+  status,
+  platform,
+  arch,
+  versions,
+  stages,
+  fixtureSha256,
+  sourceIdentity,
+}) {
+  const passedIdentity = status === "passed" ? validatedSourceIdentity(sourceIdentity) : null;
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     status,
+    commit: passedIdentity?.commit ?? null,
+    tree: passedIdentity?.tree ?? null,
     platform,
     arch,
     node: versions.node,
@@ -739,7 +872,7 @@ async function executeLogicalCommand({ tool, args, cwd }) {
   const result = await executeCommand({
     ...invocation,
     cwd,
-    env: { ...process.env },
+    env: releaseSubprocessEnvironment(),
     timeoutMs: VERSION_TIMEOUT_MS,
     maxOutputBytes: VERSION_MAX_OUTPUT_BYTES,
     captureOutput: true,
@@ -826,13 +959,16 @@ function stageEnvironment(overrides) {
     throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
   }
   for (const [key, value] of Object.entries(overrides)) {
-    if (!/^[A-Z_][A-Z0-9_]*$/u.test(key) || typeof value !== "string") {
+    if (!/^[A-Z_][A-Z0-9_]*$/u.test(key) || typeof value !== "string"
+      || /^GIT_/iu.test(key)) {
       throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
     }
   }
-  const environment = { ...process.env, ...overrides };
-  delete environment.NODE_TEST_CONTEXT;
-  return environment;
+  try {
+    return releaseSubprocessEnvironment(process.env, overrides);
+  } catch {
+    throw releaseError("RELEASE_VERIFY_STAGE_INVALID");
+  }
 }
 
 async function executeCommand({

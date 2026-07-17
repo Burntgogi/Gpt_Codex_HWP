@@ -4,25 +4,28 @@ import {
   access,
   lstat,
   mkdir,
-  mkdtemp,
   readFile,
+  realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { loadProjectMetadata, pluginVersion } from "../../../scripts/project-metadata.mjs";
 import { buildRuntime } from "../../../scripts/project-runtime.mjs";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 const TEST_ROOT = dirname(fileURLToPath(import.meta.url));
 const SOURCE_ROOT = resolve(TEST_ROOT, "..");
 const REPOSITORY_ROOT = resolve(SOURCE_ROOT, "../..");
 
 test("public runtime projection stages only branded executable files", { timeout: 120_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-suite-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-runtime-suite-",
+  });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const output = join(root, "runtime");
   const result = await buildRuntime({ root: REPOSITORY_ROOT, outputRoot: output });
@@ -122,8 +125,23 @@ test("public runtime projection stages only branded executable files", { timeout
   }
 });
 
+test("package runtime fixtures canonicalize an injected aliased temp parent", async (t) => {
+  const alias = await temporaryDirectoryAlias(t, "package-runtime-parent-");
+  if (alias === undefined) return;
+  const root = await createCanonicalTemporaryDirectory({
+    parent: alias.path,
+    prefix: "package-runtime-fixture-",
+  });
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  assert.equal(dirname(root), alias.canonicalParent);
+  const output = join(root, "runtime");
+  await assert.doesNotReject(buildRuntime({ root: REPOSITORY_ROOT, outputRoot: output }));
+});
+
 test("owned projection cleanup removes a failed stage and permits retry", { timeout: 120_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-retry-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-runtime-retry-",
+  });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const output = join(root, "owned-output");
   const swapId = "injected-promotion-failure";
@@ -162,7 +180,9 @@ test("owned projection cleanup removes a failed stage and permits retry", { time
 });
 
 test("pre-existing unowned projection evidence is never removed", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-unowned-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-runtime-unowned-",
+  });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const output = join(root, "user-output");
   const swapId = "unowned-evidence";
@@ -189,3 +209,25 @@ test("pre-existing unowned projection evidence is never removed", async (t) => {
   assert.equal(await readFile(join(output, "keep.txt"), "utf8"), "current runtime\n");
   assert.equal(await readFile(join(backup, "keep.txt"), "utf8"), "unowned backup evidence\n");
 });
+
+async function temporaryDirectoryAlias(
+  t: test.TestContext,
+  prefix: string,
+): Promise<{ canonicalParent: string; path: string } | undefined> {
+  const base = await createCanonicalTemporaryDirectory({ prefix });
+  const canonicalParent = join(base, "canonical");
+  const path = join(base, "alias");
+  await mkdir(canonicalParent);
+  try {
+    await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    await rm(base, { recursive: true, force: true });
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
+      t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
+      return undefined;
+    }
+    throw error;
+  }
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  return { canonicalParent: await realpath(canonicalParent), path };
+}

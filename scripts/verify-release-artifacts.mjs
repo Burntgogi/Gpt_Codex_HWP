@@ -8,6 +8,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 import { assertPublicContentBuffer } from "./public-content-policy.mjs";
+import {
+  noReplaceGitArguments,
+  releaseSubprocessEnvironment,
+} from "./release-subprocess-environment.mjs";
 
 const executeFile = promisify(execFile);
 const PRODUCT = "gpt-codex-hwp";
@@ -886,14 +890,26 @@ async function safeLstat(path, code) {
 
 async function git(root, args) {
   try {
-    const result = await executeFile("git", args, { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+    const result = await executeFile("git", noReplaceGitArguments(args), {
+      cwd: root,
+      encoding: "utf8",
+      env: releaseSubprocessEnvironment(),
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+    });
     return result.stdout;
   } catch { throw verificationError("RELEASE_ARTIFACTS_GIT_INVALID"); }
 }
 
 async function gitBuffer(root, args, maxBuffer) {
   try {
-    const result = await executeFile("git", args, { cwd: root, encoding: "buffer", maxBuffer });
+    const result = await executeFile("git", noReplaceGitArguments(args), {
+      cwd: root,
+      encoding: "buffer",
+      env: releaseSubprocessEnvironment(),
+      maxBuffer,
+      windowsHide: true,
+    });
     return Buffer.from(result.stdout);
   } catch { throw verificationError("RELEASE_ARTIFACTS_GIT_INVALID"); }
 }

@@ -7,7 +7,9 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
+  symlink,
   truncate,
   writeFile,
 } from "node:fs/promises";
@@ -16,6 +18,8 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import {
   EXCLUDED_PACKAGES,
@@ -33,6 +37,7 @@ import {
   verifyCompactRuntime,
 } from "../release-scripts/verify-compact-runtime.mjs";
 import { resolveHwpFixture } from "../release-scripts/hwp-fixture.mjs";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 const SOURCE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = resolve(SOURCE_ROOT, "../..");
 const COMPACT_TEMP_PREFIX = "gpt-codex-hwp-compact-";
@@ -307,6 +312,154 @@ test("installed runtime child start failures do not expose executable paths", as
       return true;
     },
   );
+});
+
+test("compact command, npm, and tool children receive one scrubbed environment", async (t) => {
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-compact-env-",
+  });
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const probePath = join(root, "compact-environment-probe.cjs");
+  const evidencePath = join(root, "compact-environment-evidence.ndjson");
+  await writeFile(probePath, [
+    'const { appendFileSync } = require("node:fs")',
+    `const evidencePath = ${JSON.stringify(evidencePath)}`,
+    "const forbiddenGitKeys = Object.keys(process.env).filter((key) => /^GIT_/i.test(key) && key !== 'GIT_NO_REPLACE_OBJECTS')",
+    "const evidence = { role: process.env.COMPACT_ENV_PROBE_ROLE ?? 'missing', forbiddenGitKeyCount: forbiddenGitKeys.length, hasNodeTestContext: Object.keys(process.env).some((key) => /^NODE_TEST_CONTEXT$/i.test(key)), noReplace: process.env.GIT_NO_REPLACE_OBJECTS === '1' }",
+    "appendFileSync(evidencePath, `${JSON.stringify(evidence)}\\n`)",
+    "if (evidence.forbiddenGitKeyCount !== 0 || evidence.hasNodeTestContext || !evidence.noReplace || evidence.role === 'missing') process.exit(91)",
+  ].join(";"), "utf8");
+
+  const hostile = {
+    GIT_DIR: "hostile-dir",
+    GIT_WORK_TREE: "hostile-worktree",
+    GIT_OBJECT_DIRECTORY: "hostile-objects",
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: "hostile-alternates",
+    GIT_REPLACE_REF_BASE: "hostile-replacements",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.hooksPath",
+    GIT_CONFIG_VALUE_0: "hostile-hooks",
+    NODE_TEST_CONTEXT: "hostile-test-context",
+    NODE_OPTIONS: `--require=${probePath}`,
+  };
+  const original = new Map<string, string | undefined>();
+  try {
+    for (const [key, value] of Object.entries(hostile)) {
+      original.set(key, process.env[key]);
+      process.env[key] = value;
+    }
+    await runCommand(
+      process.execPath,
+      ["-e", "process.exit(0)"],
+      SOURCE_ROOT,
+      { environmentOverrides: { COMPACT_ENV_PROBE_ROLE: "command" } },
+    );
+    const npm = resolveNpmInvocation(["--version"]);
+    await runCommand(npm.command, npm.args, SOURCE_ROOT, {
+      environmentOverrides: { COMPACT_ENV_PROBE_ROLE: "npm" },
+    });
+    await runCommand(
+      process.execPath,
+      [
+        fileURLToPath(new URL("../release-scripts/verify-compact-runtime.mjs", import.meta.url)),
+        "--tool-smoke",
+      ],
+      SOURCE_ROOT,
+      {
+        allowFailure: true,
+        environmentOverrides: { COMPACT_ENV_PROBE_ROLE: "tool-smoke" },
+      },
+    );
+  } finally {
+    for (const [key, value] of original) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  const evidence = (await readFile(evidencePath, "utf8")).trim().split(/\r?\n/u)
+    .map((line) => JSON.parse(line));
+  for (const role of ["command", "npm", "tool-smoke"]) {
+    assert.ok(evidence.some((record) => record.role === role), role);
+  }
+  assert.ok(evidence.every((record) => record.forbiddenGitKeyCount === 0
+    && record.hasNodeTestContext === false && record.noReplace === true));
+
+  await assert.rejects(
+    runCommand(process.execPath, ["-e", "process.exit(0)"], SOURCE_ROOT, {
+      environmentOverrides: { GIT_DIR: "hostile-reintroduction" },
+    }),
+    (error: Error & { code?: string }) => error.code === "COMMAND_ENVIRONMENT_INVALID",
+  );
+
+  const verifierSource = await readFile(
+    new URL("../release-scripts/verify-compact-runtime.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    verifierSource,
+    /buildRuntime\(\{\s*root: source,\s*outputRoot: runtimeRoot,\s*subprocessEnvironment: releaseSubprocessEnvironment\(\),\s*\}\)/u,
+  );
+  const transportOptions = /new StdioClientTransport\(\{([\s\S]*?)\n\s*\}\)/u.exec(verifierSource)?.[1];
+  assert.equal(typeof transportOptions, "string");
+  const transportEnvironment = /\benv\s*:\s*(\{[^{}]*\})/u.exec(transportOptions!)?.[1];
+  assert.equal(
+    transportEnvironment?.replace(/\s+/gu, ""),
+    '{GIT_NO_REPLACE_OBJECTS:"1"}',
+  );
+  assert.doesNotMatch(transportOptions!, /releaseSubprocessEnvironment|process\.env/u);
+});
+
+test("MCP SDK merges safe defaults with only the no-replace transport override", async (t) => {
+  const original = new Map<string, string | undefined>();
+  const hostile = {
+    GIT_DIR: "transport-hostile-git-dir",
+    NODE_TEST_CONTEXT: "transport-hostile-test-context",
+    NODE_OPTIONS: "--require=transport-hostile-preload.cjs",
+    TRANSPORT_PRIVATE_SENTINEL: "transport-private-value",
+  };
+  for (const [key, value] of Object.entries(hostile)) {
+    original.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  t.after(() => {
+    for (const [key, value] of original) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  const childProbe = [
+    "const keys = Object.keys(process.env)",
+    "const message = { jsonrpc: '2.0', method: 'environment/probe', params: { path: process.env.PATH ?? null, noReplace: process.env.GIT_NO_REPLACE_OBJECTS ?? null, forbiddenGitKeys: keys.filter((key) => /^GIT_/i.test(key) && key !== 'GIT_NO_REPLACE_OBJECTS'), hasNodeTestContext: keys.some((key) => /^NODE_TEST_CONTEXT$/i.test(key)), hasNodeOptions: keys.some((key) => /^NODE_OPTIONS$/i.test(key)), hasPrivateSentinel: keys.some((key) => /^TRANSPORT_PRIVATE_SENTINEL$/i.test(key)) } }",
+    "process.stdout.write(`${JSON.stringify(message)}\\n`)",
+  ].join(";");
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["-e", childProbe],
+    env: { GIT_NO_REPLACE_OBJECTS: "1" },
+    stderr: "pipe",
+  });
+  const message = new Promise<Record<string, any>>((resolveMessage, reject) => {
+    transport.onmessage = resolveMessage;
+    transport.onerror = reject;
+  });
+  await transport.start();
+  try {
+    const received = await Promise.race([
+      message,
+      delay(3_000).then(() => { throw new Error("MCP environment probe timed out"); }),
+    ]);
+    assert.deepEqual(received.params, {
+      path: process.env.PATH ?? null,
+      noReplace: "1",
+      forbiddenGitKeys: [],
+      hasNodeTestContext: false,
+      hasNodeOptions: false,
+      hasPrivateSentinel: false,
+    });
+  } finally {
+    await transport.close();
+  }
 });
 
 test("installed runtime allowFailure preserves raw diagnostic streams", async () => {
@@ -1217,6 +1370,19 @@ test("installed runtime verifies provenance, npm ls, and all nine tools", { time
   assert.equal(report.cleanup, true);
 });
 
+test("compact runtime staging canonicalizes an injected temporary parent", async (t) => {
+  const module = await import("../release-scripts/verify-compact-runtime.mjs");
+  const createCompactRuntimeTemp = Reflect.get(module, "createCompactRuntimeTemp") as
+    | undefined
+    | ((parent?: string) => Promise<string>);
+  assert.equal(typeof createCompactRuntimeTemp, "function");
+  const alias = await temporaryDirectoryAlias(t, "compact-runtime-parent-");
+  if (alias === undefined) return;
+  const root = await createCompactRuntimeTemp!(alias.path);
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  assert.equal(dirname(root), alias.canonicalParent);
+});
+
 function pinnedDetectResult() {
   return {
     isError: false,
@@ -1248,6 +1414,28 @@ async function compactTemporaryDirectories(): Promise<string[]> {
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(COMPACT_TEMP_PREFIX))
     .map((entry) => entry.name)
     .sort();
+}
+
+async function temporaryDirectoryAlias(
+  t: test.TestContext,
+  prefix: string,
+): Promise<{ canonicalParent: string; path: string } | undefined> {
+  const base = await createCanonicalTemporaryDirectory({ prefix });
+  const canonicalParent = join(base, "canonical");
+  const path = join(base, "alias");
+  await mkdir(canonicalParent);
+  try {
+    await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    await rm(base, { recursive: true, force: true });
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
+      t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
+      return undefined;
+    }
+    throw error;
+  }
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  return { canonicalParent: await realpath(canonicalParent), path };
 }
 
 async function collectSourceFiles(roots: string[]): Promise<string[]> {

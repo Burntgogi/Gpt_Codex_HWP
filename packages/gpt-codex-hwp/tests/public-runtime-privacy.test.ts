@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { copyFile, cp, lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile, cp, lstat, mkdir, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,6 +10,7 @@ import {
   classifyRuntimeEntryForTest,
 } from "../release-scripts/public-runtime-privacy.mjs";
 import { buildRuntime } from "../../../scripts/project-runtime.mjs";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 const TEST_ROOT = dirname(fileURLToPath(import.meta.url));
 const SOURCE_ROOT = dirname(TEST_ROOT);
@@ -413,6 +413,15 @@ test("public runtime privacy rejects a junction root before target content is re
   await assert.rejects(assertPublicRuntimePrivacy(linked), /runtime privacy violation/iu);
 });
 
+test("runtime privacy fixtures canonicalize an injected aliased temp parent", async (t) => {
+  const alias = await temporaryDirectoryAlias(t, "runtime-canonical-parent-");
+  if (alias === undefined) return;
+  const root = await temporaryRuntime(t, "owned-fixture-", alias.path);
+  assert.equal(dirname(root), alias.canonicalParent);
+  await writeFile(join(root, "safe.txt"), "safe\n");
+  await assert.doesNotReject(assertPublicRuntimePrivacy(root));
+});
+
 test("split release-suite sources contain no assembled privacy probe", async (t) => {
   const root = await temporaryRuntime(t, "privacy-split-source-");
   for (const name of [
@@ -439,10 +448,32 @@ function credentialAssignment(keyParts: string[], valueParts: string[]): string 
   return fragments(keyParts.join("_"), "=", valueParts.join("-"), "\n");
 }
 
-async function temporaryRuntime(t: TestContext, prefix: string): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), prefix));
+async function temporaryRuntime(t: TestContext, prefix: string, parent?: string): Promise<string> {
+  const root = await createCanonicalTemporaryDirectory({ parent, prefix });
   t.after(async () => rm(root, { recursive: true, force: true }));
   return root;
+}
+
+async function temporaryDirectoryAlias(
+  t: TestContext,
+  prefix: string,
+): Promise<{ canonicalParent: string; path: string } | undefined> {
+  const base = await createCanonicalTemporaryDirectory({ prefix });
+  const canonicalParent = join(base, "canonical");
+  const path = join(base, "alias");
+  await mkdir(canonicalParent);
+  try {
+    await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    await rm(base, { recursive: true, force: true });
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
+      t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
+      return undefined;
+    }
+    throw error;
+  }
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  return { canonicalParent: await realpath(canonicalParent), path };
 }
 
 async function createProjectionFixture(fixtureRoot: string, fixtureSource: string): Promise<void> {

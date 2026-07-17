@@ -3,7 +3,6 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
-  mkdtemp,
   open,
   readdir,
   realpath,
@@ -11,7 +10,6 @@ import {
   rm,
 } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -19,6 +17,11 @@ import { deflateRawSync } from "node:zlib";
 
 import { buildRuntime, compareRuntime } from "../../../scripts/project-runtime.mjs";
 import { assertPublicContentBuffer } from "../../../scripts/public-content-policy.mjs";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
+import {
+  noReplaceGitArguments,
+  releaseSubprocessEnvironment,
+} from "../../../scripts/release-subprocess-environment.mjs";
 
 const executeFile = promisify(execFile);
 const PRODUCT = "gpt-codex-hwp";
@@ -58,6 +61,10 @@ export async function buildReleaseArtifacts(options = {}) {
   await assertAbsent(output, "RELEASE_ARTIFACTS_OUTPUT_EXISTS");
   const prepareRuntime = options.prepareRuntime ?? prepareProductionRuntime;
   if (typeof prepareRuntime !== "function") throw releaseError("RELEASE_ARTIFACTS_OPTIONS_INVALID");
+  if (Object.hasOwn(options, "temporaryParent")
+    && typeof options.temporaryParent !== "string") {
+    throw releaseError("RELEASE_ARTIFACTS_OPTIONS_INVALID");
+  }
 
   const source = await readSourceIdentity(root, options.sourceDateEpoch);
   const versions = options.versions ?? await toolVersions(root);
@@ -74,7 +81,10 @@ export async function buildReleaseArtifacts(options = {}) {
 
   let outputIdentity;
   const outputHandles = [];
-  const privateRoot = await mkdtemp(join(tmpdir(), `${PRODUCT}-release-stage-`));
+  const privateRoot = await createCanonicalTemporaryDirectory({
+    parent: options.temporaryParent,
+    prefix: `${PRODUCT}-release-stage-`,
+  });
   const privateRootIdentity = await privateDirectoryIdentity(privateRoot);
   let completed = false;
   try {
@@ -239,7 +249,11 @@ async function closeOutputHandles(records) {
 }
 
 async function prepareProductionRuntime({ root, stageRoot }) {
-  await buildRuntime({ root, outputRoot: stageRoot });
+  await buildRuntime({
+    root,
+    outputRoot: stageRoot,
+    subprocessEnvironment: releaseSubprocessEnvironment(),
+  });
   await compareRuntime({
     expectedRoot: stageRoot,
     actualRoot: join(root, "plugins", PRODUCT),
@@ -642,7 +656,10 @@ async function toolVersions(root) {
         ? { command: "cmd.exe", args: ["/d", "/s", "/c", "npm.cmd", "--version"] }
         : { command: "npm", args: ["--version"] };
     npm = (await executeFile(invocation.command, invocation.args, {
-      cwd: root, encoding: "utf8", windowsHide: true,
+      cwd: root,
+      encoding: "utf8",
+      env: releaseSubprocessEnvironment(),
+      windowsHide: true,
     })).stdout.trim();
   }
   catch { throw releaseError("RELEASE_ARTIFACTS_TOOLCHAIN_INVALID"); }
@@ -795,8 +812,12 @@ async function readGitBlob(root, commit, path, maximumBytes) {
   }
   let result;
   try {
-    result = await executeFile("git", ["show", object], {
-      cwd: root, encoding: "buffer", maxBuffer: maximumBytes + 1,
+    result = await executeFile("git", noReplaceGitArguments(["show", object]), {
+      cwd: root,
+      encoding: "buffer",
+      env: releaseSubprocessEnvironment(),
+      maxBuffer: maximumBytes + 1,
+      windowsHide: true,
     });
   } catch { throw releaseError("RELEASE_ARTIFACTS_INPUT_MISSING"); }
   const bytes = Buffer.from(result.stdout);
@@ -849,7 +870,13 @@ async function assertAbsent(path, code) {
 
 async function git(root, args, maxBuffer = 16 * 1024 * 1024) {
   try {
-    const result = await executeFile("git", args, { cwd: root, encoding: "utf8", maxBuffer });
+    const result = await executeFile("git", noReplaceGitArguments(args), {
+      cwd: root,
+      encoding: "utf8",
+      env: releaseSubprocessEnvironment(),
+      maxBuffer,
+      windowsHide: true,
+    });
     return result.stdout;
   } catch { throw releaseError("RELEASE_ARTIFACTS_GIT_INVALID"); }
 }

@@ -5,22 +5,23 @@ import {
   cp,
   lstat,
   mkdir,
-  mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, extname, join, relative } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { buildRuntime, compareRuntime } from "../scripts/project-runtime.mjs";
 import { verifyKordocCoreRuntime } from "../scripts/kordoc-core-runtime.mjs";
+import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
+import { releaseSubprocessEnvironment } from "../scripts/release-subprocess-environment.mjs";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const SOURCE = join(ROOT, "packages", "gpt-codex-hwp");
@@ -67,7 +68,9 @@ let expectedRoot;
 let actualRoot;
 
 before(async () => {
-  temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-projection-test-"));
+  temporaryRoot = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-projection-test-",
+  });
   expectedRoot = join(temporaryRoot, "expected");
   actualRoot = join(temporaryRoot, "actual");
   await buildRuntime({ root: ROOT, outputRoot: expectedRoot });
@@ -76,6 +79,117 @@ before(async () => {
 
 after(async () => {
   if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+});
+
+test("runtime compiler receives an explicit validated scrubbed subprocess environment", async () => {
+  const probePath = join(temporaryRoot, "compiler-environment-probe.cjs");
+  const evidencePath = join(temporaryRoot, "compiler-environment-evidence.json");
+  const output = join(temporaryRoot, "compiler-environment-runtime");
+  await writeFile(probePath, [
+    'const { writeFileSync } = require("node:fs")',
+    `const evidencePath = ${JSON.stringify(evidencePath)}`,
+    "const forbiddenGitKeys = Object.keys(process.env).filter((key) => /^GIT_/i.test(key) && key !== 'GIT_NO_REPLACE_OBJECTS')",
+    "const evidence = { forbiddenGitKeyCount: forbiddenGitKeys.length, hasNodeTestContext: Object.keys(process.env).some((key) => /^NODE_TEST_CONTEXT$/i.test(key)), noReplace: process.env.GIT_NO_REPLACE_OBJECTS === '1' }",
+    "writeFileSync(evidencePath, JSON.stringify(evidence))",
+    "if (evidence.forbiddenGitKeyCount !== 0 || evidence.hasNodeTestContext || !evidence.noReplace) process.exit(91)",
+  ].join(";"), "utf8");
+
+  const hostile = {
+    GIT_DIR: "hostile-dir",
+    GIT_WORK_TREE: "hostile-worktree",
+    GIT_OBJECT_DIRECTORY: "hostile-objects",
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: "hostile-alternates",
+    GIT_REPLACE_REF_BASE: "hostile-replacements",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.hooksPath",
+    GIT_CONFIG_VALUE_0: "hostile-hooks",
+    NODE_TEST_CONTEXT: "hostile-test-context",
+    NODE_OPTIONS: `--require=${probePath}`,
+  };
+  const original = new Map();
+  try {
+    for (const [key, value] of Object.entries(hostile)) {
+      original.set(key, process.env[key]);
+      process.env[key] = value;
+    }
+    await buildRuntime({
+      root: ROOT,
+      outputRoot: output,
+      subprocessEnvironment: releaseSubprocessEnvironment(),
+    });
+  } finally {
+    for (const [key, value] of original) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+  assert.deepEqual(JSON.parse(await readFile(evidencePath, "utf8")), {
+    forbiddenGitKeyCount: 0,
+    hasNodeTestContext: false,
+    noReplace: true,
+  });
+
+  for (const subprocessEnvironment of [
+    null,
+    [],
+    { SAFE: 1 },
+    { "BAD\0KEY": "value" },
+    { SAFE: "bad\0value" },
+  ]) {
+    await assert.rejects(
+      buildRuntime({
+        root: ROOT,
+        outputRoot: join(temporaryRoot, `invalid-environment-${Math.random()}`),
+        subprocessEnvironment,
+      }),
+      /subprocessEnvironment/u,
+    );
+  }
+});
+
+test("runtime compiler preserves exact keys from a null-prototype environment", async () => {
+  const probePath = join(temporaryRoot, "compiler-record-fidelity-probe.cjs");
+  const evidencePath = join(temporaryRoot, "compiler-record-fidelity-evidence.json");
+  const output = join(temporaryRoot, "compiler-record-fidelity-runtime");
+  await writeFile(probePath, [
+    'const { writeFileSync } = require("node:fs")',
+    `const evidencePath = ${JSON.stringify(evidencePath)}`,
+    "const evidence = { ownPrototypeName: Object.hasOwn(process.env, '__proto__'), prototypeName: process.env.__proto__, ownConstructorName: Object.hasOwn(process.env, 'constructor'), constructorName: process.env.constructor, safeValue: process.env.SAFE_RUNTIME_VALUE }",
+    "writeFileSync(evidencePath, JSON.stringify(evidence))",
+    "if (!evidence.ownPrototypeName || evidence.prototypeName !== 'runtime-prototype-name' || !evidence.ownConstructorName || evidence.constructorName !== 'runtime-constructor-name' || evidence.safeValue !== 'runtime-safe-value') process.exit(92)",
+  ].join(";"), "utf8");
+  const subprocessEnvironment = Object.create(null);
+  for (const [key, value] of Object.entries(releaseSubprocessEnvironment())) {
+    subprocessEnvironment[key] = value;
+  }
+  subprocessEnvironment.NODE_OPTIONS = `--require=${probePath}`;
+  subprocessEnvironment.__proto__ = "runtime-prototype-name";
+  subprocessEnvironment.constructor = "runtime-constructor-name";
+  subprocessEnvironment.SAFE_RUNTIME_VALUE = "runtime-safe-value";
+
+  await buildRuntime({
+    root: ROOT,
+    outputRoot: output,
+    subprocessEnvironment,
+  });
+  assert.deepEqual(JSON.parse(await readFile(evidencePath, "utf8")), {
+    ownPrototypeName: true,
+    prototypeName: "runtime-prototype-name",
+    ownConstructorName: true,
+    constructorName: "runtime-constructor-name",
+    safeValue: "runtime-safe-value",
+  });
+
+  const invalidEnvironment = Object.create(null);
+  invalidEnvironment.SAFE_RUNTIME_VALUE = { unexpected: true };
+  await assert.rejects(
+    buildRuntime({
+      root: ROOT,
+      outputRoot: join(temporaryRoot, "invalid-object-environment"),
+      subprocessEnvironment: invalidEnvironment,
+    }),
+    /subprocessEnvironment/u,
+  );
 });
 
 test("runtime projection contains the exact sorted allowlist and no special entries", async () => {
@@ -101,6 +215,19 @@ test("runtime projection contains the exact sorted allowlist and no special entr
     assert.equal(segments.some((segment) => FORBIDDEN_SEGMENTS.has(segment)), false, path);
     assert.equal(FORBIDDEN_EXTENSIONS.has(extname(path).toLowerCase()), false, path);
   }
+});
+
+test("root runtime fixtures canonicalize an injected aliased temp parent", async (t) => {
+  const alias = await temporaryDirectoryAlias(t, "root-runtime-parent-");
+  if (alias === undefined) return;
+  const root = await createCanonicalTemporaryDirectory({
+    parent: alias.path,
+    prefix: "root-runtime-fixture-",
+  });
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  assert.equal(dirname(root), alias.canonicalParent);
+  const output = join(root, "runtime");
+  await assert.doesNotReject(buildRuntime({ root: ROOT, outputRoot: output }));
 });
 
 test("package-local npm policy is projected byte-for-byte into the public runtime", async () => {
@@ -318,6 +445,25 @@ test("atomic projection refuses pre-existing unowned stage and backup paths", as
   assert.equal(await readFile(join(output, "old.txt"), "utf8"), "old runtime\n");
   assert.equal((await lstat(backup)).isDirectory(), true);
 });
+
+async function temporaryDirectoryAlias(t, prefix) {
+  const base = await createCanonicalTemporaryDirectory({ prefix });
+  const canonicalParent = join(base, "canonical");
+  const path = join(base, "alias");
+  await mkdir(canonicalParent);
+  try {
+    await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    await rm(base, { recursive: true, force: true });
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes(error?.code)) {
+      t.skip(`directory aliases are unavailable (${error.code})`);
+      return undefined;
+    }
+    throw error;
+  }
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  return { canonicalParent: await realpath(canonicalParent), path };
+}
 
 test("successful atomic projection removes its owned stage and backup", async () => {
   const output = join(temporaryRoot, "successful-swap-output");

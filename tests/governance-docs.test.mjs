@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 import {
   MAX_ADVISORY_RECORDS,
@@ -475,27 +476,43 @@ test("governance documentation audit uses shared bounded process receipts author
   ), { code });
 });
 
-test("governance documentation lock read is bounded and rejects an open-time swap", async () => {
+test("governance documentation lock read is bounded and rejects an open-time swap", async (t) => {
   const module = await import("../scripts/dependency-audit-issue.mjs");
   assert.equal(typeof module.readAuditLock, "function");
-  const root = await mkdtemp(join(tmpdir(), "governance-lock-"));
-  try {
-    const directory = join(root, "packages", "gpt-codex-hwp");
-    await mkdir(directory, { recursive: true });
-    const lockPath = join(directory, "package-lock.json");
-    const replacement = join(directory, "replacement.json");
-    await writeFile(lockPath, '{"packages":{}}');
-    await writeFile(replacement, '{"packages":{"changed":{}}}');
-    await assert.rejects(module.readAuditLock(root, { directory: "packages/gpt-codex-hwp" }, {
-      readOptions: { beforeOpen: async () => rename(replacement, lockPath) },
-    }), { code: "LOCKFILE_CHANGED" });
-    await writeFile(lockPath, Buffer.alloc(4 * 1024 * 1024 + 1));
-    await assert.rejects(module.readAuditLock(root, { directory: "packages/gpt-codex-hwp" }), {
-      code: "LOCKFILE_TOO_LARGE",
-    });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  const root = await createCanonicalTemporaryDirectory({ prefix: "governance-lock-" });
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const directory = join(root, "packages", "gpt-codex-hwp");
+  await mkdir(directory, { recursive: true });
+  const lockPath = join(directory, "package-lock.json");
+  const replacement = join(directory, "replacement.json");
+  await writeFile(lockPath, '{"packages":{}}');
+  await writeFile(replacement, '{"packages":{"changed":{}}}');
+  await assert.rejects(module.readAuditLock(root, { directory: "packages/gpt-codex-hwp" }, {
+    readOptions: { beforeOpen: async () => rename(replacement, lockPath) },
+  }), { code: "LOCKFILE_CHANGED" });
+  await writeFile(lockPath, Buffer.alloc(4 * 1024 * 1024 + 1));
+  await assert.rejects(module.readAuditLock(root, { directory: "packages/gpt-codex-hwp" }), {
+    code: "LOCKFILE_TOO_LARGE",
+  });
+});
+
+test("governance lock fixtures canonicalize an injected aliased temp parent", async (t) => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  const alias = await temporaryDirectoryAlias(t, "governance-canonical-parent-");
+  if (alias === undefined) return;
+  const root = await createCanonicalTemporaryDirectory({
+    parent: alias.path,
+    prefix: "governance-lock-",
+  });
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  assert.equal(dirname(root), alias.canonicalParent);
+  const directory = join(root, "packages", "gpt-codex-hwp");
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, "package-lock.json"), '{"packages":{}}');
+  assert.deepEqual(
+    await module.readAuditLock(root, { directory: "packages/gpt-codex-hwp" }),
+    { packages: {} },
+  );
 });
 
 test("governance documentation keeps contributor-only material out of generated runtime", async () => {
@@ -517,4 +534,23 @@ function escapeRegExp(value) {
 
 function githubAuthorization() {
   return { [["to", "ken"].join("")]: ["test", "authorization", "fixture"].join("-") };
+}
+
+async function temporaryDirectoryAlias(t, prefix) {
+  const base = await createCanonicalTemporaryDirectory({ prefix });
+  const canonicalParent = join(base, "canonical");
+  const path = join(base, "alias");
+  await mkdir(canonicalParent);
+  try {
+    await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    await rm(base, { recursive: true, force: true });
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes(error?.code)) {
+      t.skip(`directory aliases are unavailable (${error.code})`);
+      return undefined;
+    }
+    throw error;
+  }
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  return { canonicalParent: await realpath(canonicalParent), path };
 }

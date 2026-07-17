@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { lstat, mkdtemp, open, readFile, readdir, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, open, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { buildRuntime } from "../../../scripts/project-runtime.mjs";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 import { verifyKordocCoreRuntime } from "../../../scripts/kordoc-core-runtime.mjs";
+import { releaseSubprocessEnvironment } from "../../../scripts/release-subprocess-environment.mjs";
 import {
   assertCompactBudgets,
   assertCompactLockfile,
@@ -74,11 +75,25 @@ export function resolveNpmInvocation(args, options = {}) {
 }
 
 export async function runCommand(command, args, cwd, options = {}) {
-  const { allowFailure = false, timeoutMs = COMMAND_TIMEOUT_MS } = options;
+  const {
+    allowFailure = false,
+    timeoutMs = COMMAND_TIMEOUT_MS,
+    environmentOverrides = {},
+  } = options;
+  let environment;
+  try {
+    environment = releaseSubprocessEnvironment(process.env, environmentOverrides);
+  } catch {
+    throw commandError(
+      "COMMAND_ENVIRONMENT_INVALID",
+      "subprocess environment overrides are invalid",
+    );
+  }
   return await new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd,
       detached: process.platform !== "win32",
+      env: environment,
       windowsHide: true,
       shell: false,
     });
@@ -133,6 +148,7 @@ async function terminateProcessTree(child) {
   if (process.platform === "win32") {
     await new Promise((resolvePromise) => {
       const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+        env: releaseSubprocessEnvironment(),
         stdio: "ignore",
         windowsHide: true,
         shell: false,
@@ -640,6 +656,7 @@ async function verifyMcp(runtimeRoot, {
     command: process.execPath,
     args: [serverPath],
     cwd: runtimeRoot,
+    env: { GIT_NO_REPLACE_OBJECTS: "1" },
     stderr: "pipe",
   });
   const client = new Client({ name: "compact-runtime-gate", version: "0.1.0" });
@@ -757,7 +774,14 @@ async function verifyTools(
   return statuses;
 }
 
-export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
+export async function createCompactRuntimeTemp(parent) {
+  return createCanonicalTemporaryDirectory({
+    parent,
+    prefix: "gpt-codex-hwp-compact-",
+  });
+}
+
+export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath, temporaryParent }) {
   const source = resolve(sourceRoot);
   const fixture = sampleHwpPath === undefined
     ? await resolveHwpFixture({ requireTracked: true })
@@ -767,7 +791,7 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
   if (sampleBefore !== fixture.sha256) {
     throw new Error("The HWP sample changed before verification.");
   }
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-compact-"));
+  const temporaryRoot = await createCompactRuntimeTemp(temporaryParent);
   let report;
   let ownedSample;
   try {
@@ -778,7 +802,11 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath }) {
       expectedSha256: fixture.sha256,
     });
     const runtimeRoot = join(temporaryRoot, "runtime");
-    await buildRuntime({ root: source, outputRoot: runtimeRoot });
+    await buildRuntime({
+      root: source,
+      outputRoot: runtimeRoot,
+      subprocessEnvironment: releaseSubprocessEnvironment(),
+    });
     const provenanceRecord = await verifyKordocCoreRuntime(join(runtimeRoot, "vendor", "kordoc-core"));
     const provenance = {
       status: "passed",

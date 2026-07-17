@@ -5,15 +5,14 @@ import {
   cp,
   lstat,
   mkdir,
-  mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -29,6 +28,7 @@ import {
   inspectReleaseZipForTest,
   verifyReleaseArtifacts,
 } from "../../../scripts/verify-release-artifacts.mjs";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 const executeFile = promisify(execFile);
 const EPOCH = 1_700_000_000;
@@ -269,6 +269,10 @@ test("release artifact builder never deletes caller output after it takes owners
   );
   assert.doesNotMatch(source, /removeOwnedDirectory\s*\(/u);
   assert.doesNotMatch(source, /\brm\s*\(\s*output\b/u);
+  assert.match(
+    source,
+    /buildRuntime\(\{\s*root,\s*outputRoot: stageRoot,\s*subprocessEnvironment: releaseSubprocessEnvironment\(\),\s*\}\)/u,
+  );
 });
 
 test("release artifact builder never deletes a private staging replacement on failure", async (t) => {
@@ -306,6 +310,32 @@ test("release artifact builder never deletes a private staging replacement on fa
   assert.equal((await lstat(savedPrivateRoot)).isDirectory(), true);
 });
 
+test("release artifact builder canonicalizes an injected temporary parent", async (t) => {
+  const fixture = await createReleaseFixture(t);
+  const alias = await temporaryDirectoryAlias(t, "release-artifact-parent-");
+  if (alias === undefined) return;
+  let privateRoot: string | undefined;
+  t.after(async () => {
+    if (privateRoot !== undefined) await rm(privateRoot, { recursive: true, force: true });
+  });
+  await assert.rejects(
+    buildReleaseArtifacts({
+      root: fixture.root,
+      output: join(fixture.parent, "canonical-stage-output"),
+      sourceDateEpoch: REPRODUCIBLE_EPOCH,
+      versions: VERSIONS,
+      temporaryParent: alias.path,
+      prepareRuntime: async ({ stageRoot }) => {
+        privateRoot = dirname(stageRoot);
+        throw new Error("stop after staging observation");
+      },
+    }),
+    /RELEASE_ARTIFACTS_BUILD_FAILED/u,
+  );
+  assert.equal(dirname(privateRoot!), alias.canonicalParent);
+  assert.equal((await lstat(privateRoot!)).isDirectory(), true);
+});
+
 test("release artifacts require the exact configured Git identity", async (t) => {
   const fixture = await createReleaseFixture(t);
   await runGit(fixture.root, ["config", "user.email", "wrong@example.invalid"]);
@@ -318,6 +348,72 @@ test("release artifacts require the exact configured Git identity", async (t) =>
       versions: VERSIONS,
     }),
     /RELEASE_ARTIFACTS_GIT_IDENTITY_MISSING/u,
+  );
+});
+
+test("release artifact Git reads ignore replacement refs and inherited selectors", async (t) => {
+  const fixture = await createReleaseFixture(t);
+  const original = (await gitOutput(fixture.root, ["rev-parse", "HEAD"])).trim();
+  const originalTree = (await gitOutput(fixture.root, ["rev-parse", "HEAD^{tree}"])).trim();
+  const originalReadme = await readFile(
+    join(fixture.root, "plugins", "gpt-codex-hwp", "README.md"),
+  );
+
+  await writeFile(
+    join(fixture.root, "plugins", "gpt-codex-hwp", "README.md"),
+    "# Replacement runtime\n",
+    "utf8",
+  );
+  await runGit(fixture.root, ["add", "."]);
+  await runGit(fixture.root, ["commit", "-m", "replacement runtime"]);
+  const replacement = (await gitOutput(fixture.root, ["rev-parse", "HEAD"])).trim();
+  await runGit(fixture.root, ["reset", "--hard", original]);
+  await runGit(fixture.root, ["replace", original, replacement]);
+
+  const inherited = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries({
+    GIT_DIR: join(fixture.root, ".git", "hostile-missing"),
+    GIT_WORK_TREE: join(fixture.parent, "hostile-worktree"),
+    GIT_OBJECT_DIRECTORY: join(fixture.parent, "hostile-objects"),
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: join(fixture.parent, "hostile-alternates"),
+    GIT_REPLACE_REF_BASE: "refs/hostile-replace/",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.hooksPath",
+    GIT_CONFIG_VALUE_0: join(fixture.parent, "hostile-hooks"),
+  })) {
+    inherited.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  t.after(() => {
+    for (const [key, value] of inherited) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const output = join(fixture.parent, "unreplaced-artifacts");
+  const built = await buildReleaseArtifacts({
+    root: fixture.root,
+    output,
+    sourceDateEpoch: REPRODUCIBLE_EPOCH,
+    prepareRuntime: fixture.prepareRuntime,
+    versions: VERSIONS,
+  });
+  const verified = await verifyReleaseArtifacts({
+    root: fixture.root,
+    artifacts: output,
+    sourceDateEpoch: REPRODUCIBLE_EPOCH,
+  });
+  assert.equal(built.commit, original);
+  assert.equal(built.tree, originalTree);
+  assert.equal(verified.commit, original);
+  assert.equal(verified.tree, originalTree);
+  const archive = inspectReleaseZipForTest(
+    await readFile(join(output, "gpt-codex-hwp-0.1.4.zip")),
+  );
+  assert.deepEqual(
+    Buffer.from(archive.find((entry) => entry.name === "README.md")?.bytes ?? []),
+    originalReadme,
   );
 });
 
@@ -620,7 +716,9 @@ test("release artifacts verifier fails closed on tampering and unexpected output
 });
 
 async function createReleaseFixture(t: test.TestContext) {
-  const parent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-test-"));
+  const parent = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-release-test-",
+  });
   t.after(async () => { await rm(parent, { recursive: true, force: true }); });
   const root = join(parent, "repository");
   await mkdir(root, { recursive: true });
@@ -721,6 +819,28 @@ async function createReleaseFixture(t: test.TestContext) {
       assert.equal(metadata.isDirectory(), true);
     },
   };
+}
+
+async function temporaryDirectoryAlias(
+  t: test.TestContext,
+  prefix: string,
+): Promise<{ canonicalParent: string; path: string } | undefined> {
+  const base = await createCanonicalTemporaryDirectory({ prefix });
+  const canonicalParent = join(base, "canonical");
+  const path = join(base, "alias");
+  await mkdir(canonicalParent);
+  try {
+    await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    await rm(base, { recursive: true, force: true });
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
+      t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
+      return undefined;
+    }
+    throw error;
+  }
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  return { canonicalParent: await realpath(canonicalParent), path };
 }
 
 async function writeJson(path: string, value: unknown) {
