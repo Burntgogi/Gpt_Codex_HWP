@@ -729,7 +729,7 @@ async function runChild<Operation extends DocumentEngineOperation>(
           throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
         }
       }
-      const wire = createWireDocumentRequest(request, transports);
+      const wire = createWireDocumentRequest(request, transports, "child");
       const frame = encodeBoundedJsonFrame(wire, MAX_CHILD_REQUEST_FRAME_BYTES);
       if (child.stdin === null) throw new Error("child stdin unavailable");
       child.stdin.end(frame, (error?: Error | null) => {

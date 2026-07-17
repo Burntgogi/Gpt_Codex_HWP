@@ -27,6 +27,7 @@ import {
 } from "../src/shared/document-snapshot.js";
 import { MAX_DOCUMENT_BYTES } from "../src/shared/files.js";
 import { toOwnedExactBytes } from "../src/shared/owned-bytes.js";
+import { MAX_WORKER_INPUT_BYTES } from "../src/workers/document-protocol.js";
 
 test("owned bytes reuses an exact standalone ArrayBuffer without copying", () => {
   const input = new Uint8Array(new ArrayBuffer(4));
@@ -128,7 +129,8 @@ test("document snapshot opens an exact worker buffer with frozen path-free metad
   });
   t.after(async () => snapshot.cleanup());
 
-  assert.equal(WORKER_INPUT_MAX_BYTES, 64 * 1024 * 1024);
+  assert.equal(WORKER_INPUT_MAX_BYTES, MAX_WORKER_INPUT_BYTES);
+  assert.equal(MAX_WORKER_INPUT_BYTES, 64 * 1024 * 1024);
   assert.equal(snapshot.transport, "worker");
   assert.deepEqual(allocations, [bytes.byteLength]);
   assert.deepEqual(snapshot.metadata, {

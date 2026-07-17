@@ -39,7 +39,7 @@ port.on("message", (value: unknown) => {
 async function run(value: unknown): Promise<void> {
   let request: WireDocumentRequest;
   try {
-    request = validateWireDocumentRequest(value);
+    request = validateWireDocumentRequest(value, "worker");
   } catch {
     throw new Error("invalid document worker request");
   }

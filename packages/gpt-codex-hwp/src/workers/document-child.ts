@@ -44,7 +44,7 @@ void run();
 async function run(): Promise<void> {
   let request: WireDocumentRequest;
   try {
-    request = validateWireDocumentRequest(await readRequest());
+    request = validateWireDocumentRequest(await readRequest(), "child");
   } catch {
     process.exitCode = 19;
     return;

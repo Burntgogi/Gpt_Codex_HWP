@@ -27,8 +27,9 @@ import {
   authorizeExistingPath,
 } from "./allowed-roots.js";
 import { toOwnedExactBytes } from "./owned-bytes.js";
+import { MAX_WORKER_INPUT_BYTES } from "../workers/document-protocol.js";
 
-export const WORKER_INPUT_MAX_BYTES = 64 * 1024 * 1024;
+export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
 
 const READ_CHUNK_BYTES = 1024 * 1024;
 const PREFLIGHT_BYTES = 8;

@@ -131,6 +131,67 @@ test("document worker client rejects an invalid deadline before dispatch and sti
   assert.equal(snapshot.cleanupCalls, 1);
 });
 
+test("document worker client refuses declared aggregate input over 64 MiB before factory dispatch", async () => {
+  let factories = 0;
+  const request = detectRequest("worker-declared-oversize");
+  const logicalBytes = Buffer.byteLength(JSON.stringify({
+    input: request.input,
+    options: request.options,
+  }), "utf8");
+  const snapshot = workerSnapshotWithDeclaredSize(
+    new ArrayBuffer(1),
+    64 * 1024 * 1024 - logicalBytes + 1,
+  );
+  const client = createDocumentWorkerClient({
+    workerFactory: (options) => {
+      factories += 1;
+      return new Worker(fixtureUrl, { ...options, workerData: { mode: "success" } });
+    },
+  });
+
+  await assert.rejects(
+    client.run(request, snapshot),
+    (error: unknown) => safeCode(error) === "ENGINE_RESOURCE_LIMIT",
+  );
+  assert.equal(factories, 0);
+  assert.equal(snapshot.takeCalls, 0);
+  assert.equal(snapshot.cleanupCalls, 1);
+});
+
+test("document worker client rejects understated transferred bytes before postMessage", async () => {
+  let posts = 0;
+  let terminations = 0;
+  const snapshot = workerSnapshotWithDeclaredSize(new ArrayBuffer(2), 1);
+  const client = createDocumentWorkerClient({
+    workerFactory: (options) => {
+      const worker = new Worker(fixtureUrl, {
+        ...options,
+        workerData: { mode: "success" },
+      });
+      const post = worker.postMessage.bind(worker);
+      worker.postMessage = ((...args: Parameters<typeof worker.postMessage>) => {
+        posts += 1;
+        return post(...args);
+      }) as typeof worker.postMessage;
+      const terminate = worker.terminate.bind(worker);
+      worker.terminate = async () => {
+        terminations += 1;
+        return terminate();
+      };
+      return worker;
+    },
+  });
+
+  await assert.rejects(
+    client.run(detectRequest("worker-actual-mismatch"), snapshot),
+    (error: unknown) => safeCode(error) === "ENGINE_PROTOCOL_ERROR",
+  );
+  assert.equal(posts, 0);
+  assert.equal(terminations, 1);
+  assert.equal(snapshot.takeCalls, 1);
+  assert.equal(snapshot.cleanupCalls, 1);
+});
+
 test("document worker client rejects operation-incompatible snapshots before factory dispatch", async () => {
   let dispatches = 0;
   const client = createDocumentWorkerClient({
@@ -620,6 +681,17 @@ function workerSnapshot(buffer: ArrayBuffer): WorkerDocumentSnapshot & {
     },
     async verifySourceUnchanged() {},
     async cleanup() { this.cleanupCalls += 1; },
+  };
+}
+
+function workerSnapshotWithDeclaredSize(
+  buffer: ArrayBuffer,
+  sizeBytes: number,
+): ReturnType<typeof workerSnapshot> {
+  const snapshot = workerSnapshot(buffer);
+  return {
+    ...snapshot,
+    metadata: { ...snapshot.metadata, sizeBytes },
   };
 }
 

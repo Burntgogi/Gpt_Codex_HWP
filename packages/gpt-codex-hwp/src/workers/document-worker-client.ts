@@ -13,6 +13,8 @@ import type {
 import {
   createDocumentEventValidator,
   createWireDocumentRequest,
+  documentWorkerRequestBytes,
+  MAX_WORKER_INPUT_BYTES,
   type DocumentEngineOperation,
   type DocumentResultPayload,
   type LogicalDocumentRequest,
@@ -86,6 +88,14 @@ export function createDocumentWorkerClient(
         await cleanupSnapshot(snapshot);
         throw error;
       }
+      let preflight: WorkerRequestPreflight;
+      try {
+        preflight = workerRequestPreflight(request, snapshot, options);
+      } catch (error: unknown) {
+        await cleanupSnapshot(snapshot);
+        if (error instanceof DocumentEngineRunError) throw error;
+        throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+      }
       let worker: DocumentWorkerLike;
       try {
         worker = workerFactory({
@@ -130,6 +140,7 @@ export function createDocumentWorkerClient(
         remainingDeadlineMs,
         worker,
         terminationDeadlineMs,
+        preflight,
       );
     },
   };
@@ -142,6 +153,7 @@ async function runWorker<Operation extends DocumentEngineOperation>(
   deadlineMs: number,
   worker: DocumentWorkerLike,
   terminationDeadlineMs: number,
+  preflight: WorkerRequestPreflight,
 ): Promise<DocumentResultPayload<Operation>> {
   const startedAt = Date.now();
   const validator = createDocumentEventValidator(request.requestId, request.operation);
@@ -281,16 +293,29 @@ async function runWorker<Operation extends DocumentEngineOperation>(
     try {
       const transports: Record<string, unknown> = {};
       const transferList: Transferable[] = [];
+      let actualDocumentBytes = 0;
+      let actualImageBytes = 0;
       if (request.operation !== "generateHwpx") {
         if (snapshot?.transport !== "worker") {
           throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
         }
         const buffer = snapshot.takeTransferable();
+        actualDocumentBytes = buffer.byteLength;
+        if (actualDocumentBytes !== preflight.documentBytes) {
+          throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+        }
         transports.document = { transport: "buffer", buffer };
         transferList.push(buffer);
       }
       if (request.operation === "insertImage") {
         if (options.imageInput?.transport !== "buffer") {
+          throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+        }
+        actualImageBytes = options.imageInput.buffer.byteLength;
+        if (actualImageBytes !== preflight.imageBytes) {
+          throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+        }
+        if (transferList.includes(options.imageInput.buffer)) {
           throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
         }
         transports.image = {
@@ -299,12 +324,59 @@ async function runWorker<Operation extends DocumentEngineOperation>(
         };
         transferList.push(options.imageInput.buffer);
       }
-      const wire = createWireDocumentRequest(request, transports);
+      const actualBytes = documentWorkerRequestBytes(
+        { input: request.input, options: request.options },
+        actualDocumentBytes,
+        actualImageBytes,
+      );
+      if (actualBytes !== preflight.aggregateBytes || actualBytes > MAX_WORKER_INPUT_BYTES) {
+        throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+      }
+      let wire;
+      try {
+        wire = createWireDocumentRequest(request, transports, "worker");
+      } catch {
+        throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+      }
       worker.postMessage(wire, transferList);
     } catch (error: unknown) {
       settle({ error });
     }
   });
+}
+
+interface WorkerRequestPreflight {
+  readonly documentBytes: number;
+  readonly imageBytes: number;
+  readonly aggregateBytes: number;
+}
+
+function workerRequestPreflight(
+  request: LogicalDocumentRequest,
+  snapshot: WorkerDocumentSnapshot | undefined,
+  options: DocumentEngineRunOptions,
+): WorkerRequestPreflight {
+  const documentBytes = request.operation === "generateHwpx"
+    ? 0
+    : snapshot?.metadata.sizeBytes ?? Number.NaN;
+  let imageBytes = 0;
+  if (request.operation === "insertImage") {
+    if (options.imageInput?.transport !== "buffer") {
+      throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+    }
+    imageBytes = options.imageInput.buffer.byteLength;
+  }
+  const aggregateBytes = documentWorkerRequestBytes(
+    { input: request.input, options: request.options },
+    documentBytes,
+    imageBytes,
+  );
+  if (aggregateBytes > MAX_WORKER_INPUT_BYTES) {
+    throw createDocumentEngineRunError("ENGINE_RESOURCE_LIMIT", {
+      remediation: "reduce_input",
+    });
+  }
+  return Object.freeze({ documentBytes, imageBytes, aggregateBytes });
 }
 
 type WorkerTerminationOutcome = "confirmed" | "rejected" | "timeout";

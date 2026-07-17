@@ -8,6 +8,9 @@ import {
   type DocumentEngineRunError,
 } from "./document-errors.js";
 import {
+  documentLogicalRequestBytes,
+  MAX_WORKER_INPUT_BYTES,
+  type DocumentLogicalRequestContent,
   type DocumentEngineOperation,
   type DocumentResultSpoolEncoding,
   type DocumentResultPayload,
@@ -16,7 +19,10 @@ import {
   type SafeJsonValue,
 } from "./document-protocol.js";
 
-export const WORKER_INPUT_MAX_BYTES = 64 * 1024 * 1024;
+export { documentLogicalRequestBytes };
+export type { DocumentLogicalRequestContent };
+
+export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
 export const CHILD_WORKING_SET_MAX_BYTES = 1_536 * 1024 * 1024;
 
 export type DocumentExecutionClass = "worker-safe" | "heavy";
@@ -30,24 +36,6 @@ export interface DocumentExecutionSelection {
   readonly logicalBytes?: number;
   readonly estimatedWorkingSetBytes: number;
   readonly executionClass: DocumentExecutionClass;
-}
-
-export interface DocumentLogicalRequestContent {
-  readonly input: unknown;
-  readonly options: unknown;
-}
-
-export function documentLogicalRequestBytes(
-  request: DocumentLogicalRequestContent,
-): number {
-  try {
-    return Buffer.byteLength(JSON.stringify({
-      input: request.input,
-      options: request.options,
-    }), "utf8");
-  } catch {
-    throw resourceLimitError();
-  }
 }
 
 export function maxWorkerSnapshotBytesForRequest(

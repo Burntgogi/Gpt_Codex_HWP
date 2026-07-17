@@ -14,12 +14,18 @@ interface ProtocolApi {
   readonly MAX_DOCUMENT_RENDER_SVG_BYTES: number;
   readonly MAX_DOCUMENT_ENGINE_RESULT_BYTES: number;
   readonly MAX_WORKER_INLINE_HWPX_RESULT_BYTES: number;
+  readonly MAX_WORKER_INPUT_BYTES: number;
+  readonly MAX_WORKER_RESULT_BYTES: number;
   readonly MAX_CHILD_INLINE_RESULT_BYTES: number;
   validateLogicalDocumentRequest(value: unknown): Readonly<Record<string, unknown>>;
-  validateWireDocumentRequest(value: unknown): Readonly<Record<string, unknown>>;
+  validateWireDocumentRequest(
+    value: unknown,
+    boundary: "worker" | "child",
+  ): Readonly<Record<string, unknown>>;
   createWireDocumentRequest(
     logical: unknown,
     transports: Readonly<Record<string, unknown>>,
+    boundary: "worker" | "child",
   ): Readonly<Record<string, unknown>>;
   createDocumentEventValidator(
     requestId: string,
@@ -137,27 +143,169 @@ test("document engine protocol separates path-free logical requests from wire tr
   );
 });
 
+test("document engine protocol enforces one canonical 64 MiB worker request boundary", () => {
+  assert.equal(protocol.MAX_WORKER_INPUT_BYTES, 64 * 1024 * 1024);
+  const logical = logicalRequests.detect;
+  const logicalBytes = Buffer.byteLength(JSON.stringify({
+    input: logical.input,
+    options: logical.options,
+  }), "utf8");
+  const exact = new ArrayBuffer(protocol.MAX_WORKER_INPUT_BYTES - logicalBytes);
+  assert.doesNotThrow(() => protocol.createWireDocumentRequest(logical, {
+    document: { transport: "buffer", buffer: exact },
+  }, "worker"));
+  assertProtocolError(() => protocol.createWireDocumentRequest(logical, {
+    document: {
+      transport: "buffer",
+      buffer: new ArrayBuffer(exact.byteLength + 1),
+    },
+  }, "worker"));
+
+  assertProtocolError(() => protocol.createWireDocumentRequest(logical, {
+    document: { transport: "spool", descriptor: 3, sizeBytes: 1 },
+  }, "worker"));
+  assertProtocolError(() => protocol.createWireDocumentRequest(logical, {
+    document: { transport: "buffer", buffer: new ArrayBuffer(1) },
+  }, "child"));
+});
+
+test("document engine protocol includes document image and logical bytes in the worker aggregate", () => {
+  const logical = logicalRequests.insertImage;
+  const logicalBytes = Buffer.byteLength(JSON.stringify({
+    input: logical.input,
+    options: logical.options,
+  }), "utf8");
+  const document = new ArrayBuffer(
+    protocol.MAX_WORKER_INPUT_BYTES - logicalBytes - 1,
+  );
+  assert.doesNotThrow(() => protocol.createWireDocumentRequest(logical, {
+    document: { transport: "buffer", buffer: document },
+    image: { transport: "buffer", buffer: new ArrayBuffer(1) },
+  }, "worker"));
+  assertProtocolError(() => protocol.createWireDocumentRequest(logical, {
+    document: { transport: "buffer", buffer: document },
+    image: { transport: "buffer", buffer: new ArrayBuffer(2) },
+  }, "worker"));
+});
+
+test("document engine protocol preserves the 512 MiB child input spool boundary", () => {
+  for (const sizeBytes of [64 * 1024 * 1024 + 1, 512 * 1024 * 1024]) {
+    assert.doesNotThrow(() => protocol.createWireDocumentRequest(
+      logicalRequests.detect,
+      { document: { transport: "spool", descriptor: 3, sizeBytes } },
+      "child",
+    ));
+  }
+  assertProtocolError(() => protocol.createWireDocumentRequest(
+    logicalRequests.detect,
+    {
+      document: {
+        transport: "spool",
+        descriptor: 3,
+        sizeBytes: 512 * 1024 * 1024 + 1,
+      },
+    },
+    "child",
+  ));
+});
+
+test("document engine protocol uses one universal 64 MiB worker result boundary", () => {
+  assert.equal(protocol.MAX_WORKER_RESULT_BYTES, 64 * 1024 * 1024);
+  for (const operation of protocol.DOCUMENT_ENGINE_OPERATIONS) {
+    assert.equal(
+      protocol.maximumWorkerInlineResultBytes(operation),
+      protocol.MAX_WORKER_RESULT_BYTES,
+    );
+  }
+
+  const exactValidator = protocol.createDocumentEventValidator(requestId, "render");
+  exactValidator.accept(readyEvent());
+  const exactSvg = "x".repeat(protocol.MAX_WORKER_RESULT_BYTES);
+  assert.doesNotThrow(() => exactValidator.accept(resultEvent(
+    { svg: exactSvg },
+    Buffer.byteLength(exactSvg, "utf8"),
+  )));
+
+  const oversizedValidator = protocol.createDocumentEventValidator(requestId, "render");
+  oversizedValidator.accept(readyEvent());
+  const oversizedSvg = `${exactSvg}x`;
+  assertProtocolError(() => oversizedValidator.accept(resultEvent(
+    { svg: oversizedSvg },
+    Buffer.byteLength(oversizedSvg, "utf8"),
+  )));
+});
+
+test("parse worker results accept exactly 64 MiB and reject one byte more", () => {
+  const emptyBytes = protocol.measureDocumentResultByteLength("parse", parsePayload(""));
+  const exactPayload = parsePayload(
+    "x".repeat(protocol.MAX_WORKER_RESULT_BYTES - emptyBytes),
+  );
+  const exactBytes = protocol.measureDocumentResultByteLength("parse", exactPayload);
+  assert.equal(exactBytes, protocol.MAX_WORKER_RESULT_BYTES);
+  const exact = protocol.createDocumentEventValidator(requestId, "parse");
+  exact.accept(readyEvent());
+  assert.doesNotThrow(() => exact.accept(resultEvent(exactPayload, exactBytes)));
+
+  const oversizedPayload = parsePayload(
+    "x".repeat(protocol.MAX_WORKER_RESULT_BYTES - emptyBytes + 1),
+  );
+  const oversizedBytes = protocol.measureDocumentResultByteLength(
+    "parse",
+    oversizedPayload,
+  );
+  const oversized = protocol.createDocumentEventValidator(requestId, "parse");
+  oversized.accept(readyEvent());
+  assertProtocolError(() => oversized.accept(
+    resultEvent(oversizedPayload, oversizedBytes),
+  ));
+});
+
+test("HWPX-producing worker results preserve the exact universal boundary", () => {
+  const exactBytes = new ArrayBuffer(protocol.MAX_WORKER_RESULT_BYTES);
+  const oversizedBytes = new ArrayBuffer(protocol.MAX_WORKER_RESULT_BYTES + 1);
+  for (const operation of [
+    "generateHwpx",
+    "patchHwpx",
+    "fillHwpx",
+    "insertImage",
+  ]) {
+    const exact = protocol.createDocumentEventValidator(requestId, operation);
+    exact.accept(readyEvent());
+    assert.doesNotThrow(() => exact.accept(resultEvent(
+      { bytes: exactBytes },
+      protocol.MAX_WORKER_RESULT_BYTES,
+    )));
+
+    const oversized = protocol.createDocumentEventValidator(requestId, operation);
+    oversized.accept(readyEvent());
+    assertProtocolError(() => oversized.accept(resultEvent(
+      { bytes: oversizedBytes },
+      protocol.MAX_WORKER_RESULT_BYTES + 1,
+    )));
+  }
+});
+
 test("document engine protocol builds exact wire inputs from logical requests and transports", () => {
   for (const wire of Object.values(wireRequests)) {
-    assert.doesNotThrow(() => protocol.validateWireDocumentRequest(wire));
+    assert.doesNotThrow(() => protocol.validateWireDocumentRequest(wire, "worker"));
   }
   assert.deepEqual(
     protocol.createWireDocumentRequest(logicalRequests.patchHwpx, {
       document: documentTransport,
-    }),
+    }, "worker"),
     wireRequests.patchHwpx,
   );
   assert.deepEqual(
-    protocol.createWireDocumentRequest(logicalRequests.generateHwpx, {}),
+    protocol.createWireDocumentRequest(logicalRequests.generateHwpx, {}, "worker"),
     logicalRequests.generateHwpx,
   );
   assertProtocolError(() =>
-    protocol.createWireDocumentRequest(logicalRequests.detect, {}),
+    protocol.createWireDocumentRequest(logicalRequests.detect, {}, "worker"),
   );
   assertProtocolError(() =>
     protocol.createWireDocumentRequest(logicalRequests.generateHwpx, {
       document: documentTransport,
-    }),
+    }, "worker"),
   );
 });
 
@@ -306,7 +454,7 @@ test("document engine protocol accepts only exact ArrayBuffer worker transports"
       protocol.validateWireDocumentRequest({
         ...wireRequests.detect,
         input: { document: { transport: "buffer", buffer: rejected } },
-      }),
+      }, "worker"),
     );
   }
   assertProtocolError(() =>
@@ -319,7 +467,7 @@ test("document engine protocol accepts only exact ArrayBuffer worker transports"
           byteOffset: 1,
         },
       },
-    }),
+    }, "worker"),
   );
 });
 
@@ -333,7 +481,7 @@ test("document engine protocol validates path-free child spool descriptors and s
     },
     {},
   );
-  assert.doesNotThrow(() => protocol.validateWireDocumentRequest(child));
+  assert.doesNotThrow(() => protocol.validateWireDocumentRequest(child, "child"));
 
   for (const badInput of [
     {
@@ -376,7 +524,7 @@ test("document engine protocol validates path-free child spool descriptors and s
     },
   ]) {
     assertProtocolError(() =>
-      protocol.validateWireDocumentRequest({ ...child, input: badInput }),
+      protocol.validateWireDocumentRequest({ ...child, input: badInput }, "child"),
     );
   }
 });
@@ -399,8 +547,6 @@ test("document child protocol accepts only small inline results", () => {
 });
 
 test("document child protocol validates exact fd 5 spool receipts by operation", () => {
-  const validator = protocol.createChildDocumentEventValidator(requestId, "render");
-  validator.accept(readyEvent());
   const event = {
     protocolVersion: 1,
     requestId,
@@ -409,11 +555,40 @@ test("document child protocol validates exact fd 5 spool receipts by operation",
       descriptor: 5,
       operation: "render",
       encoding: "render-result-v1",
-      sizeBytes: 9 * 1024 * 1024,
+      sizeBytes: 64 * 1024 * 1024 + 1,
       sha256: "a".repeat(64),
     },
   };
-  assert.deepEqual(validator.accept(event), event);
+  for (const sizeBytes of [64 * 1024 * 1024 + 1, 512 * 1024 * 1024]) {
+    for (const operation of ["parse", "render"] as const) {
+      const validator = protocol.createChildDocumentEventValidator(requestId, operation);
+      validator.accept(readyEvent());
+      const accepted = {
+        ...event,
+        receipt: {
+          ...event.receipt,
+          operation,
+          encoding: operation === "parse" ? "document-result-v1" : "render-result-v1",
+          sizeBytes,
+        },
+      };
+      assert.deepEqual(validator.accept(accepted), accepted);
+    }
+  }
+
+  for (const operation of ["parse", "render"] as const) {
+    const rejected = protocol.createChildDocumentEventValidator(requestId, operation);
+    rejected.accept(readyEvent());
+    assertProtocolError(() => rejected.accept({
+      ...event,
+      receipt: {
+        ...event.receipt,
+        operation,
+        encoding: operation === "parse" ? "document-result-v1" : "render-result-v1",
+        sizeBytes: 512 * 1024 * 1024 + 1,
+      },
+    }));
+  }
 
   for (const receipt of [
     { ...event.receipt, descriptor: 4 },
@@ -428,6 +603,23 @@ test("document child protocol validates exact fd 5 spool receipts by operation",
     rejected.accept(readyEvent());
     assertProtocolError(() => rejected.accept({ ...event, receipt }));
   }
+});
+
+test("document worker protocol never accepts a result spool escape hatch", () => {
+  const validator = protocol.createDocumentEventValidator(requestId, "parse");
+  validator.accept(readyEvent());
+  assertProtocolError(() => validator.accept({
+    protocolVersion: 1,
+    requestId,
+    type: "spoolResult",
+    receipt: {
+      descriptor: 5,
+      operation: "parse",
+      encoding: "document-result-v1",
+      sizeBytes: 1,
+      sha256: "a".repeat(64),
+    },
+  }));
 });
 
 test("document child protocol preserves bounded versioned HWPX mutation metadata", () => {
@@ -512,7 +704,7 @@ test("document engine protocol rejects empty and oversized image buffers", () =>
       protocol.validateWireDocumentRequest({
         ...wireRequests.insertImage,
         input: { ...wireRequests.insertImage.input, image: { transport: "buffer", buffer } },
-      }),
+      }, "worker"),
     );
   }
 });
@@ -828,7 +1020,7 @@ test("document engine protocol keeps parse and render delivery ceilings distinct
   );
 });
 
-test("worker inline HWPX results have a separate bounded ceiling before parent transfer", () => {
+test("worker inline results share one bounded ceiling before parent transfer", () => {
   assert.equal(protocol.MAX_WORKER_INLINE_HWPX_RESULT_BYTES, 64 * 1024 * 1024);
   for (const operation of [
     "generateHwpx",
@@ -843,7 +1035,7 @@ test("worker inline HWPX results have a separate bounded ceiling before parent t
   }
   assert.equal(
     protocol.maximumWorkerInlineResultBytes("parse"),
-    protocol.MAX_DOCUMENT_ENGINE_RESULT_BYTES,
+    protocol.MAX_WORKER_RESULT_BYTES,
   );
 
   const validator = protocol.createDocumentEventValidator(requestId, "generateHwpx");
@@ -947,7 +1139,8 @@ test("document engine protocol converts hostile request and event traps to proto
 
   for (const hostile of [throwingProxy, revoked.proxy]) {
     assertProtocolError(() => protocol.validateLogicalDocumentRequest(hostile));
-    assertProtocolError(() => protocol.validateWireDocumentRequest(hostile));
+    assertProtocolError(() => protocol.validateWireDocumentRequest(hostile, "worker"));
+    assertProtocolError(() => protocol.validateWireDocumentRequest(hostile, "child"));
     const validator = protocol.createDocumentEventValidator(requestId, "detect");
     assertProtocolError(() => validator.accept(hostile));
   }
