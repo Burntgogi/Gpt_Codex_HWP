@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   PUBLIC_BINARY_ALLOWLIST,
@@ -31,6 +32,7 @@ import { REQUIRED_RELEASE_STAGES } from "../scripts/release-verify.mjs";
 import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 const OWNER_EMAIL = fragments("224273819+Burntgogi", "@users.noreply.github.com");
+const REPOSITORY_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const APPROVED_HWP_FIXTURE_PATH =
   "packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp";
 
@@ -313,7 +315,7 @@ test("Git history privacy finds deleted blobs, metadata, identities, and refs wh
   const refName = fragments("refs/heads/leaked-", "AK", "IA", "Q".repeat(16));
   git(root, ["update-ref", refName, "HEAD"]);
 
-  const result = await scanPublicHistory({ root });
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
   const categories = new Set(result.findings.map((finding) => finding.category));
   for (const expected of [
     "provider credential",
@@ -336,7 +338,7 @@ test("Git history binds binary approval to every reachable tree path", async (t)
   await writeFile(join(root, "copied", "gpt-codex-hwp-banner.png"), banner);
   git(root, ["add", "copied/gpt-codex-hwp-banner.png"]);
   git(root, ["commit", "-qm", "same blob at unapproved path"]);
-  const result = await scanPublicHistory({ root });
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
   assert.ok(result.findings.some((finding) =>
     finding.category === "binary not allowlisted"
     && finding.label === "copied/gpt-codex-hwp-banner.png"));
@@ -350,7 +352,7 @@ test("Git history rejects private evidence paths after their files are deleted",
   git(root, ["rm", "-q", "--", privatePath]);
   git(root, ["commit", "-qm", "remove private evidence"]);
 
-  const result = await scanPublicHistory({ root });
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
   assert.ok(result.findings.some((finding) =>
     finding.category === "private repository path"
     && finding.label === privatePath));
@@ -365,7 +367,7 @@ test("Git history associates private paths reachable only from an annotated tree
   const rootTree = gitInput(root, ["mktree"], `040000 tree ${privateTree}\t.superpowers\n`).trim();
   git(root, ["tag", "-a", "private-tree", "-m", "private tree tag", rootTree]);
 
-  const result = await scanPublicHistory({ root });
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
   assert.ok(result.findings.some((finding) =>
     finding.category === "private repository path"
     && finding.label === ".superpowers/sdd/report.md"));
@@ -383,7 +385,7 @@ test("Git history checks private tree and gitlink entry paths even without blobs
   const commit = gitInput(root, ["commit-tree", rootTree, "-p", parent], "private non-blob paths\n").trim();
   git(root, ["reset", "--hard", "-q", commit]);
 
-  const result = await scanPublicHistory({ root });
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
   for (const path of ["empty.hwpx", "linked.hwpx"]) {
     assert.ok(result.findings.some((finding) =>
       finding.category === "private repository path"
@@ -414,7 +416,7 @@ test("Git history rejects the approved fixture path when it is a tree or gitlink
     ).trim();
     git(root, ["reset", "--hard", "-q", commit]);
 
-    const result = await scanPublicHistory({ root });
+    const result = await scanPublicHistory(syntheticHistoryOptions(root));
     assert.ok(result.findings.some((finding) =>
       finding.category === "private repository path"
       && finding.label === APPROVED_HWP_FIXTURE_PATH), kind);
@@ -445,7 +447,7 @@ test("Git history document exception requires the allowlisted bytes in a regular
     const commit = gitInput(root, ["commit-tree", rootTree, "-p", parent], "fixture blob\n").trim();
     git(root, ["reset", "--hard", "-q", commit]);
 
-    const result = await scanPublicHistory({ root });
+    const result = await scanPublicHistory(syntheticHistoryOptions(root));
     if (expected === "passed") {
       assert.equal(result.findings.length, 0);
     } else {
@@ -475,7 +477,7 @@ test("Git history disables and rejects replacement refs that hide a private tree
   git(root, ["replace", privateCommit, cleanReplacement]);
   git(root, ["reset", "--hard", "-q", privateCommit]);
 
-  const result = await scanPublicHistory({ root });
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
   assert.ok(result.findings.some((finding) =>
     finding.category === "private repository path"
     && finding.label === privatePath));
@@ -488,7 +490,7 @@ test("Git history fails closed when info/grafts exists", async (t) => {
   git(root, ["config", "advice.graftFileDeprecated", "false"]);
   await writeFile(join(root, ".git", "info", "grafts"), "");
 
-  await assert.rejects(scanPublicHistory({ root }), /history scan failed/iu);
+  await assert.rejects(scanPublicHistory(syntheticHistoryOptions(root)), /history scan failed/iu);
 });
 
 test("annotated tag chains are memoized within a linear traversal budget", () => {
@@ -595,41 +597,110 @@ test("Git history requires exact names and scans every header plus ref label", a
   git(root, ["update-ref", "refs/heads/header-probe", craftedId]);
   git(root, ["update-ref", "refs/heads/credentials.json", "HEAD"]);
 
-  const result = await scanPublicHistory({ root });
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
   assert.ok(result.findings.some((finding) => finding.category === "personal identity"));
   assert.ok(result.findings.some((finding) => finding.objectId === craftedId
     && finding.category === "sensitive Git metadata"));
   assert.ok(result.findings.some((finding) => finding.category === "sensitive ref name"));
 });
 
+test("Git history pins frozen releases to annotated tag objects and peeled commits", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-frozen-tags-");
+  const pinnedCommit = await commitFile(root, "safe.txt", "safe\n", "safe", OWNER_EMAIL);
+  git(root, ["tag", "-a", "v-inner", "-m", "inner frozen release"]);
+  git(root, ["tag", "-a", "v-test", "-m", "outer frozen release", "v-inner"]);
+  const pinnedTagObject = git(root, ["rev-parse", "refs/tags/v-test"]).trim();
+  const expected = new Map([["v-test", Object.freeze({
+    tagObject: pinnedTagObject,
+    commit: pinnedCommit,
+  })]]);
+
+  const passed = await scanPublicHistory({ root, frozenReleaseTags: expected });
+  assert.equal(passed.findings.length, 0);
+
+  const otherCommit = await commitFile(root, "retargeted.txt", "safe\n", "retarget", OWNER_EMAIL);
+  await assert.rejects(
+    scanPublicHistory({
+      root,
+      frozenReleaseTags: new Map([["v-test", Object.freeze({
+        tagObject: pinnedTagObject,
+        commit: otherCommit,
+      })]]),
+    }),
+    /history scan failed/iu,
+  );
+
+  git(root, ["tag", "-d", "v-test"]);
+  git(root, ["tag", "-a", "v-test", "-m", "retargeted release"]);
+  await assert.rejects(
+    scanPublicHistory({ root, frozenReleaseTags: expected }),
+    /history scan failed/iu,
+  );
+
+  git(root, ["tag", "-d", "v-test"]);
+  git(root, ["tag", "v-test", pinnedCommit]);
+  await assert.rejects(
+    scanPublicHistory({ root, frozenReleaseTags: expected }),
+    /history scan failed/iu,
+  );
+
+  await assert.rejects(
+    scanPublicHistory({
+      root,
+      frozenReleaseTags: new Map([["v-missing", Object.freeze({
+        tagObject: pinnedTagObject,
+        commit: pinnedCommit,
+      })]]),
+    }),
+    /history scan failed/iu,
+  );
+});
+
+test("Git history production pins contain the exact published identities with no CLI bypass", async () => {
+  const source = await readFile(new URL("../scripts/scan-public-history.mjs", import.meta.url), "utf8");
+  const identities = [
+    ["v0.1.0", "ef0912777438499192c570f6e4f8e638f723f713", "8ab57d6b289727a6ea4b53f21193223e314c5f11"],
+    ["v0.1.1", "c40236454d48ab5010d5df39761220fb7bf0759b", "356eb97d4627769a9593529b0c08adf481ca0eb8"],
+    ["v0.1.2", "95d563c8edeeb1db97129c364cc353938faf1eb2", "4fe07da12d12fdba928f98fb9167a9ce70c98151"],
+    ["v0.1.3", "35f5792981d8306ab9554d107b6fbe33576df99c", "4132b280cb206f7da426c1c479e950ac208d9639"],
+    ["v0.1.4", "e400d45c1f9f746d177f7ffcc2a5737ae699beee", "27e44224241628e336181727c85b1598dfe74fd2"],
+  ];
+  assert.match(source, /const FROZEN_RELEASE_TAGS = Object\.freeze\(\{/u);
+  assert.doesNotMatch(source, /export\s+(?:const|\{[^}]*\})\s*FROZEN_RELEASE_TAGS/u);
+  assert.doesNotMatch(source, /--(?:skip|ignore|disable)[^\s"']*tag/iu);
+  for (const [tag, tagObject, commit] of identities) {
+    for (const identity of [tag, tagObject, commit]) assert.equal(source.includes(identity), true, identity);
+    assert.equal(git(REPOSITORY_ROOT, ["--no-replace-objects", "cat-file", "-t", `refs/tags/${tag}`]).trim(), "tag", tag);
+    assert.equal(git(REPOSITORY_ROOT, ["--no-replace-objects", "rev-parse", `refs/tags/${tag}`]).trim(), tagObject, tag);
+    assert.equal(git(REPOSITORY_ROOT, ["--no-replace-objects", "rev-parse", `refs/tags/${tag}^{commit}`]).trim(), commit, tag);
+  }
+});
+
 test("Git history privacy allows only the approved owner and exact neutral immutable objects", async (t) => {
   const root = await temporaryGitRepository(t, "public-history-identity-");
   const ownerCommit = await commitFile(root, "owner.txt", "safe\n", "owner", OWNER_EMAIL);
-  let result = await scanPublicHistory({ root });
+  let result = await scanPublicHistory(syntheticHistoryOptions(root));
   assert.equal(result.findings.length, 0);
 
   const neutralEmail = fragments("codex", "@local");
   const neutralCommit = await commitFile(root, "neutral.txt", "safe\n", "neutral", neutralEmail, "Codex");
-  result = await scanPublicHistory({ root });
+  result = await scanPublicHistory(syntheticHistoryOptions(root));
   assert.ok(result.findings.some((finding) => finding.category === "personal identity"));
 
-  result = await scanPublicHistory({
-    root,
+  result = await scanPublicHistory(syntheticHistoryOptions(root, {
     neutralObjectAllowlist: new Set([neutralCommit]),
-  });
+  }));
   assert.equal(result.findings.length, 0);
 
   git(root, ["-c", "user.name=Codex", "-c", `user.email=${neutralEmail}`, "tag", "-a", "neutral-tag", "-m", "safe tag"]);
   const tagObject = git(root, ["rev-parse", "refs/tags/neutral-tag"]).trim();
-  result = await scanPublicHistory({
-    root,
+  result = await scanPublicHistory(syntheticHistoryOptions(root, {
     neutralObjectAllowlist: new Set([neutralCommit]),
-  });
+  }));
   assert.ok(result.findings.some((finding) => finding.objectId === tagObject));
-  result = await scanPublicHistory({
-    root,
+  result = await scanPublicHistory(syntheticHistoryOptions(root, {
     neutralObjectAllowlist: new Set([neutralCommit, tagObject]),
-  });
+  }));
   assert.equal(result.findings.length, 0);
   assert.match(ownerCommit, /^[a-f0-9]{40}$/u);
 });
@@ -640,9 +711,11 @@ test("Git history privacy fails closed for shallow and malformed Git operations"
   const clone = await temporaryDirectory(t, "public-history-shallow-");
   await rm(clone, { recursive: true, force: true });
   git(process.cwd(), ["clone", "-q", "--depth=1", `file:///${source.replaceAll("\\", "/")}`, clone]);
-  await assert.rejects(scanPublicHistory({ root: clone }), /history scan failed/iu);
+  await assert.rejects(scanPublicHistory(syntheticHistoryOptions(clone)), /history scan failed/iu);
   await assert.rejects(
-    scanPublicHistory({ root: source, runGit: async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }) }),
+    scanPublicHistory(syntheticHistoryOptions(source, {
+      runGit: async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }),
+    })),
     /history scan failed/iu,
   );
 });
@@ -917,6 +990,10 @@ function captureThrown(operation) {
   try { operation(); }
   catch (error) { return error; }
   assert.fail("operation did not throw");
+}
+
+function syntheticHistoryOptions(root, overrides = {}) {
+  return { root, frozenReleaseTags: new Map(), ...overrides };
 }
 
 async function temporaryDirectory(t, prefix, parent) {

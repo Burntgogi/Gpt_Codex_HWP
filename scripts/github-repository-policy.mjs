@@ -12,6 +12,9 @@ const CREDENTIAL_FIELDS = new Set([
 const ALLOWED_METHODS = new Set(["GET", "PATCH", "PUT", "DELETE"]);
 const COLLABORATOR_PAGE_SIZE = 100;
 const MAX_COLLABORATOR_PAGES = 10;
+const DEPLOY_KEY_PAGE_SIZE = 100;
+const MAX_DEPLOY_KEY_PAGES = 10;
+const MAX_RULESET_SUMMARIES = 100;
 let evidenceSequence = 0;
 
 export async function runRepositoryPolicy(options) {
@@ -22,6 +25,7 @@ export async function runRepositoryPolicy(options) {
   const request = options.request ?? createGitHubRequest(token);
   if (typeof request !== "function") throw policyError("GITHUB_POLICY_REQUEST_INVALID");
   const base = `/repos/${policy.repository.owner}/${policy.repository.name}`;
+  const rulesetSummaries = await request({ method: "GET", path: `${base}/rulesets` });
 
   const state = {
     repository: await request({ method: "GET", path: base }),
@@ -29,13 +33,20 @@ export async function runRepositoryPolicy(options) {
     workflowPermissions: await request({ method: "GET", path: `${base}/actions/permissions/workflow` }),
     selectedActions: await request({ method: "GET", path: `${base}/actions/permissions/selected-actions` }),
     mainProtection: await request({ method: "GET", path: `${base}/branches/main/protection` }),
-    rulesets: await request({ method: "GET", path: `${base}/rulesets` }),
+    rulesets: await listDetailedTagRulesets(
+      request,
+      base,
+      rulesetSummaries,
+      policy.tagRuleset,
+    ),
     privateVulnerabilityReporting: await request({ method: "GET", path: `${base}/private-vulnerability-reporting` }),
     vulnerabilityAlerts: await request({ method: "GET", path: `${base}/vulnerability-alerts` }),
     automatedSecurityFixes: await request({ method: "GET", path: `${base}/automated-security-fixes` }),
     collaborators: await listDirectCollaborators(request, base),
+    deployKeys: await listDeployKeys(request, base),
   };
   const unexpected = unexpectedWriteCollaborators(state.collaborators, policy.collaborators.owner);
+  const unexpectedDeployKeys = state.deployKeys.filter(({ canWrite }) => canWrite);
   const drift = comparePolicy(policy, state);
   const evidence = buildPolicyEvidence(policy, state, drift, unexpected);
   if (options.evidenceDirectory !== undefined) await writeEvidence(options.evidenceDirectory, evidence);
@@ -46,6 +57,18 @@ export async function runRepositoryPolicy(options) {
       mode: options.mode,
       code: "UNEXPECTED_WRITE_COLLABORATOR",
       blockers: unexpected.map(({ identifier }) => ({ category: "collaborator", identifier })),
+    });
+  }
+  if (unexpectedDeployKeys.length > 0) {
+    return Object.freeze({
+      status: "blocked",
+      mode: options.mode,
+      code: "UNEXPECTED_WRITE_DEPLOY_KEY",
+      blockers: Object.freeze(unexpectedDeployKeys.map(({ identifier }) => Object.freeze({
+        type: "deploy-key",
+        identifier,
+        permission: "write",
+      }))),
     });
   }
   if (drift.length === 0) return Object.freeze({ status: "compliant", mode: options.mode, changes: [] });
@@ -100,9 +123,97 @@ async function listDirectCollaborators(request, base) {
   throw policyError("GITHUB_POLICY_RESPONSE_INVALID");
 }
 
+async function listDetailedTagRulesets(request, base, summaries, desired) {
+  if (!Array.isArray(summaries) || summaries.length > MAX_RULESET_SUMMARIES) {
+    throw policyError("GITHUB_POLICY_RESPONSE_INVALID");
+  }
+  const projected = [];
+  for (const summary of summaries) {
+    if (summary?.name !== desired.name || summary?.target !== "tag") continue;
+    const summaryId = summary?.id;
+    if (!Number.isSafeInteger(summaryId) || summaryId <= 0) {
+      projected.push(Object.freeze({ summaryIdMatches: false }));
+      continue;
+    }
+    const detail = await request({ method: "GET", path: `${base}/rulesets/${summaryId}` });
+    projected.push(projectTagRulesetDetail(detail, summaryId));
+  }
+  return Object.freeze(projected);
+}
+
+function projectTagRulesetDetail(detail, summaryId) {
+  if (!isRecord(detail)) return Object.freeze({ summaryIdMatches: false });
+  const include = detail.conditions?.ref_name?.include;
+  const exclude = detail.conditions?.ref_name?.exclude;
+  const bypassPresent = Object.hasOwn(detail, "bypass_actors");
+  const bypass = detail.bypass_actors;
+  const rules = detail.rules;
+  return Object.freeze({
+    summaryIdMatches: Number.isSafeInteger(detail.id) && detail.id === summaryId,
+    name: typeof detail.name === "string" ? detail.name : undefined,
+    target: typeof detail.target === "string" ? detail.target : undefined,
+    enforcement: typeof detail.enforcement === "string" ? detail.enforcement : undefined,
+    include: stringArrayProjection(include),
+    exclude: stringArrayProjection(exclude),
+    bypassPresent,
+    bypassCount: Array.isArray(bypass) ? bypass.length : undefined,
+    ruleTypes: Array.isArray(rules) && rules.every((rule) => isRecord(rule)
+      && typeof rule.type === "string")
+      ? Object.freeze(rules.map(({ type }) => type))
+      : undefined,
+  });
+}
+
+function stringArrayProjection(value) {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? Object.freeze([...value])
+    : undefined;
+}
+
+async function listDeployKeys(request, base) {
+  const keys = [];
+  const identifiers = new Set();
+  for (let page = 1; page <= MAX_DEPLOY_KEY_PAGES; page += 1) {
+    const entries = await request({
+      method: "GET",
+      path: `${base}/keys?per_page=${DEPLOY_KEY_PAGE_SIZE}&page=${page}`,
+    });
+    if (!Array.isArray(entries) || entries.length > DEPLOY_KEY_PAGE_SIZE) {
+      throw policyError("GITHUB_POLICY_RESPONSE_INVALID");
+    }
+    for (const entry of entries) {
+      const projected = projectDeployKey(entry);
+      if (identifiers.has(projected.identifier)) {
+        throw policyError("GITHUB_POLICY_RESPONSE_INVALID");
+      }
+      identifiers.add(projected.identifier);
+      keys.push(projected);
+    }
+    if (entries.length < DEPLOY_KEY_PAGE_SIZE) return Object.freeze(keys);
+  }
+  throw policyError("GITHUB_POLICY_RESPONSE_INVALID");
+}
+
+function projectDeployKey(entry) {
+  if (!isRecord(entry) || !Number.isSafeInteger(entry.id) || entry.id <= 0
+    || typeof entry.key !== "string" || !/^[^\u0000-\u001f\u007f]{1,16384}$/u.test(entry.key)
+    || typeof entry.read_only !== "boolean") {
+    throw policyError("GITHUB_POLICY_RESPONSE_INVALID");
+  }
+  return Object.freeze({
+    identifier: deployKeyIdentifier(entry.key),
+    readOnly: entry.read_only,
+    canWrite: entry.read_only === false,
+  });
+}
+
+function deployKeyIdentifier(publicKey) {
+  return `sha256:${createHash("sha256").update(publicKey, "utf8").digest("hex").slice(0, 12)}`;
+}
+
 function buildPolicyEvidence(policy, state, drift, unexpected) {
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     repository: Object.freeze({
       defaultBranchMatches: state.repository?.default_branch === policy.repository.defaultBranch,
       issuesMatches: state.repository?.has_issues === policy.features.issues,
@@ -135,6 +246,11 @@ function buildPolicyEvidence(policy, state, drift, unexpected) {
         canWrite: collaboratorCanWrite(entry),
       }))),
     }),
+    deployKeys: Object.freeze(state.deployKeys.map(({ identifier, readOnly, canWrite }) => Object.freeze({
+      identifier,
+      readOnly,
+      canWrite,
+    }))),
     drift: Object.freeze(drift.map(publicChange)),
   });
 }
@@ -153,7 +269,7 @@ async function applyAllowedPolicy({ request, base, policy, drift }) {
   }
   if (categories.has("actions")) {
     await request({ method: "PUT", path: `${base}/actions/permissions`, body: {
-      enabled: true,
+      enabled: policy.actions.enabled,
       allowed_actions: policy.actions.allowedActions,
     } });
     await request({ method: "PUT", path: `${base}/actions/permissions/workflow`, body: {
@@ -217,7 +333,8 @@ function actionsMatch(state, desired) {
   const actions = state.actions ?? {};
   const workflow = state.workflowPermissions ?? actions;
   const selected = state.selectedActions ?? {};
-  return actions.allowed_actions === desired.allowedActions
+  return actions.enabled === desired.enabled
+    && actions.allowed_actions === desired.allowedActions
     && workflow.default_workflow_permissions === desired.defaultWorkflowPermissions
     && workflow.can_approve_pull_request_reviews === desired.canApprovePullRequestReviews
     && selected.github_owned_allowed === desired.githubOwnedAllowed
@@ -240,10 +357,14 @@ function mainProtectionMatches(actual, desired) {
 function tagRulesetMatches(rulesets, desired) {
   if (!Array.isArray(rulesets)) return false;
   return rulesets.some((ruleset) => {
-    const types = new Set(Array.isArray(ruleset?.rules) ? ruleset.rules.map(({ type }) => type) : []);
-    return ruleset?.name === desired.name && ruleset?.target === "tag"
+    const types = new Set(Array.isArray(ruleset?.ruleTypes) ? ruleset.ruleTypes : []);
+    return ruleset?.summaryIdMatches === true
+      && ruleset?.name === desired.name && ruleset?.target === "tag"
       && ruleset?.enforcement === desired.enforcement
-      && sameSet(ruleset?.conditions?.ref_name?.include, desired.include)
+      && sameSet(ruleset?.include, desired.include)
+      && sameSet(ruleset?.exclude, desired.exclude)
+      && ruleset?.bypassPresent === true
+      && ruleset?.bypassCount === desired.bypassActors.length
       && (!desired.blockUpdate || types.has("update"))
       && (!desired.blockDeletion || types.has("deletion"))
       && (!desired.blockNonFastForward || types.has("non_fast_forward"));
@@ -334,17 +455,30 @@ function assertAllowedRequest(method, path) {
     "DELETE /automated-security-fixes",
   ]);
   const collaboratorPage = /^\/collaborators\?affiliation=direct&per_page=100&page=(?:[1-9]|10)$/u.test(route);
-  if (method === "GET" ? get.has(route) || collaboratorPage : mutate.has(`${method} ${route}`)) return;
+  const deployKeyPage = /^\/keys\?per_page=100&page=(?:[1-9]|10)$/u.test(route);
+  const rulesetDetail = /^\/rulesets\/[1-9][0-9]*$/u.test(route);
+  if (method === "GET"
+    ? get.has(route) || collaboratorPage || deployKeyPage || rulesetDetail
+    : mutate.has(`${method} ${route}`)) return;
   throw policyError("GITHUB_POLICY_ENDPOINT_BLOCKED");
 }
 
 function validatePolicy(policy) {
   if (!isRecord(policy) || policy.schemaVersion !== 1 || !isRecord(policy.repository)
     || !isRecord(policy.features) || !isRecord(policy.actions) || !isRecord(policy.mainProtection)
-    || !isRecord(policy.tagRuleset) || !isRecord(policy.collaborators)) {
+    || !isRecord(policy.tagRuleset) || !isRecord(policy.collaborators)
+    || !isRecord(policy.deployKeys)) {
     throw policyError("GITHUB_POLICY_INVALID");
   }
-  const { repository, features, actions, mainProtection, tagRuleset, collaborators } = policy;
+  const {
+    repository,
+    features,
+    actions,
+    mainProtection,
+    tagRuleset,
+    collaborators,
+    deployKeys,
+  } = policy;
   const slug = /^[A-Za-z0-9_.-]{1,100}$/u;
   const statuses = new Set(["enabled", "disabled"]);
   const patterns = actions.patternsAllowed;
@@ -358,6 +492,7 @@ function validatePolicy(policy) {
     ])
     && statuses.has(features.secretScanning)
     && statuses.has(features.secretScanningPushProtection)
+    && actions.enabled === true
     && ["read", "write"].includes(actions.defaultWorkflowPermissions)
     && typeof actions.canApprovePullRequestReviews === "boolean"
     && actions.allowedActions === "selected"
@@ -378,12 +513,19 @@ function validatePolicy(policy) {
     && Array.isArray(tagRuleset.include)
     && tagRuleset.include.length === 1
     && tagRuleset.include[0] === "refs/tags/v*"
+    && Array.isArray(tagRuleset.exclude)
+    && tagRuleset.exclude.length === 0
+    && Array.isArray(tagRuleset.bypassActors)
+    && tagRuleset.bypassActors.length === 0
     && tagRuleset.blockUpdate === true
     && tagRuleset.blockDeletion === true
     && tagRuleset.blockNonFastForward === true
     && collaborators.owner === repository.owner
     && collaborators.nonOwnerMaximumPermission === "read"
-    && collaborators.unexpectedWriteIsBlocker === true;
+    && collaborators.unexpectedWriteIsBlocker === true
+    && exactKeys(deployKeys, ["maximumPermission", "unexpectedWriteIsBlocker"])
+    && deployKeys.maximumPermission === "read"
+    && deployKeys.unexpectedWriteIsBlocker === true;
   if (!valid) throw policyError("GITHUB_POLICY_INVALID");
   return policy;
 }
@@ -396,6 +538,10 @@ function nonEmptyUniqueStrings(value, pattern) {
   return Array.isArray(value) && value.length > 0
     && new Set(value).size === value.length
     && value.every((entry) => typeof entry === "string" && pattern.test(entry));
+}
+
+function exactKeys(value, keys) {
+  return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
 }
 
 async function writeEvidence(directory, value) {

@@ -14,6 +14,7 @@
     "automatedDependabotSecurityUpdates": false
   },
   "actions": {
+    "enabled": true,
     "defaultWorkflowPermissions": "read",
     "canApprovePullRequestReviews": false,
     "allowedActions": "selected",
@@ -50,6 +51,8 @@
     "include": [
       "refs/tags/v*"
     ],
+    "exclude": [],
+    "bypassActors": [],
     "blockUpdate": true,
     "blockDeletion": true,
     "blockNonFastForward": true
@@ -57,6 +60,10 @@
   "collaborators": {
     "owner": "Burntgogi",
     "nonOwnerMaximumPermission": "read",
+    "unexpectedWriteIsBlocker": true
+  },
+  "deployKeys": {
+    "maximumPermission": "read",
     "unexpectedWriteIsBlocker": true
   }
 }

@@ -46,6 +46,7 @@ test("GitHub repository policy declares protected main, immutable tags, and owne
     automatedDependabotSecurityUpdates: false,
   });
   assert.equal(policy.actions.defaultWorkflowPermissions, "read");
+  assert.equal(policy.actions.enabled, true);
   assert.equal(policy.actions.canApprovePullRequestReviews, false);
   assert.equal(policy.actions.allowedActions, "selected");
   assert.equal(policy.actions.githubOwnedAllowed, true);
@@ -71,6 +72,8 @@ test("GitHub repository policy declares protected main, immutable tags, and owne
     name: "immutable-version-tags",
     enforcement: "active",
     include: ["refs/tags/v*"],
+    exclude: [],
+    bypassActors: [],
     blockUpdate: true,
     blockDeletion: true,
     blockNonFastForward: true,
@@ -78,6 +81,10 @@ test("GitHub repository policy declares protected main, immutable tags, and owne
   assert.equal(policy.collaborators.owner, "Burntgogi");
   assert.equal(policy.collaborators.nonOwnerMaximumPermission, "read");
   assert.equal(policy.collaborators.unexpectedWriteIsBlocker, true);
+  assert.deepEqual(policy.deployKeys, {
+    maximumPermission: "read",
+    unexpectedWriteIsBlocker: true,
+  });
 });
 
 test("GitHub repository policy rejects malformed or internally inconsistent policy before any request", async (t) => {
@@ -87,10 +94,15 @@ test("GitHub repository policy rejects malformed or internally inconsistent poli
   const mutations = [
     (policy) => { policy.repository.name = "../wrong"; },
     (policy) => { policy.features.issues = "true"; },
+    (policy) => { policy.actions.enabled = false; },
     (policy) => { policy.actions.requireFullSha = false; },
     (policy) => { policy.mainProtection.requiredStatusChecks = []; },
     (policy) => { policy.tagRuleset.enforcement = "sometimes"; },
+    (policy) => { delete policy.tagRuleset.exclude; },
+    (policy) => { policy.tagRuleset.bypassActors = [{ actorId: 1 }]; },
     (policy) => { policy.collaborators.owner = "different-owner"; },
+    (policy) => { delete policy.deployKeys.maximumPermission; },
+    (policy) => { policy.deployKeys.unexpectedExtra = true; },
   ];
   const { runRepositoryPolicy } = await import(
     `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?invalid=${Date.now()}`
@@ -148,7 +160,7 @@ test("GitHub repository policy tool plans safely, redacts credentials, and const
   });
 
   const source = await readFile(SCRIPT_PATH, "utf8");
-  assert.doesNotMatch(source, /\/releases|\/git\/refs|\/collaborators\/[^{'"`]|\/keys|\/hooks|\/secrets|\/contents\//u);
+  assert.doesNotMatch(source, /\/releases|\/git\/refs|\/collaborators\/[^{'"`]|\/keys\/[^{'"`]|\/hooks|\/secrets|\/contents\//u);
   assert.doesNotMatch(source, /git\s+(?:push|commit|tag)|gh\s+release/iu);
 
   const requests = [];
@@ -165,6 +177,127 @@ test("GitHub repository policy tool plans safely, redacts credentials, and const
   assert.equal(result.mode, "plan");
   assert.equal(requests.every(({ method }) => method === "GET"), true, "--plan must be side-effect free");
   assert.equal(JSON.stringify(result).includes(TEST_CREDENTIAL), false);
+});
+
+test("GitHub repository policy requires numeric tag-ruleset detail with exact include, exclude, and bypass actors", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?ruleset-detail=${Date.now()}`
+  );
+  for (const [name, alter] of [
+    ["summary-only", (request, response) => request.path.endsWith("/rulesets")
+      ? response.map(({ id: _id, ...summary }) => summary) : response],
+    ["excluded-ref", (request, response) => request.path.endsWith("/rulesets/73")
+      ? { ...response, conditions: { ref_name: { include: ["refs/tags/v*"], exclude: ["refs/tags/v0.1.0"] } } }
+      : response],
+    ["missing-exclude", (request, response) => {
+      if (!request.path.endsWith("/rulesets/73")) return response;
+      return { ...response, conditions: { ref_name: { include: ["refs/tags/v*"] } } };
+    }],
+    ["mismatched-id", (request, response) => request.path.endsWith("/rulesets/73")
+      ? { ...response, id: 74 } : response],
+    ["unsafe-detail-id", (request, response) => request.path.endsWith("/rulesets/73")
+      ? { ...response, id: Number.MAX_SAFE_INTEGER + 1 } : response],
+    ["noninteger-summary-id", (request, response) => request.path.endsWith("/rulesets")
+      ? response.map((summary) => ({ ...summary, id: "73" })) : response],
+    ["bypass-actor", (request, response) => request.path.endsWith("/rulesets/73")
+      ? { ...response, bypass_actors: [{ actor_id: 7, actor_type: "RepositoryRole", bypass_mode: "always" }] }
+      : response],
+    ["missing-bypass", (request, response) => {
+      if (!request.path.endsWith("/rulesets/73")) return response;
+      const { bypass_actors: _bypassActors, ...withoutBypass } = response;
+      return withoutBypass;
+    }],
+  ]) {
+    const requests = [];
+    const result = await runRepositoryPolicy({
+      mode: "plan",
+      policyPath: POLICY_PATH,
+      [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+      request: async (request) => {
+        requests.push(request);
+        return alter(request, compliantResponse(request));
+      },
+    });
+    assert.equal(result.status, "drift", name);
+    assert.ok(result.changes.some(({ category }) => category === "tag-ruleset"), name);
+    if (!["summary-only", "noninteger-summary-id"].includes(name)) {
+      assert.equal(requests.some(({ path }) => path.endsWith("/rulesets/73")), true, name);
+    }
+    assert.equal(requests.every(({ method }) => method === "GET"), true, name);
+  }
+});
+
+test("GitHub repository policy drops raw bypass-actor metadata from drift evidence", async (t) => {
+  const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bypass-evidence-"));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?bypass-evidence=${Date.now()}`
+  );
+  const rawActorType = ["private", "-actor-type"].join("");
+  const rawBypassMode = ["private", "-bypass-mode"].join("");
+  const result = await runRepositoryPolicy({
+    mode: "check",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      const response = compliantResponse(request);
+      return request.path.endsWith("/rulesets/73")
+        ? { ...response, bypass_actors: [{ actor_id: 987654, actor_type: rawActorType, bypass_mode: rawBypassMode }] }
+        : response;
+    },
+    evidenceDirectory,
+  });
+  assert.equal(result.status, "drift");
+  const [name] = await readdir(evidenceDirectory);
+  const serialized = `${JSON.stringify(result)}${await readFile(join(evidenceDirectory, name), "utf8")}`;
+  for (const forbidden of ["987654", rawActorType, rawBypassMode, "actor_id", "actor_type", "bypass_mode"]) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
+});
+
+test("GitHub repository policy apply re-enables disabled Actions from policy", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?actions-enabled=${Date.now()}`
+  );
+  const requests = [];
+  const result = await runRepositoryPolicy({
+    mode: "apply",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      requests.push(request);
+      const response = compliantResponse(request);
+      return request.path.endsWith("/actions/permissions") && request.method === "GET"
+        ? { ...response, enabled: false }
+        : response;
+    },
+  });
+  assert.equal(result.status, "applied");
+  const update = requests.find(({ method, path }) => method === "PUT"
+    && path.endsWith("/actions/permissions"));
+  assert.deepEqual(update.body, { enabled: true, allowed_actions: "selected" });
+});
+
+test("GitHub repository policy check records disabled Actions as drift", async (t) => {
+  const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-actions-evidence-"));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?actions-check=${Date.now()}`
+  );
+  const result = await runRepositoryPolicy({
+    mode: "check",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => request.path.endsWith("/actions/permissions")
+      ? { ...compliantResponse(request), enabled: false }
+      : compliantResponse(request),
+    evidenceDirectory,
+  });
+  assert.equal(result.status, "drift");
+  assert.ok(result.changes.some(({ category }) => category === "actions"));
+  const [name] = await readdir(evidenceDirectory);
+  const saved = JSON.parse(await readFile(join(evidenceDirectory, name), "utf8"));
+  assert.deepEqual(saved.actions, { enabled: false, matches: false });
 });
 
 test("GitHub repository policy treats unexpected write collaborators as a non-removing blocker", async () => {
@@ -241,6 +374,160 @@ test("GitHub repository policy fails closed when collaborator pagination never t
     }),
     { code: "GITHUB_POLICY_RESPONSE_INVALID" },
   );
+});
+
+test("GitHub repository policy blocks a second-page write deploy key without leaking raw metadata", async (t) => {
+  const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-deploy-key-evidence-"));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?deploy-key=${Date.now()}`
+  );
+  const rawTitle = ["private", " deploy key title"].join("");
+  const rawKey = ["ssh-ed25519 ", "AAAAC3NzaC1lZDI1NTE5AAAA", "private-material"].join("");
+  const rawUrl = ["https://api.github.invalid/repos/private/keys/", "9001"].join("");
+  const rawActor = ["private", "-deploy-key-actor"].join("");
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    title: `reader-${index}`,
+    key: `public-${index}`,
+    url: `https://api.github.invalid/keys/${index}`,
+    read_only: true,
+  }));
+  const requests = [];
+  const result = await runRepositoryPolicy({
+    mode: "apply",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      requests.push(request);
+      if (request.path.includes("/keys?")) {
+        return request.path.endsWith("&page=1")
+          ? firstPage
+          : [{
+            id: 9001,
+            title: rawTitle,
+            key: rawKey,
+            url: rawUrl,
+            read_only: false,
+            added_by: { login: rawActor },
+          }];
+      }
+      return compliantResponse(request);
+    },
+    evidenceDirectory,
+  });
+  assert.equal(result.status, "blocked");
+  assert.equal(result.code, "UNEXPECTED_WRITE_DEPLOY_KEY");
+  assert.deepEqual(Object.keys(result.blockers[0]).sort(), ["identifier", "permission", "type"]);
+  assert.deepEqual({ type: result.blockers[0].type, permission: result.blockers[0].permission }, {
+    type: "deploy-key",
+    permission: "write",
+  });
+  assert.match(result.blockers[0].identifier, /^sha256:[0-9a-f]{12}$/u);
+  assert.equal(requests.some(({ path }) => path.endsWith("&page=2")), true);
+  assert.equal(requests.every(({ method }) => method === "GET"), true);
+  assert.equal(requests.some(({ path }) => /\/keys\/(?:9001|\{)/u.test(path)), false);
+
+  const [name] = await readdir(evidenceDirectory);
+  const saved = JSON.parse(await readFile(join(evidenceDirectory, name), "utf8"));
+  const serialized = JSON.stringify(saved);
+  assert.equal(saved.schemaVersion, 2);
+  assert.equal(saved.deployKeys.length, 101);
+  assert.deepEqual(Object.keys(saved.deployKeys[0]).sort(), ["canWrite", "identifier", "readOnly"]);
+  assert.equal(saved.deployKeys.at(-1).readOnly, false);
+  assert.equal(saved.deployKeys.at(-1).canWrite, true);
+  for (const forbidden of [rawTitle, rawKey, rawUrl, rawActor, "title", "url", "added_by"]) {
+    assert.equal(serialized.includes(forbidden), false, `deploy-key evidence leaked ${forbidden}`);
+    assert.equal(JSON.stringify(result).includes(forbidden), false, `deploy-key blocker leaked ${forbidden}`);
+  }
+});
+
+test("GitHub repository policy bounds deploy-key pagination at ten GET-only pages", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?deploy-key-limit=${Date.now()}`
+  );
+  const fullPage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    key: `ssh-ed25519 public-key-material-${index}`,
+    read_only: true,
+  }));
+  const requests = [];
+  await assert.rejects(
+    runRepositoryPolicy({
+      mode: "check",
+      policyPath: POLICY_PATH,
+      [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+      request: async (request) => {
+        requests.push(request);
+        if (!request.path.includes("/keys?")) return compliantResponse(request);
+        const page = Number(/[?&]page=([0-9]+)$/u.exec(request.path)?.[1]);
+        return fullPage.map((entry) => ({
+          ...entry,
+          id: (page * 1_000) + entry.id,
+          key: `${entry.key}-page-${page}`,
+        }));
+      },
+    }),
+    { code: "GITHUB_POLICY_RESPONSE_INVALID" },
+  );
+  const keyRequests = requests.filter(({ path }) => path.includes("/keys?"));
+  assert.equal(keyRequests.length, 10);
+  assert.equal(keyRequests.at(-1).path.endsWith("&page=10"), true);
+  assert.equal(requests.every(({ method }) => method === "GET"), true);
+});
+
+test("GitHub repository policy rejects malformed deploy-key identifiers and permissions", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?deploy-key-malformed=${Date.now()}`
+  );
+  for (const entry of [
+    { key: "ssh-ed25519 valid-public-key", read_only: true },
+    { id: 0, key: "ssh-ed25519 valid-public-key", read_only: true },
+    { id: "7", key: "ssh-ed25519 valid-public-key", read_only: true },
+    { id: 7, read_only: true },
+    { id: 7, key: "", read_only: true },
+    { id: 7, key: 77, read_only: true },
+    { id: 7, key: "ssh-ed25519 valid-public-key", read_only: "false" },
+  ]) {
+    await assert.rejects(
+      runRepositoryPolicy({
+        mode: "check",
+        policyPath: POLICY_PATH,
+        [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+        request: async (request) => request.path.includes("/keys?")
+          ? [entry]
+          : compliantResponse(request),
+      }),
+      { code: "GITHUB_POLICY_RESPONSE_INVALID" },
+    );
+  }
+});
+
+test("GitHub repository policy preserves collaborator blocker priority over write deploy keys", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?blocker-priority=${Date.now()}`
+  );
+  const requests = [];
+  const result = await runRepositoryPolicy({
+    mode: "apply",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      requests.push(request);
+      if (request.path.includes("/collaborators?")) {
+        return [{ login: "private-collaborator", role_name: "write", permissions: { push: true } }];
+      }
+      if (request.path.includes("/keys?")) {
+        return [{ id: 700, key: "ssh-ed25519 private-collaborator-key", read_only: false }];
+      }
+      return compliantResponse(request);
+    },
+  });
+  assert.equal(result.status, "blocked");
+  assert.equal(result.code, "UNEXPECTED_WRITE_COLLABORATOR");
+  assert.equal(requests.some(({ path }) => path.includes("/keys?")), true);
+  assert.equal(requests.every(({ method }) => method === "GET"), true);
+  assert.doesNotMatch(JSON.stringify(result), /private-collaborator|700/u);
 });
 
 test("GitHub repository policy apply mutates only repository, Actions, main, and declared security features", async () => {
@@ -336,7 +623,7 @@ test("GitHub repository policy evidence is a strict safe DTO, never a raw API pr
           permissions: { pull: true, push: false, maintain: false, admin: false },
         }];
       }
-      return typeof response === "object" && response !== null
+      return typeof response === "object" && response !== null && !Array.isArray(response)
         ? { ...response, email: rawEmail, url: rawUrl, [SENSITIVE_FIELD_SIX]: rawSensitiveValue }
         : response;
     },
@@ -345,8 +632,8 @@ test("GitHub repository policy evidence is a strict safe DTO, never a raw API pr
   const [name] = await readdir(evidenceDirectory);
   const saved = JSON.parse(await readFile(join(evidenceDirectory, name), "utf8"));
   const serialized = JSON.stringify(saved);
-  assert.deepEqual(Object.keys(saved).sort(), ["actions", "collaborators", "drift", "mainProtection", "repository", "schemaVersion", "security", "tagRuleset"]);
-  assert.equal(saved.schemaVersion, 1);
+  assert.deepEqual(Object.keys(saved).sort(), ["actions", "collaborators", "deployKeys", "drift", "mainProtection", "repository", "schemaVersion", "security", "tagRuleset"]);
+  assert.equal(saved.schemaVersion, 2);
   assert.equal(saved.collaborators.total, 1);
   assert.equal(saved.collaborators.entries[0].role, "read");
   assert.equal(saved.collaborators.entries[0].canWrite, false);
@@ -378,9 +665,21 @@ function compliantResponse({ path }) {
     };
   }
   if (path.endsWith("/rulesets")) {
-    return [{ name: "immutable-version-tags", enforcement: "active", target: "tag", conditions: { ref_name: { include: ["refs/tags/v*"] } }, rules: [{ type: "update" }, { type: "deletion" }, { type: "non_fast_forward" }] }];
+    return [{ id: 73, name: "immutable-version-tags", enforcement: "active", target: "tag" }];
+  }
+  if (path.endsWith("/rulesets/73")) {
+    return {
+      id: 73,
+      name: "immutable-version-tags",
+      enforcement: "active",
+      target: "tag",
+      bypass_actors: [],
+      conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+      rules: [{ type: "update" }, { type: "deletion" }, { type: "non_fast_forward" }],
+    };
   }
   if (path.includes("/collaborators?")) return [];
+  if (path.includes("/keys?")) return [];
   if (path.endsWith("/private-vulnerability-reporting")) return { enabled: true };
   if (path.endsWith("/vulnerability-alerts")) return { enabled: true };
   if (path.endsWith("/automated-security-fixes")) return { enabled: false };

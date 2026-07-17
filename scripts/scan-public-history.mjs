@@ -22,6 +22,29 @@ const MAX_PATH_ASSOCIATIONS = 500_000;
 const NEUTRAL_EMAIL = "codex@local";
 const NEUTRAL_NAME = "Codex";
 
+const FROZEN_RELEASE_TAGS = Object.freeze({
+  "v0.1.0": {
+    tagObject: "ef0912777438499192c570f6e4f8e638f723f713",
+    commit: "8ab57d6b289727a6ea4b53f21193223e314c5f11",
+  },
+  "v0.1.1": {
+    tagObject: "c40236454d48ab5010d5df39761220fb7bf0759b",
+    commit: "356eb97d4627769a9593529b0c08adf481ca0eb8",
+  },
+  "v0.1.2": {
+    tagObject: "95d563c8edeeb1db97129c364cc353938faf1eb2",
+    commit: "4fe07da12d12fdba928f98fb9167a9ce70c98151",
+  },
+  "v0.1.3": {
+    tagObject: "35f5792981d8306ab9554d107b6fbe33576df99c",
+    commit: "4132b280cb206f7da426c1c479e950ac208d9639",
+  },
+  "v0.1.4": {
+    tagObject: "e400d45c1f9f746d177f7ffcc2a5737ae699beee",
+    commit: "27e44224241628e336181727c85b1598dfe74fd2",
+  },
+});
+
 export const IMMUTABLE_NEUTRAL_OBJECT_IDS = Object.freeze([
   "8ab57d6b289727a6ea4b53f21193223e314c5f11",
   "4f1d0c12f10cce7c1f7e8aca38732f6e2c60c9ed",
@@ -45,6 +68,9 @@ export async function scanPublicHistory(options = {}) {
   const neutralObjectAllowlist = validateNeutralAllowlist(
     options.neutralObjectAllowlist ?? new Set(IMMUTABLE_NEUTRAL_OBJECT_IDS),
   );
+  const frozenReleaseTags = validateFrozenReleaseTags(
+    options.frozenReleaseTags === undefined ? FROZEN_RELEASE_TAGS : options.frozenReleaseTags,
+  );
 
   await rejectGitGrafts(runGit, root);
 
@@ -59,6 +85,7 @@ export async function scanPublicHistory(options = {}) {
   if (refsResult.code !== 0 || refsResult.stderr.length !== 0) throw historyFailure();
   const refs = parseRefs(refsResult.stdout);
   if (refs.length === 0) throw historyFailure();
+  validateFrozenTagRefs(frozenReleaseTags, refs);
 
   const objectsResult = await invokeGit(runGit, root, ["rev-list", "--objects", "--all", "-z"]);
   if (objectsResult.code !== 0 || objectsResult.stderr.length !== 0) throw historyFailure();
@@ -115,6 +142,7 @@ export async function scanPublicHistory(options = {}) {
     }
   });
 
+  validateFrozenTagTargets(frozenReleaseTags, tagTargets, objectTypes);
   addTaggedRootTrees(tagTargets, objectTypes, rootTrees);
   const associations = associateRepositoryPaths(rootTrees, trees, blobs);
   findings.push(...associations.findings);
@@ -396,6 +424,61 @@ function parseRefs(bytes) {
     throw historyFailure();
   }
   return refs;
+}
+
+function validateFrozenReleaseTags(value) {
+  const entries = value instanceof Map
+    ? [...value.entries()]
+    : value === FROZEN_RELEASE_TAGS ? Object.entries(value) : undefined;
+  if (entries === undefined) throw historyFailure();
+  const validated = new Map();
+  for (const [name, identity] of entries) {
+    if (typeof name !== "string" || !/^v[A-Za-z0-9._-]{1,64}$/u.test(name)
+      || identity === null || typeof identity !== "object" || Array.isArray(identity)
+      || JSON.stringify(Object.keys(identity).sort()) !== JSON.stringify(["commit", "tagObject"])
+      || !/^[a-f0-9]{40}$/u.test(identity.tagObject)
+      || !/^[a-f0-9]{40}$/u.test(identity.commit)
+      || validated.has(name)) {
+      throw historyFailure();
+    }
+    validated.set(name, Object.freeze({
+      tagObject: identity.tagObject,
+      commit: identity.commit,
+    }));
+  }
+  return validated;
+}
+
+function validateFrozenTagRefs(frozenReleaseTags, refs) {
+  const byName = new Map(refs.map((ref) => [ref.name, ref]));
+  for (const [tag, expected] of frozenReleaseTags) {
+    const ref = byName.get(`refs/tags/${tag}`);
+    if (ref?.type !== "tag" || ref.objectId !== expected.tagObject) throw historyFailure();
+  }
+}
+
+function validateFrozenTagTargets(frozenReleaseTags, tagTargets, objectTypes) {
+  for (const { tagObject, commit } of frozenReleaseTags.values()) {
+    const terminal = resolveTagTerminal(tagObject, tagTargets, objectTypes);
+    if (terminal.type !== "commit" || terminal.objectId !== commit) throw historyFailure();
+  }
+}
+
+function resolveTagTerminal(tagObject, tagTargets, objectTypes) {
+  const visited = new Set();
+  let current = tagObject;
+  while (true) {
+    if (visited.has(current) || visited.size >= MAX_OBJECTS || objectTypes.get(current) !== "tag") {
+      throw historyFailure();
+    }
+    visited.add(current);
+    const target = tagTargets.get(current);
+    if (target === undefined || objectTypes.get(target.objectId) !== target.type) {
+      throw historyFailure();
+    }
+    if (target.type !== "tag") return target;
+    current = target.objectId;
+  }
 }
 
 function parseObjectRecords(bytes) {
