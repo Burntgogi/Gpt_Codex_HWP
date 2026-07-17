@@ -10,33 +10,65 @@ import { assertSafeSvgString, IncrementalSvgPolicyValidator, } from "./svg-polic
 const RENDER_SPOOL_PREFIX_BYTES = 4;
 const RENDER_SPOOL_VERSION = 1;
 const VALIDATION_CHUNK_BYTES = 64 * 1024;
-export async function writeDocumentRenderResultExclusively(rendered, outputPath, options = {}) {
+export async function prepareDocumentRenderOutput(rendered, options = {}) {
     const result = rendered.payload;
-    if (!isIntegrityVerifiedResultSpool(result)) {
-        try {
-            assertSafeSvgString(result.svg);
-            const svgBytes = Buffer.byteLength(result.svg, "utf8");
-            if (svgBytes > MAX_PREVIEW_SVG_BYTES) {
-                throw previewTooLargeError(svgBytes);
-            }
-        }
-        catch (error) {
-            if (isSafePublicError(error))
-                throw error;
-            throw protocolError();
-        }
-        requireNotAborted(options.signal);
-        await rendered.verifySourceUnchanged();
-        requireNotAborted(options.signal);
-        await writeFilesExclusively([{ path: outputPath, data: result.svg }], {
-            sourcePaths: options.sourcePaths,
-            beforeOpen: () => requireRenderOutputOpenAuthorized(options),
-        });
-        return result.metadata;
+    if (isIntegrityVerifiedResultSpool(result)) {
+        return prepareRenderSpool(rendered, result, options);
     }
-    return writeRenderSpool(rendered, result, outputPath, options);
+    try {
+        assertSafeSvgString(result.svg);
+        const svgBytes = Buffer.byteLength(result.svg, "utf8");
+        if (svgBytes > MAX_PREVIEW_SVG_BYTES) {
+            throw previewTooLargeError(svgBytes);
+        }
+        requireNotAborted(options.signal);
+    }
+    catch (error) {
+        if (isSafePublicError(error))
+            throw error;
+        throw protocolError();
+    }
+    let cleaned = false;
+    let committed = false;
+    return {
+        ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
+        async writeExclusively(outputPath, commitOptions = {}) {
+            if (cleaned || committed)
+                throw protocolError();
+            requireNotAborted(commitOptions.signal);
+            await writeFilesExclusively([{ path: outputPath, data: result.svg }], {
+                sourcePaths: commitOptions.sourcePaths,
+                expectedDirectoryIdentities: commitOptions.expectedDirectoryIdentities,
+                beforeOpen: () => authorizeRenderOutputOpen(rendered, commitOptions),
+            });
+            committed = true;
+        },
+        async cleanup() {
+            cleaned = true;
+        },
+    };
 }
-async function writeRenderSpool(rendered, spool, outputPath, options) {
+export async function writeDocumentRenderResultExclusively(rendered, outputPath, options = {}) {
+    const prepared = await prepareDocumentRenderOutput(rendered, {
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.unitTestReadInto === undefined
+            ? {}
+            : { unitTestReadInto: options.unitTestReadInto }),
+    });
+    try {
+        await prepared.writeExclusively(outputPath, {
+            sourcePaths: options.sourcePaths,
+            beforeOpen: options.beforeOpen,
+            expectedDirectoryIdentities: options.expectedDirectoryIdentities,
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+        return prepared.metadata;
+    }
+    finally {
+        await prepared.cleanup();
+    }
+}
+async function prepareRenderSpool(rendered, spool, options) {
     if (spool.metadata.operation !== "render" ||
         spool.metadata.encoding !== "render-result-v1" ||
         !Number.isSafeInteger(spool.metadata.sizeBytes) ||
@@ -45,40 +77,70 @@ async function writeRenderSpool(rendered, spool, outputPath, options) {
         await spool.cleanup().catch(() => undefined);
         throw protocolError();
     }
-    try {
-        const handle = spool.takeHandle();
-        if (handle.sizeBytes !== spool.metadata.sizeBytes)
-            throw protocolError();
-        const validated = await validateRenderSpool(handle.fd, handle.sizeBytes, options.signal, options.unitTestReadInto ?? readInto);
-        requireNotAborted(options.signal);
-        await rendered.verifySourceUnchanged();
-        requireNotAborted(options.signal);
-        await writeFileRangeExclusively(outputPath, {
-            fd: handle.fd,
-            offset: validated.svgOffset,
-            sizeBytes: validated.svgBytes,
-        }, {
-            sourcePaths: options.sourcePaths,
-            beforeOpen: () => requireRenderOutputOpenAuthorized(options),
-        });
-        return validated.metadata;
-    }
-    catch (error) {
-        if (isSafePublicError(error))
-            throw error;
-        throw protocolError();
-    }
-    finally {
+    let cleaned = false;
+    const cleanup = async () => {
+        if (cleaned)
+            return;
+        cleaned = true;
         try {
             await spool.cleanup();
         }
         catch {
             throw protocolError();
         }
+    };
+    try {
+        const handle = spool.takeHandle();
+        if (handle.sizeBytes !== spool.metadata.sizeBytes)
+            throw protocolError();
+        const validated = await validateRenderSpool(handle.fd, handle.sizeBytes, options.signal, options.unitTestReadInto ?? readInto);
+        let committed = false;
+        return {
+            ...(validated.metadata === undefined ? {} : { metadata: validated.metadata }),
+            async writeExclusively(outputPath, commitOptions = {}) {
+                if (cleaned || committed)
+                    throw protocolError();
+                requireNotAborted(commitOptions.signal);
+                await writeFileRangeExclusively(outputPath, {
+                    fd: handle.fd,
+                    offset: validated.svgOffset,
+                    sizeBytes: validated.svgBytes,
+                }, {
+                    sourcePaths: commitOptions.sourcePaths,
+                    expectedDirectoryIdentities: commitOptions.expectedDirectoryIdentities,
+                    beforeOpen: () => authorizeRenderOutputOpen(rendered, commitOptions),
+                });
+                committed = true;
+            },
+            cleanup,
+        };
+    }
+    catch (error) {
+        try {
+            await cleanup();
+        }
+        catch {
+            throw protocolError();
+        }
+        if (isSafePublicError(error))
+            throw error;
+        throw protocolError();
     }
 }
-async function requireRenderOutputOpenAuthorized(options) {
+async function verifyRenderSourceUnchanged(rendered) {
+    try {
+        await rendered.verifySourceUnchanged();
+    }
+    catch (error) {
+        if (isSafePublicError(error))
+            throw error;
+        throw protocolError();
+    }
+}
+async function authorizeRenderOutputOpen(rendered, options) {
     await options.beforeOpen?.();
+    requireNotAborted(options.signal);
+    await verifyRenderSourceUnchanged(rendered);
     requireNotAborted(options.signal);
 }
 async function validateRenderSpool(fd, sizeBytes, signal, read) {

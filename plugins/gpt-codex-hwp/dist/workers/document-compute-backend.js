@@ -1,6 +1,7 @@
 import { read as readFd } from "node:fs";
 import { assertSafeSvgString } from "../shared/svg-policy.js";
 import { HwpxAnchorResolutionError, resolveHwpxAnchorOccurrence, } from "../shared/hwpx-anchor.js";
+import { copyToOwnedExactBytes, createBoundedCopyObserver, } from "../shared/owned-bytes.js";
 import { isIntegrityVerifiedResultSpool } from "./document-child-client.js";
 import { createDocumentEngineRunError, DocumentEngineRunError, } from "./document-errors.js";
 import { MAX_DOCUMENT_ENGINE_RESULT_BYTES, MAX_DOCUMENT_VALIDATION_ISSUES, MAX_SAFE_JSON_BYTES, measureDocumentResultByteLength, resultSpoolEncoding, validateDocumentResultSpoolMetadata, } from "./document-protocol.js";
@@ -53,18 +54,20 @@ export function createDocumentComputeBackend(dependencies) {
             await requireValidMutableSourceHwpx(kordoc, source);
             return prepareImageInsertion(kordoc, source, image, anchorText, requestedOccurrence);
         },
-        async execute(request, inputs, onProgress) {
-            const payload = await executeOperation(dependencies, request, inputs, onProgress);
+        async execute(request, inputs, onProgress, onMetrics) {
+            const payload = await executeOperation(dependencies, request, inputs, onProgress, onMetrics);
             validateResultPayload(request.operation, payload);
             return payload;
         },
     });
 }
-async function executeOperation(dependencies, request, inputs, onProgress) {
+async function executeOperation(dependencies, request, inputs, onProgress, onMetrics) {
     const { kordoc } = dependencies;
     switch (request.operation) {
         case "detect":
-            return { format: await detectSupportedFormat(kordoc, requireDocument(inputs)) };
+            return {
+                format: await detectSupportedFormat(kordoc, requireDocument(inputs), onMetrics),
+            };
         case "parse": {
             const source = requireDocument(inputs);
             const format = await requireReadableFormat(kordoc, source);
@@ -255,16 +258,18 @@ async function renderHwpWithRhwp(dependencies, source) {
         document?.free();
     }
 }
-async function detectSupportedFormat(kordoc, source) {
-    const candidate = kordoc.detectFormat(copyArrayBuffer(source));
+async function detectSupportedFormat(kordoc, source, onMetrics) {
+    const observeCopy = createBoundedCopyObserver(source.byteLength, (copiedBytes) => onMetrics?.(Object.freeze({ copiedBytes })));
+    const engineInput = copyToOwnedExactBytes(source, observeCopy).transferable;
+    const candidate = kordoc.detectFormat(engineInput);
     try {
         if (candidate === "hwp") {
-            return kordoc.detectOle2Format(copyArrayBuffer(source)) === "hwp"
+            return kordoc.detectOle2Format(engineInput) === "hwp"
                 ? "hwp"
                 : "unknown";
         }
         if (candidate === "hwpx") {
-            return await kordoc.detectZipFormat(copyArrayBuffer(source)) === "hwpx"
+            return await kordoc.detectZipFormat(engineInput) === "hwpx"
                 ? "hwpx"
                 : "unknown";
         }

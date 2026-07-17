@@ -1,17 +1,8 @@
 import { createDocumentEngineRunError, } from "./document-errors.js";
-export const WORKER_INPUT_MAX_BYTES = 64 * 1024 * 1024;
+import { documentLogicalRequestBytes, MAX_WORKER_INPUT_BYTES, } from "./document-protocol.js";
+export { documentLogicalRequestBytes };
+export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
 export const CHILD_WORKING_SET_MAX_BYTES = 1_536 * 1024 * 1024;
-export function documentLogicalRequestBytes(request) {
-    try {
-        return Buffer.byteLength(JSON.stringify({
-            input: request.input,
-            options: request.options,
-        }), "utf8");
-    }
-    catch {
-        throw resourceLimitError();
-    }
-}
 export function maxWorkerSnapshotBytesForRequest(request, imageBytes = 0) {
     const reservedBytes = checkedByteSum(documentLogicalRequestBytes(request), imageBytes);
     return Math.max(0, WORKER_INPUT_MAX_BYTES - reservedBytes);

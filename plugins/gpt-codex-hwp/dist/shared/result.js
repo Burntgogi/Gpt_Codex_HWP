@@ -5,12 +5,19 @@ export function toolSuccess(summary, details) {
 export function toolError(summary, details) {
     return buildToolResult(summary, details, true);
 }
+export async function commitBudgetedToolSuccess(summary, details, commitOutput) {
+    const result = toolSuccess(summary, details);
+    if (result.isError === true)
+        return result;
+    await commitOutput();
+    return result;
+}
 function buildToolResult(summary, details, isError) {
     const readableSummary = summary.trim();
     if (readableSummary.length === 0) {
         throw new Error("Tool result summary must not be empty.");
     }
-    const safeDetails = sanitizeSensitivePathError(details);
+    const safeDetails = immutableDetailsSnapshot(sanitizeSensitivePathError(details));
     const result = assembleToolResult(readableSummary, safeDetails, isError);
     const responseBytes = serializedBytes(result);
     if (responseBytes <= MAX_MCP_RESPONSE_BYTES)
@@ -47,4 +54,31 @@ function sanitizeSensitivePathError(details) {
         code: "PATH_OUTSIDE_ALLOWED_ROOTS",
         error: "Path is outside configured allowed roots.",
     };
+}
+function immutableDetailsSnapshot(details) {
+    const serialized = JSON.stringify(details);
+    if (serialized === undefined) {
+        throw new Error("Tool result details must be JSON serializable.");
+    }
+    const snapshot = JSON.parse(serialized);
+    if (!isRecord(snapshot)) {
+        throw new Error("Tool result details must serialize to a JSON object.");
+    }
+    return freezeJson(snapshot);
+}
+function freezeJson(value) {
+    if (Array.isArray(value)) {
+        for (const item of value)
+            freezeJson(item);
+        return Object.freeze(value);
+    }
+    if (isRecord(value)) {
+        for (const item of Object.values(value))
+            freezeJson(item);
+        return Object.freeze(value);
+    }
+    return value;
+}
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }

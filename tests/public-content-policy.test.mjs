@@ -733,12 +733,13 @@ test("bounded process enforces a deadline and closes with a redacted receipt", a
   assert.equal(result.stderr.length, 0);
 });
 
-test("bounded process keeps fast target bytes separate from control frames", async () => {
+test("bounded process proves termination while keeping fast target bytes separate from control frames", async () => {
   const result = await runBoundedProcess(process.execPath, [
     "-e",
     "process.stdout.write(Buffer.from([0,255,65]));process.stderr.write(Buffer.from([66,0,254]));",
   ], { timeoutMs: 5_000, maxOutputBytes: 64 });
   assert.equal(result.code, 0);
+  assert.equal(result.terminationFailed, false);
   assert.deepEqual(result.stdout, Buffer.from([0, 255, 65]));
   assert.deepEqual(result.stderr, Buffer.from([66, 0, 254]));
 });

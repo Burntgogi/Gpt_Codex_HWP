@@ -60,6 +60,7 @@ const SKILL_ICON_FILES = [
 ];
 const FORBIDDEN_SEGMENTS = new Set([
   "node_modules", "src", "tests", "fixtures", "release-scripts", ".superpowers", "artifacts", "tmp",
+  "plans", "specs", "evidence", "temporary",
 ]);
 const FORBIDDEN_EXTENSIONS = new Set([".hwp", ".hwpx", ".map", ".pem", ".p12", ".pfx"]);
 
@@ -208,12 +209,42 @@ test("runtime projection contains the exact sorted allowlist and no special entr
   ].sort(comparePaths);
 
   assert.deepEqual(actual.map(({ path }) => path), expected);
-  assert.ok(actual.some(({ path }) => path === "dist/doctor.js"));
+  for (const requiredPath of [
+    "dist/doctor.js",
+    "dist/workers/document-child-start-gate.js",
+    "dist/workers/document-process-registration.js",
+    "dist/workers/registered-process-supervisor.js",
+  ]) {
+    assert.ok(actual.some(({ path }) => path === requiredPath), requiredPath);
+  }
   assert.ok(actual.every(({ kind }) => kind === "file"));
   for (const { path } of actual) {
     const segments = path.split("/");
     assert.equal(segments.some((segment) => FORBIDDEN_SEGMENTS.has(segment)), false, path);
     assert.equal(FORBIDDEN_EXTENSIONS.has(extname(path).toLowerCase()), false, path);
+  }
+});
+
+test("projection refuses plans specs and temporary evidence nested below an allowlisted source tree", async () => {
+  for (const [segment, name] of [
+    ["plans", "public-source-plan.txt"],
+    ["specs", "public-source-spec.txt"],
+    ["evidence", "temporary-evidence.txt"],
+  ]) {
+    const sourceDirectory = join(SOURCE, "assets", segment);
+    const sourcePath = join(sourceDirectory, name);
+    const output = join(temporaryRoot, `forbidden-${segment}`);
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(sourcePath, "must not ship\n", "utf8");
+    try {
+      await assert.rejects(
+        buildRuntime({ root: ROOT, outputRoot: output }),
+        new RegExp(`Forbidden runtime path was staged: assets/${segment}/`, "u"),
+      );
+      await assert.rejects(lstat(output), { code: "ENOENT" });
+    } finally {
+      await rm(sourceDirectory, { recursive: true, force: true });
+    }
   }
 });
 

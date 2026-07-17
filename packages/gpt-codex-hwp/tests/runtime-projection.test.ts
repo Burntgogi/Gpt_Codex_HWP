@@ -41,6 +41,9 @@ test("public runtime projection stages only branded executable files", { timeout
     "assets/gpt-codex-hwp-icon-128.png",
     "dist/doctor.js",
     "dist/mcp.js",
+    "dist/workers/document-child-start-gate.js",
+    "dist/workers/document-process-registration.js",
+    "dist/workers/registered-process-supervisor.js",
     "dist/workers/windows-job-supervisor.ps1",
     "scripts/hwpx-safe-edit/hwpxlib.py",
     "scripts/hwpx-safe-edit/insert_image.py",
@@ -68,6 +71,10 @@ test("public runtime projection stages only branded executable files", { timeout
   for (const forbidden of [
     "src",
     "tests",
+    "plans",
+    "specs",
+    "evidence",
+    "temporary-evidence.txt",
     "tsconfig.json",
     "release-scripts",
     "node_modules",
@@ -122,6 +129,31 @@ test("public runtime projection stages only branded executable files", { timeout
     assert.doesNotMatch(file.path, /(?:^|\/)(?:src|tests|node_modules|release-scripts)(?:\/|$)/iu);
     assert.doesNotMatch(file.path, /(?:^|\/)\.env(?:\.|$)/iu);
     assert.equal([".hwp", ".hwpx", ".hml", ".docx", ".pdf", ".map"].includes(extname(file.path).toLowerCase()), false);
+  }
+});
+
+test("package runtime projection refuses plans specs and temporary evidence below copied assets", { timeout: 120_000 }, async (t) => {
+  for (const [segment, name] of [
+    ["plans", "package-plan.txt"],
+    ["specs", "package-spec.txt"],
+    ["evidence", "temporary-evidence.txt"],
+  ]) {
+    const sourceDirectory = join(SOURCE_ROOT, "assets", segment);
+    const sourcePath = join(sourceDirectory, name);
+    const outputRoot = await createCanonicalTemporaryDirectory({
+      prefix: `gpt-codex-hwp-runtime-forbidden-${segment}-`,
+    });
+    t.after(async () => rm(outputRoot, { recursive: true, force: true }));
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(sourcePath, "must not ship\n", "utf8");
+    try {
+      await assert.rejects(
+        buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(outputRoot, "runtime") }),
+        new RegExp(`Forbidden runtime path was staged: assets/${segment}/`, "u"),
+      );
+    } finally {
+      await rm(sourceDirectory, { recursive: true, force: true });
+    }
   }
 });
 

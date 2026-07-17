@@ -3,7 +3,7 @@ import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/docume
 import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { toolError, toolSuccess } from "../shared/result.js";
+import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
 import { runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 import { MAX_FILL_VALUES, ResourceLimitError, assertFillValueBudget, sumStringCharacters, } from "../shared/resource-limits.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
@@ -82,16 +82,17 @@ export async function handleHwpPatchDocument(input, facade = defaultDocumentEngi
                     validation,
                 });
             }
-            await patchResult.writeOutputExclusively(outputPath, {
-                sourcePaths: [filePath],
-            });
-            return toolSuccess("Patched and semantically verified the HWPX document.", {
+            return await commitBudgetedToolSuccess("Patched and semantically verified the HWPX document.", {
                 output_path: outputPath,
                 format,
                 applied: metadata.applied,
                 skipped: metadata.skipped,
                 verification: metadata.verification,
                 complete,
+            }, async () => {
+                await patchResult.writeOutputExclusively(outputPath, {
+                    sourcePaths: [filePath],
+                });
             });
         }
         finally {
@@ -196,16 +197,17 @@ export async function handleHwpFillForm(input, facade = defaultDocumentEngineFac
                     validation: presentedValidation,
                 });
             }
-            await fillResult.writeOutputExclusively(outputPath, {
-                sourcePaths: [filePath],
-            });
-            return toolSuccess(`Filled ${filled.length} HWPX fields.`, {
+            return await commitBudgetedToolSuccess(`Filled ${filled.length} HWPX fields.`, {
                 output_path: outputPath,
                 filled_count: filled.length,
                 filled: presentFilledFields(filled, input.mask_values !== false),
                 unmatched,
                 rejected,
                 validation: presentedValidation,
+            }, async () => {
+                await fillResult.writeOutputExclusively(outputPath, {
+                    sourcePaths: [filePath],
+                });
             });
         }
         finally {

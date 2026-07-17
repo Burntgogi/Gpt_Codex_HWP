@@ -24,6 +24,7 @@ import {
   executeBounded,
   formatBenchmarkProgress,
   parseBenchmarkArguments,
+  runBenchmark,
   validateBenchmarkReceipt,
   validateCaseSizeMiB,
   validateLargeBenchmarkEvidence,
@@ -65,6 +66,28 @@ test("benchmark policy accepts only bounded approved sizes with fixed sequential
   });
   assert.equal(validateCaseSizeMiB(10), 10);
   assert.throws(() => validateCaseSizeMiB(11), { code: "BENCHMARK_ARGUMENTS_INVALID" });
+});
+
+test("benchmark policy records a real nonempty detect dispatch before its one defensive copy", { timeout: 120_000 }, async (t) => {
+  const outputPath = join(
+    REPOSITORY_ROOT,
+    ".superpowers",
+    "benchmarks",
+    `real-detect-${process.pid}-${Date.now()}.json`,
+  );
+  t.after(() => rm(outputPath, { force: true }));
+
+  const evidence = await runBenchmark({
+    sizesMiB: [10],
+    outputPath,
+  });
+  const receipt = evidence.receipts[0];
+
+  assert.ok(receipt);
+  assert.equal(receipt.status, "passed");
+  assert.equal(receipt.dispatchStarted, true);
+  assert.equal(receipt.actualBytes > 0, true);
+  assert.equal(receipt.copiedBytes, receipt.actualBytes);
 });
 
 test("benchmark policy requires one-shot inherited control for internal case execution", async () => {

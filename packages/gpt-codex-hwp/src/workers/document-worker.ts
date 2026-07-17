@@ -50,10 +50,12 @@ async function run(value: unknown): Promise<void> {
     port.postMessage(event(request, "ready"));
     ready = true;
     const inputs = transferredInputs(request);
+    postMetrics(request, 0);
     const payload = await backend.execute(
       request as never,
       inputs,
       (progress) => postProgress(request, progress),
+      (metrics) => postMetrics(request, metrics.copiedBytes),
     );
     const outputByteLength = measureDocumentResultByteLength(
       request.operation,
@@ -128,6 +130,16 @@ function postProgress(
     ...event(request, "progress"),
     completed: progress.completed,
     total: progress.total,
+  });
+}
+
+function postMetrics(
+  request: WireDocumentRequest,
+  copiedBytes: number,
+): void {
+  port.postMessage({
+    ...event(request, "metrics"),
+    copiedBytes,
   });
 }
 

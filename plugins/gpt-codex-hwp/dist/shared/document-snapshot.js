@@ -6,8 +6,9 @@ import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { FileLimitError, MAX_DOCUMENT_BYTES, openFileForBoundedRead, } from "./files.js";
 import { AllowedRootsPathError, authorizeExistingPath, } from "./allowed-roots.js";
-import { toOwnedExactBytes } from "./owned-bytes.js";
-export const WORKER_INPUT_MAX_BYTES = 64 * 1024 * 1024;
+import { toOwnedExactBytes, } from "./owned-bytes.js";
+import { MAX_WORKER_INPUT_BYTES } from "../workers/document-protocol.js";
+export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
 const READ_CHUNK_BYTES = 1024 * 1024;
 const PREFLIGHT_BYTES = 8;
 const SPOOL_PREFIX = "gpt-codex-hwp-snapshot-";
@@ -75,9 +76,10 @@ export async function openDocumentSnapshot(path, options = {}) {
         const metadata = createMetadata(sizeBytes, preparation.sha256, preparation.preflight);
         const verifySourceUnchanged = createSourceVerifier(authorizedPath, initialIdentity, preparation.sha256, sizeBytes, normalized.allocationObserver);
         if (preparation.kind === "worker") {
-            const owned = toOwnedExactBytes(preparation.bytes);
+            const owned = toOwnedExactBytes(preparation.bytes, normalized.copyObserver);
             return createWorkerSnapshot(metadata, owned.transferable, verifySourceUnchanged);
         }
+        normalized.copyObserver?.(0);
         const snapshot = createSpoolSnapshot(metadata, preparation.owner, normalized.testHooks, verifySourceUnchanged);
         pendingSpool = undefined;
         return snapshot;
@@ -514,6 +516,10 @@ function validateOptions(rawOptions) {
         typeof rawOptions.allocationObserver !== "function") {
         throw optionsInvalidError();
     }
+    if (rawOptions.copyObserver !== undefined &&
+        typeof rawOptions.copyObserver !== "function") {
+        throw optionsInvalidError();
+    }
     const hooks = rawOptions.testHooks;
     if (hooks !== undefined) {
         if (typeof hooks !== "object" || hooks === null) {
@@ -540,6 +546,9 @@ function validateOptions(rawOptions) {
         ...(rawOptions.allocationObserver === undefined
             ? {}
             : { allocationObserver: rawOptions.allocationObserver }),
+        ...(rawOptions.copyObserver === undefined
+            ? {}
+            : { copyObserver: rawOptions.copyObserver }),
         ...(hooks === undefined ? {} : { testHooks: hooks }),
         spoolRoot: hooks?.spoolRoot ?? tmpdir(),
     };

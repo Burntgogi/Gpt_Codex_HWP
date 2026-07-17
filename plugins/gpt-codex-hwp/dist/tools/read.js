@@ -1,13 +1,13 @@
-import { lstat, mkdir, open, realpath, stat, } from "node:fs/promises";
-import { extname, join, parse as parsePath, resolve } from "node:path";
+import { lstat, } from "node:fs/promises";
+import { extname, resolve } from "node:path";
 import { z } from "zod";
 import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
 import { MarkdownDeliveryError, planMarkdownDelivery, } from "../shared/markdown-output.js";
-import { writeFilesExclusively } from "../shared/output.js";
-import { toolError, toolSuccess } from "../shared/result.js";
+import { captureExistingOutputDirectoryIdentity, UnsafeOutputPathError, writeFilesExclusively, } from "../shared/output.js";
+import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
 import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_READ_TOOL_NAME = "hwp_read";
@@ -57,9 +57,9 @@ export async function handleHwpRead(input, documentEngine = defaultDocumentEngin
         }
         const warnings = copyWarnings(parsed.warnings);
         const shouldExtractImages = input.extract_images ?? input.output_dir !== undefined;
-        const assets = shouldExtractImages
-            ? await collectImageAssets(parsed.images ?? [], input.output_dir, filePath, warnings, context)
-            : [];
+        const plannedAssets = shouldExtractImages
+            ? await planImageAssets(parsed.images ?? [], input.output_dir, filePath, warnings, context)
+            : EMPTY_IMAGE_ASSET_PLAN;
         const metadata = {
             ...(parsed.metadata ?? {}),
             fileType: parsed.fileType,
@@ -74,7 +74,7 @@ export async function handleHwpRead(input, documentEngine = defaultDocumentEngin
             markdown: delivery.inlineMarkdown,
             metadata,
             warnings,
-            assets,
+            assets: plannedAssets.assets,
         };
         if (delivery.outputPath !== undefined) {
             Object.assign(details, {
@@ -89,16 +89,34 @@ export async function handleHwpRead(input, documentEngine = defaultDocumentEngin
         const summary = delivery.outputPath === undefined
             ? `Read ${parsed.fileType} document.`
             : `Read ${parsed.fileType} document and saved complete Markdown.`;
-        const successResult = toolSuccess(summary, details);
-        if (successResult.isError)
-            return successResult;
-        if (delivery.outputPath !== undefined) {
-            await writeFilesExclusively([{ path: delivery.outputPath, data: parsed.markdown }], {
+        return await commitBudgetedToolSuccess(summary, details, async () => {
+            const files = [
+                ...plannedAssets.files,
+                ...(delivery.outputPath === undefined
+                    ? []
+                    : [{ path: delivery.outputPath, data: parsed.markdown }]),
+            ];
+            if (files.length === 0) {
+                requireToolNotCancelled(context);
+                await engineResult.verifySourceUnchanged();
+                requireToolNotCancelled(context);
+                return;
+            }
+            await writeFilesExclusively(files, {
                 sourcePaths: [filePath],
-                beforeOpen: async () => requireToolNotCancelled(context),
+                beforeOpen: async () => {
+                    await engineResult.verifySourceUnchanged();
+                    requireToolNotCancelled(context);
+                },
+                ...(plannedAssets.existingDirectoryIdentity === undefined
+                    ? {}
+                    : {
+                        expectedDirectoryIdentities: [
+                            plannedAssets.existingDirectoryIdentity,
+                        ],
+                    }),
             });
-        }
-        return successResult;
+        });
     }
     catch (error) {
         const message = errorMessage(error);
@@ -157,24 +175,61 @@ export function registerHwpRead(server, documentEngine = defaultDocumentEngineFa
 function copyWarnings(warnings) {
     return (warnings ?? []).map((warning) => ({ ...warning }));
 }
-async function collectImageAssets(images, outputDir, sourceFilePath, warnings, context) {
+const EMPTY_IMAGE_ASSET_PLAN = Object.freeze({
+    assets: Object.freeze([]),
+    files: Object.freeze([]),
+});
+async function planImageAssets(images, outputDir, sourceFilePath, warnings, context) {
     const filenames = uniqueSafeFilenames(images);
     if (outputDir === undefined) {
         warnings.push({
             code: "IMAGES_NOT_WRITTEN",
             message: "extract_images was requested without output_dir; returning image names only, without raw bytes.",
         });
-        return filenames;
+        return { assets: filenames, files: [] };
     }
     requireToolNotCancelled(context);
+    if (images.length === 0)
+        return EMPTY_IMAGE_ASSET_PLAN;
     const resolvedOutputDir = await authorizeFuturePath(resolveLocalPath(outputDir, "output_dir"));
     const resolvedSourceFilePath = await authorizeExistingPath(resolveLocalPath(sourceFilePath, "file_path"));
-    const outputDirectory = await prepareCanonicalOutputDirectory(resolvedOutputDir);
-    const paths = [];
-    for (const [index, image] of images.entries()) {
-        paths.push(await writeImageAssetExclusively(image, filenames[index], outputDirectory, resolvedSourceFilePath, context));
+    let existingDirectoryIdentity;
+    try {
+        existingDirectoryIdentity = await captureExistingOutputDirectoryIdentity(resolvedOutputDir);
     }
-    return paths;
+    catch (error) {
+        if (error instanceof UnsafeOutputPathError) {
+            throw new UnsafeOutputDirectoryError(error.message);
+        }
+        throw error;
+    }
+    const paths = [];
+    const files = [];
+    const reserved = new Set();
+    for (const [index, image] of images.entries()) {
+        let attempt = 1;
+        while (true) {
+            const filename = filenameForAttempt(filenames[index], attempt);
+            const outputPath = await authorizeFuturePath(resolve(resolvedOutputDir, filename));
+            const key = comparablePath(outputPath);
+            if (key === comparablePath(resolvedSourceFilePath) ||
+                reserved.has(key) || await outputPathExists(outputPath)) {
+                attempt += 1;
+                continue;
+            }
+            reserved.add(key);
+            paths.push(outputPath);
+            files.push({ path: outputPath, data: new Uint8Array(image.bytes) });
+            break;
+        }
+    }
+    return {
+        assets: paths,
+        files,
+        ...(existingDirectoryIdentity === undefined
+            ? {}
+            : { existingDirectoryIdentity }),
+    };
 }
 class UnsafeOutputDirectoryError extends Error {
     code = "UNSAFE_OUTPUT_DIR";
@@ -183,122 +238,15 @@ class UnsafeOutputDirectoryError extends Error {
         this.name = "UnsafeOutputDirectoryError";
     }
 }
-async function prepareCanonicalOutputDirectory(outputDir) {
-    await assertNoLinkedExistingComponents(outputDir);
-    await mkdir(outputDir, { recursive: true });
-    await assertNoLinkedExistingComponents(outputDir);
-    const [canonicalPath, stats] = await Promise.all([
-        realpath(outputDir),
-        stat(outputDir, { bigint: true }),
-    ]);
-    if (!stats.isDirectory()) {
-        throw new UnsafeOutputDirectoryError("output_dir must resolve to a directory.");
+async function outputPathExists(path) {
+    try {
+        await lstat(path);
+        return true;
     }
-    if (comparablePath(canonicalPath) !== comparablePath(outputDir)) {
-        throw new UnsafeOutputDirectoryError("output_dir must be a canonical path without symlinks or junctions.");
-    }
-    return {
-        path: outputDir,
-        realPath: canonicalPath,
-        device: stats.dev,
-        inode: stats.ino,
-    };
-}
-async function assertCanonicalDirectoryIdentity(expected) {
-    await assertNoLinkedExistingComponents(expected.path);
-    const [canonicalPath, stats] = await Promise.all([
-        realpath(expected.path),
-        stat(expected.path, { bigint: true }),
-    ]);
-    if (!stats.isDirectory() ||
-        comparablePath(canonicalPath) !== comparablePath(expected.realPath) ||
-        comparablePath(canonicalPath) !== comparablePath(expected.path) ||
-        stats.dev !== expected.device ||
-        stats.ino !== expected.inode) {
-        throw new UnsafeOutputDirectoryError("output_dir changed or became non-canonical before asset creation.");
-    }
-}
-async function assertNoLinkedExistingComponents(path) {
-    for (const component of absolutePathComponents(path)) {
-        let stats;
-        try {
-            stats = await lstat(component);
-        }
-        catch (error) {
-            if (errorCode(error, "") === "ENOENT") {
-                return;
-            }
-            throw error;
-        }
-        if (stats.isSymbolicLink()) {
-            throw new UnsafeOutputDirectoryError(`output_dir path component is a symlink or junction: ${component}`);
-        }
-    }
-}
-function absolutePathComponents(path) {
-    const root = parsePath(path).root;
-    const components = [root];
-    let current = root;
-    for (const segment of path.slice(root.length).split(/[\\/]+/u)) {
-        if (segment.length === 0) {
-            continue;
-        }
-        current = join(current, segment);
-        components.push(current);
-    }
-    return components;
-}
-async function writeImageAssetExclusively(image, baseFilename, outputDirectory, sourceFilePath, context) {
-    let attempt = 1;
-    while (true) {
-        const filename = filenameForAttempt(baseFilename, attempt);
-        const outputPath = await authorizeFuturePath(resolve(outputDirectory.path, filename));
-        if (comparablePath(outputPath) === comparablePath(sourceFilePath)) {
-            attempt += 1;
-            continue;
-        }
-        await assertCanonicalDirectoryIdentity(outputDirectory);
-        if (comparablePath(await authorizeFuturePath(outputPath)) !== comparablePath(outputPath)) {
-            throw new UnsafeOutputDirectoryError("output_dir changed before asset creation.");
-        }
-        requireToolNotCancelled(context);
-        let handle;
-        try {
-            handle = await open(outputPath, "wx");
-        }
-        catch (error) {
-            if (errorCode(error, "") === "EEXIST") {
-                attempt += 1;
-                continue;
-            }
-            throw error;
-        }
-        let closed = false;
-        try {
-            const created = await handle.stat({ bigint: true });
-            await assertCanonicalDirectoryIdentity(outputDirectory);
-            const openedPath = await lstat(outputPath, { bigint: true });
-            if (!openedPath.isFile() ||
-                openedPath.isSymbolicLink() ||
-                openedPath.dev !== created.dev ||
-                openedPath.ino !== created.ino ||
-                comparablePath(await authorizeFuturePath(outputPath)) !==
-                    comparablePath(outputPath)) {
-                throw new UnsafeOutputDirectoryError("Extracted asset path changed while it was being created.");
-            }
-            await handle.writeFile(new Uint8Array(image.bytes));
-            await handle.close();
-            closed = true;
-            return outputPath;
-        }
-        catch (error) {
-            if (!closed) {
-                await handle.close().catch(() => undefined);
-            }
-            // Never delete a failed output by pathname: a concurrent replacement
-            // could be removed between any identity check and deletion.
-            throw error;
-        }
+    catch (error) {
+        if (errorCode(error, "") === "ENOENT")
+            return false;
+        throw error;
     }
 }
 function filenameForAttempt(baseFilename, attempt) {

@@ -26,7 +26,11 @@ import {
   openDocumentSnapshot,
 } from "../src/shared/document-snapshot.js";
 import { MAX_DOCUMENT_BYTES } from "../src/shared/files.js";
-import { toOwnedExactBytes } from "../src/shared/owned-bytes.js";
+import {
+  copyToOwnedExactBytes,
+  createBoundedCopyObserver,
+  toOwnedExactBytes,
+} from "../src/shared/owned-bytes.js";
 import { MAX_WORKER_INPUT_BYTES } from "../src/workers/document-protocol.js";
 
 test("owned bytes reuses an exact standalone ArrayBuffer without copying", () => {
@@ -113,6 +117,26 @@ test("owned bytes rejects invalid inputs and observers", () => {
   );
 });
 
+test("owned bytes reports cumulative defensive copies through a bounded observer", () => {
+  const observed: number[] = [];
+  const copyObserver = createBoundedCopyObserver(
+    5,
+    (copiedBytes) => observed.push(copiedBytes),
+  );
+  const input = Buffer.allocUnsafe(8).subarray(2, 5);
+  input.set([1, 2, 3]);
+
+  const owned = copyToOwnedExactBytes(input, copyObserver);
+
+  assert.equal(owned.copiedBytes, 3);
+  assert.equal(owned.transferable.byteLength, 3);
+  assert.deepEqual([...owned.bytes], [1, 2, 3]);
+  assert.deepEqual(observed, [3]);
+  assert.throws(() => copyObserver(3), RangeError);
+  assert.throws(() => copyObserver(-1), RangeError);
+  assert.deepEqual(observed, [3]);
+});
+
 test("document snapshot opens an exact worker buffer with frozen path-free metadata", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-small-snapshot-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -122,10 +146,12 @@ test("document snapshot opens an exact worker buffer with frozen path-free metad
   ]);
   await writeFile(sourcePath, bytes);
   const allocations: number[] = [];
+  const copies: number[] = [];
 
   const snapshot = await openDocumentSnapshot(sourcePath, {
     workerInputMaxBytes: bytes.byteLength,
     allocationObserver: (allocatedBytes) => allocations.push(allocatedBytes),
+    copyObserver: (copiedBytes) => copies.push(copiedBytes),
   });
   t.after(async () => snapshot.cleanup());
 
@@ -133,6 +159,7 @@ test("document snapshot opens an exact worker buffer with frozen path-free metad
   assert.equal(MAX_WORKER_INPUT_BYTES, 64 * 1024 * 1024);
   assert.equal(snapshot.transport, "worker");
   assert.deepEqual(allocations, [bytes.byteLength]);
+  assert.deepEqual(copies, [0]);
   assert.deepEqual(snapshot.metadata, {
     sizeBytes: bytes.byteLength,
     sha256: sha256(bytes),
@@ -303,12 +330,14 @@ test("document snapshot streams large input into an owner-only spool with an off
   ]);
   await writeFile(sourcePath, bytes);
   const allocations: number[] = [];
+  const copies: number[] = [];
   let observedDirectory = "";
   let observedFile = "";
 
   const snapshot = await openDocumentSnapshot(sourcePath, {
     workerInputMaxBytes: 4,
     allocationObserver: (allocatedBytes) => allocations.push(allocatedBytes),
+    copyObserver: (copiedBytes) => copies.push(copiedBytes),
     testHooks: {
       spoolRoot,
       onSpoolCreated: (spool) => {
@@ -321,6 +350,7 @@ test("document snapshot streams large input into an owner-only spool with an off
 
   assert.equal(snapshot.transport, "spool");
   assert.deepEqual(allocations, [bytes.byteLength]);
+  assert.deepEqual(copies, [0]);
   assert.deepEqual(snapshot.metadata, {
     sizeBytes: bytes.byteLength,
     sha256: sha256(bytes),

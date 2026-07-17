@@ -1,6 +1,6 @@
 import { Worker } from "node:worker_threads";
 import { DocumentEngineRunError, createDocumentEngineRunError, normalizeDocumentEngineError, } from "./document-errors.js";
-import { createDocumentEventValidator, createWireDocumentRequest, validateLogicalDocumentRequest, } from "./document-protocol.js";
+import { createDocumentEventValidator, createWireDocumentRequest, documentWorkerRequestBytes, MAX_WORKER_INPUT_BYTES, validateLogicalDocumentRequest, } from "./document-protocol.js";
 import { defaultDocumentDeadlineMs } from "./document-execution-policy.js";
 export const DOCUMENT_WORKER_RESOURCE_LIMITS = Object.freeze({
     maxOldGenerationSizeMb: 768,
@@ -38,6 +38,16 @@ export function createDocumentWorkerClient(dependencies = {}) {
                 await cleanupSnapshot(snapshot);
                 throw error;
             }
+            let preflight;
+            try {
+                preflight = workerRequestPreflight(request, snapshot, options);
+            }
+            catch (error) {
+                await cleanupSnapshot(snapshot);
+                if (error instanceof DocumentEngineRunError)
+                    throw error;
+                throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+            }
             let worker;
             try {
                 worker = workerFactory({
@@ -71,13 +81,13 @@ export function createDocumentWorkerClient(dependencies = {}) {
                 }
                 throw createDocumentEngineRunError("ENGINE_TIMEOUT");
             }
-            return runWorker(request, snapshot, options, remainingDeadlineMs, worker, terminationDeadlineMs);
+            return runWorker(request, snapshot, options, remainingDeadlineMs, worker, terminationDeadlineMs, preflight);
         },
     };
 }
-async function runWorker(request, snapshot, options, deadlineMs, worker, terminationDeadlineMs) {
+async function runWorker(request, snapshot, options, deadlineMs, worker, terminationDeadlineMs, preflight) {
     const startedAt = Date.now();
-    const validator = createDocumentEventValidator(request.requestId, request.operation);
+    const validator = createDocumentEventValidator(request.requestId, request.operation, preflight.documentBytes);
     let ready = false;
     let settling = false;
     let deadlineTimer;
@@ -170,6 +180,10 @@ async function runWorker(request, snapshot, options, deadlineMs, worker, termina
                     options.onProgress?.(event.completed, event.total);
                     return;
                 }
+                if (event.type === "metrics") {
+                    options.onMetrics?.(Object.freeze({ copiedBytes: event.copiedBytes }));
+                    return;
+                }
                 if (event.type === "failure") {
                     settle({
                         error: event.error.code === "ENGINE_OOM" || ready
@@ -211,16 +225,29 @@ async function runWorker(request, snapshot, options, deadlineMs, worker, termina
         try {
             const transports = {};
             const transferList = [];
+            let actualDocumentBytes = 0;
+            let actualImageBytes = 0;
             if (request.operation !== "generateHwpx") {
                 if (snapshot?.transport !== "worker") {
                     throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
                 }
                 const buffer = snapshot.takeTransferable();
+                actualDocumentBytes = buffer.byteLength;
+                if (actualDocumentBytes !== preflight.documentBytes) {
+                    throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+                }
                 transports.document = { transport: "buffer", buffer };
                 transferList.push(buffer);
             }
             if (request.operation === "insertImage") {
                 if (options.imageInput?.transport !== "buffer") {
+                    throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+                }
+                actualImageBytes = options.imageInput.buffer.byteLength;
+                if (actualImageBytes !== preflight.imageBytes) {
+                    throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+                }
+                if (transferList.includes(options.imageInput.buffer)) {
                     throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
                 }
                 transports.image = {
@@ -229,13 +256,42 @@ async function runWorker(request, snapshot, options, deadlineMs, worker, termina
                 };
                 transferList.push(options.imageInput.buffer);
             }
-            const wire = createWireDocumentRequest(request, transports);
+            const actualBytes = documentWorkerRequestBytes({ input: request.input, options: request.options }, actualDocumentBytes, actualImageBytes);
+            if (actualBytes !== preflight.aggregateBytes || actualBytes > MAX_WORKER_INPUT_BYTES) {
+                throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+            }
+            let wire;
+            try {
+                wire = createWireDocumentRequest(request, transports, "worker");
+            }
+            catch {
+                throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+            }
             worker.postMessage(wire, transferList);
         }
         catch (error) {
             settle({ error });
         }
     });
+}
+function workerRequestPreflight(request, snapshot, options) {
+    const documentBytes = request.operation === "generateHwpx"
+        ? 0
+        : snapshot?.metadata.sizeBytes ?? Number.NaN;
+    let imageBytes = 0;
+    if (request.operation === "insertImage") {
+        if (options.imageInput?.transport !== "buffer") {
+            throw createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR");
+        }
+        imageBytes = options.imageInput.buffer.byteLength;
+    }
+    const aggregateBytes = documentWorkerRequestBytes({ input: request.input, options: request.options }, documentBytes, imageBytes);
+    if (aggregateBytes > MAX_WORKER_INPUT_BYTES) {
+        throw createDocumentEngineRunError("ENGINE_RESOURCE_LIMIT", {
+            remediation: "reduce_input",
+        });
+    }
+    return Object.freeze({ documentBytes, imageBytes, aggregateBytes });
 }
 function beginWorkerTermination(worker, deadlineMs) {
     let termination;

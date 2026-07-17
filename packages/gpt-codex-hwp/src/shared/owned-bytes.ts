@@ -37,6 +37,51 @@ export function toOwnedExactBytes(
   };
 }
 
+export function copyToOwnedExactBytes(
+  input: ArrayBuffer | ArrayBufferView,
+  copyObserver?: OwnedBytesCopyObserver,
+): OwnedExactBytes {
+  if (copyObserver !== undefined && typeof copyObserver !== "function") {
+    throw new TypeError("copyObserver must be a function when provided.");
+  }
+  const view = asByteView(input);
+  const bytes = new Uint8Array(view.byteLength);
+  bytes.set(view);
+  copyObserver?.(view.byteLength);
+  return {
+    bytes,
+    transferable: bytes.buffer,
+    copiedBytes: view.byteLength,
+  };
+}
+
+export function createBoundedCopyObserver(
+  maximumCopiedBytes: number,
+  observer?: OwnedBytesCopyObserver,
+): OwnedBytesCopyObserver {
+  if (
+    !Number.isSafeInteger(maximumCopiedBytes) ||
+    maximumCopiedBytes < 0
+  ) {
+    throw new RangeError("maximumCopiedBytes must be a non-negative safe integer.");
+  }
+  if (observer !== undefined && typeof observer !== "function") {
+    throw new TypeError("observer must be a function when provided.");
+  }
+  let cumulativeCopiedBytes = 0;
+  return (copiedBytes: number): void => {
+    if (
+      !Number.isSafeInteger(copiedBytes) ||
+      copiedBytes < 0 ||
+      copiedBytes > maximumCopiedBytes - cumulativeCopiedBytes
+    ) {
+      throw new RangeError("copiedBytes exceeds the bounded copy total.");
+    }
+    cumulativeCopiedBytes += copiedBytes;
+    observer?.(cumulativeCopiedBytes);
+  };
+}
+
 function asByteView(input: ArrayBuffer | ArrayBufferView): Uint8Array {
   if (input instanceof ArrayBuffer) {
     return new Uint8Array(input);

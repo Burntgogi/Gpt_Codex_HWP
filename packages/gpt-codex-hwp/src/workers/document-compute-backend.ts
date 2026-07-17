@@ -14,13 +14,20 @@ import {
   HwpxAnchorResolutionError,
   resolveHwpxAnchorOccurrence,
 } from "../shared/hwpx-anchor.js";
+import {
+  copyToOwnedExactBytes,
+  createBoundedCopyObserver,
+} from "../shared/owned-bytes.js";
 
 import { isIntegrityVerifiedResultSpool } from "./document-child-client.js";
 import {
   createDocumentEngineRunError,
   DocumentEngineRunError,
 } from "./document-errors.js";
-import type { IntegrityVerifiedResultSpool } from "./document-execution-policy.js";
+import type {
+  DocumentEngineMetrics,
+  IntegrityVerifiedResultSpool,
+} from "./document-execution-policy.js";
 import {
   MAX_DOCUMENT_ENGINE_RESULT_BYTES,
   MAX_DOCUMENT_VALIDATION_ISSUES,
@@ -60,6 +67,10 @@ export type DocumentComputeProgressHandler = (
   progress: DocumentComputeProgress,
 ) => void;
 
+export type DocumentComputeMetricsHandler = (
+  metrics: DocumentEngineMetrics,
+) => void;
+
 export interface DocumentComputeBackend {
   assertMutableHwpx(source: ArrayBuffer): Promise<void>;
   validateExactHwpx(source: ArrayBuffer): Promise<void>;
@@ -73,6 +84,7 @@ export interface DocumentComputeBackend {
     request: Extract<WireDocumentRequest, { operation: Operation }>,
     inputs: Readonly<{ document?: ArrayBuffer; image?: ArrayBuffer }>,
     onProgress?: DocumentComputeProgressHandler,
+    onMetrics?: DocumentComputeMetricsHandler,
   ): Promise<DocumentResultPayload<Operation>>;
 }
 
@@ -144,12 +156,14 @@ export function createDocumentComputeBackend(
       request: Extract<WireDocumentRequest, { operation: Operation }>,
       inputs: Readonly<{ document?: ArrayBuffer; image?: ArrayBuffer }>,
       onProgress?: DocumentComputeProgressHandler,
+      onMetrics?: DocumentComputeMetricsHandler,
     ): Promise<DocumentResultPayload<Operation>> {
       const payload = await executeOperation(
         dependencies,
         request,
         inputs,
         onProgress,
+        onMetrics,
       );
       validateResultPayload(request.operation, payload);
       return payload as DocumentResultPayload<Operation>;
@@ -162,11 +176,18 @@ async function executeOperation(
   request: WireDocumentRequest,
   inputs: Readonly<{ document?: ArrayBuffer; image?: ArrayBuffer }>,
   onProgress?: DocumentComputeProgressHandler,
+  onMetrics?: DocumentComputeMetricsHandler,
 ): Promise<DocumentResultPayload<DocumentEngineOperation>> {
   const { kordoc } = dependencies;
   switch (request.operation) {
     case "detect":
-      return { format: await detectSupportedFormat(kordoc, requireDocument(inputs)) };
+      return {
+        format: await detectSupportedFormat(
+          kordoc,
+          requireDocument(inputs),
+          onMetrics,
+        ),
+      };
     case "parse": {
       const source = requireDocument(inputs);
       const format = await requireReadableFormat(kordoc, source);
@@ -383,16 +404,22 @@ async function renderHwpWithRhwp(
 async function detectSupportedFormat(
   kordoc: KordocModule,
   source: ArrayBuffer,
+  onMetrics?: DocumentComputeMetricsHandler,
 ): Promise<"hwp" | "hwpx" | "unknown"> {
-  const candidate = kordoc.detectFormat(copyArrayBuffer(source));
+  const observeCopy = createBoundedCopyObserver(
+    source.byteLength,
+    (copiedBytes) => onMetrics?.(Object.freeze({ copiedBytes })),
+  );
+  const engineInput = copyToOwnedExactBytes(source, observeCopy).transferable;
+  const candidate = kordoc.detectFormat(engineInput);
   try {
     if (candidate === "hwp") {
-      return kordoc.detectOle2Format(copyArrayBuffer(source)) === "hwp"
+      return kordoc.detectOle2Format(engineInput) === "hwp"
         ? "hwp"
         : "unknown";
     }
     if (candidate === "hwpx") {
-      return await kordoc.detectZipFormat(copyArrayBuffer(source)) === "hwpx"
+      return await kordoc.detectZipFormat(engineInput) === "hwpx"
         ? "hwpx"
         : "unknown";
     }

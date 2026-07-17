@@ -39,23 +39,13 @@ export async function writeFilesExclusively(files, options = {}) {
     for (const file of resolvedFiles) {
         await rejectExistingTarget(file.path, sourceIdentities);
     }
-    const directories = new Map();
-    for (const file of resolvedFiles) {
-        const parentPath = dirname(file.path);
-        const key = comparablePath(parentPath);
-        if (!directories.has(key)) {
-            directories.set(key, await prepareCanonicalDirectory(parentPath));
-        }
-    }
+    const directoryPlan = await prepareOutputDirectoryPlan(resolvedFiles.map((file) => file.path), options.expectedDirectoryIdentities ?? [], options.unitTestDirectoryIdentityCheck);
     const reservations = [];
     try {
         await options.beforeOpen?.();
-        for (const file of resolvedFiles) {
-            const directory = directories.get(comparablePath(dirname(file.path)));
-            if (directory === undefined) {
-                throw new Error("Output directory reservation is missing.");
-            }
-            await assertDirectoryIdentity(directory);
+        for (const [index, file] of resolvedFiles.entries()) {
+            const directory = outputDirectoryForPath(file.path, directoryPlan);
+            await assertPlannedDirectoryIdentity(directory, directoryPlan);
             await assertFuturePathStillAuthorized(file.path);
             let handle;
             try {
@@ -70,13 +60,15 @@ export async function writeFilesExclusively(files, options = {}) {
             }
             try {
                 const created = await handle.stat({ bigint: true });
-                await assertOpenedPathIdentity(file.path, created.dev, created.ino);
-                reservations.push({
+                const reservation = {
                     path: file.path,
                     handle,
                     device: created.dev,
                     inode: created.ino,
-                });
+                };
+                await assertReservedOutputIdentity(reservation, directory, directoryPlan);
+                reservations.push(reservation);
+                await options.unitTestAfterOpen?.(file.path, index);
             }
             catch (error) {
                 await handle.close().catch(() => undefined);
@@ -86,6 +78,8 @@ export async function writeFilesExclusively(files, options = {}) {
             }
         }
         for (const [index, reservation] of reservations.entries()) {
+            const directory = outputDirectoryForPath(reservation.path, directoryPlan);
+            await assertReservedOutputIdentity(reservation, directory, directoryPlan);
             await reservation.handle.writeFile(resolvedFiles[index].data);
         }
         for (const reservation of reservations) {
@@ -101,6 +95,35 @@ export async function writeFilesExclusively(files, options = {}) {
         throw error;
     }
 }
+export async function captureExistingOutputDirectoryIdentity(directoryPath) {
+    const resolvedDirectory = await authorizeFuturePath(resolveLocalPath(directoryPath, "output_dir"));
+    await assertNoLinkedExistingComponents(resolvedDirectory);
+    try {
+        const linked = await lstat(resolvedDirectory);
+        if (!linked.isDirectory() || linked.isSymbolicLink()) {
+            throw new UnsafeOutputPathError(`Output parent is not a directory: ${resolvedDirectory}`);
+        }
+    }
+    catch (error) {
+        if (errorCode(error, "") === "ENOENT")
+            return undefined;
+        throw error;
+    }
+    const [canonicalPath, directory] = await Promise.all([
+        realpath(resolvedDirectory),
+        stat(resolvedDirectory, { bigint: true }),
+    ]);
+    if (!directory.isDirectory() ||
+        comparablePath(canonicalPath) !== comparablePath(resolvedDirectory)) {
+        throw new UnsafeOutputPathError(`Output parent must not contain symlinks or junctions: ${resolvedDirectory}`);
+    }
+    return Object.freeze({
+        path: resolvedDirectory,
+        realPath: canonicalPath,
+        device: directory.dev,
+        inode: directory.ino,
+    });
+}
 export async function writeFileRangeExclusively(outputPath, input, options = {}) {
     if (!Number.isSafeInteger(input.fd) || input.fd < 0 ||
         !Number.isSafeInteger(input.offset) || input.offset < 0 ||
@@ -112,10 +135,11 @@ export async function writeFileRangeExclusively(outputPath, input, options = {})
     assertNoLexicalSourceAliases([resolvedOutput], resolvedSources);
     const sourceIdentities = await existingSourceIdentities(resolvedSources);
     await rejectExistingTarget(resolvedOutput, sourceIdentities);
-    const directory = await prepareCanonicalDirectory(dirname(resolvedOutput));
-    await assertDirectoryIdentity(directory);
+    const directoryPlan = await prepareOutputDirectoryPlan([resolvedOutput], options.expectedDirectoryIdentities ?? [], options.unitTestDirectoryIdentityCheck);
+    const directory = outputDirectoryForPath(resolvedOutput, directoryPlan);
+    await assertPlannedDirectoryIdentity(directory, directoryPlan);
     await options.beforeOpen?.();
-    await assertDirectoryIdentity(directory);
+    await assertPlannedDirectoryIdentity(directory, directoryPlan);
     await assertFuturePathStillAuthorized(resolvedOutput);
     let handle;
     try {
@@ -130,17 +154,15 @@ export async function writeFileRangeExclusively(outputPath, input, options = {})
     }
     try {
         const created = await handle.stat({ bigint: true });
-        await assertOpenedPathIdentity(resolvedOutput, created.dev, created.ino);
-        const buffer = Buffer.allocUnsafeSlow(1024 * 1024);
-        let copied = 0;
-        while (copied < input.sizeBytes) {
-            const requested = Math.min(buffer.byteLength, input.sizeBytes - copied);
-            const count = await readPositionally(input.fd, buffer, requested, input.offset + copied);
-            if (count === 0)
-                throw new Error("Exclusive input range is truncated.");
-            await writeChunkFully(handle, buffer, count, copied);
-            copied += count;
-        }
+        const reservation = {
+            path: resolvedOutput,
+            handle,
+            device: created.dev,
+            inode: created.ino,
+        };
+        await assertReservedOutputIdentity(reservation, directory, directoryPlan);
+        await options.unitTestAfterOpen?.(resolvedOutput, 0);
+        await copyRangeToHandle(handle, input, () => assertReservedOutputIdentity(reservation, directory, directoryPlan));
         await handle.close();
         return resolvedOutput;
     }
@@ -169,23 +191,13 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
     for (const file of resolvedFiles) {
         await rejectExistingTarget(file.path, sourceIdentities);
     }
-    const directories = new Map();
-    for (const file of resolvedFiles) {
-        const parentPath = dirname(file.path);
-        const key = comparablePath(parentPath);
-        if (!directories.has(key)) {
-            directories.set(key, await prepareCanonicalDirectory(parentPath));
-        }
-    }
+    const directoryPlan = await prepareOutputDirectoryPlan(resolvedFiles.map((file) => file.path), options.expectedDirectoryIdentities ?? [], options.unitTestDirectoryIdentityCheck);
     const reservations = [];
     try {
         await options.beforeOpen?.();
-        for (const file of resolvedFiles) {
-            const directory = directories.get(comparablePath(dirname(file.path)));
-            if (directory === undefined) {
-                throw new Error("Output directory reservation is missing.");
-            }
-            await assertDirectoryIdentity(directory);
+        for (const [index, file] of resolvedFiles.entries()) {
+            const directory = outputDirectoryForPath(file.path, directoryPlan);
+            await assertPlannedDirectoryIdentity(directory, directoryPlan);
             await assertFuturePathStillAuthorized(file.path);
             let handle;
             try {
@@ -200,21 +212,26 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
             }
             try {
                 const created = await handle.stat({ bigint: true });
-                await assertOpenedPathIdentity(file.path, created.dev, created.ino);
-                reservations.push({
+                const reservation = {
                     path: file.path,
                     handle,
                     device: created.dev,
                     inode: created.ino,
-                });
+                };
+                await assertReservedOutputIdentity(reservation, directory, directoryPlan);
+                reservations.push(reservation);
+                await options.unitTestAfterOpen?.(file.path, index);
             }
             catch (error) {
                 await handle.close().catch(() => undefined);
                 throw error;
             }
         }
-        await copyRangeToHandle(reservations[0].handle, input);
+        const rangeReservation = reservations[0];
+        const rangeDirectory = outputDirectoryForPath(rangeReservation.path, directoryPlan);
+        await copyRangeToHandle(rangeReservation.handle, input, () => assertReservedOutputIdentity(rangeReservation, rangeDirectory, directoryPlan));
         for (let index = 1; index < reservations.length; index += 1) {
+            await assertReservedOutputIdentity(reservations[index], outputDirectoryForPath(reservations[index].path, directoryPlan), directoryPlan);
             await reservations[index].handle.writeFile(resolvedFiles[index].data);
         }
         for (const reservation of reservations)
@@ -225,6 +242,57 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
         await Promise.all(reservations.map((reservation) => reservation.handle.close().catch(() => undefined)));
         throw error;
     }
+}
+async function prepareOutputDirectoryPlan(outputPaths, expectedIdentities, unitTestDirectoryIdentityCheck) {
+    const expectedDirectories = expectedDirectoryMap(expectedIdentities);
+    const outputParentKeys = new Set(outputPaths.map((outputPath) => comparablePath(dirname(outputPath))));
+    for (const [key, identity] of expectedDirectories) {
+        if (!outputParentKeys.has(key)) {
+            throw new OutputConflictError(identity.path);
+        }
+    }
+    const directories = new Map();
+    for (const outputPath of outputPaths) {
+        const parentPath = dirname(outputPath);
+        const key = comparablePath(parentPath);
+        if (directories.has(key))
+            continue;
+        const expected = expectedDirectories.get(key);
+        if (expected === undefined) {
+            directories.set(key, await prepareCanonicalDirectory(parentPath));
+        }
+        else {
+            await assertExpectedDirectoryIdentity(expected);
+            directories.set(key, expected);
+        }
+    }
+    return {
+        directories,
+        expectedDirectories,
+        ...(unitTestDirectoryIdentityCheck === undefined
+            ? {}
+            : { unitTestDirectoryIdentityCheck }),
+    };
+}
+function outputDirectoryForPath(outputPath, plan) {
+    const directory = plan.directories.get(comparablePath(dirname(outputPath)));
+    if (directory === undefined) {
+        throw new Error("Output directory reservation is missing.");
+    }
+    return directory;
+}
+async function assertPlannedDirectoryIdentity(directory, plan) {
+    if (plan.expectedDirectories.has(comparablePath(directory.path))) {
+        await assertExpectedDirectoryIdentity(directory);
+    }
+    else {
+        await assertDirectoryIdentity(directory);
+    }
+    await plan.unitTestDirectoryIdentityCheck?.(directory);
+}
+async function assertReservedOutputIdentity(reservation, directory, plan) {
+    await assertPlannedDirectoryIdentity(directory, plan);
+    await assertOpenedPathIdentity(reservation.path, reservation.device, reservation.inode);
 }
 function assertValidInputRange(input) {
     if (!Number.isSafeInteger(input.fd) || input.fd < 0 ||
@@ -248,7 +316,7 @@ async function assertOpenedPathIdentity(path, device, inode) {
         throw new UnsafeOutputPathError("Output path changed while it was being created.");
     }
 }
-async function copyRangeToHandle(handle, input) {
+async function copyRangeToHandle(handle, input, beforeWrite) {
     const buffer = Buffer.allocUnsafeSlow(1024 * 1024);
     let copied = 0;
     while (copied < input.sizeBytes) {
@@ -256,6 +324,7 @@ async function copyRangeToHandle(handle, input) {
         const count = await readPositionally(input.fd, buffer, requested, input.offset + copied);
         if (count === 0)
             throw new Error("Exclusive input range is truncated.");
+        await beforeWrite?.();
         await writeChunkFully(handle, buffer, count, copied);
         copied += count;
     }
@@ -374,6 +443,25 @@ async function assertDirectoryIdentity(expected) {
         directory.ino !== expected.inode) {
         throw new UnsafeOutputPathError(`Output parent changed before file creation: ${expected.path}`);
     }
+}
+async function assertExpectedDirectoryIdentity(expected) {
+    try {
+        await assertDirectoryIdentity(expected);
+    }
+    catch {
+        throw new OutputConflictError(expected.path);
+    }
+}
+function expectedDirectoryMap(identities) {
+    const result = new Map();
+    for (const identity of identities) {
+        const key = comparablePath(identity.path);
+        if (result.has(key)) {
+            throw new Error("Expected output directory identities must be unique.");
+        }
+        result.set(key, identity);
+    }
+    return result;
 }
 async function assertNoLinkedExistingComponents(path) {
     for (const component of absolutePathComponents(path)) {

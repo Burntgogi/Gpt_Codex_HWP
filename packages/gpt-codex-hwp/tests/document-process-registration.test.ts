@@ -1338,7 +1338,8 @@ test("registration descriptor ownership produces clean EOF after case and bootst
     START_GATE,
     REGISTRATION_RACE_FIXTURE,
   ]);
-  const caseExit = childExitPromise(caseChild);
+  const caseClose = waitForClose(caseChild);
+  const caseExit = caseClose.then(() => {});
   t.after(() => terminate(caseChild));
   assert.ok(caseChild.stdio[5] instanceof Readable);
   assert.ok(caseChild.stdio[6] instanceof Writable);
@@ -1376,7 +1377,8 @@ test("registration descriptor ownership produces clean EOF after case and bootst
     descriptorsAbsent: boolean[];
   };
   const closing = coordinator.beginClosing();
-  const caseResult = await waitForClose(caseChild);
+  await caseExit;
+  const caseResult = await caseClose;
   await closing;
   await coordinator.seal();
 

@@ -19,7 +19,7 @@ declined work cleanly. It is not a benchmark crash. Timeout, process death,
 malformed output, a failed post-case normal probe, source mutation, or partial
 output is a failed run.
 
-Evidence uses schema version 1. Its envelope includes the generation time,
+Evidence uses schema version 2. Its envelope includes the generation time,
 fixed concurrency, and a SHA-256 digest of the benchmark, package lock, and
 current document-engine implementation, including TypeScript/build asset
 configuration and the complete vendored Kordoc runtime. Per-case receipts
@@ -28,8 +28,8 @@ contain only:
 - platform, architecture, and Node runtime;
 - requested and exact generated size;
 - operation, execution mode, and status;
-- elapsed milliseconds and peak orchestrator RSS delta;
-- copied and response bytes;
+- elapsed milliseconds and sampled peak process-tree RSS delta;
+- the engine-dispatch bit, measured cumulative copied bytes, and response bytes;
 - a bounded public error code; and
 - source/output SHA-256 hashes.
 
@@ -37,15 +37,46 @@ Large evidence is accepted only when that implementation digest still matches
 the current source and build inputs. Each case runs sequentially behind an
 inherited one-shot control pipe and a parent-owned directory. The parent does
 not record a result, remove that directory, or start the next case until the
-production process-tree supervisor confirms that the case and every tracked
-descendant are gone. Failure to prove termination aborts the benchmark instead
-of producing ordinary bounded evidence.
+production lifecycle has returned a typed receipt for its retained root and any
+cleanly registered groups. Failure to obtain that bounded receipt aborts the
+benchmark instead of producing ordinary evidence.
 
-Normal and abnormal receipts use the same fresh case-orchestrator RSS sampler.
-The case reports bounded monotonic samples to its parent through an inherited
-telemetry descriptor, so crash and timeout recovery does not substitute the
-outer benchmark coordinator's memory. If no valid case sample is available,
-the run aborts without inventing timing or RSS values.
+Normal and abnormal receipts use the same outer registered-group RSS sampler.
+Its baseline is captured before the case receives control. Peak RSS is the
+sampled sum of the retained case identity plus identities in accepted lifecycle
+groups; it is not the coordinator's RSS and is never accepted from case
+telemetry. Windows samples retained Job/tracker identities every 20 ms. Linux
+walks `/proc/<pid>/task/*/children`, validates PID/start-time identities, and
+samples `VmRSS` every 25 ms. macOS uses a bounded `ps` sampler outside the
+measured group at approximately 100 ms and binds each PID to the microsecond
+kernel start time returned by `libproc` before exact signaling. Windows retains
+the synchronized process handle used to bind PID, parent PID, creation time,
+RSS, and termination. This is a sampled sum of per-process RSS, so
+operating-system shared pages can be counted in more than one process.
+
+Registration telemetry is closed and sealed before its registered-group receipt
+is accepted: closing is requested, the case and registration input end cleanly,
+no partial frame or in-flight registration remains, and the acknowledgement
+stream closes. A sampled RSS snapshot is telemetry only; it is not termination
+proof. Completion requires the typed repository-lifecycle receipt
+`windows-job-empty` or `registered-groups-empty`; missing or unverified
+registration/identity/channel/deadline evidence invalidates the case.
+
+The case telemetry descriptor contains only exact-shape, cumulative
+`elapsedMs`, `dispatchStarted`, and `copiedBytes` observations. The first
+zero-byte engine metric immediately before the first engine execution marks
+dispatch as started. Direct exact-buffer and descriptor/spool snapshot
+ownership adds zero copies. Format detection then makes one intentional,
+instrumented defensive engine-input copy and reuses it for all format probes;
+therefore a successful detect must finish at exactly the source byte length.
+This counter covers explicit copies owned by the plugin boundary, not internal
+Kordoc allocations, decompression, or library-private copies.
+A pre-dispatch refusal must remain `dispatchStarted: false` with zero copied
+bytes, while a dispatched failure may preserve any observed value from zero
+through the exact source length. Missing source metadata requires false/zero/
+zero. Decreasing, oversized, extra-key, partial, or missing telemetry aborts
+evidence validation instead of synthesizing timing, RSS, dispatch, or copy
+values.
 
 The generated HWPX is intentionally minimal. It contains an unreferenced,
 stored `benchmark/pad.bin` entry produced from deterministic zero blocks. The

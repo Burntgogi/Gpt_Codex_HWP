@@ -26,7 +26,10 @@ import {
   AllowedRootsPathError,
   authorizeExistingPath,
 } from "./allowed-roots.js";
-import { toOwnedExactBytes } from "./owned-bytes.js";
+import {
+  toOwnedExactBytes,
+  type OwnedBytesCopyObserver,
+} from "./owned-bytes.js";
 import { MAX_WORKER_INPUT_BYTES } from "../workers/document-protocol.js";
 
 export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
@@ -103,6 +106,7 @@ export interface OpenDocumentSnapshotOptions {
   workerInputMaxBytes?: number;
   maximumBytes?: number;
   allocationObserver?: (allocatedBytes: number) => void;
+  copyObserver?: OwnedBytesCopyObserver;
   testHooks?: DocumentSnapshotTestHooks;
 }
 
@@ -128,6 +132,7 @@ interface NormalizedSnapshotOptions {
   readonly workerInputMaxBytes: number;
   readonly maximumBytes: number;
   readonly allocationObserver?: (allocatedBytes: number) => void;
+  readonly copyObserver?: OwnedBytesCopyObserver;
   readonly testHooks?: DocumentSnapshotTestHooks;
   readonly spoolRoot: string;
 }
@@ -258,7 +263,10 @@ export async function openDocumentSnapshot(
       normalized.allocationObserver,
     );
     if (preparation.kind === "worker") {
-      const owned = toOwnedExactBytes(preparation.bytes);
+      const owned = toOwnedExactBytes(
+        preparation.bytes,
+        normalized.copyObserver,
+      );
       return createWorkerSnapshot(
         metadata,
         owned.transferable,
@@ -266,6 +274,7 @@ export async function openDocumentSnapshot(
       );
     }
 
+    normalized.copyObserver?.(0);
     const snapshot = createSpoolSnapshot(
       metadata,
       preparation.owner,
@@ -866,6 +875,12 @@ function validateOptions(
   ) {
     throw optionsInvalidError();
   }
+  if (
+    rawOptions.copyObserver !== undefined &&
+    typeof rawOptions.copyObserver !== "function"
+  ) {
+    throw optionsInvalidError();
+  }
 
   const hooks = rawOptions.testHooks;
   if (hooks !== undefined) {
@@ -896,6 +911,9 @@ function validateOptions(
     ...(rawOptions.allocationObserver === undefined
       ? {}
       : { allocationObserver: rawOptions.allocationObserver }),
+    ...(rawOptions.copyObserver === undefined
+      ? {}
+      : { copyObserver: rawOptions.copyObserver }),
     ...(hooks === undefined ? {} : { testHooks: hooks }),
     spoolRoot: hooks?.spoolRoot ?? tmpdir(),
   };

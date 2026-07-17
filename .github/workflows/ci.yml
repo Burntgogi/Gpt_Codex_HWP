@@ -119,3 +119,30 @@ jobs:
             release-receipts/platform-receipt.sha256
           if-no-files-found: error
           retention-days: 7
+
+  linux:
+    name: Linux lifecycle
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+      - name: Assert Linux x64 runtime
+        run: node -e "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
+      - name: Assert exact feature head
+        run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
+      - name: Fresh source dependency install
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Build package
+        run: npm --prefix packages/gpt-codex-hwp run build
+      - name: Run bounded lifecycle focused tests
+        run: npm --prefix packages/gpt-codex-hwp run test:focused -- tests/document-process-registration.test.ts tests/document-child-client.test.ts tests/benchmark-policy.test.ts

@@ -14,7 +14,7 @@ void run();
 async function run() {
     let request;
     try {
-        request = validateWireDocumentRequest(await readRequest());
+        request = validateWireDocumentRequest(await readRequest(), "child");
     }
     catch {
         process.exitCode = 19;
@@ -30,7 +30,8 @@ async function run() {
             return;
         }
         const inputs = inheritedInputs(request);
-        const payload = await backend.execute(request, inputs, (progress) => sendProgress(request, progress));
+        sendMetrics(request, 0);
+        const payload = await backend.execute(request, inputs, (progress) => sendProgress(request, progress), (metrics) => sendMetrics(request, metrics.copiedBytes));
         await sendResult(request, payload);
     }
     catch (error) {
@@ -48,6 +49,7 @@ async function runAfterParagraphInsert(request, backend) {
         throw new Error("image inputs are not inherited");
     const source = readExact(3, request.input.document.sizeBytes);
     const image = readExact(4, request.input.image.sizeBytes);
+    sendMetrics(request, 0);
     const prepared = await backend.prepareImageInsertion(source, image, request.input.anchorText, request.options.anchorOccurrence);
     const metadata = await runImageHelper(request, request.input.document.sizeBytes, prepared.image, prepared.occurrence);
     const sizeBytes = fstatSync(OUTPUT_DESCRIPTOR).size;
@@ -236,7 +238,7 @@ function inheritedInputs(request) {
     };
 }
 function readExact(fd, sizeBytes) {
-    const bytes = Buffer.allocUnsafeSlow(sizeBytes);
+    const bytes = new Uint8Array(sizeBytes);
     let offset = 0;
     while (offset < sizeBytes) {
         const count = readSync(fd, bytes, offset, sizeBytes - offset, offset);
@@ -244,9 +246,7 @@ function readExact(fd, sizeBytes) {
             throw new Error("inherited input spool is truncated");
         offset += count;
     }
-    const exact = new Uint8Array(sizeBytes);
-    exact.set(bytes);
-    return exact.buffer;
+    return bytes.buffer;
 }
 function hashDescriptor(fd, sizeBytes) {
     const hash = createHash("sha256");
@@ -339,6 +339,12 @@ function sendProgress(request, progress) {
         ...event(request, "progress"),
         completed: progress.completed,
         total: progress.total,
+    });
+}
+function sendMetrics(request, copiedBytes) {
+    sendControl({
+        ...event(request, "metrics"),
+        copiedBytes,
     });
 }
 function sendControl(value) {

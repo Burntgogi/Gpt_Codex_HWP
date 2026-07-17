@@ -15,7 +15,7 @@ port.on("message", (value) => {
 async function run(value) {
     let request;
     try {
-        request = validateWireDocumentRequest(value);
+        request = validateWireDocumentRequest(value, "worker");
     }
     catch {
         throw new Error("invalid document worker request");
@@ -26,7 +26,8 @@ async function run(value) {
         port.postMessage(event(request, "ready"));
         ready = true;
         const inputs = transferredInputs(request);
-        const payload = await backend.execute(request, inputs, (progress) => postProgress(request, progress));
+        postMetrics(request, 0);
+        const payload = await backend.execute(request, inputs, (progress) => postProgress(request, progress), (metrics) => postMetrics(request, metrics.copiedBytes));
         const outputByteLength = measureDocumentResultByteLength(request.operation, payload);
         if (outputByteLength > maximumWorkerInlineResultBytes(request.operation)) {
             throw createDocumentEngineRunError("ENGINE_RESOURCE_LIMIT", {
@@ -81,6 +82,12 @@ function postProgress(request, progress) {
         ...event(request, "progress"),
         completed: progress.completed,
         total: progress.total,
+    });
+}
+function postMetrics(request, copiedBytes) {
+    port.postMessage({
+        ...event(request, "metrics"),
+        copiedBytes,
     });
 }
 function event(request, type) {

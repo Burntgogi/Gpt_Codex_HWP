@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { Worker } from "node:worker_threads";
 import test from "node:test";
 
 import {
   createDocumentWorkerClient,
   DOCUMENT_WORKER_RESOURCE_LIMITS,
+  type DocumentWorkerLike,
 } from "../src/workers/document-worker-client.js";
 import {
   CHILD_WORKING_SET_MAX_BYTES,
@@ -57,6 +59,55 @@ test("document worker client forwards only validated monotonic progress", async 
   );
   assert.deepEqual(result, { format: "unknown" });
   assert.deepEqual(progress, [[1, 3], [2, 3]]);
+});
+
+test("document worker client forwards exact cumulative copy metrics", async () => {
+  const observed: number[] = [];
+  const client = scriptedWorkerClient((request) => [
+    eventFor(request, "ready"),
+    { ...eventFor(request, "metrics"), copiedBytes: 0 },
+    { ...eventFor(request, "metrics"), copiedBytes: 2 },
+    { ...eventFor(request, "metrics"), copiedBytes: 4 },
+    detectResultFor(request),
+  ]);
+
+  assert.deepEqual(await client.run(
+    detectRequest("worker-metrics-exact"),
+    workerSnapshot(new ArrayBuffer(4)),
+    { onMetrics: (metrics) => observed.push(metrics.copiedBytes) },
+  ), { format: "unknown" });
+  assert.deepEqual(observed, [0, 2, 4]);
+});
+
+test("document worker client rejects decreasing, oversized, and extended copy metrics", async () => {
+  for (const [label, metricEvents] of [
+    ["decreasing", [
+      { copiedBytes: 0 },
+      { copiedBytes: 3 },
+      { copiedBytes: 2 },
+    ]],
+    ["oversized", [
+      { copiedBytes: 0 },
+      { copiedBytes: 5 },
+    ]],
+    ["extended", [
+      { copiedBytes: 0 },
+      { copiedBytes: 4, privateValue: "forbidden" },
+    ]],
+  ] as const) {
+    const client = scriptedWorkerClient((request) => [
+      eventFor(request, "ready"),
+      ...metricEvents.map((metric) => ({ ...eventFor(request, "metrics"), ...metric })),
+      detectResultFor(request),
+    ]);
+    await assert.rejects(
+      client.run(
+        detectRequest(`worker-metrics-${label}`),
+        workerSnapshot(new ArrayBuffer(4)),
+      ),
+      (error: unknown) => safeCode(error) === "ENGINE_PROTOCOL_ERROR",
+    );
+  }
 });
 
 test("document worker client supports every path-free logical operation", async () => {
@@ -650,6 +701,47 @@ function workerClient(mode: string, delayMs = 250) {
       workerData: { mode, delayMs },
     }),
   });
+}
+
+function scriptedWorkerClient(
+  events: (request: { readonly requestId: string }) => readonly unknown[],
+) {
+  return createDocumentWorkerClient({
+    workerFactory: () => new ScriptedWorker(events),
+  });
+}
+
+class ScriptedWorker extends EventEmitter implements DocumentWorkerLike {
+  constructor(
+    private readonly events: (
+      request: { readonly requestId: string },
+    ) => readonly unknown[],
+  ) {
+    super();
+  }
+
+  postMessage(value: unknown): void {
+    const request = value as { readonly requestId: string };
+    queueMicrotask(() => {
+      for (const item of this.events(request)) this.emit("message", item);
+    });
+  }
+
+  async terminate(): Promise<number> {
+    return 0;
+  }
+}
+
+function eventFor(request: { readonly requestId: string }, type: string) {
+  return { protocolVersion: 1, requestId: request.requestId, type };
+}
+
+function detectResultFor(request: { readonly requestId: string }) {
+  return {
+    ...eventFor(request, "result"),
+    payload: { format: "unknown" },
+    outputByteLength: Buffer.byteLength("unknown"),
+  };
 }
 
 function detectRequest(requestId: string) {

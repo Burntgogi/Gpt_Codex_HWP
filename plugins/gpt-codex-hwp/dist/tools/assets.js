@@ -4,12 +4,12 @@ import sharp from "sharp";
 import { z } from "zod";
 import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
 import { openDocumentSnapshot, } from "../shared/document-snapshot.js";
-import { OutputConflictError, PathAliasError, UnsafeOutputPathError, writeFilesExclusively, } from "../shared/output.js";
+import { OutputConflictError, PathAliasError, writeFilesExclusively, } from "../shared/output.js";
 import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/document-contract.js";
 import { MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES, } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { AllowedRootsPathError, authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
-import { toolError, toolSuccess } from "../shared/result.js";
+import { authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
+import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
 import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 export const HWP_CREATE_SVG_ASSET_TOOL_NAME = "hwp_create_svg_asset";
 export const HWP_INSERT_IMAGE_TOOL_NAME = "hwp_insert_image";
@@ -45,35 +45,40 @@ export async function handleHwpCreateSvgAsset(input, dependencyOverrides = {}, c
         if (pngPath !== undefined) {
             await preflightOutputPath(pngPath, []);
             await preflightOutputPath(svgPath, []);
+            let png;
+            let pngRenderError;
             try {
-                const png = await dependencies.renderSvgToPng(svg);
+                png = await dependencies.renderSvgToPng(svg);
                 assertPngBytes(png);
-                await writeFilesExclusively([
-                    { path: svgPath, data: svg },
-                    { path: pngPath, data: png },
-                ], { beforeOpen: async () => requireToolNotCancelled(context) });
-                return toolSuccess("Created standalone SVG and PNG assets.", {
+            }
+            catch (error) {
+                pngRenderError = error;
+            }
+            if (png !== undefined) {
+                return await commitBudgetedToolSuccess("Created standalone SVG and PNG assets.", {
                     svg_path: svgPath,
                     png_path: pngPath,
                     warnings: [],
+                }, async () => {
+                    await writeFilesExclusively([
+                        { path: svgPath, data: svg },
+                        { path: pngPath, data: png },
+                    ], { beforeOpen: async () => requireToolNotCancelled(context) });
                 });
             }
-            catch (error) {
-                if (isOutputSafetyError(error)) {
-                    throw error;
-                }
-                await preflightOutputPath(pngPath, []);
+            await preflightOutputPath(pngPath, []);
+            return await commitBudgetedToolSuccess("Created the SVG asset; PNG rendering was skipped.", {
+                svg_path: svgPath,
+                warnings: [`PNG rendering failed: ${errorMessage(pngRenderError)}`],
+            }, async () => {
                 await writeFilesExclusively([{ path: svgPath, data: svg }], { beforeOpen: async () => requireToolNotCancelled(context) });
-                return toolSuccess("Created the SVG asset; PNG rendering was skipped.", {
-                    svg_path: svgPath,
-                    warnings: [`PNG rendering failed: ${errorMessage(error)}`],
-                });
-            }
+            });
         }
-        await writeFilesExclusively([{ path: svgPath, data: svg }], { beforeOpen: async () => requireToolNotCancelled(context) });
-        return toolSuccess("Created standalone SVG asset.", {
+        return await commitBudgetedToolSuccess("Created standalone SVG asset.", {
             svg_path: svgPath,
             warnings: [],
+        }, async () => {
+            await writeFilesExclusively([{ path: svgPath, data: svg }], { beforeOpen: async () => requireToolNotCancelled(context) });
         });
     }
     catch (error) {
@@ -146,10 +151,7 @@ export async function handleHwpInsertImage(input, facade = defaultDocumentEngine
             if (!inserted.validation.ok) {
                 throw new AssetError("HWPX_VALIDATION_FAILED", "Inserted HWPX failed structural validation.", validationDetails(inserted.validation));
             }
-            await inserted.writeOutputExclusively(outputPath, {
-                sourcePaths: [filePath, imagePath],
-            });
-            return toolSuccess("Inserted a PNG image into a structurally validated HWPX document.", {
+            return await commitBudgetedToolSuccess("Inserted a PNG image into a structurally validated HWPX document.", {
                 output_path: outputPath,
                 mode,
                 image_entry: metadata.imageEntry,
@@ -158,6 +160,10 @@ export async function handleHwpInsertImage(input, facade = defaultDocumentEngine
                     : { placement: metadata.placement }),
                 warnings: metadata.warnings,
                 validation: validationDetails(inserted.validation),
+            }, async () => {
+                await inserted.writeOutputExclusively(outputPath, {
+                    sourcePaths: [filePath, imagePath],
+                });
             });
         }
         finally {
@@ -609,12 +615,6 @@ function safeResolvedPath(value) {
     catch {
         return undefined;
     }
-}
-function isOutputSafetyError(error) {
-    return error instanceof OutputConflictError ||
-        error instanceof PathAliasError ||
-        error instanceof UnsafeOutputPathError ||
-        error instanceof AllowedRootsPathError;
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

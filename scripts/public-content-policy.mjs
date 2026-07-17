@@ -1099,8 +1099,18 @@ async function createWindowsProcessSupervisor(child, observeHelper) {
           helper.stdin.end("TERMINATE\n");
           let line = await lines.next(5_000);
           if (/^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(line)) line = await lines.next(5_000);
+          const rss = /^GPT_CODEX_HWP_JOB RSS ([1-9][0-9]*) ([1-9][0-9]*)$/u.exec(line);
+          if (rss === null) return false;
+          const baselineRss = Number(rss[1]);
+          const peakRss = Number(rss[2]);
+          if (!Number.isSafeInteger(baselineRss)
+            || !Number.isSafeInteger(peakRss)
+            || peakRss < baselineRss) {
+            return false;
+          }
+          line = await lines.next(5_000);
           if (!/^GPT_CODEX_HWP_JOB GONE 0 [12]$/u.test(line) || stderrBytes !== 0) return false;
-          return await waitForClose(helper, 5_000) === 0;
+          return await waitForClose(helper, 5_000) === 0 && stderrBytes === 0;
         } catch { return false; }
       })();
       return active;

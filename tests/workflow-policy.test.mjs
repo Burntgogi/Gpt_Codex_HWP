@@ -30,13 +30,17 @@ test("CI uses safe pull-request triggers and stable platform check names", async
   assert.doesNotMatch(workflow, /^\s+(?:actions|checks|contents|deployments|discussions|id-token|issues|packages|pages|pull-requests|security-events|statuses):\s*write\s*$/gmu);
 
   const windows = jobSection(workflow, "windows", "macos");
-  const macos = jobSection(workflow, "macos");
+  const macos = jobSection(workflow, "macos", "linux");
+  const linux = jobSection(workflow, "linux");
   assert.match(windows, /^    name: Windows x64$/mu);
   assert.match(windows, /^    runs-on: windows-2025$/mu);
   assert.match(windows, /^    permissions:\n      contents: read$/mu);
   assert.match(macos, /^    name: macOS arm64$/mu);
   assert.match(macos, /^    runs-on: macos-15$/mu);
   assert.match(macos, /^    permissions:\n      contents: read$/mu);
+  assert.match(linux, /^    name: Linux lifecycle$/mu);
+  assert.match(linux, /^    runs-on: ubuntu-24\.04$/mu);
+  assert.match(linux, /^    permissions:\n      contents: read$/mu);
 });
 
 test("CI pins every action to its approved immutable revision", async () => {
@@ -48,19 +52,59 @@ test("CI pins every action to its approved immutable revision", async () => {
     assert.match(revision, /^[0-9a-f]{40}$/u, `${action} is not pinned to a full commit SHA`);
     assert.equal(revision, ACTION_PINS[action], `${action} uses an unapproved revision`);
   }
-  for (const action of [
-    "actions/checkout",
-    "actions/setup-node",
-    "actions/setup-python",
-    "actions/upload-artifact",
+  for (const [action, expectedCount] of [
+    ["actions/checkout", 3],
+    ["actions/setup-node", 3],
+    ["actions/setup-python", 2],
+    ["actions/upload-artifact", 2],
   ]) {
-    assert.equal(uses.filter((match) => match[1] === action).length, 2, `${action} must run in both jobs`);
+    assert.equal(
+      uses.filter((match) => match[1] === action).length,
+      expectedCount,
+      `${action} job count drifted`,
+    );
   }
-  assert.equal(countMatches(workflow, /^\s+persist-credentials: false$/gmu), 2);
-  assert.equal(countMatches(workflow, /^\s+fetch-depth: 0$/gmu), 2);
-  assert.equal(countMatches(workflow, /^\s+node-version: "22\.22\.2"$/gmu), 2);
+  assert.equal(countMatches(workflow, /^\s+persist-credentials: false$/gmu), 3);
+  assert.equal(countMatches(workflow, /^\s+fetch-depth: 0$/gmu), 3);
+  assert.equal(countMatches(workflow, /^\s+node-version: "22\.22\.2"$/gmu), 3);
   assert.equal(countMatches(workflow, /^\s+python-version: "3\.12"$/gmu), 2);
   assert.doesNotMatch(workflow, /^\s+cache:/gmu);
+});
+
+test("Linux lifecycle CI is pinned, exact-head, source-only, and bounded", async () => {
+  const workflow = await readFile(WORKFLOW_PATH, "utf8");
+  const linux = jobSection(workflow, "linux");
+
+  assert.match(linux, /actions\/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0/u);
+  assert.match(linux, /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/u);
+  assert.match(
+    linux,
+    /^      EXPECTED_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}$/mu,
+    "Linux exact feature-head expectation",
+  );
+  assert.match(
+    linux,
+    /^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}$/mu,
+    "Linux exact checkout ref",
+  );
+  assert.match(linux, /^          persist-credentials: false$/mu);
+  assert.match(linux, /^          fetch-depth: 0$/mu);
+  assert.match(linux, /^          node-version: "22\.22\.2"$/mu);
+  assert.match(
+    linux,
+    /process\.env\.EXPECTED_HEAD_SHA[^\n]+rev-parse[^\n]+HEAD/u,
+    "Linux checked-out HEAD assertion",
+  );
+  assert.match(linux, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/u);
+  assert.match(linux, /npm --prefix packages\/gpt-codex-hwp run build(?:\s|$)/u);
+  assert.match(
+    linux,
+    /npm --prefix packages\/gpt-codex-hwp run test:focused -- tests\/document-process-registration\.test\.ts tests\/document-child-client\.test\.ts tests\/benchmark-policy\.test\.ts/u,
+    "Linux runs only the bounded registration/document-child/benchmark lifecycle suite",
+  );
+  assert.doesNotMatch(linux, /actions\/(?:upload|download)-artifact|platform-receipts|release-receipts/iu);
+  assert.doesNotMatch(linux, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp|HWP_BENCH_LARGE/iu);
+  assert.doesNotMatch(linux, /(?:\bpid\b|local path|artifact)/iu);
 });
 
 test("both CI jobs bind full release receipts to the exact feature head and upload only receipts", async () => {

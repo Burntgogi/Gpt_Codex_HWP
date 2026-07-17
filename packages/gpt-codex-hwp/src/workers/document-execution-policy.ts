@@ -53,12 +53,17 @@ export interface DocumentEngineRunOptions {
   readonly signal?: AbortSignal;
   readonly deadlineMs?: number;
   readonly onProgress?: (completed: number, total: number) => void;
+  readonly onMetrics?: (metrics: DocumentEngineMetrics) => void;
   readonly executionClass?: DocumentExecutionClass;
   readonly estimatedWorkingSetBytes?: number;
   readonly imageInput?: Readonly<
     | { transport: "buffer"; buffer: ArrayBuffer }
     | { transport: "spool"; fd: number; sizeBytes: number }
   >;
+}
+
+export interface DocumentEngineMetrics {
+  readonly copiedBytes: number;
 }
 
 export interface IntegrityVerifiedResultSpool<

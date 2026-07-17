@@ -3,7 +3,7 @@ import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/docume
 import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { toolError, toolSuccess } from "../shared/result.js";
+import { commitBudgetedToolSuccess, toolError, toolSuccess, } from "../shared/result.js";
 import { runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_GENERATE_HWPX_TOOL_NAME = "hwp_generate_hwpx";
@@ -56,16 +56,6 @@ export async function handleHwpGenerateHwpx(input, facade = defaultDocumentEngin
             const presentedPreview = preview === undefined
                 ? undefined
                 : previewDetails(preview);
-            await generatedResult.writeOutputExclusively(outputPath, {
-                ...(previewPath === undefined || preview === undefined
-                    ? {}
-                    : {
-                        companionFiles: [{
-                                path: previewPath,
-                                data: preview.svg,
-                            }],
-                    }),
-            });
             const fontNormalization = readFontNormalization(generatedResult.resultMetadata);
             const details = {
                 output_path: outputPath,
@@ -79,7 +69,18 @@ export async function handleHwpGenerateHwpx(input, facade = defaultDocumentEngin
                 details.preview_svg_path = previewPath;
                 details.preview = presentedPreview;
             }
-            return toolSuccess("Generated HWPX document.", details);
+            return await commitBudgetedToolSuccess("Generated HWPX document.", details, async () => {
+                await generatedResult.writeOutputExclusively(outputPath, {
+                    ...(previewPath === undefined || preview === undefined
+                        ? {}
+                        : {
+                            companionFiles: [{
+                                    path: previewPath,
+                                    data: preview.svg,
+                                }],
+                        }),
+                });
+            });
         }
         finally {
             await generatedResult.cleanup();

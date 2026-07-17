@@ -65,6 +65,57 @@ engine inputs live in a fresh owned temporary directory below the ignored
 output directory and are removed in `finally`. Delete old ignored receipts when
 they are no longer needed.
 
+Benchmark receipts use exact schema version 2. `dispatchStarted` changes from
+false only when the isolated worker/child emits its initial zero-byte metric
+immediately before the first engine execution. `copiedBytes` is an observed,
+cumulative safe integer: exact-buffer and descriptor/spool snapshot ownership
+report zero, and successful format detection reports one defensive copy equal
+to the source length. Never derive this field from `actualBytes`, and never add
+copy or RSS data to MCP responses.
+
+RSS is owned by the outer supervisor, whose baseline is taken before inherited
+case control is released. It samples the full retained process tree at 20 ms on
+Windows, 25 ms through Linux `/proc/<pid>/task/*/children` plus `VmRSS`, and
+about 100 ms with bounded macOS `ps`. Sampler processes are outside the target
+tree. macOS topology/RSS from `ps` is paired with microsecond `libproc` start
+identity; Windows keeps one synchronized process handle per retained identity.
+PID plus creation/start identity must be preserved until every retained
+identity is proven gone; missing process facts, incomplete fd4 telemetry, or an
+unverified termination invalidates the run rather than producing estimates.
+
+## Child lifecycle descriptors and proof scope
+
+The supervised child owns no caller-selected filesystem path. Its descriptor
+contract is fixed: fd 5 is a parent-created result spool that the child may
+write; fd 6 carries bounded child-to-parent control frames; fd 7 is the
+parent-owned start gate and then the parent-lifeline; fd 8 is the
+benchmark-only child registration stream; and fd 9 is the parent coordinator's
+bounded acknowledgement stream. The document and optional image inputs remain
+inherited on fd 3 and fd 4. These descriptors are private transport, never MCP
+response fields, and do not carry user paths or document content in lifecycle
+control frames.
+
+The child registers first when registration descriptors are present, waits for
+one exact START frame on fd 7 only after the parent has obtained supervision,
+and receives the document request only after that gate succeeds. After START,
+fd 7 remains a lifeline: data, error, or parent-close is terminal and causes a
+fail-closed exit. The parent closes the gate on startup, deadline, cancellation,
+or supervision failure and retains resources until a typed termination receipt
+is available.
+
+Termination evidence is deliberately narrow. The only successful proof values
+are `windows-job-empty` and `registered-groups-empty`; any missing, malformed,
+identity-mismatched, timed-out, permission-denied, or poisoned registration
+channel produces `unverified` with a bounded reason. Registration is cleanly
+sealed only after closing has begun, the case has exited, the registration input
+has ended without partial frames or in-flight work, and the acknowledgement side
+has closed. These receipts apply only to groups and identities accepted by this
+repository-controlled registration lifecycle.
+
+This lifecycle is a reliability and cleanup mechanism, not a security sandbox.
+It does not grant protection from a hostile document or a same-user process;
+run untrusted inputs under an appropriate least-privilege OS account or sandbox.
+
 For a public-release evidence gate, set `HWP_BENCH_REQUIRE_LARGE=1`. The release
 verifier then checks the exact large receipt schema, order, and freshness. Set
 `HWP_BENCH_LARGE_EVIDENCE` only when the ignored receipt is not at the default

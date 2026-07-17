@@ -156,7 +156,11 @@ async function runWorker<Operation extends DocumentEngineOperation>(
   preflight: WorkerRequestPreflight,
 ): Promise<DocumentResultPayload<Operation>> {
   const startedAt = Date.now();
-  const validator = createDocumentEventValidator(request.requestId, request.operation);
+  const validator = createDocumentEventValidator(
+    request.requestId,
+    request.operation,
+    preflight.documentBytes,
+  );
   let ready = false;
   let settling = false;
   let deadlineTimer: NodeJS.Timeout | undefined;
@@ -250,6 +254,10 @@ async function runWorker<Operation extends DocumentEngineOperation>(
         }
         if (event.type === "progress") {
           options.onProgress?.(event.completed, event.total);
+          return;
+        }
+        if (event.type === "metrics") {
+          options.onMetrics?.(Object.freeze({ copiedBytes: event.copiedBytes }));
           return;
         }
         if (event.type === "failure") {

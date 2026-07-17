@@ -3,7 +3,9 @@ export const DOCUMENT_PROTOCOL_VERSION = 1;
 export const MAX_DOCUMENT_ENGINE_INPUT_BYTES = 512 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_IMAGE_BYTES = 25 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_RESULT_BYTES = 512 * 1024 * 1024;
-export const MAX_WORKER_INLINE_HWPX_RESULT_BYTES = 64 * 1024 * 1024;
+export const MAX_WORKER_INPUT_BYTES = 64 * 1024 * 1024;
+export const MAX_WORKER_RESULT_BYTES = 64 * 1024 * 1024;
+export const MAX_WORKER_INLINE_HWPX_RESULT_BYTES = MAX_WORKER_RESULT_BYTES;
 export const MAX_CHILD_INLINE_RESULT_BYTES = 8 * 1024 * 1024;
 export const MAX_CHILD_REQUEST_FRAME_BYTES = 32 * 1024 * 1024;
 export const MAX_DOCUMENT_ENGINE_TEXT_CHARACTERS = 5_000_000;
@@ -58,14 +60,16 @@ export function validateLogicalDocumentRequest(value) {
         return value;
     });
 }
-export function validateWireDocumentRequest(value) {
+export function validateWireDocumentRequest(value, boundary) {
     return protocolBoundary(() => {
-        parseRequest(value, "wire");
+        requireTransportBoundary(boundary);
+        parseRequest(value, "wire", boundary);
         return value;
     });
 }
-export function createWireDocumentRequest(logicalValue, transportValue) {
+export function createWireDocumentRequest(logicalValue, transportValue, boundary) {
     return protocolBoundary(() => {
+        requireTransportBoundary(boundary);
         const logical = parseRequest(logicalValue, "logical");
         const transportKeys = requiredTransportKeys(logical.operation);
         const transports = exactRecord(transportValue, transportKeys);
@@ -77,29 +81,40 @@ export function createWireDocumentRequest(logicalValue, transportValue) {
             input,
             options: { ...logical.options },
         };
-        parseRequest(wire, "wire");
+        parseRequest(wire, "wire", boundary);
         return wire;
     });
 }
-export function createDocumentEventValidator(expectedRequestId, expectedOperation) {
-    const validator = createEventValidator(expectedRequestId, expectedOperation, false);
+export function documentLogicalRequestBytes(value) {
+    return protocolBoundary(() => {
+        const content = exactRecord(value, ["input", "options"], ["protocolVersion", "requestId", "operation"]);
+        return serializedLogicalRequestBytes(content.input, content.options);
+    });
+}
+export function documentWorkerRequestBytes(value, documentBytes = 0, imageBytes = 0) {
+    return protocolBoundary(() => checkedSafeByteSum(documentLogicalRequestBytes(value), documentBytes, imageBytes));
+}
+export function createDocumentEventValidator(expectedRequestId, expectedOperation, maximumCopiedBytes = MAX_DOCUMENT_ENGINE_INPUT_BYTES) {
+    const validator = createEventValidator(expectedRequestId, expectedOperation, false, maximumCopiedBytes);
     return {
         accept(value) {
             return validator.accept(value);
         },
     };
 }
-export function createChildDocumentEventValidator(expectedRequestId, expectedOperation) {
-    return createEventValidator(expectedRequestId, expectedOperation, true);
+export function createChildDocumentEventValidator(expectedRequestId, expectedOperation, maximumCopiedBytes = MAX_DOCUMENT_ENGINE_INPUT_BYTES) {
+    return createEventValidator(expectedRequestId, expectedOperation, true, maximumCopiedBytes);
 }
-function createEventValidator(expectedRequestId, expectedOperation, childMode) {
+function createEventValidator(expectedRequestId, expectedOperation, childMode, maximumCopiedBytes) {
     return protocolBoundary(() => {
         requireRequestId(expectedRequestId);
         requireOperation(expectedOperation);
+        requireIntegerInRange(maximumCopiedBytes, 0, MAX_DOCUMENT_ENGINE_INPUT_BYTES);
         let readyAccepted = false;
         let terminalAccepted = false;
         let progressTotal;
         let progressCompleted = -1;
+        let copiedBytes = 0;
         return {
             accept(value) {
                 return protocolBoundary(() => {
@@ -125,6 +140,14 @@ function createEventValidator(expectedRequestId, expectedOperation, childMode) {
                             }
                             progressTotal = event.total;
                             progressCompleted = event.completed;
+                            return event;
+                        case "metrics":
+                            if (!readyAccepted ||
+                                event.copiedBytes < copiedBytes ||
+                                event.copiedBytes > maximumCopiedBytes) {
+                                protocolFailure();
+                            }
+                            copiedBytes = event.copiedBytes;
                             return event;
                         case "result":
                             if (!readyAccepted)
@@ -169,7 +192,7 @@ export function measureDocumentResultByteLength(operation, payload) {
         return total;
     });
 }
-function parseRequest(value, mode) {
+function parseRequest(value, mode, boundary) {
     const root = exactRecord(value, [
         "protocolVersion",
         "requestId",
@@ -183,16 +206,22 @@ function parseRequest(value, mode) {
     requireOperation(root.operation);
     const input = readRecord(root.input);
     const options = readRecord(root.options);
-    validateRequestPayload(root.operation, input, options, mode);
-    return {
+    validateRequestPayload(root.operation, input, options, mode, boundary);
+    const parsed = {
         raw: value,
         requestId: root.requestId,
         operation: root.operation,
         input,
         options,
     };
+    if (mode === "wire") {
+        if (boundary === undefined)
+            protocolFailure();
+        enforceWireRequestBoundary(parsed, boundary);
+    }
+    return parsed;
 }
-function validateRequestPayload(operation, input, options, mode) {
+function validateRequestPayload(operation, input, options, mode, boundary) {
     const needsDocument = operation !== "generateHwpx";
     const documentKey = mode === "wire" && needsDocument ? ["document"] : [];
     switch (operation) {
@@ -233,10 +262,14 @@ function validateRequestPayload(operation, input, options, mode) {
             break;
     }
     if (mode === "wire" && needsDocument) {
-        validateTransport(input.document, "document");
+        if (boundary === undefined)
+            protocolFailure();
+        validateTransport(input.document, "document", boundary);
     }
     if (mode === "wire" && operation === "insertImage") {
-        validateTransport(input.image, "image");
+        if (boundary === undefined)
+            protocolFailure();
+        validateTransport(input.image, "image", boundary);
     }
 }
 function requiredTransportKeys(operation) {
@@ -265,19 +298,76 @@ function createWireInput(logical, transports) {
             };
     }
 }
-function validateTransport(value, kind) {
+function enforceWireRequestBoundary(request, boundary) {
+    if (boundary !== "worker")
+        return;
+    const logicalBytes = serializedLogicalRequestBytes(logicalInputForRequest(request), request.options);
+    const transportBytes = [];
+    if (request.operation !== "generateHwpx") {
+        transportBytes.push(bufferTransportByteLength(request.input.document));
+    }
+    if (request.operation === "insertImage") {
+        transportBytes.push(bufferTransportByteLength(request.input.image));
+    }
+    if (checkedSafeByteSum(logicalBytes, ...transportBytes) > MAX_WORKER_INPUT_BYTES) {
+        protocolFailure();
+    }
+}
+function logicalInputForRequest(request) {
+    switch (request.operation) {
+        case "detect":
+        case "parse":
+        case "render":
+        case "validateHwpx":
+            return {};
+        case "generateHwpx":
+        case "patchHwpx":
+            return { markdown: request.input.markdown };
+        case "fillHwpx":
+            return { fields: request.input.fields };
+        case "insertImage":
+            return { anchorText: request.input.anchorText };
+    }
+}
+function serializedLogicalRequestBytes(input, options) {
+    const serialized = JSON.stringify({ input, options });
+    if (typeof serialized !== "string")
+        protocolFailure();
+    return utf8Bytes(serialized);
+}
+function bufferTransportByteLength(value) {
+    const transport = exactRecord(value, ["transport", "buffer"]);
+    if (transport.transport !== "buffer")
+        protocolFailure();
+    return exactArrayBufferByteLength(transport.buffer);
+}
+function checkedSafeByteSum(...values) {
+    let total = 0;
+    for (const value of values) {
+        requireIntegerInRange(value, 0, Number.MAX_SAFE_INTEGER);
+        if (value > Number.MAX_SAFE_INTEGER - total)
+            protocolFailure();
+        total += value;
+    }
+    return total;
+}
+function validateTransport(value, kind, boundary) {
     const transport = readRecord(value);
     if (transport.transport === "buffer") {
+        if (boundary !== "worker")
+            protocolFailure();
         requireKeys(transport, ["transport", "buffer"]);
         const byteLength = exactArrayBufferByteLength(transport.buffer);
         const minimum = kind === "image" ? 1 : 0;
         const maximum = kind === "image"
             ? MAX_DOCUMENT_ENGINE_IMAGE_BYTES
-            : MAX_DOCUMENT_ENGINE_INPUT_BYTES;
+            : MAX_WORKER_INPUT_BYTES;
         requireIntegerInRange(byteLength, minimum, maximum);
         return;
     }
     if (transport.transport === "spool") {
+        if (boundary !== "child")
+            protocolFailure();
         requireKeys(transport, ["transport", "descriptor", "sizeBytes"]);
         const expectedDescriptor = kind === "image" ? 4 : 3;
         if (transport.descriptor !== expectedDescriptor)
@@ -309,6 +399,15 @@ function parseEvent(value, expectedRequestId, expectedOperation, childMode = fal
             ]);
             requireIntegerInRange(event.total, 1, Number.MAX_SAFE_INTEGER);
             requireIntegerInRange(event.completed, 0, event.total);
+            return value;
+        case "metrics":
+            requireKeys(event, [
+                "protocolVersion",
+                "requestId",
+                "type",
+                "copiedBytes",
+            ]);
+            requireIntegerInRange(event.copiedBytes, 0, MAX_DOCUMENT_ENGINE_INPUT_BYTES);
             return value;
         case "result": {
             requireKeys(event, [
@@ -398,9 +497,8 @@ function isHwpxResultOperation(operation) {
         operation === "fillHwpx" || operation === "insertImage";
 }
 export function maximumWorkerInlineResultBytes(operation) {
-    return isHwpxResultOperation(operation)
-        ? MAX_WORKER_INLINE_HWPX_RESULT_BYTES
-        : MAX_DOCUMENT_ENGINE_RESULT_BYTES;
+    requireOperation(operation);
+    return MAX_WORKER_RESULT_BYTES;
 }
 function validateHwpxResultMetadata(operation, value) {
     if (!isHwpxResultOperation(operation))
@@ -1001,6 +1099,10 @@ function requireOperation(value) {
         !DOCUMENT_ENGINE_OPERATIONS.includes(value)) {
         protocolFailure();
     }
+}
+function requireTransportBoundary(value) {
+    if (value !== "worker" && value !== "child")
+        protocolFailure();
 }
 function requireRequestId(value) {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(value)) {

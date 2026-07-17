@@ -50,10 +50,17 @@ const FORBIDDEN_SEGMENTS = new Set([
   "artifacts",
   "fixtures",
   "node_modules",
+  "plan",
+  "plans",
   "release-scripts",
+  "spec",
+  "specs",
   "src",
   "tests",
   "tmp",
+  "temporary",
+  "temporary-evidence",
+  "evidence",
 ]);
 const FORBIDDEN_EXTENSIONS = new Set([
   ".docx", ".hml", ".hwp", ".hwpx", ".map", ".pdf", ".pyc",

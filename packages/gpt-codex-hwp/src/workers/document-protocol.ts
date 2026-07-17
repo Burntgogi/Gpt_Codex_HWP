@@ -281,6 +281,9 @@ export interface DocumentProgressEvent extends EventBase<"progress"> {
   readonly completed: number;
   readonly total: number;
 }
+export interface DocumentMetricsEvent extends EventBase<"metrics"> {
+  readonly copiedBytes: number;
+}
 export interface DocumentResultEvent<
   Operation extends DocumentEngineOperation = DocumentEngineOperation,
 > extends EventBase<"result"> {
@@ -318,6 +321,7 @@ export type DocumentEventEnvelope<
 > =
   | DocumentReadyEvent
   | DocumentProgressEvent
+  | DocumentMetricsEvent
   | DocumentResultEvent<Operation>
   | DocumentFailureEvent;
 export type ChildDocumentEventEnvelope<
@@ -423,11 +427,13 @@ export function createDocumentEventValidator<
 >(
   expectedRequestId: string,
   expectedOperation: Operation,
+  maximumCopiedBytes = MAX_DOCUMENT_ENGINE_INPUT_BYTES,
 ): DocumentEventValidator<Operation> {
   const validator = createEventValidator(
     expectedRequestId,
     expectedOperation,
     false,
+    maximumCopiedBytes,
   );
   return {
     accept(value: unknown): DocumentEventEnvelope<Operation> {
@@ -441,22 +447,35 @@ export function createChildDocumentEventValidator<
 >(
   expectedRequestId: string,
   expectedOperation: Operation,
+  maximumCopiedBytes = MAX_DOCUMENT_ENGINE_INPUT_BYTES,
 ): ChildDocumentEventValidator<Operation> {
-  return createEventValidator(expectedRequestId, expectedOperation, true);
+  return createEventValidator(
+    expectedRequestId,
+    expectedOperation,
+    true,
+    maximumCopiedBytes,
+  );
 }
 
 function createEventValidator<Operation extends DocumentEngineOperation>(
   expectedRequestId: string,
   expectedOperation: Operation,
   childMode: boolean,
+  maximumCopiedBytes: number,
 ): ChildDocumentEventValidator<Operation> {
   return protocolBoundary(() => {
     requireRequestId(expectedRequestId);
     requireOperation(expectedOperation);
+    requireIntegerInRange(
+      maximumCopiedBytes,
+      0,
+      MAX_DOCUMENT_ENGINE_INPUT_BYTES,
+    );
     let readyAccepted = false;
     let terminalAccepted = false;
     let progressTotal: number | undefined;
     let progressCompleted = -1;
+    let copiedBytes = 0;
 
     return {
       accept(value: unknown): ChildDocumentEventEnvelope<Operation> {
@@ -490,6 +509,16 @@ function createEventValidator<Operation extends DocumentEngineOperation>(
               }
               progressTotal = event.total;
               progressCompleted = event.completed;
+              return event;
+            case "metrics":
+              if (
+                !readyAccepted ||
+                event.copiedBytes < copiedBytes ||
+                event.copiedBytes > maximumCopiedBytes
+              ) {
+                protocolFailure();
+              }
+              copiedBytes = event.copiedBytes;
               return event;
             case "result":
               if (!readyAccepted) protocolFailure();
@@ -781,6 +810,19 @@ function parseEvent<Operation extends DocumentEngineOperation>(
       requireIntegerInRange(event.total, 1, Number.MAX_SAFE_INTEGER);
       requireIntegerInRange(event.completed, 0, event.total as number);
       return value as DocumentProgressEvent;
+    case "metrics":
+      requireKeys(event, [
+        "protocolVersion",
+        "requestId",
+        "type",
+        "copiedBytes",
+      ]);
+      requireIntegerInRange(
+        event.copiedBytes,
+        0,
+        MAX_DOCUMENT_ENGINE_INPUT_BYTES,
+      );
+      return value as DocumentMetricsEvent;
     case "result": {
       requireKeys(event, [
         "protocolVersion",

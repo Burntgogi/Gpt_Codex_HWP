@@ -30,10 +30,12 @@ interface ProtocolApi {
   createDocumentEventValidator(
     requestId: string,
     operation: string,
+    maximumCopiedBytes?: number,
   ): { accept(value: unknown): unknown };
   createChildDocumentEventValidator(
     requestId: string,
     operation: string,
+    maximumCopiedBytes?: number,
   ): { accept(value: unknown): unknown };
   createInlineDocumentResultEvent(
     requestId: string,
@@ -770,6 +772,39 @@ test("document engine protocol rejects duplicate ready and nonmonotonic progress
   assertProtocolError(() => validator.accept(progressEvent(3, 11)));
 });
 
+test("document engine protocol accepts only exact bounded cumulative metrics after ready", () => {
+  for (const createValidator of [
+    protocol.createDocumentEventValidator,
+    protocol.createChildDocumentEventValidator,
+  ]) {
+    const beforeReady = createValidator(requestId, "detect", 8);
+    assertProtocolError(() => beforeReady.accept(metricsEvent(0)));
+
+    const validator = createValidator(requestId, "detect", 8);
+    validator.accept(readyEvent());
+    assert.deepEqual(validator.accept(metricsEvent(0)), metricsEvent(0));
+    assert.deepEqual(validator.accept(metricsEvent(4)), metricsEvent(4));
+    assert.deepEqual(validator.accept(metricsEvent(8)), metricsEvent(8));
+    for (const rejected of [
+      metricsEvent(7),
+      metricsEvent(9),
+      metricsEvent(-1),
+      metricsEvent(1.5),
+      { ...metricsEvent(8), extra: true },
+    ]) {
+      assertProtocolError(() => validator.accept(rejected));
+    }
+
+    const terminal = createValidator(requestId, "detect", 8);
+    terminal.accept(readyEvent());
+    terminal.accept(resultEvent({ format: "hwp" }, 3));
+    assertProtocolError(
+      () => terminal.accept(metricsEvent(8)),
+      "A terminal document engine event was already accepted.",
+    );
+  }
+});
+
 test("document engine protocol rejects every event after a terminal event", () => {
   const validator = protocol.createDocumentEventValidator(requestId, "detect");
   validator.accept(readyEvent());
@@ -1229,6 +1264,10 @@ function readyEvent(): Readonly<Record<string, unknown>> {
 
 function progressEvent(completed: number, total: number): Readonly<Record<string, unknown>> {
   return { protocolVersion: 1, requestId, type: "progress", completed, total };
+}
+
+function metricsEvent(copiedBytes: number): Readonly<Record<string, unknown>> {
+  return { protocolVersion: 1, requestId, type: "metrics", copiedBytes };
 }
 
 function failureEvent(): Readonly<Record<string, unknown>> {

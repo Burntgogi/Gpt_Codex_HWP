@@ -14,6 +14,7 @@ public static class GptCodexHwpJob {
     public int Id;
     public int ParentId;
     public long CreationTime;
+    public IntPtr Handle;
   }
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   public struct PROCESSENTRY32 {
@@ -49,6 +50,22 @@ public static class GptCodexHwpJob {
     public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
     public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
   }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct PROCESS_MEMORY_COUNTERS {
+    public uint cb, PageFaultCount;
+    public UIntPtr PeakWorkingSetSize, WorkingSetSize;
+    public UIntPtr QuotaPeakPagedPoolUsage, QuotaPagedPoolUsage;
+    public UIntPtr QuotaPeakNonPagedPoolUsage, QuotaNonPagedPoolUsage;
+    public UIntPtr PagefileUsage, PeakPagefileUsage;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct PROCESS_BASIC_INFORMATION {
+    public int ExitStatus;
+    public IntPtr PebBaseAddress;
+    public UIntPtr AffinityMask;
+    public int BasePriority;
+    public UIntPtr UniqueProcessId, InheritedFromUniqueProcessId;
+  }
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr CreateJobObject(IntPtr attributes, string name);
   [DllImport("kernel32.dll", SetLastError = true)]
@@ -66,6 +83,14 @@ public static class GptCodexHwpJob {
   [DllImport("kernel32.dll", SetLastError = true)]
   public static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
   [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern uint GetProcessId(IntPtr process);
+  [DllImport("psapi.dll", SetLastError = true)]
+  public static extern bool GetProcessMemoryInfo(IntPtr process, out PROCESS_MEMORY_COUNTERS counters, uint length);
+  [DllImport("ntdll.dll")]
+  public static extern int NtQueryInformationProcess(IntPtr process, int infoClass, out PROCESS_BASIC_INFORMATION info, uint length, out uint returnedLength);
+  [DllImport("kernel32.dll", SetLastError = true)]
   public static extern bool TerminateProcess(IntPtr process, uint exitCode);
   [DllImport("kernel32.dll", SetLastError = true)]
   public static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
@@ -74,13 +99,80 @@ public static class GptCodexHwpJob {
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32 entry);
 
-  public static long CreationTime(int pid) {
-    IntPtr process = OpenProcess(0x00001000, false, pid);
-    if (process == IntPtr.Zero) return 0;
+  public static ProcessRecord RecordFromHandle(IntPtr process, int expectedPid) {
+    long creation, exit, kernel, user;
+    if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) {
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    }
+    PROCESS_BASIC_INFORMATION info;
+    uint returnedLength;
+    uint expectedLength = (uint)Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION));
+    int status = NtQueryInformationProcess(process, 0, out info, expectedLength, out returnedLength);
+    if (status < 0 || returnedLength < expectedLength) throw new InvalidOperationException("NtQueryInformationProcess failed");
+    uint handlePid = GetProcessId(process);
+    uint pbiPid = checked((uint)info.UniqueProcessId.ToUInt64());
+    if (handlePid != expectedPid || pbiPid != expectedPid) throw new InvalidOperationException("process handle PID mismatch");
+    return new ProcessRecord {
+      Id = expectedPid,
+      ParentId = checked((int)info.InheritedFromUniqueProcessId.ToUInt64()),
+      CreationTime = creation,
+      Handle = process
+    };
+  }
+
+  public static ProcessRecord OpenSnapshotExact(int pid, int expectedParentId) {
+    IntPtr process = OpenProcess(0x00101001, false, pid);
+    if (process == IntPtr.Zero) {
+      int error = Marshal.GetLastWin32Error();
+      if (error == 87) return null;
+      throw new System.ComponentModel.Win32Exception(error);
+    }
     try {
-      long creation, exit, kernel, user;
-      return GetProcessTimes(process, out creation, out exit, out kernel, out user) ? creation : 0;
-    } finally { CloseHandle(process); }
+      ProcessRecord record = RecordFromHandle(process, pid);
+      if (record.ParentId != expectedParentId) { CloseHandle(process); return null; }
+      return record;
+    } catch { CloseHandle(process); throw; }
+  }
+
+  public static int HandleState(IntPtr process) {
+    uint state = WaitForSingleObject(process, 0);
+    if (state == 0) return 0;
+    if (state == 258) return 1;
+    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+  }
+
+  public static long WorkingSetHandle(IntPtr process) {
+    if (HandleState(process) == 0) return -1;
+    PROCESS_MEMORY_COUNTERS counters = new PROCESS_MEMORY_COUNTERS();
+    counters.cb = (uint)Marshal.SizeOf(counters);
+    if (!GetProcessMemoryInfo(process, out counters, counters.cb)) {
+      if (HandleState(process) == 0) return -1;
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    }
+    ulong value = counters.WorkingSetSize.ToUInt64();
+    if (value > long.MaxValue) throw new OverflowException("working set exceeds Int64");
+    return (long)value;
+  }
+
+  public static bool TerminateHandle(IntPtr process) {
+    if (HandleState(process) == 0) return true;
+    int lastError = 0;
+    for (int attempt = 0; attempt < 10; attempt++) {
+      if (TerminateProcess(process, 137)) return true;
+      lastError = Marshal.GetLastWin32Error();
+      if (HandleState(process) == 0) return true;
+      System.Threading.Thread.Sleep(5);
+    }
+    throw new InvalidOperationException("TerminateProcess_" + lastError);
+  }
+
+  public static long ExitTimeHandle(IntPtr process) {
+    if (HandleState(process) != 0) return long.MaxValue;
+    long creation, exit, kernel, user;
+    if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) {
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    }
+    return exit;
   }
 
   public static ProcessRecord[] SnapshotProcesses() {
@@ -93,7 +185,12 @@ public static class GptCodexHwpJob {
       if (!Process32FirstW(snapshot, ref entry)) throw new InvalidOperationException("Process32First failed");
       do {
         int pid = unchecked((int)entry.th32ProcessID);
-        records.Add(new ProcessRecord { Id = pid, ParentId = unchecked((int)entry.th32ParentProcessID), CreationTime = 0 });
+        records.Add(new ProcessRecord {
+          Id = pid,
+          ParentId = unchecked((int)entry.th32ParentProcessID),
+          CreationTime = 0,
+          Handle = IntPtr.Zero
+        });
         entry.dwSize = (uint)Marshal.SizeOf(entry);
       } while (Process32NextW(snapshot, ref entry));
     } finally { CloseHandle(snapshot); }
@@ -104,96 +201,51 @@ public static class GptCodexHwpJob {
     return System.Threading.Tasks.Task.Run(() => Console.In.ReadLine());
   }
 
-  public static bool TerminateExact(int pid, long creationTime) {
-    IntPtr process = OpenProcess(0x00001001, false, pid);
-    if (process == IntPtr.Zero) {
-      long current = CreationTime(pid);
-      return current == 0 || current != creationTime;
-    }
-    try {
-      long creation, exit, kernel, user;
-      if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return false;
-      if (creation != creationTime) return true;
-      return TerminateProcess(process, 137);
-    } finally { CloseHandle(process); }
-  }
 }
 '@
 
 Add-Type -TypeDefinition $source -Language CSharp
-$rootCreation = [GptCodexHwpJob]::CreationTime($TargetPid)
-if ($rootCreation -le 0) { throw 'root process creation time unavailable' }
-
 $retained = @{}
-$rootKey = "$TargetPid`:$rootCreation"
-$retained[$rootKey] = [PSCustomObject]@{
-  Id = $TargetPid
-  ParentId = 0
-  CreationTime = $rootCreation
-  ParentKey = $null
-  Depth = 0
-}
 $retainedByPid = @{}
-$retainedByPid[$TargetPid] = @($retained[$rootKey])
 
 function Get-IdentityKey($record) {
   return "$($record.Id)`:$($record.CreationTime)"
 }
 
-function Resolve-CreationTime($record) {
-  if ($record.CreationTime -le 0) {
-    $record.CreationTime = [GptCodexHwpJob]::CreationTime($record.Id)
-  }
-  return [long]$record.CreationTime
-}
-
-function Find-RetainedParent($record, $liveByPid) {
+function Find-RetainedParent($record) {
   if (-not $retainedByPid.ContainsKey($record.ParentId)) { return $null }
-  $numericCandidates = @($retainedByPid[$record.ParentId])
-  $recordCreation = Resolve-CreationTime $record
-  if ($recordCreation -le 0) { return $null }
-  if ($liveByPid.ContainsKey($record.ParentId)) {
-    $liveParent = $liveByPid[$record.ParentId]
-    [void](Resolve-CreationTime $liveParent)
-    $liveKey = Get-IdentityKey $liveParent
-    if ($retained.ContainsKey($liveKey)) { return $retained[$liveKey] }
-    if ($recordCreation -ge $liveParent.CreationTime) { return $null }
+  $matches = @()
+  foreach ($entry in @($retainedByPid[$record.ParentId])) {
+    if ($entry.CreationTime -gt $record.CreationTime) { continue }
+    [long]$exitTime = [GptCodexHwpJob]::ExitTimeHandle($entry.Handle)
+    if ($exitTime -ge $record.CreationTime) { $matches += $entry }
   }
-  $candidate = $null
-  foreach ($entry in $numericCandidates) {
-    if ($entry.CreationTime -gt $recordCreation) { continue }
-    if ($null -eq $candidate -or $entry.CreationTime -gt $candidate.CreationTime) {
-      $candidate = $entry
-    }
-  }
-  return $candidate
+  if ($matches.Count -gt 1) { throw 'ambiguous retained parent lifetime' }
+  if ($matches.Count -eq 1) { return $matches[0] }
+  return $null
 }
 
 function Update-TrackedIdentities {
   $records = @([GptCodexHwpJob]::SnapshotProcesses())
-  $liveByPid = @{}
-  foreach ($record in $records) {
-    $liveByPid[$record.Id] = $record
-  }
   $changed = $true
   while ($changed) {
     $changed = $false
-    foreach ($record in $records) {
-      if ($retainedByPid.ContainsKey($record.Id)) {
-        [void](Resolve-CreationTime $record)
-        if ($record.CreationTime -gt 0 -and $retained.ContainsKey((Get-IdentityKey $record))) {
-          continue
-        }
-      }
-      $parent = Find-RetainedParent $record $liveByPid
-      if ($null -eq $parent) { continue }
-      if ($record.CreationTime -lt $rootCreation) { continue }
-      $key = Get-IdentityKey $record
-      if ($retained.ContainsKey($key)) { continue }
+    foreach ($hint in $records) {
+      if (-not $retainedByPid.ContainsKey($hint.ParentId)) { continue }
+      $record = [GptCodexHwpJob]::OpenSnapshotExact($hint.Id, $hint.ParentId)
+      if ($null -eq $record) { continue }
+      $adopted = $false
+      try {
+        $key = Get-IdentityKey $record
+        if ($retained.ContainsKey($key)) { continue }
+        $parent = Find-RetainedParent $record
+        if ($null -eq $parent -or $record.CreationTime -lt $rootCreation) { continue }
+        if ($retained.Count -ge 4096) { throw 'retained identity limit exceeded' }
       $entry = [PSCustomObject]@{
         Id = $record.Id
         ParentId = $record.ParentId
         CreationTime = $record.CreationTime
+        Handle = $record.Handle
         ParentKey = "$($parent.Id)`:$($parent.CreationTime)"
         Depth = [int]$parent.Depth + 1
       }
@@ -203,23 +255,35 @@ function Update-TrackedIdentities {
       } else {
         $retainedByPid[$record.Id] = @($entry)
       }
+        $adopted = $true
       $changed = $true
+      } finally {
+        if (-not $adopted) { [void][GptCodexHwpJob]::CloseHandle($record.Handle) }
+      }
     }
   }
   return @($records)
 }
 
-function Get-LiveTracked($records) {
+function Get-LiveTracked {
   $live = @()
-  foreach ($record in $records) {
-    if (-not $retainedByPid.ContainsKey($record.Id)) { continue }
-    [void](Resolve-CreationTime $record)
-    $key = Get-IdentityKey $record
-    if ($retained.ContainsKey($key)) {
-      $live += $retained[$key]
-    }
+  foreach ($entry in @($retained.Values)) {
+    if ([GptCodexHwpJob]::HandleState($entry.Handle) -eq 1) { $live += $entry }
   }
   return @($live | Sort-Object Depth, CreationTime)
+}
+
+function Measure-TrackedWorkingSet($records) {
+  [long]$total = 0
+  foreach ($entry in @(Get-LiveTracked)) {
+    [long]$workingSet = [GptCodexHwpJob]::WorkingSetHandle($entry.Handle)
+    if ($workingSet -lt 0) { continue }
+    if ($workingSet -lt 0 -or $total -gt ([long]::MaxValue - $workingSet)) {
+      throw 'working set total overflow'
+    }
+    $total += $workingSet
+  }
+  return $total
 }
 
 $maxDiscoveryPollMs = 0
@@ -232,22 +296,62 @@ function Invoke-TrackedPoll {
 }
 
 function Stop-TrackedTree {
+  $script:stopFailure = 'none'
   $quiescentScans = 0
   for ($attempt = 0; $attempt -lt 150; $attempt++) {
-    $records = @(Invoke-TrackedPoll)
-    $live = @(Get-LiveTracked $records)
-    if ($live.Count -eq 0) {
+    $discoveryComplete = $false
+    try {
+      $records = @(Invoke-TrackedPoll)
+      $discoveryComplete = $true
+      [long]$terminationRss = Measure-TrackedWorkingSet $records
+      if ($terminationRss -gt $script:peakRss) { $script:peakRss = $terminationRss }
+    } catch {
+      $script:stopFailure = 'discovery-or-rss-unavailable'
+      [void](Invoke-RetainedTerminationPass)
+      if (-not $discoveryComplete) { return $false }
+      return $false
+    }
+    $terminationPass = Invoke-RetainedTerminationPass
+    if (-not $terminationPass.Complete) {
+      $script:stopFailure = 'retained-handle-unavailable'
+      return $false
+    }
+    if ($terminationPass.AllGone) {
       $quiescentScans += 1
       if ($quiescentScans -ge 2) { return $true }
       Start-Sleep -Milliseconds 20
       continue
     }
     $quiescentScans = 0
-    foreach ($entry in $live) {
-      if (-not [GptCodexHwpJob]::TerminateExact($entry.Id, $entry.CreationTime)) {
-        return $false
-      }
+    Start-Sleep -Milliseconds 20
+  }
+  $script:stopFailure = 'scan-exhausted'
+  return $false
+}
+
+function Invoke-RetainedTerminationPass {
+  $complete = $true
+  $allGone = $true
+  $entries = @($retained.Values | Sort-Object `
+    @{ Expression = 'Depth'; Descending = $true }, `
+    @{ Expression = 'CreationTime'; Descending = $true })
+  foreach ($entry in $entries) {
+    try {
+      if ([GptCodexHwpJob]::HandleState($entry.Handle) -eq 0) { continue }
+      $allGone = $false
+      if (-not [GptCodexHwpJob]::TerminateHandle($entry.Handle)) { $complete = $false }
+    } catch {
+      $complete = $false
+      $allGone = $false
     }
+  }
+  return [PSCustomObject]@{ Complete = $complete; AllGone = $allGone }
+}
+
+function Stop-RetainedHandles {
+  for ($attempt = 0; $attempt -lt 150; $attempt++) {
+    $terminationPass = Invoke-RetainedTerminationPass
+    if ($terminationPass.Complete -and $terminationPass.AllGone) { return $true }
     Start-Sleep -Milliseconds 20
   }
   return $false
@@ -258,6 +362,7 @@ $process = [IntPtr]::Zero
 $mode = 2
 $verifiedGone = $false
 $failure = $null
+$failureStage = 'startup'
 try {
   $job = [GptCodexHwpJob]::CreateJobObject([IntPtr]::Zero, $null)
   if ($job -eq [IntPtr]::Zero) { throw 'CreateJobObject failed' }
@@ -267,15 +372,41 @@ try {
   if (-not [GptCodexHwpJob]::SetInformationJobObject($job, 9, [ref]$limits, $limitSize)) {
     throw 'SetInformationJobObject failed'
   }
-  $process = [GptCodexHwpJob]::OpenProcess(0x00001101, $false, $TargetPid)
+  $process = [GptCodexHwpJob]::OpenProcess(0x00101101, $false, $TargetPid)
   if ($process -eq [IntPtr]::Zero) { throw 'OpenProcess failed' }
+  try {
+    $rootRecord = [GptCodexHwpJob]::RecordFromHandle($process, $TargetPid)
+    [long]$rootCreation = $rootRecord.CreationTime
+    $rootKey = "$TargetPid`:$rootCreation"
+    $retained[$rootKey] = [PSCustomObject]@{
+      Id = $TargetPid
+      ParentId = $rootRecord.ParentId
+      CreationTime = $rootCreation
+      Handle = $process
+      ParentKey = $null
+      Depth = 0
+    }
+    $retainedByPid[$TargetPid] = @($retained[$rootKey])
+  } catch {
+    [void][GptCodexHwpJob]::CloseHandle($process)
+    $process = [IntPtr]::Zero
+    throw
+  }
   if (-not $ForceTracker -and [GptCodexHwpJob]::AssignProcessToJobObject($job, $process)) { $mode = 1 }
+  $baselineRecords = @(Invoke-TrackedPoll)
+  $failureStage = 'baseline-rss'
+  [long]$baselineRss = Measure-TrackedWorkingSet $baselineRecords
+  if ($baselineRss -le 0) { throw 'baseline working set unavailable' }
+  [long]$script:peakRss = $baselineRss
   [Console]::Out.WriteLine("GPT_CODEX_HWP_JOB READY $TargetPid $mode $rootCreation")
   [Console]::Out.Flush()
   $commandTask = [GptCodexHwpJob]::ReadCommandAsync()
+  $failureStage = 'sampling'
   while (-not $commandTask.IsCompleted) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    [void](Update-TrackedIdentities)
+    $sampleRecords = @(Update-TrackedIdentities)
+    [long]$sampleRss = Measure-TrackedWorkingSet $sampleRecords
+    if ($sampleRss -gt $script:peakRss) { $script:peakRss = $sampleRss }
     $watch.Stop()
     $elapsed = [int][Math]::Ceiling($watch.Elapsed.TotalMilliseconds)
     if ($elapsed -gt $maxDiscoveryPollMs) { $maxDiscoveryPollMs = $elapsed }
@@ -283,8 +414,14 @@ try {
   }
   $command = $commandTask.GetAwaiter().GetResult()
   if ($command -ne 'TERMINATE') { throw 'invalid supervisor command' }
-  if ($mode -eq 1) { [void][GptCodexHwpJob]::TerminateJobObject($job, 137) }
-  if (-not (Stop-TrackedTree)) { throw 'tracked tree did not reach zero' }
+  $failureStage = 'termination'
+  if ($mode -eq 1 -and -not [GptCodexHwpJob]::TerminateJobObject($job, 137)) {
+    throw 'TerminateJobObject failed'
+  }
+  if (-not (Stop-TrackedTree)) {
+    $failureStage = "termination-$script:stopFailure"
+    throw 'tracked tree did not reach zero'
+  }
   if ($mode -eq 1) {
     $accounting = New-Object GptCodexHwpJob+JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
     $accountingSize = [Runtime.InteropServices.Marshal]::SizeOf($accounting)
@@ -295,21 +432,33 @@ try {
     [Console]::Out.WriteLine("GPT_CODEX_HWP_JOB TRACKER $maxDiscoveryPollMs $($retained.Count)")
     [Console]::Out.Flush()
   }
+  $failureStage = 'rss-receipt'
+  [Console]::Out.WriteLine("GPT_CODEX_HWP_JOB RSS $baselineRss $script:peakRss")
+  [Console]::Out.Flush()
   $verifiedGone = $true
 } catch {
   $failure = $_
+  $reason = $_.Exception.Message
+  if ($null -ne $_.Exception.InnerException) { $reason = $_.Exception.InnerException.Message }
+  $safeReason = ($reason -replace '[^A-Za-z0-9_-]', '_')
+  if ($safeReason.Length -gt 48) { $safeReason = $safeReason.Substring(0, 48) }
+  [Console]::Out.WriteLine("GPT_CODEX_HWP_JOB ERROR $failureStage $safeReason")
+  [Console]::Out.Flush()
 } finally {
   try {
     if ($job -ne [IntPtr]::Zero) {
       [void][GptCodexHwpJob]::TerminateJobObject($job, 137)
     }
-    if (-not (Stop-TrackedTree)) { throw 'final tracked tree did not reach zero' }
+    if (-not (Stop-RetainedHandles)) { throw 'final retained tree did not reach zero' }
   } catch {
     if ($null -eq $failure) { $failure = $_ }
   } finally {
-    if ($process -ne [IntPtr]::Zero -and -not [GptCodexHwpJob]::CloseHandle($process)) {
-      if ($null -eq $failure) { $failure = 'process handle close failed' }
+    foreach ($entry in @($retained.Values)) {
+      if ($entry.Handle -ne [IntPtr]::Zero -and -not [GptCodexHwpJob]::CloseHandle($entry.Handle)) {
+        if ($null -eq $failure) { $failure = 'process handle close failed' }
+      }
     }
+    $process = [IntPtr]::Zero
     if ($job -ne [IntPtr]::Zero -and -not [GptCodexHwpJob]::CloseHandle($job)) {
       if ($null -eq $failure) { $failure = 'job handle close failed' }
     }

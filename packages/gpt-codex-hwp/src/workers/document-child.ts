@@ -60,10 +60,12 @@ async function run(): Promise<void> {
       return;
     }
     const inputs = inheritedInputs(request);
+    sendMetrics(request, 0);
     const payload = await backend.execute(
       request as never,
       inputs,
       (progress) => sendProgress(request, progress),
+      (metrics) => sendMetrics(request, metrics.copiedBytes),
     );
     await sendResult(request, payload);
   } catch (error: unknown) {
@@ -84,6 +86,7 @@ async function runAfterParagraphInsert(
     request.input.image.descriptor !== 4) throw new Error("image inputs are not inherited");
   const source = readExact(3, request.input.document.sizeBytes);
   const image = readExact(4, request.input.image.sizeBytes);
+  sendMetrics(request, 0);
   const prepared = await backend.prepareImageInsertion(
     source,
     image,
@@ -302,16 +305,14 @@ function inheritedInputs(request: WireDocumentRequest): Readonly<{
 }
 
 function readExact(fd: number, sizeBytes: number): ArrayBuffer {
-  const bytes = Buffer.allocUnsafeSlow(sizeBytes);
+  const bytes = new Uint8Array(sizeBytes);
   let offset = 0;
   while (offset < sizeBytes) {
     const count = readSync(fd, bytes, offset, sizeBytes - offset, offset);
     if (count === 0) throw new Error("inherited input spool is truncated");
     offset += count;
   }
-  const exact = new Uint8Array(sizeBytes);
-  exact.set(bytes);
-  return exact.buffer;
+  return bytes.buffer;
 }
 
 function hashDescriptor(fd: number, sizeBytes: number): string {
@@ -411,6 +412,13 @@ function sendProgress(
     ...event(request, "progress"),
     completed: progress.completed,
     total: progress.total,
+  });
+}
+
+function sendMetrics(request: WireDocumentRequest, copiedBytes: number): void {
+  sendControl({
+    ...event(request, "metrics"),
+    copiedBytes,
   });
 }
 

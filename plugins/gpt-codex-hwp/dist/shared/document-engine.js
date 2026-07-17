@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { read as readFd } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
-import { writeDocumentRenderResultExclusively, } from "./document-render-output.js";
+import { prepareDocumentRenderOutput, writeDocumentRenderResultExclusively, } from "./document-render-output.js";
 import { writeFileRangeAndFilesExclusively, writeFilesExclusively, } from "./output.js";
 import { decodeDocumentResultSpool, } from "../workers/document-compute-backend.js";
 import { createDocumentChildClient, isIntegrityVerifiedResultSpool, } from "../workers/document-child-client.js";
@@ -20,6 +20,7 @@ export function createDocumentEngineFacade(dependencies = {}) {
                     return {
                         payload: { format: "unknown" },
                         snapshotMetadata: snapshot.metadata,
+                        verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
                     };
                 }
                 finally {
@@ -74,7 +75,11 @@ export function createDocumentEngineFacade(dependencies = {}) {
         const result = await execute(request, snapshot, toRunOptions(context));
         const payload = await decodeResult(operation, result);
         await snapshot.verifySourceUnchanged();
-        return { payload, snapshotMetadata: snapshot.metadata };
+        return {
+            payload,
+            snapshotMetadata: snapshot.metadata,
+            verifySourceUnchanged: () => snapshot.verifySourceUnchanged(),
+        };
     }
     async function runGenerate(markdown, options, context) {
         const request = {
@@ -206,6 +211,7 @@ export function createDocumentEngineFacade(dependencies = {}) {
                         throw engineProtocolError();
                     }
                     await verifySourceUnchanged();
+                    requireNotAborted(context.signal);
                 };
                 let written;
                 if (range === undefined) {
@@ -373,12 +379,13 @@ function requireNotAborted(signal) {
     Object.assign(error, { code: "REQUEST_CANCELLED" });
     throw error;
 }
-export { writeDocumentRenderResultExclusively };
+export { prepareDocumentRenderOutput, writeDocumentRenderResultExclusively, };
 function toRunOptions(context) {
     return {
         ...(context.signal === undefined ? {} : { signal: context.signal }),
         ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
         ...(context.onProgress === undefined ? {} : { onProgress: context.onProgress }),
+        ...(context.onMetrics === undefined ? {} : { onMetrics: context.onMetrics }),
     };
 }
 function copyDefined(options) {
@@ -393,12 +400,14 @@ function copyFillFields(fields) {
 function createDefaultIsolatedEngine() {
     const workerEntry = runtimeEntry("document-worker.js");
     const childEntry = runtimeEntry("document-child.js");
+    const childStartGateEntry = runtimeEntry("document-child-start-gate.js");
     return createIsolatedDocumentEngine({
         workerClient: createDocumentWorkerClient({
             workerFactory: (options) => new Worker(workerEntry, options),
         }),
         childClient: createDocumentChildClient({
             childEntry: fileURLToPath(childEntry),
+            startGateEntry: fileURLToPath(childStartGateEntry),
         }),
     });
 }
