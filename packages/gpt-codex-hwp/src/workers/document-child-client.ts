@@ -1408,6 +1408,7 @@ export async function finalizeVerifiedWindowsSupervisor({
     stderrBytes: number;
     stdoutEnded: boolean;
     stdoutFailed: boolean;
+    protocolFailed: boolean;
     queuedFrames: number;
     partialBytes: number;
   }>;
@@ -1437,6 +1438,7 @@ function cleanWindowsSupervisorTranscript(
     stderrBytes: number;
     stdoutEnded: boolean;
     stdoutFailed: boolean;
+    protocolFailed: boolean;
     queuedFrames: number;
     partialBytes: number;
   }>,
@@ -1444,7 +1446,7 @@ function cleanWindowsSupervisorTranscript(
   try {
     const value = receipt();
     return value.stdinFailed === false && value.stderrBytes === 0 && value.stdoutEnded === true &&
-      value.stdoutFailed === false && value.queuedFrames === 0 &&
+      value.stdoutFailed === false && value.protocolFailed === false && value.queuedFrames === 0 &&
       value.partialBytes === 0;
   } catch {
     return false;
@@ -2501,6 +2503,7 @@ class BoundedSupervisorLineReader {
   #failed: Error | undefined;
   #stdoutEnded = false;
   #stdoutFailed = false;
+  #protocolFailed = false;
 
   constructor(stream: NodeJS.ReadableStream, maxLineBytes: number) {
     this.#buffer = Buffer.alloc(maxLineBytes);
@@ -2547,12 +2550,14 @@ class BoundedSupervisorLineReader {
   transcriptReceipt(): Readonly<{
     stdoutEnded: boolean;
     stdoutFailed: boolean;
+    protocolFailed: boolean;
     queuedFrames: number;
     partialBytes: number;
   }> {
     return Object.freeze({
       stdoutEnded: this.#stdoutEnded,
       stdoutFailed: this.#stdoutFailed,
+      protocolFailed: this.#protocolFailed,
       queuedFrames: this.#queue.length,
       partialBytes: this.#length,
     });
@@ -2577,6 +2582,7 @@ class BoundedSupervisorLineReader {
         byte > 0x7e ||
         this.#length >= this.#buffer.byteLength
       ) {
+        this.#protocolFailed = true;
         this.#fail(new Error("invalid job supervisor frame"));
         return;
       }

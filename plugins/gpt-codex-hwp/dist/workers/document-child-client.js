@@ -956,7 +956,7 @@ function cleanWindowsSupervisorTranscript(receipt) {
     try {
         const value = receipt();
         return value.stdinFailed === false && value.stderrBytes === 0 && value.stdoutEnded === true &&
-            value.stdoutFailed === false && value.queuedFrames === 0 &&
+            value.stdoutFailed === false && value.protocolFailed === false && value.queuedFrames === 0 &&
             value.partialBytes === 0;
     }
     catch {
@@ -1819,6 +1819,7 @@ class BoundedSupervisorLineReader {
     #failed;
     #stdoutEnded = false;
     #stdoutFailed = false;
+    #protocolFailed = false;
     constructor(stream, maxLineBytes) {
         this.#buffer = Buffer.alloc(maxLineBytes);
         stream.on("data", (chunk) => this.#push(chunk));
@@ -1867,6 +1868,7 @@ class BoundedSupervisorLineReader {
         return Object.freeze({
             stdoutEnded: this.#stdoutEnded,
             stdoutFailed: this.#stdoutFailed,
+            protocolFailed: this.#protocolFailed,
             queuedFrames: this.#queue.length,
             partialBytes: this.#length,
         });
@@ -1891,6 +1893,7 @@ class BoundedSupervisorLineReader {
             if ((byte < 0x20 && byte !== 0x0d) ||
                 byte > 0x7e ||
                 this.#length >= this.#buffer.byteLength) {
+                this.#protocolFailed = true;
                 this.#fail(new Error("invalid job supervisor frame"));
                 return;
             }

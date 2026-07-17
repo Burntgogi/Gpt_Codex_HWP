@@ -123,6 +123,7 @@ const finalizeVerifiedWindowsSupervisor = (
         stderrBytes: number;
         stdoutEnded: boolean;
         stdoutFailed: boolean;
+        protocolFailed: boolean;
         queuedFrames: number;
         partialBytes: number;
       }>;
@@ -2892,6 +2893,22 @@ test("Windows supervisor rejects late stderr and trailing complete or partial st
   }
 });
 
+test("Windows supervisor rejects a poisoned protocol transcript after an otherwise clean close", async () => {
+  const poisonedTranscript = Object.freeze({
+    ...cleanWindowsSupervisorTranscript(),
+    protocolFailed: true,
+  });
+
+  assert.equal(await finalizeWindowsSupervisorForTest({
+    closeReceipt: Promise.resolve({ code: 0, signal: null, error: null }),
+    forceClose: () => true,
+    allowForceClose: true,
+    transcriptReceipt: () => poisonedTranscript,
+    gracefulExitMs: 20,
+    forcedExitMs: 20,
+  }), false);
+});
+
 test("Windows supervisor accepts only the expected deliberate signalled close after valid GONE", async () => {
   const close = telemetryDeferred<Readonly<{
     code: number | null;
@@ -3864,6 +3881,7 @@ function cleanWindowsSupervisorTranscript() {
     stderrBytes: 0,
     stdoutEnded: true,
     stdoutFailed: false,
+    protocolFailed: false,
     queuedFrames: 0,
     partialBytes: 0,
   });

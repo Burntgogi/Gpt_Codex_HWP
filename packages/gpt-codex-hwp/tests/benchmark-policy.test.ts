@@ -172,6 +172,7 @@ test("benchmark policy does not confuse verified tree termination with delayed h
       stderrBytes: 0,
       stdoutEnded: true,
       stdoutFailed: false,
+      protocolFailed: false,
       queuedFrames: 0,
       partialBytes: 0,
     }),
