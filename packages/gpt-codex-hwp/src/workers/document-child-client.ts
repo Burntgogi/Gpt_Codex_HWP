@@ -61,6 +61,7 @@ import {
   unverifiedTermination,
   type ProcessTreeTerminationReceipt,
   type RegisteredProcessGroupIdentity,
+  type RegisteredProcessGroupSupervisor,
   type UnverifiedTerminationReason,
 } from "./registered-process-supervisor.js";
 
@@ -119,6 +120,8 @@ export interface DocumentChildClientDependencies {
 
 export interface ChildLifecycleSupervisor {
   terminate(): Promise<ProcessTreeTerminationReceipt>;
+  /** Optional telemetry readiness only; never process-tree authority or START gating. */
+  readonly processTreeTelemetryReady?: Promise<boolean>;
   processTreeRss?(): Readonly<{
     baselineBytes: number;
     peakBytes: number;
@@ -1182,6 +1185,7 @@ async function createWindowsJobSupervisor(
     peakBytes: number;
   }> | undefined;
   return {
+    processTreeTelemetryReady: Promise.resolve(true),
     processTreeRss: () => processTreeRss,
     terminate(): Promise<ProcessTreeTerminationReceipt> {
       if (verifiedReceipt?.gone === true) return Promise.resolve(verifiedReceipt);
@@ -1278,60 +1282,192 @@ interface RetainedPosixProcess extends PosixProcessRecord {
   readonly depth: number;
 }
 
+export interface PosixProcessTelemetryTracker {
+  initialize(): Promise<void>;
+  sample(): Promise<unknown>;
+  disableTelemetry(): void;
+  telemetryAvailable(): boolean;
+  processTreeRss(): Readonly<{ baselineBytes: number; peakBytes: number }>;
+}
+
+export interface PosixTelemetryIntervalHandle {
+  unref(): void;
+}
+
+export interface PosixProcessTreeSupervisorTestDependencies {
+  readonly registeredSupervisor?: RegisteredProcessGroupSupervisor;
+  readonly tracker?: PosixProcessTelemetryTracker;
+  readonly scheduleInterval?: (
+    callback: () => void,
+    milliseconds: number,
+  ) => PosixTelemetryIntervalHandle;
+  readonly clearScheduledInterval?: (handle: PosixTelemetryIntervalHandle) => void;
+}
+
+export function createPosixProcessTreeSupervisorForTest(
+  child: ChildProcess,
+  platform: "linux" | "darwin",
+  dependencies: PosixProcessTreeSupervisorTestDependencies,
+): Promise<ChildLifecycleSupervisor> {
+  return createPosixProcessTreeSupervisor(child, platform, dependencies);
+}
+
 async function createPosixProcessTreeSupervisor(
   child: ChildProcess,
   platform: NodeJS.Platform,
+  dependencies: PosixProcessTreeSupervisorTestDependencies = {},
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
   if (platform !== "linux" && platform !== "darwin") {
     throw new Error(`unsupported process-tree metrics platform: ${platform}`);
   }
-  const registeredSupervisor = createRegisteredPosixProcessGroupSupervisor({
-    inspectIdentity: (pid) => snapshotRegisteredPosixProcessGroupIdentity(pid, platform),
-  });
+  const registeredSupervisor = dependencies.registeredSupervisor
+    ?? createRegisteredPosixProcessGroupSupervisor({
+      inspectIdentity: (pid) => snapshotRegisteredPosixProcessGroupIdentity(pid, platform),
+    });
   await registeredSupervisor.registerRoot(child.pid, process.pid);
-  const tracker = new PosixProcessTreeTracker(child.pid, platform);
-  let samplingFailure: unknown;
-  try {
-    await tracker.initialize();
-  } catch (error: unknown) {
-    samplingFailure = error;
-    tracker.disableTelemetry();
-  }
+  const tracker = dependencies.tracker ?? new PosixProcessTreeTracker(child.pid, platform);
+  const scheduleInterval = dependencies.scheduleInterval ?? ((callback, milliseconds) =>
+    setInterval(callback, milliseconds));
+  const clearScheduledInterval = dependencies.clearScheduledInterval ?? ((handle) => {
+    clearInterval(handle as NodeJS.Timeout);
+  });
+  let telemetryState: "initializing" | "active" | "disabled" | "stopped" = "initializing";
+  let sampler: PosixTelemetryIntervalHandle | undefined;
   let sampleRunning = false;
   let sampleRequested = false;
-  let sampleTail = Promise.resolve();
+  let settleTelemetryReady!: (available: boolean) => void;
+  let telemetryReadySettled = false;
+  const processTreeTelemetryReady = new Promise<boolean>((resolve) => {
+    settleTelemetryReady = (available) => {
+      if (telemetryReadySettled) return;
+      telemetryReadySettled = true;
+      resolve(available);
+    };
+  });
+  let stoppedProcessTreeRss: Readonly<{
+    baselineBytes: number;
+    peakBytes: number;
+  }> | undefined;
+  let termination: Promise<ProcessTreeTerminationReceipt> | undefined;
+
+  const clearSampler = (): void => {
+    const handle = sampler;
+    sampler = undefined;
+    if (handle === undefined) return;
+    try { clearScheduledInterval(handle); } catch {}
+  };
+  const disableTracker = (): void => {
+    try { tracker.disableTelemetry(); } catch {}
+  };
+  const deactivateTelemetry = (state: "disabled" | "stopped"): void => {
+    telemetryState = state;
+    settleTelemetryReady(false);
+    sampleRequested = false;
+    clearSampler();
+    disableTracker();
+  };
+  const readCompleteProcessTreeRss = (): Readonly<{
+    baselineBytes: number;
+    peakBytes: number;
+  }> | undefined => {
+    if (telemetryState !== "active" || sampleRunning) return undefined;
+    try {
+      return tracker.telemetryAvailable() ? tracker.processTreeRss() : undefined;
+    } catch {
+      deactivateTelemetry("disabled");
+      return undefined;
+    }
+  };
   const queueSample = (): void => {
-    if (samplingFailure !== undefined) return;
+    if (telemetryState !== "active") return;
     if (sampleRunning) {
       sampleRequested = true;
       return;
     }
     sampleRunning = true;
-    sampleTail = (async () => {
-      do {
-        sampleRequested = false;
-        try { await tracker.sample(); } catch (error: unknown) { samplingFailure = error; }
-      } while (sampleRequested && samplingFailure === undefined);
-    })().finally(() => { sampleRunning = false; });
+    sampleRequested = false;
+    let sample: Promise<unknown>;
+    try {
+      sample = tracker.sample();
+    } catch {
+      sampleRunning = false;
+      deactivateTelemetry("disabled");
+      return;
+    }
+    void sample.then(
+      () => {
+        sampleRunning = false;
+        if (telemetryState !== "active") return;
+        if (sampleRequested) queueSample();
+      },
+      () => {
+        sampleRunning = false;
+        if (telemetryState === "active") deactivateTelemetry("disabled");
+      },
+    ).catch(() => {
+      sampleRunning = false;
+      if (telemetryState === "active") deactivateTelemetry("disabled");
+    });
   };
-  const sampler = samplingFailure === undefined
-    ? setInterval(
-        queueSample,
-        platform === "linux" ? LINUX_PROCESS_SAMPLE_MS : MACOS_PROCESS_SAMPLE_MS,
-      )
-    : undefined;
-  sampler?.unref();
+
+  let initialization: Promise<void> | undefined;
+  try {
+    initialization = tracker.initialize();
+  } catch {
+    deactivateTelemetry("disabled");
+  }
+  if (initialization !== undefined) {
+    void initialization.then(
+      () => {
+        if (telemetryState !== "initializing") return;
+        telemetryState = "active";
+        try {
+          sampler = scheduleInterval(
+            queueSample,
+            platform === "linux" ? LINUX_PROCESS_SAMPLE_MS : MACOS_PROCESS_SAMPLE_MS,
+          );
+          sampler.unref();
+          settleTelemetryReady(true);
+        } catch {
+          deactivateTelemetry("disabled");
+        }
+      },
+      () => {
+        if (telemetryState === "initializing") deactivateTelemetry("disabled");
+      },
+    ).catch(() => {
+      if (telemetryState !== "stopped") deactivateTelemetry("disabled");
+    });
+  }
+
   return {
-    processTreeRss: () => samplingFailure === undefined
-      && tracker.telemetryAvailable()
-      ? tracker.processTreeRss()
-      : undefined,
-    async terminate(): Promise<ProcessTreeTerminationReceipt> {
-      if (sampler !== undefined) clearInterval(sampler);
-      await sampleTail;
-      if (samplingFailure !== undefined) tracker.disableTelemetry();
-      return registeredSupervisor.terminate();
+    processTreeTelemetryReady,
+    processTreeRss: () => telemetryState === "stopped"
+      ? stoppedProcessTreeRss
+      : readCompleteProcessTreeRss(),
+    terminate(): Promise<ProcessTreeTerminationReceipt> {
+      if (termination !== undefined) return termination;
+      try {
+        const registeredTermination = registeredSupervisor.terminate();
+        termination = registeredTermination.then(
+          (receipt) => {
+            stoppedProcessTreeRss = readCompleteProcessTreeRss();
+            deactivateTelemetry("stopped");
+            return receipt;
+          },
+          (error: unknown) => {
+            stoppedProcessTreeRss = readCompleteProcessTreeRss();
+            deactivateTelemetry("stopped");
+            throw error;
+          },
+        );
+      } catch (error: unknown) {
+        stoppedProcessTreeRss = readCompleteProcessTreeRss();
+        deactivateTelemetry("stopped");
+        termination = Promise.reject(error);
+      }
+      return termination;
     },
   };
 }

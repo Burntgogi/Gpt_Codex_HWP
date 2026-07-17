@@ -21,7 +21,9 @@ import { HeavyChildGate } from "../src/workers/document-execution-policy.js";
 import type { SpoolDocumentSnapshot } from "../src/shared/document-snapshot.js";
 import {
   createRegisteredPosixProcessGroupSupervisor,
+  type ProcessTreeTerminationReceipt,
   type RegisteredProcessGroupIdentity,
+  type RegisteredProcessGroupSupervisor,
 } from "../src/workers/registered-process-supervisor.js";
 
 const fixturePath = fileURLToPath(
@@ -1935,26 +1937,277 @@ test("macOS identity-only cleanup enforces the 4096-record cap", async () => {
   );
 });
 
-test("POSIX registration owns termination proof while ancestry and RSS remain telemetry only", () => {
-  const source = readFileSync(
-    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
-    "utf8",
+type TestPosixTelemetryTracker = Readonly<{
+  initialize(): Promise<void>;
+  sample(): Promise<void>;
+  disableTelemetry(): void;
+  telemetryAvailable(): boolean;
+  processTreeRss(): Readonly<{ baselineBytes: number; peakBytes: number }>;
+}>;
+
+type TestPosixIntervalHandle = Readonly<{ unref(): void }>;
+
+const createPosixProcessTreeSupervisorForTest = (
+  childClientModule as unknown as {
+    createPosixProcessTreeSupervisorForTest(
+      child: ReturnType<typeof spawn>,
+      platform: "linux" | "darwin",
+      dependencies: Readonly<{
+        registeredSupervisor: RegisteredProcessGroupSupervisor;
+        tracker: TestPosixTelemetryTracker;
+        scheduleInterval: (
+          callback: () => void,
+          milliseconds: number,
+        ) => TestPosixIntervalHandle;
+        clearScheduledInterval: (handle: TestPosixIntervalHandle) => void;
+      }>,
+    ): Promise<Readonly<{
+      readonly processTreeTelemetryReady?: Promise<boolean>;
+      processTreeRss?(): Readonly<{ baselineBytes: number; peakBytes: number }> | undefined;
+      terminate(): Promise<ProcessTreeTerminationReceipt>;
+    }>>;
+  }
+).createPosixProcessTreeSupervisorForTest;
+
+test("POSIX telemetry initialize cannot delay registered readiness or termination", async () => {
+  const rootPid = 8_101;
+  const signals: Array<NodeJS.Signals | 0> = [];
+  const initialize = telemetryDeferred<void>();
+  let scheduled = 0;
+  const creating = createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryRegisteredSupervisor(rootPid, signals),
+      tracker: telemetryTracker({ initialize: () => initialize.promise }),
+      scheduleInterval: () => {
+        scheduled += 1;
+        return { unref() {} };
+      },
+      clearScheduledInterval: () => {},
+    },
   );
-  const registeredSource = readFileSync(
-    fileURLToPath(new URL("../src/workers/registered-process-supervisor.ts", import.meta.url)),
-    "utf8",
+  const supervisor = await telemetryBounded(creating);
+  if (supervisor === TELEMETRY_STALLED) {
+    assert.fail("telemetry initialization delayed registered supervisor readiness");
+  }
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  assert.equal(
+    await telemetryBounded(supervisor.processTreeTelemetryReady as Promise<boolean>, 25),
+    TELEMETRY_STALLED,
   );
-  assert.match(source, /await registeredSupervisor\.registerRoot\(child\.pid, process\.pid\)/u);
-  assert.match(source, /try \{\s*await tracker\.initialize\(\);\s*\} catch/u);
-  assert.match(source, /samplingFailure === undefined[\s\S]*setInterval/u);
-  const trackerStart = source.indexOf("class PosixProcessTreeTracker");
-  const trackerEnd = source.indexOf("function posixIdentityKey", trackerStart);
-  assert.ok(trackerStart >= 0 && trackerEnd > trackerStart);
-  assert.doesNotMatch(source.slice(trackerStart, trackerEnd), /terminate\(/u);
-  assert.match(registeredSource, /process\.kill\(-processGroupId, signal\)/u);
-  assert.match(registeredSource, /for \(const signal of \["SIGTERM", "SIGKILL"\]/u);
-  assert.match(registeredSource, /proof: "registered-groups-empty"/u);
-  assert.doesNotMatch(registeredSource, /ancestry|descendant|snapshot.*Tree/iu);
+
+  const receipt = await telemetryBounded(supervisor.terminate());
+  if (receipt === TELEMETRY_STALLED) {
+    assert.fail("telemetry initialization delayed registered group termination");
+  }
+  assert.deepEqual(receipt, { gone: true, proof: "registered-groups-empty" });
+  assert.equal(await supervisor.processTreeTelemetryReady, false);
+  assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL", 0]);
+  assert.equal(scheduled, 0);
+  assert.deepEqual(
+    await supervisor.terminate(),
+    { gone: true, proof: "registered-groups-empty" },
+  );
+  assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL", 0]);
+});
+
+test("POSIX telemetry sample cannot delay registered termination or expose pending RSS", async () => {
+  const rootPid = 8_102;
+  const signals: Array<NodeJS.Signals | 0> = [];
+  const sample = telemetryDeferred<void>();
+  const sampleStarted = telemetryDeferred<void>();
+  let scheduledCallback: (() => void) | undefined;
+  let cleared = 0;
+  let telemetryDisabled = false;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryRegisteredSupervisor(rootPid, signals),
+      tracker: telemetryTracker({
+        initialize: async () => {},
+        sample: () => {
+          sampleStarted.resolve();
+          return sample.promise;
+        },
+        disableTelemetry: () => {
+          telemetryDisabled = true;
+        },
+        telemetryAvailable: () => !telemetryDisabled,
+      }),
+      scheduleInterval: (callback) => {
+        scheduledCallback = callback;
+        return { unref() {} };
+      },
+      clearScheduledInterval: () => {
+        cleared += 1;
+      },
+    },
+  );
+  assert.ok(scheduledCallback !== undefined);
+  assert.equal(await supervisor.processTreeTelemetryReady, true);
+  scheduledCallback();
+  await sampleStarted.promise;
+
+  const termination = supervisor.terminate();
+  const receipt = await telemetryBounded(termination);
+  if (receipt === TELEMETRY_STALLED) {
+    sample.resolve();
+    await termination;
+    assert.fail("in-flight telemetry sample delayed registered group termination");
+  }
+  assert.deepEqual(receipt, { gone: true, proof: "registered-groups-empty" });
+  assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL", 0]);
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  assert.equal(cleared, 1);
+
+  sample.reject(new Error("late telemetry sample rejection"));
+  await new Promise((resolve) => setTimeout(resolve, 25));
+});
+
+for (const lateOutcome of ["resolve", "reject"] as const) {
+  test(`POSIX late telemetry initialize ${lateOutcome} is absorbed after termination`, async () => {
+    const rootPid = lateOutcome === "resolve" ? 8_103 : 8_104;
+    const initialize = telemetryDeferred<void>();
+    let scheduled = 0;
+    const creating = createPosixProcessTreeSupervisorForTest(
+      { pid: rootPid } as ReturnType<typeof spawn>,
+      "linux",
+      {
+        registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+        tracker: telemetryTracker({ initialize: () => initialize.promise }),
+        scheduleInterval: () => {
+          scheduled += 1;
+          return { unref() {} };
+        },
+        clearScheduledInterval: () => {},
+      },
+    );
+    const supervisor = await telemetryBounded(creating);
+    if (supervisor === TELEMETRY_STALLED) {
+      if (lateOutcome === "resolve") initialize.resolve();
+      else initialize.reject(new Error("release blocking initialize"));
+      await creating.catch(() => undefined);
+      assert.fail(`telemetry initialize ${lateOutcome} delayed registered readiness`);
+    }
+    assert.deepEqual(
+      await supervisor.terminate(),
+      { gone: true, proof: "registered-groups-empty" },
+    );
+    assert.equal(await supervisor.processTreeTelemetryReady, false);
+    if (lateOutcome === "resolve") initialize.resolve();
+    else initialize.reject(new Error("late telemetry initialize rejection"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(supervisor.processTreeRss?.(), undefined);
+    assert.equal(scheduled, 0);
+  });
+}
+
+test("POSIX telemetry failure stays unavailable without delaying registered authority", async () => {
+  for (const failurePoint of ["initialize", "sample"] as const) {
+    const rootPid = failurePoint === "initialize" ? 8_105 : 8_106;
+    const disabled = telemetryDeferred<void>();
+    let scheduledCallback: (() => void) | undefined;
+    const supervisor = await createPosixProcessTreeSupervisorForTest(
+      { pid: rootPid } as ReturnType<typeof spawn>,
+      "linux",
+      {
+        registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+        tracker: telemetryTracker({
+          initialize: failurePoint === "initialize"
+            ? async () => { throw new Error("initialize failed"); }
+            : async () => {},
+          sample: async () => { throw new Error("sample failed"); },
+          disableTelemetry: () => disabled.resolve(),
+        }),
+        scheduleInterval: (callback) => {
+          scheduledCallback = callback;
+          return { unref() {} };
+        },
+        clearScheduledInterval: () => {},
+      },
+    );
+    if (failurePoint === "sample") {
+      assert.ok(scheduledCallback !== undefined);
+      scheduledCallback();
+    }
+    assert.notEqual(await telemetryBounded(disabled.promise), TELEMETRY_STALLED);
+    assert.equal(
+      await supervisor.processTreeTelemetryReady,
+      failurePoint === "sample",
+    );
+    assert.equal(supervisor.processTreeRss?.(), undefined);
+    assert.deepEqual(
+      await supervisor.terminate(),
+      { gone: true, proof: "registered-groups-empty" },
+    );
+  }
+});
+
+test("POSIX telemetry scheduler failure keeps readiness and RSS unavailable", async () => {
+  for (const failurePoint of ["schedule", "unref"] as const) {
+    const rootPid = failurePoint === "schedule" ? 8_107 : 8_108;
+    let cleared = 0;
+    const supervisor = await createPosixProcessTreeSupervisorForTest(
+      { pid: rootPid } as ReturnType<typeof spawn>,
+      "linux",
+      {
+        registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+        tracker: telemetryTracker(),
+        scheduleInterval: () => {
+          if (failurePoint === "schedule") throw new Error("schedule failed");
+          return {
+            unref() { throw new Error("unref failed"); },
+          };
+        },
+        clearScheduledInterval: () => {
+          cleared += 1;
+        },
+      },
+    );
+    assert.equal(await supervisor.processTreeTelemetryReady, false);
+    assert.equal(supervisor.processTreeRss?.(), undefined);
+    assert.equal(cleared, failurePoint === "unref" ? 1 : 0);
+    assert.deepEqual(
+      await supervisor.terminate(),
+      { gone: true, proof: "registered-groups-empty" },
+    );
+  }
+});
+
+test("POSIX telemetry freezes only a complete active RSS receipt at stop", async () => {
+  const rootPid = 8_109;
+  const active = telemetryDeferred<void>();
+  let cleared = 0;
+  const expected = Object.freeze({ baselineBytes: 31, peakBytes: 47 });
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+      tracker: telemetryTracker({
+        initialize: async () => {},
+        processTreeRss: () => expected,
+      }),
+      scheduleInterval: () => {
+        active.resolve();
+        return { unref() {} };
+      },
+      clearScheduledInterval: () => {
+        cleared += 1;
+      },
+    },
+  );
+  assert.notEqual(await telemetryBounded(active.promise), TELEMETRY_STALLED);
+  assert.equal(await supervisor.processTreeTelemetryReady, true);
+  assert.deepEqual(supervisor.processTreeRss?.(), expected);
+  assert.deepEqual(
+    await supervisor.terminate(),
+    { gone: true, proof: "registered-groups-empty" },
+  );
+  assert.deepEqual(supervisor.processTreeRss?.(), expected);
+  assert.equal(cleared, 1);
 });
 
 test("Windows supervisor always performs discovery-free retained-handle cleanup", () => {
@@ -2813,6 +3066,87 @@ function isPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+const TELEMETRY_STALLED = Symbol("telemetry-stalled");
+
+function telemetryDeferred<T>(): Readonly<{
+  promise: Promise<T>;
+  resolve(value?: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+}> {
+  let resolvePromise!: (value: T | PromiseLike<T>) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return {
+    promise,
+    resolve: (value) => resolvePromise(value as T | PromiseLike<T>),
+    reject: rejectPromise,
+  };
+}
+
+async function telemetryBounded<T>(
+  promise: Promise<T>,
+  timeoutMs = 250,
+): Promise<T | typeof TELEMETRY_STALLED> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof TELEMETRY_STALLED>((resolve) => {
+        timer = setTimeout(() => resolve(TELEMETRY_STALLED), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function telemetryTracker(
+  overrides: Partial<TestPosixTelemetryTracker> = {},
+): TestPosixTelemetryTracker {
+  let disabled = false;
+  return {
+    initialize: overrides.initialize ?? (async () => {}),
+    sample: overrides.sample ?? (async () => {}),
+    disableTelemetry: overrides.disableTelemetry ?? (() => {
+      disabled = true;
+    }),
+    telemetryAvailable: overrides.telemetryAvailable ?? (() => !disabled),
+    processTreeRss: overrides.processTreeRss ?? (() => ({
+      baselineBytes: 11,
+      peakBytes: 22,
+    })),
+  };
+}
+
+function telemetryRegisteredSupervisor(
+  rootPid: number,
+  signals: Array<NodeJS.Signals | 0>,
+): RegisteredProcessGroupSupervisor {
+  const rootIdentity = Object.freeze({
+    pid: rootPid,
+    parentPid: process.pid,
+    processGroupId: rootPid,
+    identity: `test:${rootPid}`,
+    startOrder: rootPid,
+  });
+  let livenessProbes = 0;
+  return createRegisteredPosixProcessGroupSupervisor({
+    rootIdentity,
+    inspectIdentity: async () => rootIdentity,
+    signalGroup: (_processGroupId, signal) => {
+      signals.push(signal);
+      if (signal !== 0) return;
+      livenessProbes += 1;
+      if (livenessProbes >= 2) throw errno("ESRCH");
+    },
+    delay: async () => {},
+    terminationGraceMs: 0,
+  });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
