@@ -1939,6 +1939,7 @@ test("macOS identity-only cleanup enforces the 4096-record cap", async () => {
 
 type TestPosixTelemetryTracker = Readonly<{
   initialize(): Promise<void>;
+  registerRoot?(identity: RegisteredProcessGroupIdentity): void;
   sample(): Promise<void>;
   disableTelemetry(): void;
   telemetryAvailable(): boolean;
@@ -1960,9 +1961,14 @@ const createPosixProcessTreeSupervisorForTest = (
           milliseconds: number,
         ) => TestPosixIntervalHandle;
         clearScheduledInterval: (handle: TestPosixIntervalHandle) => void;
+        deferProcessTreeTelemetryStop?: boolean;
       }>,
     ): Promise<Readonly<{
       readonly processTreeTelemetryReady?: Promise<boolean>;
+      registerProcessTreeTelemetryRoot?(
+        identity: RegisteredProcessGroupIdentity,
+      ): void;
+      finishProcessTreeTelemetry?(): void;
       processTreeRss?(): Readonly<{ baselineBytes: number; peakBytes: number }> | undefined;
       terminate(): Promise<ProcessTreeTerminationReceipt>;
     }>>;
@@ -2208,6 +2214,117 @@ test("POSIX telemetry freezes only a complete active RSS receipt at stop", async
   );
   assert.deepEqual(supervisor.processTreeRss?.(), expected);
   assert.equal(cleared, 1);
+});
+
+test("POSIX benchmark telemetry roots preserve baseline and require a covering post-registration sample", async () => {
+  const rootPid = 8_115;
+  const firstSample = telemetryDeferred<void>();
+  const secondSample = telemetryDeferred<void>();
+  const sampleStarted = [telemetryDeferred<void>(), telemetryDeferred<void>()];
+  const registeredRoots: RegisteredProcessGroupIdentity[] = [];
+  let scheduledCallback: (() => void) | undefined;
+  let sampleCalls = 0;
+  let peakBytes = 47;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+      tracker: telemetryTracker({
+        initialize: async () => {},
+        registerRoot: (identity) => { registeredRoots.push(identity); },
+        sample: () => {
+          const call = sampleCalls;
+          sampleCalls += 1;
+          sampleStarted[call]!.resolve();
+          return call === 0 ? firstSample.promise : secondSample.promise;
+        },
+        processTreeRss: () => ({ baselineBytes: 31, peakBytes }),
+      }),
+      scheduleInterval: (callback) => {
+        scheduledCallback = callback;
+        return { unref() {} };
+      },
+      clearScheduledInterval: () => {},
+      deferProcessTreeTelemetryStop: true,
+    },
+  );
+  assert.equal(await supervisor.processTreeTelemetryReady, true);
+  assert.deepEqual(supervisor.processTreeRss?.(), { baselineBytes: 31, peakBytes: 47 });
+  assert.ok(scheduledCallback !== undefined);
+  scheduledCallback();
+  await sampleStarted[0]!.promise;
+  const nested = Object.freeze({
+    pid: 8_215,
+    parentPid: rootPid,
+    processGroupId: 8_215,
+    identity: "nested:8215",
+    startOrder: 8_215,
+  });
+  supervisor.registerProcessTreeTelemetryRoot!(nested);
+  assert.deepEqual(registeredRoots, [nested]);
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  assert.throws(() => supervisor.registerProcessTreeTelemetryRoot!(nested));
+
+  firstSample.resolve();
+  await sampleStarted[1]!.promise;
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  peakBytes = 96;
+  secondSample.resolve();
+  await waitFor(() => supervisor.processTreeRss?.()?.peakBytes === 96);
+  assert.deepEqual(supervisor.processTreeRss?.(), { baselineBytes: 31, peakBytes: 96 });
+
+  assert.deepEqual(await supervisor.terminate(), {
+    gone: true,
+    proof: "registered-groups-empty",
+  });
+  assert.deepEqual(supervisor.processTreeRss?.(), { baselineBytes: 31, peakBytes: 96 });
+  supervisor.finishProcessTreeTelemetry!();
+  supervisor.finishProcessTreeTelemetry!();
+  assert.deepEqual(supervisor.processTreeRss?.(), { baselineBytes: 31, peakBytes: 96 });
+});
+
+test("POSIX benchmark telemetry finalizer never freezes an uncovered registered-root generation", async () => {
+  const rootPid = 8_116;
+  const sample = telemetryDeferred<void>();
+  const sampleStarted = telemetryDeferred<void>();
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+      tracker: telemetryTracker({
+        initialize: async () => {},
+        registerRoot: () => {},
+        sample: () => {
+          sampleStarted.resolve();
+          return sample.promise;
+        },
+        processTreeRss: () => ({ baselineBytes: 41, peakBytes: 99 }),
+      }),
+      scheduleInterval: () => ({ unref() {} }),
+      clearScheduledInterval: () => {},
+      deferProcessTreeTelemetryStop: true,
+    },
+  );
+  await supervisor.processTreeTelemetryReady;
+  supervisor.registerProcessTreeTelemetryRoot!(Object.freeze({
+    pid: 8_216,
+    parentPid: rootPid,
+    processGroupId: 8_216,
+    identity: "nested:8216",
+    startOrder: 8_216,
+  }));
+  await sampleStarted.promise;
+  assert.deepEqual(await supervisor.terminate(), {
+    gone: true,
+    proof: "registered-groups-empty",
+  });
+  supervisor.finishProcessTreeTelemetry!();
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  sample.resolve();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  assert.equal(supervisor.processTreeRss?.(), undefined);
 });
 
 test("POSIX termination retries after an unverified receipt and caches later proof", async () => {
@@ -2480,6 +2597,34 @@ test("document child client makes a waiting heavy request abortable and runs one
     assert.equal(secondSnapshot.takeCalls, 0);
     assert.equal(secondSnapshot.cleanupCalls, 1);
     assert.deepEqual(await first, { format: "unknown" });
+    assert.equal(gate.activeCount, 0);
+  } finally {
+    firstOwned.cleanup();
+    secondOwned.cleanup();
+  }
+});
+
+test("one reused document child client serializes two child-eligible registration transport requests", async () => {
+  const gate = new HeavyChildGate();
+  const client = childClient("slow", gate, 100);
+  const firstOwned = createOwnedFiles();
+  const secondOwned = createOwnedFiles();
+  try {
+    const first = client.run(
+      detectRequest("registration-sequential-first"),
+      spoolSnapshot(firstOwned.inputFd, 3),
+      { deadlineMs: 5_000 },
+    );
+    const second = client.run(
+      detectRequest("registration-sequential-second"),
+      spoolSnapshot(secondOwned.inputFd, 3),
+      { deadlineMs: 5_000 },
+    );
+    await waitFor(() => gate.activeCount === 1 &&
+      (gate as unknown as { queuedCount: number }).queuedCount === 1);
+    assert.deepEqual(await first, { format: "unknown" });
+    assert.equal(gate.activeCount, 1);
+    assert.deepEqual(await second, { format: "unknown" });
     assert.equal(gate.activeCount, 0);
   } finally {
     firstOwned.cleanup();
@@ -3267,6 +3412,7 @@ function telemetryTracker(
   let disabled = false;
   return {
     initialize: overrides.initialize ?? (async () => {}),
+    registerRoot: overrides.registerRoot ?? (() => {}),
     sample: overrides.sample ?? (async () => {}),
     disableTelemetry: overrides.disableTelemetry ?? (() => {
       disabled = true;

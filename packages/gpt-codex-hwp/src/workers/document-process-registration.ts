@@ -6,6 +6,15 @@ import {
   readSync,
   writeSync,
 } from "node:fs";
+import { performance } from "node:perf_hooks";
+
+import {
+  normalizeProcessTreeTerminationReceipt,
+  unverifiedTermination,
+  type ProcessTreeTerminationReceipt,
+  type RegisteredProcessGroupSupervisor,
+  type UnverifiedTerminationReason,
+} from "./registered-process-supervisor.js";
 
 export const DOCUMENT_START_DESCRIPTOR = 7;
 export const BENCHMARK_REGISTRATION_DESCRIPTOR = 8;
@@ -28,6 +37,16 @@ export interface AckFrame {
   readonly type: "ack";
   readonly nonce: string;
   readonly status: "accepted" | "rejected";
+}
+
+export type RegistrationCoordinatorState = "open" | "closing" | "sealed" | "failed";
+
+export interface ProcessRegistrationCoordinator {
+  readonly state: RegistrationCoordinatorState;
+  start(): void;
+  beginClosing(): Promise<void>;
+  seal(): Promise<void>;
+  terminateRegisteredGroups(): Promise<ProcessTreeTerminationReceipt>;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -77,6 +96,337 @@ export function encodeAckFrame(frame: AckFrame): Uint8Array {
   } catch {
     throw new Error("invalid ack frame");
   }
+}
+
+export function createProcessRegistrationCoordinator(options: Readonly<{
+  casePid: number;
+  registrationInput: NodeJS.ReadableStream;
+  acknowledgementOutput: NodeJS.WritableStream;
+  supervisor: RegisteredProcessGroupSupervisor;
+  caseExited: Promise<void>;
+  deadlineAt: number;
+}>): ProcessRegistrationCoordinator {
+  if (!isSafePositiveInteger(options.casePid) ||
+    !Number.isFinite(options.deadlineAt) ||
+    options.deadlineAt <= performance.now()) {
+    throw new Error("invalid registration coordinator options");
+  }
+  let state: RegistrationCoordinatorState = "open";
+  let started = false;
+  let closingRequested = false;
+  let readableEnded = false;
+  let readableClosed = false;
+  let caseExited = false;
+  let channelBytes = 0;
+  let pendingFrame = Buffer.alloc(0);
+  let inFlightRegistrations = 0;
+  let retainedGroups = 0;
+  let poisonReason: UnverifiedTerminationReason | undefined;
+  let queueTail: Promise<void> = Promise.resolve();
+  let authorityCleanupTail: Promise<void> = Promise.resolve();
+  let sealPromise: Promise<void> | undefined;
+  let pendingAckReject: ((error: Error) => void) | undefined;
+  const nonces = new Set<string>();
+  const pids = new Set<number>();
+  const registrationSettlements = new Set<Promise<void>>();
+  let resolveReadableEnd!: () => void;
+  const readableEnd = new Promise<void>((resolvePromise) => {
+    resolveReadableEnd = resolvePromise;
+  });
+  const remaining = Math.max(0, options.deadlineAt - performance.now());
+  const deadlineTimer = setTimeout(() => {
+    fail("deadline");
+  }, remaining);
+  deadlineTimer.unref();
+
+  const onAcknowledgementError = (error: Error): void => {
+    pendingAckReject?.(error);
+    fail("channel");
+  };
+  const onAcknowledgementClose = (): void => {
+    options.acknowledgementOutput.removeListener("error", onAcknowledgementError);
+  };
+  options.acknowledgementOutput.on("error", onAcknowledgementError);
+  options.acknowledgementOutput.once("close", onAcknowledgementClose);
+
+  void options.caseExited.then(
+    () => { caseExited = true; },
+    () => { fail("channel"); },
+  ).catch(() => { fail("channel"); });
+
+  const enqueue = (operation: () => void | Promise<void>): Promise<void> => {
+    const result = queueTail.then(operation);
+    queueTail = result.catch(() => {});
+    return result;
+  };
+  const currentState = (): RegistrationCoordinatorState => state;
+
+  const runAcknowledgementOperation = (
+    operation: (settle: (error?: Error | null) => void) => void,
+  ): Promise<void> => bounded(new Promise<void>((resolvePromise, rejectPromise) => {
+      let settled = false;
+      const settle = (error?: Error | null): void => {
+        if (settled) return;
+        settled = true;
+        if (pendingAckReject === rejectAck) pendingAckReject = undefined;
+        if (error === undefined || error === null) resolvePromise();
+        else rejectPromise(error);
+      };
+      const rejectAck = (error: Error): void => settle(error);
+      pendingAckReject = rejectAck;
+      try {
+        operation(settle);
+      } catch (error: unknown) {
+        settle(error instanceof Error ? error : new Error("ACK write failed"));
+      }
+    }));
+
+  const writeAcknowledgement = (frame: AckFrame): Promise<void> =>
+    runAcknowledgementOperation((settle) => {
+      options.acknowledgementOutput.write(
+        Buffer.from(encodeAckFrame(frame)),
+        (error?: Error | null) => settle(error),
+      );
+    });
+
+  const scheduleAuthorityCleanup = (): void => {
+    authorityCleanupTail = authorityCleanupTail.then(async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        let receipt: ProcessTreeTerminationReceipt;
+        try {
+          receipt = normalizeProcessTreeTerminationReceipt(
+            await options.supervisor.terminate(),
+          );
+        } catch {
+          receipt = unverifiedTermination("termination");
+        }
+        if (receipt.gone === true && receipt.proof === "registered-groups-empty") return;
+      }
+    }).catch(() => {
+      // Retention remains owned and a later public termination can retry authority.
+    });
+  };
+
+  const reserveAndQueue = (bytes: Buffer): void => {
+    if (state === "failed" || state === "sealed") return;
+    let frame: RegisterFrame;
+    try {
+      frame = parseRegisterFrame(bytes);
+    } catch {
+      fail("channel");
+      return;
+    }
+    if (frame.parentPid !== options.casePid ||
+      nonces.has(frame.nonce) || pids.has(frame.pid) ||
+      nonces.size >= MAX_REGISTERED_DOCUMENT_GROUPS ||
+      inFlightRegistrations !== 0) {
+      fail("channel");
+      return;
+    }
+    nonces.add(frame.nonce);
+    pids.add(frame.pid);
+    inFlightRegistrations += 1;
+    void enqueue(async () => {
+      let retained = false;
+      try {
+        if (state === "failed" || state === "sealed") return;
+        const expectedParentPid = state === "open" ? options.casePid : undefined;
+        const registration = Promise.resolve().then(() =>
+          options.supervisor.registerRoot(frame.pid, expectedParentPid));
+        const ownedRegistration = registration.then((identity) => {
+          retained = true;
+          retainedGroups += 1;
+          if (state === "failed") scheduleAuthorityCleanup();
+          return identity;
+        });
+        let settlement!: Promise<void>;
+        settlement = ownedRegistration.then(
+          () => { registrationSettlements.delete(settlement); },
+          () => { registrationSettlements.delete(settlement); },
+        );
+        registrationSettlements.add(settlement);
+        await bounded(ownedRegistration);
+        if (currentState() === "failed" || currentState() === "sealed") {
+          scheduleAuthorityCleanup();
+          throw new Error("registration coordinator poisoned after retention");
+        }
+        const status = state === "open" ? "accepted" : "rejected";
+        await writeAcknowledgement({
+          schemaVersion: 1,
+          type: "ack",
+          nonce: frame.nonce,
+          status,
+        });
+      } catch {
+        fail(poisonReason ?? (retained ? "channel" : "identity"));
+        if (retained) scheduleAuthorityCleanup();
+        throw new Error("registration coordinator job failed");
+      } finally {
+        inFlightRegistrations -= 1;
+      }
+    });
+  };
+
+  const onData = (chunk: string | Buffer | Uint8Array): void => {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    channelBytes += bytes.byteLength;
+    if (channelBytes > MAX_REGISTRATION_CHANNEL_BYTES) {
+      fail("channel");
+      return;
+    }
+    if (state === "failed") return;
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const newline = bytes.indexOf(0x0a, offset);
+      const end = newline === -1 ? bytes.byteLength : newline + 1;
+      const segment = bytes.subarray(offset, end);
+      if (pendingFrame.byteLength + segment.byteLength > MAX_REGISTRATION_FRAME_BYTES) {
+        fail("channel");
+        return;
+      }
+      pendingFrame = Buffer.concat([pendingFrame, segment]);
+      offset = end;
+      if (newline !== -1) {
+        const complete = pendingFrame;
+        pendingFrame = Buffer.alloc(0);
+        reserveAndQueue(complete);
+        if (currentState() === "failed") return;
+      }
+    }
+  };
+  const onEnd = (): void => {
+    readableEnded = true;
+    if (pendingFrame.byteLength !== 0) fail("channel");
+    resolveReadableEnd();
+  };
+  const onError = (): void => { fail("channel"); };
+  const onClose = (): void => {
+    readableClosed = true;
+    if (!readableEnded) fail("channel");
+  };
+
+  function fail(reason: UnverifiedTerminationReason): void {
+    poisonReason ??= reason;
+    state = "failed";
+    clearTimeout(deadlineTimer);
+    pendingAckReject?.(new Error("registration acknowledgement channel failed"));
+    try {
+      const destroy = (options.acknowledgementOutput as { destroy?: (error?: Error) => void })
+        .destroy;
+      destroy?.call(options.acknowledgementOutput);
+    } catch {
+      // The channel is already permanently unverified.
+    }
+  }
+
+  function bounded<Value>(promise: Promise<Value>): Promise<Value> {
+    const milliseconds = options.deadlineAt - performance.now();
+    if (milliseconds <= 0) {
+      fail("deadline");
+      return Promise.reject(new Error("registration coordinator deadline exceeded"));
+    }
+    return new Promise<Value>((resolvePromise, rejectPromise) => {
+      const timer = setTimeout(() => {
+        fail("deadline");
+        rejectPromise(new Error("registration coordinator deadline exceeded"));
+      }, milliseconds);
+      timer.unref();
+      void promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolvePromise(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          rejectPromise(error);
+        },
+      );
+    });
+  }
+
+  const coordinator: ProcessRegistrationCoordinator = {
+    get state() { return state; },
+    start(): void {
+      if (started) return;
+      started = true;
+      options.registrationInput.on("data", onData);
+      options.registrationInput.once("end", onEnd);
+      options.registrationInput.once("error", onError);
+      options.registrationInput.once("close", onClose);
+    },
+    beginClosing(): Promise<void> {
+      closingRequested = true;
+      return enqueue(() => {
+        if (state === "failed") {
+          throw new Error("registration coordinator failed");
+        }
+        if (state === "open") state = "closing";
+      });
+    },
+    seal(): Promise<void> {
+      if (sealPromise !== undefined) return sealPromise;
+      if (!started || !closingRequested) {
+        return Promise.reject(new Error("registration coordinator is not closing"));
+      }
+      if (state === "failed") {
+        return Promise.reject(new Error("registration coordinator failed"));
+      }
+      sealPromise = bounded((async () => {
+        await readableEnd;
+        await options.caseExited;
+        caseExited = true;
+        await queueTail;
+        if (currentState() === "failed" || !readableEnded || readableClosed && !readableEnded ||
+          pendingFrame.byteLength !== 0 || inFlightRegistrations !== 0 || !caseExited) {
+          throw new Error("registration coordinator failed to seal");
+        }
+        await runAcknowledgementOperation((settle) => {
+            const end = (options.acknowledgementOutput as {
+              end?: (callback?: () => void) => void;
+            }).end;
+            if (end === undefined) {
+              settle();
+              return;
+            }
+            end.call(options.acknowledgementOutput, () => settle());
+        });
+        state = "sealed";
+        clearTimeout(deadlineTimer);
+      })()).catch((error: unknown) => {
+        fail(poisonReason ?? "channel");
+        throw error;
+      });
+      return sealPromise;
+    },
+    async terminateRegisteredGroups(): Promise<ProcessTreeTerminationReceipt> {
+      try {
+        await bounded(Promise.all([
+          queueTail,
+          ...registrationSettlements,
+        ]));
+      } catch {
+        // Deadline/channel poison keeps proof unverified, but authority still runs.
+      }
+      let receipt: ProcessTreeTerminationReceipt;
+      if (retainedGroups === 0 && state === "sealed") {
+        receipt = Object.freeze({ gone: true, proof: "registered-groups-empty" });
+      } else {
+        try {
+          receipt = normalizeProcessTreeTerminationReceipt(
+            await options.supervisor.terminate(),
+          );
+        } catch {
+          receipt = unverifiedTermination("termination");
+        }
+      }
+      if (poisonReason !== undefined || state === "failed") {
+        return unverifiedTermination(poisonReason ?? "channel");
+      }
+      if (state !== "sealed") return unverifiedTermination("registration");
+      return receipt;
+    },
+  };
+  return coordinator;
 }
 
 export function runDocumentChildStartGate(): void {

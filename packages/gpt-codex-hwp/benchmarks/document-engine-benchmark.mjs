@@ -15,12 +15,19 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 
 import { generatePaddedHwpx } from "./generate-padded-hwpx.mjs";
+import { createProcessRegistrationCoordinator } from "../src/workers/document-process-registration.ts";
+import {
+  createRegisteredPosixProcessGroupSupervisor,
+  normalizeProcessTreeTerminationReceipt,
+  unverifiedTermination,
+} from "../src/workers/registered-process-supervisor.ts";
 
 export const APPROVED_BENCHMARK_SIZES_MIB = Object.freeze([10, 100, 256, 512]);
 export const BENCHMARK_CONCURRENCY = 1;
-export const BENCHMARK_RECEIPT_SCHEMA_VERSION = 1;
+export const BENCHMARK_RECEIPT_SCHEMA_VERSION = 2;
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, "..", "..");
@@ -48,6 +55,7 @@ const RECEIPT_KEYS = [
   "actualBytes",
   "arch",
   "copiedBytes",
+  "dispatchStarted",
   "elapsedMs",
   "errorCode",
   "executionMode",
@@ -62,6 +70,7 @@ const RECEIPT_KEYS = [
   "sourceSha256",
   "status",
 ];
+const CASE_OUTCOME_KEYS = ["errorCode", "responseBytes", "status"];
 
 export function parseBenchmarkArguments(args, options = {}) {
   if (!Array.isArray(args) || args.length !== 4
@@ -183,6 +192,7 @@ export function validateBenchmarkReceipt(value) {
     || !safeNonNegative(value.elapsedMs)
     || !safeNonNegative(value.peakRssDeltaBytes)
     || !safeNonNegative(value.copiedBytes)
+    || typeof value.dispatchStarted !== "boolean"
     || !safeNonNegative(value.responseBytes)
     || !hashOrNull(value.outputSha256)
     || !hashOrNull(value.sourceSha256)
@@ -198,13 +208,18 @@ export function validateBenchmarkReceipt(value) {
     ? value.actualBytes > 0
       && value.actualBytes <= requestedBytes
       && requestedBytes - value.actualBytes <= 4096
-      && value.copiedBytes === value.actualBytes
+      && value.copiedBytes <= value.actualBytes
     : value.status === "failed"
+      && value.dispatchStarted === false
       && value.actualBytes === 0
       && value.copiedBytes === 0;
   const statusSemantics = value.status === "passed"
-    ? value.errorCode === null && value.responseBytes > 0
-    : value.responseBytes === 0;
+    ? value.dispatchStarted === true
+      && value.copiedBytes === value.actualBytes
+      && value.errorCode === null
+      && value.responseBytes > 0
+    : value.responseBytes === 0
+      && (value.dispatchStarted || value.copiedBytes === 0);
   if (value.executionMode !== expectedMode
     || value.outputSha256 !== null
     || !sourceSemantics
@@ -440,7 +455,13 @@ async function runFreshCase(sizeMiB, outputParent) {
     let receipt;
     if (result.status === "passed") {
       try {
-        receipt = validateBenchmarkReceipt(JSON.parse(result.stdout.trim()));
+        const outcome = validateCaseOutcome(JSON.parse(result.stdout.trim()));
+        receipt = await parentCaseReceipt(
+          sizeMiB,
+          owner.path,
+          outcome,
+          result.caseMetrics,
+        );
       } catch {
         receipt = await parentFailureReceipt(
           sizeMiB,
@@ -480,7 +501,10 @@ export async function executeBounded(
       shell: false,
       detached: process.platform !== "win32",
       env,
-      stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"],
+    });
+    const caseExited = new Promise((resolveExit) => {
+      child.once("close", () => resolveExit());
     });
     let stdout = "";
     let stderr = "";
@@ -490,7 +514,14 @@ export async function executeBounded(
     let telemetryBytes = 0;
     let telemetryBuffer = "";
     let caseMetrics = null;
-    const finish = (status, processGone = true) => {
+    let telemetryEnded = false;
+    let registrationCoordinator;
+    let coordinatorSetup;
+    let resolveTelemetryEnd;
+    const telemetryEnd = new Promise((resolveEnd) => {
+      resolveTelemetryEnd = resolveEnd;
+    });
+    const finish = (status, processGone = true, mergedMetrics = null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -500,17 +531,81 @@ export async function executeBounded(
         stderr,
         processGone,
         elapsedMs: Math.max(1, Math.round(performance.now() - started)),
-        caseMetrics,
+        caseMetrics: mergedMetrics,
       });
     };
     const supervisor = supervisorFactory === undefined
       ? import("../src/workers/document-child-client.ts")
-        .then(({ superviseDocumentProcessTree }) => superviseDocumentProcessTree(child))
+        .then(({ superviseDocumentProcessTree }) => superviseDocumentProcessTree(child, {
+          deferProcessTreeTelemetryStop: process.platform !== "win32",
+        }))
       : Promise.resolve().then(() => supervisorFactory(child));
+    const ensureRegistrationCoordinator = (caseSupervisor) => {
+      if (process.platform === "win32") return Promise.resolve(undefined);
+      coordinatorSetup ??= (async () => {
+        if (typeof caseSupervisor.registerProcessTreeTelemetryRoot !== "function") {
+          throw benchmarkError("BENCHMARK_TELEMETRY_UNAVAILABLE");
+        }
+        if (child.pid === undefined || child.stdio[5] === null || child.stdio[6] === null) {
+          throw benchmarkError("BENCHMARK_TERMINATION_FAILED");
+        }
+        const { snapshotRegisteredPosixProcessGroupIdentity } = await import(
+          "../src/workers/document-child-client.ts"
+        );
+        const nestedAuthority = createRegisteredPosixProcessGroupSupervisor({
+          inspectIdentity: (pid) => snapshotRegisteredPosixProcessGroupIdentity(
+            pid,
+            process.platform,
+          ),
+        });
+        const nestedWithTelemetry = {
+          async registerRoot(pid, expectedParentPid) {
+            const identity = await nestedAuthority.registerRoot(pid, expectedParentPid);
+            caseSupervisor.registerProcessTreeTelemetryRoot(identity);
+            return identity;
+          },
+          terminate: () => nestedAuthority.terminate(),
+        };
+        registrationCoordinator = createProcessRegistrationCoordinator({
+          casePid: child.pid,
+          registrationInput: child.stdio[5],
+          acknowledgementOutput: child.stdio[6],
+          supervisor: nestedWithTelemetry,
+          caseExited,
+          deadlineAt: started + timeoutMs,
+        });
+        registrationCoordinator.start();
+        return registrationCoordinator;
+      })();
+      return coordinatorSetup;
+    };
     const stop = (status) => {
       stopping ??= (async () => {
-        const gone = await terminateCaseProcessTree(child, supervisor);
-        finish(gone ? status : "termination-failed", gone);
+        const termination = await terminateCaseProcessTree(
+          child,
+          supervisor,
+          ensureRegistrationCoordinator,
+        );
+        await Promise.race([
+          telemetryEnd,
+          new Promise((resolveWait) => setTimeout(resolveWait, 1_000)),
+        ]);
+        const rss = termination.processTreeRss;
+        const completeTelemetry = telemetryEnded
+          && telemetryBuffer.length === 0
+          && caseMetrics !== null
+          && rss !== undefined;
+        const mergedMetrics = completeTelemetry
+          ? Object.freeze({
+              ...caseMetrics,
+              peakRssDeltaBytes: Math.max(0, rss.peakBytes - rss.baselineBytes),
+            })
+          : null;
+        finish(
+          termination.gone && completeTelemetry ? status : "termination-failed",
+          termination.gone,
+          mergedMetrics,
+        );
       })();
       return stopping;
     };
@@ -545,11 +640,14 @@ export async function executeBounded(
         try {
           const metric = JSON.parse(frame);
           if (metric === null || typeof metric !== "object" || Array.isArray(metric)
-            || Object.keys(metric).sort().join(",") !== "elapsedMs,peakRssDeltaBytes"
+            || Object.keys(metric).sort().join(",") !== "copiedBytes,dispatchStarted,elapsedMs"
             || !safeNonNegative(metric.elapsedMs)
-            || !safeNonNegative(metric.peakRssDeltaBytes)
+            || !safeNonNegative(metric.copiedBytes)
+            || typeof metric.dispatchStarted !== "boolean"
+            || (!metric.dispatchStarted && metric.copiedBytes !== 0)
             || (caseMetrics !== null && (metric.elapsedMs < caseMetrics.elapsedMs
-              || metric.peakRssDeltaBytes < caseMetrics.peakRssDeltaBytes))) {
+              || metric.copiedBytes < caseMetrics.copiedBytes
+              || (caseMetrics.dispatchStarted && !metric.dispatchStarted)))) {
             throw benchmarkError("BENCHMARK_TELEMETRY_INVALID");
           }
           caseMetrics = Object.freeze(metric);
@@ -560,21 +658,42 @@ export async function executeBounded(
         }
       }
     });
-    telemetry.once("error", () => { void stop("failed"); });
+    const onTelemetryEnd = () => {
+      if (telemetryEnded) return;
+      telemetryEnded = true;
+      resolveTelemetryEnd();
+    };
+    telemetry.once("end", onTelemetryEnd);
+    telemetry.once("close", onTelemetryEnd);
+    telemetry.once("error", () => {
+      overflow = true;
+      onTelemetryEnd();
+      void stop("failed");
+    });
     child.once("error", () => { void stop("failed"); });
     child.once("close", (code, signal) => {
       if (stopping !== undefined) return;
       void stop(!overflow && code === 0 && signal === null ? "passed" : "failed");
     });
-    void supervisor.then(() => {
+    void supervisor.then(async (caseSupervisor) => {
+      await ensureRegistrationCoordinator(caseSupervisor);
+      const ready = await exactTelemetryReady(
+        caseSupervisor.processTreeTelemetryReady,
+        Math.min(5_000, Math.max(1, started + timeoutMs - performance.now() - 25)),
+      );
       const control = child.stdio[3];
-      if (control === null || typeof control.end !== "function") {
+      if (ready !== true || stopping !== undefined || control === null ||
+        typeof control.end !== "function") {
+        closeCaseControl(control);
         void stop("failed");
         return;
       }
       control.once("error", () => { void stop("failed"); });
       control.end(`${JSON.stringify(controlFrame)}\n`);
-    }).catch(() => { void stop("failed"); });
+    }).catch(() => {
+      closeCaseControl(child.stdio[3]);
+      void stop("failed");
+    });
     const timer = setTimeout(() => {
       void stop("timeout");
     }, timeoutMs);
@@ -582,20 +701,132 @@ export async function executeBounded(
   });
 }
 
-async function terminateCaseProcessTree(child, supervisorPromise) {
-  if (child.pid === undefined) return true;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+async function terminateCaseProcessTree(
+  child,
+  supervisorPromise,
+  ensureRegistrationCoordinator,
+) {
+  if (child.pid === undefined) return { gone: true };
+  let supervisor;
+  try {
+    supervisor = await supervisorPromise;
+  } catch {
+    await genericProcessTreeCleanup(child.pid);
+    return { gone: false };
+  }
+
+  let coordinator;
+  let coordinatorReady = process.platform === "win32";
+  let rootReceipt = unverifiedTermination("termination");
+  let nestedReceipt = process.platform === "win32"
+    ? { gone: true, proof: "registered-groups-empty" }
+    : unverifiedTermination("registration");
+  let registrationDrained = process.platform === "win32";
+  let processTreeRss;
+  try {
     try {
-      const supervisor = await supervisorPromise;
-      if (await supervisor.terminate()) return true;
+      coordinator = await ensureRegistrationCoordinator(supervisor);
+      coordinatorReady = process.platform === "win32" || coordinator !== undefined;
+      await coordinator?.beginClosing();
     } catch {
-      const { terminateDocumentProcessTreeByPid } = await import(
-        "../src/workers/document-child-client.ts"
-      );
-      if (await terminateDocumentProcessTreeByPid(child.pid)) return true;
+      coordinatorReady = false;
+    }
+
+    rootReceipt = await terminateAuthority(
+      supervisor,
+      process.platform === "win32" ? "windows-job-empty" : "registered-groups-empty",
+      child.pid,
+    );
+
+    if (coordinator !== undefined) {
+      try {
+        await coordinator.seal();
+        registrationDrained = coordinator.state === "sealed";
+      } catch {
+        registrationDrained = false;
+      }
+      try {
+        nestedReceipt = normalizeProcessTreeTerminationReceipt(
+          await coordinator.terminateRegisteredGroups(),
+          "registration",
+        );
+      } catch {
+        nestedReceipt = unverifiedTermination("registration");
+      }
+    }
+  } finally {
+    try {
+      supervisor.finishProcessTreeTelemetry?.();
+      processTreeRss = supervisor.processTreeRss?.();
+    } catch {
+      processTreeRss = undefined;
     }
   }
-  return false;
+
+  const rootGone = rootReceipt.gone === true
+    && rootReceipt.proof === (process.platform === "win32"
+      ? "windows-job-empty"
+      : "registered-groups-empty");
+  const nestedGone = nestedReceipt.gone === true
+    && nestedReceipt.proof === "registered-groups-empty";
+  return {
+    gone: rootGone && coordinatorReady && registrationDrained && nestedGone,
+    processTreeRss,
+  };
+}
+
+async function terminateAuthority(supervisor, expectedProof, pid) {
+  let receipt = unverifiedTermination("termination");
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      receipt = normalizeProcessTreeTerminationReceipt(
+        await supervisor.terminate(),
+        "termination",
+      );
+    } catch {
+      receipt = unverifiedTermination("termination");
+    }
+    if (receipt.gone === true && receipt.proof === expectedProof) return receipt;
+    await genericProcessTreeCleanup(pid);
+  }
+  return receipt.gone === true
+    ? unverifiedTermination("termination")
+    : receipt;
+}
+
+async function genericProcessTreeCleanup(pid) {
+  const { terminateDocumentProcessTreeByPid } = await import(
+    "../src/workers/document-child-client.ts"
+  );
+  await terminateDocumentProcessTreeByPid(pid).catch(() => false);
+}
+
+async function exactTelemetryReady(readiness, timeoutMs) {
+  if (readiness === undefined) return false;
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve(readiness).then(
+        (value) => value === true,
+        () => false,
+      ),
+      new Promise((resolveWait) => {
+        timer = setTimeout(() => resolveWait(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function closeCaseControl(control) {
+  if (control === null || control === undefined) return;
+  control.on?.("error", () => {});
+  try {
+    control.end?.();
+  } catch {
+    try { control.destroy?.(); } catch {}
+  }
 }
 
 async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
@@ -603,20 +834,22 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
   const requestedBytes = sizeMiB * 1024 * 1024;
   await assertCaseBoundary(ownedRoot, ownedCase);
   const sourcePath = join(ownedCase, "source.hwpx");
-  let source;
   const started = telemetry.started;
-  let receipt;
-  source = await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes });
-    const { createDocumentEngineFacade } = await import("../src/shared/document-engine.ts");
+  let outcome;
+  const source = await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes });
+  await writeCaseMetadata(ownedCase, source);
+  let facade;
+  try {
+    facade = await createCaseFacade();
     const { openDocumentSnapshot } = await import("../src/shared/document-snapshot.ts");
     const snapshot = await openDocumentSnapshot(sourcePath, {
       testHooks: { spoolRoot: ownedCase },
     });
-    await writeCaseMetadata(ownedCase, source);
     let responseBytes = 0;
     try {
-      const result = await createDocumentEngineFacade().detect(snapshot, {
+      const result = await facade.detect(snapshot, {
         deadlineMs: Math.max(1, CASE_DEADLINE_MS - Math.ceil(performance.now() - started) - 30_000),
+        onMetrics: (metrics) => telemetry.observeMetrics(metrics),
       });
       if (result.payload.format !== "hwpx") {
         throw Object.assign(new Error("unexpected format"), { code: "ENGINE_PROTOCOL_ERROR" });
@@ -624,40 +857,42 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
       responseBytes = Buffer.byteLength(JSON.stringify(result.payload));
     } catch (error) {
       const errorCode = safeEngineErrorCode(error);
-      receipt = baseReceipt({
-        sizeMiB,
-        source,
-        metrics: telemetry.snapshot(),
+      outcome = {
         responseBytes: 0,
         status: errorCode === "ENGINE_RESOURCE_LIMIT" || errorCode === "ENGINE_OOM"
           ? "resource-refused"
           : "failed",
         errorCode,
-      });
+      };
     }
-    if (receipt === undefined) {
-      receipt = baseReceipt({
-        sizeMiB,
-        source,
-        metrics: telemetry.snapshot(),
+    if (outcome === undefined) {
+      outcome = {
         responseBytes,
         status: "passed",
         errorCode: null,
-      });
+      };
     }
-    try {
-      await runNormalProbe(ownedCase);
-    } catch {
-      receipt = baseReceipt({
-        sizeMiB,
-        source,
-        metrics: telemetry.snapshot(),
-        responseBytes: 0,
-        status: "failed",
-        errorCode: "BENCHMARK_PROBE_FAILED",
-      });
-    }
-    return validateBenchmarkReceipt(receipt);
+  } catch (error) {
+    const errorCode = safeEngineErrorCode(error);
+    outcome = {
+      responseBytes: 0,
+      status: errorCode === "ENGINE_RESOURCE_LIMIT" || errorCode === "ENGINE_OOM"
+        ? "resource-refused"
+        : "failed",
+      errorCode,
+    };
+  }
+  try {
+    if (facade === undefined) throw benchmarkError("BENCHMARK_PROBE_FAILED");
+    await runNormalProbe(ownedCase, facade);
+  } catch {
+    outcome = {
+      responseBytes: 0,
+      status: "failed",
+      errorCode: "BENCHMARK_PROBE_FAILED",
+    };
+  }
+  return validateCaseOutcome(outcome);
 }
 
 async function assertCaseBoundary(ownedRoot, ownedCase) {
@@ -750,6 +985,14 @@ async function writeCaseMetadata(root, source) {
 }
 
 async function parentFailureReceipt(sizeMiB, root, errorCode, metrics) {
+  return parentCaseReceipt(sizeMiB, root, {
+    status: "failed",
+    responseBytes: 0,
+    errorCode,
+  }, metrics?.caseMetrics);
+}
+
+async function parentCaseReceipt(sizeMiB, root, outcome, metrics) {
   let source;
   try {
     const path = join(root, CASE_METADATA_FILENAME);
@@ -762,15 +1005,51 @@ async function parentFailureReceipt(sizeMiB, root, errorCode, metrics) {
   } catch {
     source = { actualBytes: 0, sourceSha256: null };
   }
-  return buildParentFailureReceipt(sizeMiB, errorCode, source, metrics?.caseMetrics);
+  return validateBenchmarkReceipt(buildReceipt(
+    sizeMiB,
+    outcome,
+    source,
+    metrics,
+  ));
 }
 
-async function runNormalProbe(root) {
+async function createCaseFacade() {
+  const [
+    { createDocumentEngineFacade },
+    { createDocumentChildClient },
+    { createIsolatedDocumentEngine, HeavyChildGate },
+    { createDocumentWorkerClient },
+  ] = await Promise.all([
+    import("../src/shared/document-engine.ts"),
+    import("../src/workers/document-child-client.ts"),
+    import("../src/workers/document-execution-policy.ts"),
+    import("../src/workers/document-worker-client.ts"),
+  ]);
+  const heavyChildGate = new HeavyChildGate();
+  const childClient = createDocumentChildClient({
+    childEntry: join(PACKAGE_ROOT, "dist", "workers", "document-child.js"),
+    startGateEntry: join(PACKAGE_ROOT, "dist", "workers", "document-child-start-gate.js"),
+    ...(process.platform === "win32"
+      ? {}
+      : { benchmarkRegistrationDescriptors: { writeFd: 5, ackFd: 6 } }),
+    heavyChildGate,
+  });
+  const workerClient = createDocumentWorkerClient({
+    workerFactory: (options) => new Worker(
+      join(PACKAGE_ROOT, "dist", "workers", "document-worker.js"),
+      options,
+    ),
+  });
+  return createDocumentEngineFacade({
+    isolatedEngine: createIsolatedDocumentEngine({ workerClient, childClient }),
+  });
+}
+
+async function runNormalProbe(root, facade) {
   const path = join(root, "normal-probe.hwpx");
   await generatePaddedHwpx({ outputPath: path, requestedBytes: 128 * 1024 });
-  const { createDocumentEngineFacade } = await import("../src/shared/document-engine.ts");
   const { openDocumentSnapshot } = await import("../src/shared/document-snapshot.ts");
-  const result = await createDocumentEngineFacade().parse(await openDocumentSnapshot(path), {}, {
+  const result = await facade.parse(await openDocumentSnapshot(path), {}, {
     deadlineMs: 30_000,
   });
   if (typeof result.payload.markdown !== "string") {
@@ -778,36 +1057,13 @@ async function runNormalProbe(root) {
   }
 }
 
-function baseReceipt({
-  sizeMiB,
-  source,
-  metrics,
-  responseBytes,
-  status,
-  errorCode,
-}) {
-  return {
-    schemaVersion: BENCHMARK_RECEIPT_SCHEMA_VERSION,
-    platform: process.platform,
-    arch: process.arch,
-    runtime: `node-${process.version}`,
-    requestedMiB: sizeMiB,
-    actualBytes: source.actualBytes,
-    operation: "detectFormat",
-    executionMode: sizeMiB === 10 ? "transferable-worker" : "supervised-child",
-    status,
-    elapsedMs: metrics.elapsedMs,
-    peakRssDeltaBytes: metrics.peakRssDeltaBytes,
-    copiedBytes: source.actualBytes,
-    responseBytes,
-    errorCode,
-    sourceSha256: source.sha256,
-    outputSha256: null,
-  };
-}
-
-export function buildParentFailureReceipt(sizeMiB, errorCode, source, metrics) {
-  if (!safeNonNegative(metrics?.elapsedMs) || !safeNonNegative(metrics?.peakRssDeltaBytes)) {
+function buildReceipt(sizeMiB, outcome, source, metrics) {
+  if (
+    !safeNonNegative(metrics?.elapsedMs) ||
+    !safeNonNegative(metrics?.peakRssDeltaBytes) ||
+    !safeNonNegative(metrics?.copiedBytes) ||
+    typeof metrics?.dispatchStarted !== "boolean"
+  ) {
     throw benchmarkError("BENCHMARK_TELEMETRY_UNAVAILABLE");
   }
   return {
@@ -819,15 +1075,38 @@ export function buildParentFailureReceipt(sizeMiB, errorCode, source, metrics) {
     actualBytes: source.actualBytes,
     operation: "detectFormat",
     executionMode: sizeMiB === 10 ? "transferable-worker" : "supervised-child",
-    status: "failed",
+    status: outcome.status,
     elapsedMs: metrics.elapsedMs,
     peakRssDeltaBytes: metrics.peakRssDeltaBytes,
-    copiedBytes: source.actualBytes,
-    responseBytes: 0,
-    errorCode,
+    copiedBytes: metrics.copiedBytes,
+    dispatchStarted: metrics.dispatchStarted,
+    responseBytes: outcome.responseBytes,
+    errorCode: outcome.errorCode,
     sourceSha256: source.sourceSha256,
     outputSha256: null,
   };
+}
+
+export function buildParentFailureReceipt(sizeMiB, errorCode, source, metrics) {
+  return buildReceipt(sizeMiB, {
+    status: "failed",
+    responseBytes: 0,
+    errorCode,
+  }, source, metrics);
+}
+
+function validateCaseOutcome(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== CASE_OUTCOME_KEYS.join(",")
+    || !["passed", "resource-refused", "failed"].includes(value.status)
+    || !safeNonNegative(value.responseBytes)
+    || !validErrorCode(value.status, value.errorCode)
+    || (value.status === "passed"
+      ? value.responseBytes === 0
+      : value.responseBytes !== 0)) {
+    throw benchmarkError("BENCHMARK_RECEIPT_INVALID");
+  }
+  return Object.freeze(value);
 }
 
 export function benchmarkImplementationInputPaths() {
@@ -871,31 +1150,37 @@ function createCaseTelemetry(fd = 4) {
   const stream = createWriteStream(null, { fd, autoClose: true });
   stream.on("error", () => {});
   const started = performance.now();
-  const baselineRss = process.memoryUsage().rss;
-  let peakRss = baselineRss;
-  const sample = () => {
-    peakRss = Math.max(peakRss, process.memoryUsage().rss);
-  };
+  let copiedBytes = 0;
+  let dispatchStarted = false;
   const snapshot = () => {
-    sample();
     return Object.freeze({
       elapsedMs: Math.max(1, Math.round(performance.now() - started)),
-      peakRssDeltaBytes: Math.max(0, peakRss - baselineRss),
+      copiedBytes,
+      dispatchStarted,
     });
   };
   const emit = () => {
     if (!stream.destroyed) stream.write(`${JSON.stringify(snapshot())}\n`);
   };
-  const sampler = setInterval(sample, 25);
   const reporter = setInterval(emit, 250);
-  sampler.unref();
   reporter.unref();
   emit();
   return Object.freeze({
     started,
     snapshot,
+    observeMetrics(metrics) {
+      if (metrics === null || typeof metrics !== "object" || Array.isArray(metrics)
+        || Object.keys(metrics).join(",") !== "copiedBytes"
+        || !safeNonNegative(metrics.copiedBytes)
+        || metrics.copiedBytes < copiedBytes
+        || (!dispatchStarted && metrics.copiedBytes !== 0)) {
+        throw benchmarkError("BENCHMARK_TELEMETRY_INVALID");
+      }
+      dispatchStarted = true;
+      copiedBytes = metrics.copiedBytes;
+      emit();
+    },
     async close() {
-      clearInterval(sampler);
       clearInterval(reporter);
       emit();
       if (!stream.destroyed) {

@@ -57,6 +57,7 @@ export interface RegisteredPosixProcessGroupDependencies {
 }
 
 const DEFAULT_TERMINATION_GRACE_MS = 100;
+const MAX_REGISTERED_PROCESS_GROUPS = 16;
 
 export function createRegisteredPosixProcessGroupSupervisor(
   dependencies: RegisteredPosixProcessGroupDependencies,
@@ -68,8 +69,14 @@ export function createRegisteredPosixProcessGroupSupervisor(
     new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const terminationGraceMs = dependencies.terminationGraceMs
     ?? DEFAULT_TERMINATION_GRACE_MS;
-  let registered: RegisteredProcessGroupIdentity | undefined;
-  let verifiedReceipt: ProcessTreeTerminationReceipt | undefined;
+  const registered = new Map<number, RegisteredProcessGroupIdentity>();
+  const pendingPids = new Set<number>();
+  const provenAbsent = new Set<string>();
+  let registryGeneration = 0;
+  let verifiedReceipt: Readonly<{
+    generation: number;
+    receipt: ProcessTreeTerminationReceipt;
+  }> | undefined;
   let activeTermination: Promise<ProcessTreeTerminationReceipt> | undefined;
 
   return {
@@ -78,34 +85,60 @@ export function createRegisteredPosixProcessGroupSupervisor(
       pid: number,
       expectedParentPid?: number,
     ): Promise<RegisteredProcessGroupIdentity> {
-      if (registered !== undefined) throw new Error("process group already registered");
       if (!Number.isSafeInteger(pid) || pid <= 0) {
         throw new Error("invalid process group root pid");
       }
-      const before = await dependencies.inspectIdentity(pid);
-      const after = await dependencies.inspectIdentity(pid);
-      if (before === undefined || after === undefined || !sameIdentity(before, after)) {
-        throw new Error("process group root identity unavailable");
+      if (registered.has(pid) || pendingPids.has(pid)) {
+        throw new Error("process group already registered");
       }
-      if (after.pid !== pid || after.processGroupId !== pid) {
-        throw new Error("process group root is not its group leader");
+      if (registered.size + pendingPids.size >= MAX_REGISTERED_PROCESS_GROUPS) {
+        throw new Error("registered process group limit exceeded");
       }
-      if (expectedParentPid !== undefined && after.parentPid !== expectedParentPid) {
-        throw new Error("process group root parent identity mismatch");
+      pendingPids.add(pid);
+      try {
+        const before = await dependencies.inspectIdentity(pid);
+        const after = await dependencies.inspectIdentity(pid);
+        if (before === undefined || after === undefined ||
+          !sameRegistrationIdentity(before, after)) {
+          throw new Error("process group root identity unavailable");
+        }
+        if (after.pid !== pid || after.processGroupId !== pid) {
+          throw new Error("process group root is not its group leader");
+        }
+        if (expectedParentPid !== undefined && after.parentPid !== expectedParentPid) {
+          throw new Error("process group root parent identity mismatch");
+        }
+        if (registered.has(pid)) throw new Error("process group already registered");
+        const retained = Object.freeze({ ...after });
+        registered.set(pid, retained);
+        registryGeneration += 1;
+        verifiedReceipt = undefined;
+        return retained;
+      } finally {
+        pendingPids.delete(pid);
       }
-      registered = Object.freeze({ ...after });
-      return registered;
     },
     terminate(): Promise<ProcessTreeTerminationReceipt> {
-      if (verifiedReceipt?.gone === true) return Promise.resolve(verifiedReceipt);
-      activeTermination ??= terminateRegisteredGroup(
-        registered,
+      if (pendingPids.size === 0 &&
+        verifiedReceipt?.generation === registryGeneration &&
+        verifiedReceipt.receipt.gone === true) {
+        return Promise.resolve(verifiedReceipt.receipt);
+      }
+      const generation = registryGeneration;
+      const generationCurrent = (): boolean =>
+        registryGeneration === generation && pendingPids.size === 0;
+      activeTermination ??= terminateRegisteredGroups(
+        [...registered.values()],
+        provenAbsent,
         dependencies.inspectIdentity,
         signalGroup,
         delay,
         terminationGraceMs,
+        generationCurrent,
       ).then((receipt) => {
-        if (receipt.gone) verifiedReceipt = receipt;
+        if (receipt.gone && generationCurrent()) {
+          verifiedReceipt = Object.freeze({ generation, receipt });
+        }
         return receipt;
       }).finally(() => {
         activeTermination = undefined;
@@ -138,67 +171,102 @@ export function unverifiedTermination(
   return Object.freeze({ gone: false, proof: "unverified", reason });
 }
 
-async function terminateRegisteredGroup(
-  registered: RegisteredProcessGroupIdentity | undefined,
+async function terminateRegisteredGroups(
+  registered: readonly RegisteredProcessGroupIdentity[],
+  provenAbsent: Set<string>,
   inspectIdentity: RegisteredPosixProcessGroupDependencies["inspectIdentity"],
   signalGroup: NonNullable<RegisteredPosixProcessGroupDependencies["signalGroup"]>,
   delay: NonNullable<RegisteredPosixProcessGroupDependencies["delay"]>,
   terminationGraceMs: number,
+  generationCurrent: () => boolean,
 ): Promise<ProcessTreeTerminationReceipt> {
-  if (registered === undefined) return unverifiedTermination("registration");
+  if (registered.length === 0) return unverifiedTermination("registration");
+  const unresolved = new Map(
+    registered
+      .filter((identity) => !provenAbsent.has(processIdentityKey(identity)))
+      .map((identity) => [identity.pid, identity]),
+  );
+  let failure: UnverifiedTerminationReason | undefined;
+
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    let current: RegisteredProcessGroupIdentity | undefined;
-    try {
-      current = await inspectIdentity(registered.pid);
-    } catch {
-      return unverifiedTermination("channel");
+    const signalled = new Set<number>();
+    const eligible = new Set<number>();
+    for (const identity of unresolved.values()) {
+      let current: RegisteredProcessGroupIdentity | undefined;
+      try {
+        current = await inspectIdentity(identity.pid);
+      } catch {
+        failure = preferFailure(failure, "channel");
+        continue;
+      }
+      if (current !== undefined && !sameKernelIdentity(current, identity)) {
+        failure = preferFailure(failure, "identity");
+        continue;
+      }
+      eligible.add(identity.pid);
+      const result = signalRegisteredGroup(identity.processGroupId, signal, signalGroup);
+      if (result === "absent") {
+        provenAbsent.add(processIdentityKey(identity));
+        unresolved.delete(identity.pid);
+      } else if (result === "signalled") {
+        signalled.add(identity.pid);
+      } else {
+        failure = preferFailure(failure, result);
+      }
     }
-    if (current !== undefined && !sameIdentity(current, registered)) {
-      return unverifiedTermination("identity");
+    if (signalled.size > 0) await delay(terminationGraceMs);
+
+    for (const identity of [...unresolved.values()]) {
+      if (!eligible.has(identity.pid)) continue;
+      const presence = probeRegisteredGroup(identity.processGroupId, signalGroup);
+      if (presence === "absent") {
+        provenAbsent.add(processIdentityKey(identity));
+        unresolved.delete(identity.pid);
+      } else if (presence !== "present") {
+        failure = preferFailure(failure, presence);
+      }
     }
-    const signalled = signalRegisteredGroup(registered.processGroupId, signal, signalGroup);
-    if (signalled !== undefined) return signalled;
-    await delay(terminationGraceMs);
-    const presence = probeRegisteredGroup(registered.processGroupId, signalGroup);
-    if (presence !== undefined) return presence;
+
+    if (unresolved.size === 0) {
+      return generationCurrent()
+        ? Object.freeze({ gone: true, proof: "registered-groups-empty" })
+        : unverifiedTermination("registration");
+    }
   }
-  return unverifiedTermination("deadline");
+  if (!generationCurrent()) return unverifiedTermination("registration");
+  return unverifiedTermination(failure ?? "deadline");
 }
 
 function signalRegisteredGroup(
   processGroupId: number,
   signal: NodeJS.Signals,
   signalGroup: NonNullable<RegisteredPosixProcessGroupDependencies["signalGroup"]>,
-): ProcessTreeTerminationReceipt | undefined {
+): "signalled" | "absent" | UnverifiedTerminationReason {
   try {
     signalGroup(processGroupId, signal);
-    return undefined;
+    return "signalled";
   } catch (error: unknown) {
-    if (hasErrorCode(error, "ESRCH")) {
-      return Object.freeze({ gone: true, proof: "registered-groups-empty" });
-    }
-    if (hasErrorCode(error, "EPERM")) return unverifiedTermination("permission");
-    return unverifiedTermination("termination");
+    if (hasErrorCode(error, "ESRCH")) return "absent";
+    if (hasErrorCode(error, "EPERM")) return "permission";
+    return "termination";
   }
 }
 
 function probeRegisteredGroup(
   processGroupId: number,
   signalGroup: NonNullable<RegisteredPosixProcessGroupDependencies["signalGroup"]>,
-): ProcessTreeTerminationReceipt | undefined {
+): "present" | "absent" | UnverifiedTerminationReason {
   try {
     signalGroup(processGroupId, 0);
-    return undefined;
+    return "present";
   } catch (error: unknown) {
-    if (hasErrorCode(error, "ESRCH")) {
-      return Object.freeze({ gone: true, proof: "registered-groups-empty" });
-    }
-    if (hasErrorCode(error, "EPERM")) return unverifiedTermination("permission");
-    return unverifiedTermination("termination");
+    if (hasErrorCode(error, "ESRCH")) return "absent";
+    if (hasErrorCode(error, "EPERM")) return "permission";
+    return "termination";
   }
 }
 
-function sameIdentity(
+function sameRegistrationIdentity(
   left: RegisteredProcessGroupIdentity,
   right: RegisteredProcessGroupIdentity,
 ): boolean {
@@ -207,6 +275,37 @@ function sameIdentity(
     left.processGroupId === right.processGroupId &&
     left.identity === right.identity &&
     left.startOrder === right.startOrder;
+}
+
+function sameKernelIdentity(
+  left: RegisteredProcessGroupIdentity,
+  right: RegisteredProcessGroupIdentity,
+): boolean {
+  return left.pid === right.pid &&
+    left.processGroupId === right.processGroupId &&
+    left.identity === right.identity &&
+    left.startOrder === right.startOrder;
+}
+
+function processIdentityKey(identity: RegisteredProcessGroupIdentity): string {
+  return `${identity.pid}:${identity.processGroupId}:${identity.identity}:${identity.startOrder}`;
+}
+
+function preferFailure(
+  current: UnverifiedTerminationReason | undefined,
+  candidate: UnverifiedTerminationReason,
+): UnverifiedTerminationReason {
+  const priority: Readonly<Record<UnverifiedTerminationReason, number>> = {
+    registration: 6,
+    identity: 5,
+    channel: 4,
+    permission: 3,
+    termination: 2,
+    deadline: 1,
+  };
+  return current === undefined || priority[candidate] > priority[current]
+    ? candidate
+    : current;
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {

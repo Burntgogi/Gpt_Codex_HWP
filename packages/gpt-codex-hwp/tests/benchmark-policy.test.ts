@@ -36,6 +36,7 @@ import {
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, "..", "..");
+const BENCHMARK_ENTRY = join(PACKAGE_ROOT, "benchmarks", "document-engine-benchmark.mjs");
 
 test("benchmark policy accepts only bounded approved sizes with fixed sequential execution", () => {
   assert.deepEqual(APPROVED_BENCHMARK_SIZES_MIB, [10, 100, 256, 512]);
@@ -99,7 +100,7 @@ test("benchmark policy verifies descendant termination after abnormal case exit"
     "import { spawn } from 'node:child_process';",
     "import { readFileSync, writeFileSync } from 'node:fs';",
     "readFileSync(3, 'utf8');",
-    "writeFileSync(4, JSON.stringify({ elapsedMs: 25, peakRssDeltaBytes: 4096 }) + '\\n');",
+    "writeFileSync(4, JSON.stringify({ elapsedMs: 25, copiedBytes: 0, dispatchStarted: false }) + '\\n');",
     "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
     "process.stdout.write(String(child.pid));",
     "setTimeout(() => process.exit(9), 50);",
@@ -113,7 +114,13 @@ test("benchmark policy verifies descendant termination after abnormal case exit"
   assert.equal(result.status, "failed");
   assert.equal(result.processGone, true);
   assert.ok(result.elapsedMs > 0);
-  assert.deepEqual(result.caseMetrics, { elapsedMs: 25, peakRssDeltaBytes: 4096 });
+  assert.deepEqual(result.caseMetrics, {
+    elapsedMs: 25,
+    copiedBytes: 0,
+    dispatchStarted: false,
+    peakRssDeltaBytes: result.caseMetrics.peakRssDeltaBytes,
+  });
+  assert.ok(result.caseMetrics.peakRssDeltaBytes >= 0);
   const descendantPid = Number(result.stdout);
   assert.ok(Number.isSafeInteger(descendantPid));
   assert.throws(() => process.kill(descendantPid, 0));
@@ -157,7 +164,7 @@ test("benchmark policy bounds synthetic child-tree stress and verifies every ide
     "import { spawn } from 'node:child_process';",
     "import { readFileSync, writeFileSync } from 'node:fs';",
     "readFileSync(3, 'utf8');",
-    "writeFileSync(4, JSON.stringify({ elapsedMs: 25, peakRssDeltaBytes: 4096 }) + '\\n');",
+    "writeFileSync(4, JSON.stringify({ elapsedMs: 25, copiedBytes: 0, dispatchStarted: false }) + '\\n');",
     `const children = Array.from({ length: ${descendantCount} }, () => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }));`,
     "process.stdout.write(JSON.stringify(children.map((child) => child.pid)));",
     "setTimeout(() => process.exit(9), 250);",
@@ -183,10 +190,238 @@ test("benchmark policy bounds synthetic child-tree stress and verifies every ide
   );
 });
 
+test("benchmark registration measures accepted-group RSS outside the case and terminates the retained group", { timeout: 20_000 }, async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX benchmark registration descriptors");
+    return;
+  }
+  const fixture = join(
+    REPOSITORY_ROOT,
+    ".superpowers",
+    "benchmarks",
+    `rss-descendant-${process.pid}.mjs`,
+  );
+  await mkdir(dirname(fixture), { recursive: true });
+  t.after(() => rm(fixture, { force: true }));
+  const startGatePath = fileURLToPath(new URL(
+    "../src/workers/document-child-start-gate.ts",
+    import.meta.url,
+  ));
+  await writeFile(fixture, [
+    "import { spawn } from 'node:child_process';",
+    "import { readFileSync, writeFileSync } from 'node:fs';",
+    "if (process.argv[2] === '--payload') {",
+    "  const bytes = Buffer.alloc(80 * 1024 * 1024);",
+    "  for (let offset = 0; offset < bytes.length; offset += 4096) bytes[offset] = 1;",
+    "  process.stdout.write('READY\\n');",
+    "  setInterval(() => {}, 1000);",
+    "} else {",
+    "  readFileSync(3, 'utf8');",
+    "  const baseline = process.memoryUsage().rss;",
+    `  const child = spawn(process.execPath, ['--import', 'tsx', '--import', ${JSON.stringify(startGatePath)}, ${JSON.stringify(fixture)}, '--payload'], { detached: true, stdio: ['ignore', 'pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe', 5, 6] });`,
+    "  child.stdio[7].on('error', () => {});",
+    "  child.stdio[7].write('GPT_CODEX_HWP_START_V1\\n');",
+    "  child.stdout.once('data', () => {",
+    "    const rootRssDeltaBytes = Math.max(0, process.memoryUsage().rss - baseline);",
+    "    process.stdout.write(JSON.stringify({ childPid: child.pid, rootRssDeltaBytes }));",
+    "    writeFileSync(4, JSON.stringify({ elapsedMs: 1100, copiedBytes: 0, dispatchStarted: false }) + '\\n');",
+    "    setTimeout(() => process.exit(9), 1100);",
+    "  });",
+    "}",
+  ].join("\n"), "utf8");
+
+  const result = await executeBounded(process.execPath, [fixture], {
+    cwd: PACKAGE_ROOT,
+    timeoutMs: 10_000,
+    env: process.env,
+    controlFrame: { bounded: true },
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.processGone, true);
+  const root = JSON.parse(result.stdout) as {
+    childPid: number;
+    rootRssDeltaBytes: number;
+  };
+  assert.ok(root.rootRssDeltaBytes < 16 * 1024 * 1024);
+  assert.ok(result.caseMetrics.peakRssDeltaBytes > 48 * 1024 * 1024);
+  assert.throws(() => process.kill(root.childPid, 0));
+});
+
 test("benchmark policy aborts evidence when verified termination fails", () => {
   assert.throws(() => assertCaseProcessGone({ processGone: false }), {
     code: "BENCHMARK_TERMINATION_FAILED",
   });
+});
+
+test("benchmark fallback cannot prove identity-aware termination after an unverified receipt", async () => {
+  const result = await executeBounded(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd: PACKAGE_ROOT,
+    timeoutMs: 100,
+    env: process.env,
+    controlFrame: { bounded: true },
+    supervisorFactory: async () => ({
+      terminate: async () => ({ gone: false, proof: "unverified", reason: "deadline" }),
+      processTreeRss: () => ({ baselineBytes: 1, peakBytes: 2 }),
+    }),
+  });
+  assert.equal(result.processGone, false);
+  assert.equal(result.status, "termination-failed");
+  assert.equal(result.caseMetrics, null);
+});
+
+test("benchmark registration proof rejects a truthy forged successful receipt object", async () => {
+  const result = await executeBounded(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd: PACKAGE_ROOT,
+    timeoutMs: 100,
+    env: process.env,
+    controlFrame: { bounded: true },
+    supervisorFactory: async (child) => ({
+      processTreeTelemetryReady: Promise.resolve(true),
+      terminate: async () => {
+        child.kill("SIGKILL");
+        return { gone: true, proof: "tracker-empty" };
+      },
+      processTreeRss: () => ({ baselineBytes: 1, peakBytes: 2 }),
+    }),
+  });
+  assert.equal(result.processGone, false);
+  assert.equal(result.status, "termination-failed");
+  assert.equal(result.caseMetrics, null);
+});
+
+test("benchmark registration proof rejects an extra-key receipt with the expected proof literal", async () => {
+  const expectedProof = process.platform === "win32"
+    ? "windows-job-empty"
+    : "registered-groups-empty";
+  const result = await executeBounded(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd: PACKAGE_ROOT,
+    timeoutMs: 100,
+    env: process.env,
+    controlFrame: { bounded: true },
+    supervisorFactory: async (child) => ({
+      processTreeTelemetryReady: Promise.resolve(true),
+      registerProcessTreeTelemetryRoot: () => {},
+      finishProcessTreeTelemetry: () => {},
+      terminate: async () => {
+        child.kill("SIGKILL");
+        return { gone: true, proof: expectedProof, extra: true };
+      },
+      processTreeRss: () => ({ baselineBytes: 1, peakBytes: 2 }),
+    }),
+  });
+  assert.equal(result.processGone, false);
+  assert.equal(result.status, "termination-failed");
+  assert.equal(result.caseMetrics, null);
+});
+
+test("benchmark registration telemetry gate writes fd3 only after exact bounded true readiness", { timeout: 15_000 }, async (t) => {
+  const rejectedReadiness = Promise.reject(new Error("injected readiness failure"));
+  void rejectedReadiness.catch(() => {});
+  const stalledReadiness = new Promise<boolean>(() => {});
+  const readinessCases: ReadonlyArray<readonly [
+    string,
+    Promise<boolean> | undefined,
+    boolean,
+  ]> = [
+    ["true", Promise.resolve(true), true],
+    ["false", Promise.resolve(false), false],
+    ["missing", undefined, false],
+    ["rejected", rejectedReadiness, false],
+    ["never-settling", stalledReadiness, false],
+  ];
+  const caseScript = [
+    "const { readFileSync, writeFileSync } = require('node:fs');",
+    "const control = readFileSync(3);",
+    "if (control.length > 0) process.stdout.write('FD3_CONTROL_RECEIVED');",
+    "writeFileSync(4, JSON.stringify({ elapsedMs: 25, copiedBytes: 0, dispatchStarted: false }) + '\\n');",
+  ].join("");
+
+  for (const [label, readiness, expectControl] of readinessCases) {
+    await t.test(label, async () => {
+      let terminateCalls = 0;
+      const result = await executeBounded(process.execPath, ["-e", caseScript], {
+        cwd: PACKAGE_ROOT,
+        timeoutMs: 300,
+        env: process.env,
+        controlFrame: { bounded: true },
+        supervisorFactory: async (child) => ({
+          ...(readiness === undefined ? {} : { processTreeTelemetryReady: readiness }),
+          registerProcessTreeTelemetryRoot: () => {},
+          finishProcessTreeTelemetry: () => {},
+          terminate: async () => {
+            terminateCalls += 1;
+            child.kill("SIGKILL");
+            return process.platform === "win32"
+              ? { gone: true, proof: "windows-job-empty" }
+              : { gone: true, proof: "registered-groups-empty" };
+          },
+          processTreeRss: () => ({ baselineBytes: 1, peakBytes: 2 }),
+        }),
+      });
+      assert.equal(result.stdout.includes("FD3_CONTROL_RECEIVED"), expectControl, label);
+      assert.equal(terminateCalls, 1, label);
+      assert.equal(result.processGone, true, label);
+      if (expectControl) {
+        assert.equal(result.status, "passed", label);
+      } else {
+        assert.equal(result.status, "termination-failed", label);
+        assert.equal(result.caseMetrics, null, label);
+      }
+    });
+  }
+});
+
+test("benchmark shutdown finalizes telemetry only after exact root authority", async () => {
+  const events: string[] = [];
+  const caseScript = [
+    "const { readFileSync, writeFileSync } = require('node:fs');",
+    "readFileSync(3);",
+    "writeFileSync(4, JSON.stringify({ elapsedMs: 25, copiedBytes: 0, dispatchStarted: false }) + '\\n');",
+  ].join("");
+  const result = await executeBounded(process.execPath, ["-e", caseScript], {
+    cwd: PACKAGE_ROOT,
+    timeoutMs: 1_000,
+    env: process.env,
+    controlFrame: { bounded: true },
+    supervisorFactory: async () => ({
+      processTreeTelemetryReady: Promise.resolve(true),
+      registerProcessTreeTelemetryRoot: () => { events.push("telemetry-root"); },
+      terminate: async () => {
+        events.push("root-authority");
+        return process.platform === "win32"
+          ? { gone: true, proof: "windows-job-empty" }
+          : { gone: true, proof: "registered-groups-empty" };
+      },
+      finishProcessTreeTelemetry: () => { events.push("telemetry-finalizer"); },
+      processTreeRss: () => {
+        events.push("rss-read");
+        return { baselineBytes: 1, peakBytes: 2 };
+      },
+    }),
+  });
+
+  assert.equal(result.processGone, true);
+  assert.equal(result.status, "passed");
+  assert.deepEqual(events, ["root-authority", "telemetry-finalizer", "rss-read"]);
+});
+
+test("benchmark source wires one reusable facade and ordered nested shutdown", async () => {
+  const source = await readFile(BENCHMARK_ENTRY, "utf8");
+  assert.match(source, /facade = await createCaseFacade\(\)/u);
+  assert.match(source, /await runNormalProbe\(ownedCase, facade\)/u);
+  assert.match(source, /benchmarkRegistrationDescriptors: \{ writeFd: 5, ackFd: 6 \}/u);
+  assert.match(source, /process\.platform === "win32"\s*\? \{\}\s*: \{ benchmarkRegistrationDescriptors/u);
+  const beginClosing = source.indexOf("await coordinator?.beginClosing()");
+  const rootAuthority = source.indexOf("rootReceipt = await terminateAuthority");
+  const seal = source.indexOf("await coordinator.seal()", rootAuthority);
+  const nestedAuthority = source.indexOf("await coordinator.terminateRegisteredGroups()", seal);
+  const finalizer = source.indexOf("supervisor.finishProcessTreeTelemetry?.()", nestedAuthority);
+  assert.ok(beginClosing >= 0);
+  assert.ok(beginClosing < rootAuthority);
+  assert.ok(rootAuthority < seal);
+  assert.ok(seal < nestedAuthority);
+  assert.ok(nestedAuthority < finalizer);
 });
 
 test("benchmark policy requires a non-aliased output beneath a Git-ignored directory", async (t) => {
@@ -276,6 +511,7 @@ test("benchmark policy validates privacy-safe exact-schema receipts", () => {
     operation: "detectFormat",
     executionMode: "transferable-worker",
     status: "passed",
+    dispatchStarted: true,
     elapsedMs: 125,
     peakRssDeltaBytes: 4096,
     copiedBytes: 10 * 1024 * 1024 - 32,
@@ -295,6 +531,7 @@ test("benchmark policy validates privacy-safe exact-schema receipts", () => {
     { ...receipt, actualBytes: 0 },
     { ...receipt, executionMode: "supervised-child" },
     { ...receipt, copiedBytes: 0 },
+    { ...receipt, copiedBytes: receipt.actualBytes * 2 },
     { ...receipt, outputSha256: "c".repeat(64) },
   ]) {
     assert.throws(() => validateBenchmarkReceipt(unsafe), {
@@ -307,7 +544,8 @@ test("benchmark policy validates privacy-safe exact-schema receipts", () => {
     actualBytes: 100 * 1024 * 1024 - 32,
     executionMode: "supervised-child",
     status: "resource-refused",
-    copiedBytes: 100 * 1024 * 1024 - 32,
+    dispatchStarted: false,
+    copiedBytes: 0,
     responseBytes: 0,
     errorCode: "ENGINE_OOM",
   }));
@@ -315,13 +553,28 @@ test("benchmark policy validates privacy-safe exact-schema receipts", () => {
   const failed = buildParentFailureReceipt(100, "ENGINE_TIMEOUT", {
     actualBytes: 100 * 1024 * 1024 - 32,
     sourceSha256: "d".repeat(64),
-  }, { elapsedMs: 60_123, peakRssDeltaBytes: 8192 });
+  }, {
+    elapsedMs: 60_123,
+    peakRssDeltaBytes: 8192,
+    copiedBytes: 17,
+    dispatchStarted: true,
+  });
   assert.equal(failed.elapsedMs, 60_123);
   assert.equal(failed.peakRssDeltaBytes, 8192);
+  assert.equal(failed.copiedBytes, 17);
+  assert.equal(failed.dispatchStarted, true);
   assert.throws(() => buildParentFailureReceipt(100, "ENGINE_CRASH", {
     actualBytes: 0,
     sourceSha256: null,
   }, null), { code: "BENCHMARK_TELEMETRY_UNAVAILABLE" });
+
+  assert.doesNotThrow(() => validateBenchmarkReceipt({
+    ...receipt,
+    status: "failed",
+    copiedBytes: 17,
+    responseBytes: 0,
+    errorCode: "ENGINE_CRASH",
+  }));
 });
 
 test("benchmark implementation digest covers build config, asset copy, and vendored Kordoc", async () => {
@@ -369,9 +622,10 @@ test("benchmark policy requires fresh exact sequential large evidence", async (t
     operation: "detectFormat",
     executionMode: "supervised-child",
     status: "resource-refused",
+    dispatchStarted: false,
     elapsedMs: 125,
     peakRssDeltaBytes: 4096,
-    copiedBytes: requestedMiB * 1024 * 1024 - 32,
+    copiedBytes: 0,
     responseBytes: 0,
     errorCode: "ENGINE_RESOURCE_LIMIT",
     sourceSha256: "b".repeat(64),

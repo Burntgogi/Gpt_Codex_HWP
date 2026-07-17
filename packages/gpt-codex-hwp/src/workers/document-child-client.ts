@@ -122,6 +122,10 @@ export interface ChildLifecycleSupervisor {
   terminate(): Promise<ProcessTreeTerminationReceipt>;
   /** Optional telemetry readiness only; never process-tree authority or START gating. */
   readonly processTreeTelemetryReady?: Promise<boolean>;
+  /** Benchmark-only telemetry anchor; the identity is already authority-retained. */
+  registerProcessTreeTelemetryRoot?(identity: RegisteredProcessGroupIdentity): void;
+  /** Synchronously freezes complete telemetry or latches it unavailable. */
+  finishProcessTreeTelemetry?(): void;
   processTreeRss?(): Readonly<{
     baselineBytes: number;
     peakBytes: number;
@@ -1255,7 +1259,10 @@ export async function finalizeVerifiedWindowsSupervisor({
 
 export async function superviseDocumentProcessTree(
   child: ChildProcess,
-  options: Readonly<{ frameObserver?: (frame: string) => void }> = {},
+  options: Readonly<{
+    frameObserver?: (frame: string) => void;
+    deferProcessTreeTelemetryStop?: boolean;
+  }> = {},
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
   if (process.platform === "win32") {
@@ -1266,7 +1273,9 @@ export async function superviseDocumentProcessTree(
       false,
     );
   }
-  return createPosixProcessTreeSupervisor(child, process.platform);
+  return createPosixProcessTreeSupervisor(child, process.platform, {
+    deferProcessTreeTelemetryStop: options.deferProcessTreeTelemetryStop,
+  });
 }
 
 interface PosixProcessRecord {
@@ -1284,6 +1293,7 @@ interface RetainedPosixProcess extends PosixProcessRecord {
 
 export interface PosixProcessTelemetryTracker {
   initialize(): Promise<void>;
+  registerRoot(identity: RegisteredProcessGroupIdentity): void;
   sample(): Promise<unknown>;
   disableTelemetry(): void;
   telemetryAvailable(): boolean;
@@ -1302,6 +1312,7 @@ export interface PosixProcessTreeSupervisorTestDependencies {
     milliseconds: number,
   ) => PosixTelemetryIntervalHandle;
   readonly clearScheduledInterval?: (handle: PosixTelemetryIntervalHandle) => void;
+  readonly deferProcessTreeTelemetryStop?: boolean;
 }
 
 export function createPosixProcessTreeSupervisorForTest(
@@ -1336,6 +1347,9 @@ async function createPosixProcessTreeSupervisor(
   let sampler: PosixTelemetryIntervalHandle | undefined;
   let sampleRunning = false;
   let sampleRequested = false;
+  let requiredTelemetryGeneration = 0;
+  let coveredTelemetryGeneration = 0;
+  const telemetryRootKeys = new Set<string>();
   let settleTelemetryReady!: (available: boolean) => void;
   let telemetryReadySettled = false;
   const processTreeTelemetryReady = new Promise<boolean>((resolve) => {
@@ -1372,7 +1386,8 @@ async function createPosixProcessTreeSupervisor(
     baselineBytes: number;
     peakBytes: number;
   }> | undefined => {
-    if (telemetryState !== "active" || sampleRunning) return undefined;
+    if (telemetryState !== "active" || sampleRunning ||
+      coveredTelemetryGeneration < requiredTelemetryGeneration) return undefined;
     try {
       return tracker.telemetryAvailable() ? tracker.processTreeRss() : undefined;
     } catch {
@@ -1388,6 +1403,7 @@ async function createPosixProcessTreeSupervisor(
     }
     sampleRunning = true;
     sampleRequested = false;
+    const sampleGeneration = requiredTelemetryGeneration;
     let sample: Promise<unknown>;
     try {
       sample = tracker.sample();
@@ -1400,7 +1416,12 @@ async function createPosixProcessTreeSupervisor(
       () => {
         sampleRunning = false;
         if (telemetryState !== "active") return;
-        if (sampleRequested) queueSample();
+        coveredTelemetryGeneration = Math.max(
+          coveredTelemetryGeneration,
+          sampleGeneration,
+        );
+        if (sampleRequested ||
+          coveredTelemetryGeneration < requiredTelemetryGeneration) queueSample();
       },
       () => {
         sampleRunning = false;
@@ -1450,6 +1471,22 @@ async function createPosixProcessTreeSupervisor(
 
   return {
     processTreeTelemetryReady,
+    registerProcessTreeTelemetryRoot(identity): void {
+      if (telemetryState !== "active") {
+        throw new Error("process-tree telemetry is not active");
+      }
+      const key = `${identity.pid}:${identity.processGroupId}:${identity.identity}:${identity.startOrder}`;
+      if (telemetryRootKeys.has(key)) {
+        throw new Error("process-tree telemetry root already registered");
+      }
+      tracker.registerRoot(identity);
+      telemetryRootKeys.add(key);
+      requiredTelemetryGeneration += 1;
+      queueSample();
+    },
+    finishProcessTreeTelemetry(): void {
+      stopTelemetry();
+    },
     processTreeRss: () => telemetryState === "stopped"
       ? stoppedProcessTreeRss
       : readCompleteProcessTreeRss(),
@@ -1466,13 +1503,13 @@ async function createPosixProcessTreeSupervisor(
       }
       const settledAttempt = registeredTermination.then(
         (receipt) => {
-          stopTelemetry();
+          if (dependencies.deferProcessTreeTelemetryStop !== true) stopTelemetry();
           const recognized = normalizeProcessTreeTerminationReceipt(receipt);
           if (recognized.gone === true) verifiedTerminationReceipt = recognized;
           return receipt;
         },
         (error: unknown) => {
-          stopTelemetry();
+          if (dependencies.deferProcessTreeTelemetryStop !== true) stopTelemetry();
           throw error;
         },
       );
@@ -1520,6 +1557,21 @@ class PosixProcessTreeTracker {
     const live = this.#observe(await this.#snapshot());
     this.#peakBytes = Math.max(this.#peakBytes, sumProcessRss(live));
     return live;
+  }
+
+  registerRoot(identity: RegisteredProcessGroupIdentity): void {
+    if (identity.pid !== identity.processGroupId) {
+      throw new Error("telemetry root is not a process-group leader");
+    }
+    const key = posixIdentityKey(identity);
+    if (this.#retained.has(key)) {
+      throw new Error("telemetry root already retained");
+    }
+    this.#retain(Object.freeze({
+      ...identity,
+      rssBytes: 0,
+      depth: 0,
+    }));
   }
 
   async #snapshot(): Promise<PosixProcessRecord[]> {
