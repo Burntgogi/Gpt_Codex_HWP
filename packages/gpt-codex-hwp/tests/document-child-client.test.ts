@@ -254,6 +254,371 @@ test("document child start gate waits for supervisor readiness before one START 
   }
 });
 
+for (const scenario of [
+  { label: "abort", deadlineMs: 5_000, waitMs: 1_500, abort: true },
+  { label: "deadline", deadlineMs: 2_000, waitMs: 3_500, abort: false },
+] as const) {
+  test(`document child stalled supervisor readiness yields to ${scenario.label}`, {
+    timeout: 10_000,
+  }, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hwp-stalled-supervisor-${scenario.label}-`));
+    const owned = createOwnedFiles();
+    const abort = new AbortController();
+    let rejectSupervisor!: (error: Error) => void;
+    const supervisorReady = new Promise<never>((_resolve, reject) => {
+      rejectSupervisor = reject;
+    });
+    let supervisorEntered = false;
+    let spawned: ReturnType<typeof spawn> | undefined;
+    let gateClosed = false;
+    let startWrites = 0;
+    let dispatches = 0;
+    try {
+      const client = createProductionDocumentChildClient({
+        childEntry: fixturePath,
+        childArguments: ["success", "250"],
+        startGateEntry: startGatePath,
+        spoolRoot: root,
+        spawnFactory: (specification) => {
+          const child = spawn(
+            specification.command,
+            [...specification.args],
+            specification.options,
+          );
+          spawned = child;
+          const startWriter = child.stdio[7];
+          assert.ok(startWriter !== null && startWriter !== undefined && "write" in startWriter);
+          startWriter.once("close", () => {
+            gateClosed = true;
+          });
+          const write = startWriter.write.bind(startWriter);
+          startWriter.write = ((...args: Parameters<typeof startWriter.write>) => {
+            startWrites += 1;
+            return write(...args);
+          }) as typeof startWriter.write;
+          const end = child.stdin!.end.bind(child.stdin);
+          child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+            dispatches += 1;
+            return end(...args);
+          }) as typeof child.stdin.end;
+          return child;
+        },
+        treeTerminator: async (child) => {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+          return true;
+        },
+        jobSupervisorFactory: async () => {
+          supervisorEntered = true;
+          return supervisorReady;
+        },
+      } as never);
+      const settled = client.run(
+        detectRequest(`stalled-supervisor-${scenario.label}`),
+        spoolSnapshot(owned.inputFd, 3),
+        { signal: abort.signal, deadlineMs: scenario.deadlineMs },
+      ).then(
+        () => ({ kind: "value" as const }),
+        (error: unknown) => ({ kind: "error" as const, code: safeCode(error) }),
+      );
+      await waitFor(() => supervisorEntered);
+      if (scenario.abort) abort.abort();
+      const outcome = await Promise.race([
+        settled,
+        new Promise<Readonly<{ kind: "stalled" }>>((resolve) => {
+          setTimeout(() => resolve({ kind: "stalled" }), scenario.waitMs);
+        }),
+      ]);
+      if (outcome.kind === "stalled") {
+        rejectSupervisor(new Error("release stalled supervisor for test cleanup"));
+        await settled;
+        assert.fail(`stalled supervisor ignored ${scenario.label}`);
+      }
+      assert.deepEqual(outcome, { kind: "error", code: "ENGINE_TERMINATION_FAILED" });
+      assert.equal(startWrites, 0);
+      assert.equal(dispatches, 0);
+      await waitFor(() => gateClosed);
+
+      rejectSupervisor(new Error("late supervisor rejection"));
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } finally {
+      rejectSupervisor?.(new Error("test cleanup"));
+      if (spawned !== undefined && spawned.exitCode === null && spawned.signalCode === null) {
+        spawned.kill("SIGKILL");
+      }
+      owned.cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("document child late supervisor proof releases provisional startup retention", {
+  timeout: 10_000,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-late-supervisor-proof-"));
+  const owned = createOwnedFiles();
+  const snapshot = spoolSnapshot(owned.inputFd, 3);
+  const abort = new AbortController();
+  const gate = new HeavyChildGate();
+  let resolveSupervisor!: (supervisor: {
+    terminate(): Promise<
+      | Readonly<{ gone: true; proof: "registered-groups-empty" }>
+      | Readonly<{ gone: false; proof: "unverified"; reason: "identity" }>
+    >;
+  }) => void;
+  const supervisorReady = new Promise<Parameters<typeof resolveSupervisor>[0]>((resolve) => {
+    resolveSupervisor = resolve;
+  });
+  let supervisorEntered = false;
+  let allowProof = false;
+  let terminationCalls = 0;
+  let spawned: ReturnType<typeof spawn> | undefined;
+  let dispatches = 0;
+  try {
+    const client = createProductionDocumentChildClient({
+      childEntry: fixturePath,
+      childArguments: ["success", "250"],
+      startGateEntry: startGatePath,
+      spoolRoot: root,
+      heavyChildGate: gate,
+      spawnFactory: (specification) => {
+        const child = spawn(
+          specification.command,
+          [...specification.args],
+          specification.options,
+        );
+        spawned = child;
+        const end = child.stdin!.end.bind(child.stdin);
+        child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+          dispatches += 1;
+          return end(...args);
+        }) as typeof child.stdin.end;
+        return child;
+      },
+      treeTerminator: async (child) => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        return true;
+      },
+      jobSupervisorFactory: async () => {
+        supervisorEntered = true;
+        return supervisorReady;
+      },
+    } as never);
+    const settled = client.run(
+      detectRequest("late-supervisor-proof"),
+      snapshot,
+      { signal: abort.signal, deadlineMs: 5_000 },
+    );
+    await waitFor(() => supervisorEntered);
+    abort.abort();
+    await assert.rejects(
+      settled,
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
+    );
+    assert.equal(snapshot.cleanupCalls, 0);
+    assert.equal(dispatches, 0);
+
+    resolveSupervisor({
+      async terminate() {
+        terminationCalls += 1;
+        return allowProof
+          ? { gone: true as const, proof: "registered-groups-empty" as const }
+          : { gone: false as const, proof: "unverified" as const, reason: "identity" as const };
+      },
+    });
+    await waitFor(() => terminationCalls >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    assert.equal(snapshot.cleanupCalls, 0);
+
+    allowProof = true;
+    await waitFor(() => snapshot.cleanupCalls === 1);
+    await waitFor(() => readdirSync(root).length === 0);
+    const release = await gate.acquire(undefined, 500);
+    release();
+  } finally {
+    allowProof = true;
+    if (spawned !== undefined && spawned.exitCode === null && spawned.signalCode === null) {
+      spawned.kill("SIGKILL");
+    }
+    owned.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of [
+  {
+    label: "abort",
+    deadlineMs: 5_000,
+    waitMs: 1_500,
+    expectedCode: "REQUEST_CANCELLED",
+    abort: true,
+  },
+  {
+    label: "deadline",
+    deadlineMs: 2_000,
+    waitMs: 3_500,
+    expectedCode: "ENGINE_TIMEOUT",
+    abort: false,
+  },
+] as const) {
+  test(`document child stalled START callback yields to ${scenario.label}`, {
+    timeout: 10_000,
+  }, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hwp-stalled-start-${scenario.label}-`));
+    const owned = createOwnedFiles();
+    const abort = new AbortController();
+    let spawned: ReturnType<typeof spawn> | undefined;
+    let startWriter: ReturnType<typeof spawn>["stdio"][number] | undefined;
+    let stalledCallback: ((error?: Error | null) => void) | undefined;
+    let startWrites = 0;
+    let dispatches = 0;
+    let gateClosed = false;
+    try {
+      const client = createProductionDocumentChildClient({
+        childEntry: fixturePath,
+        childArguments: ["success", "250"],
+        startGateEntry: startGatePath,
+        spoolRoot: root,
+        spawnFactory: (specification) => {
+          const child = spawn(
+            specification.command,
+            [...specification.args],
+            specification.options,
+          );
+          spawned = child;
+          startWriter = child.stdio[7];
+          assert.ok(startWriter !== null && startWriter !== undefined && "write" in startWriter);
+          startWriter.once("close", () => {
+            gateClosed = true;
+          });
+          startWriter.write = ((
+            _chunk: Uint8Array | string,
+            callback?: (error?: Error | null) => void,
+          ) => {
+            startWrites += 1;
+            stalledCallback = callback;
+            return true;
+          }) as typeof startWriter.write;
+          const end = child.stdin!.end.bind(child.stdin);
+          child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+            dispatches += 1;
+            return end(...args);
+          }) as typeof child.stdin.end;
+          return child;
+        },
+        jobSupervisorFactory: async (child) => ({
+          terminate: async () => terminateChildWithProof(child, "registered-groups-empty"),
+        }),
+      } as never);
+      const settled = client.run(
+        detectRequest(`stalled-start-${scenario.label}`),
+        spoolSnapshot(owned.inputFd, 3),
+        { signal: abort.signal, deadlineMs: scenario.deadlineMs },
+      ).then(
+        () => ({ kind: "value" as const }),
+        (error: unknown) => ({ kind: "error" as const, code: safeCode(error) }),
+      );
+      await waitFor(() => startWrites === 1);
+      if (scenario.abort) abort.abort();
+      const outcome = await Promise.race([
+        settled,
+        new Promise<Readonly<{ kind: "stalled" }>>((resolve) => {
+          setTimeout(() => resolve({ kind: "stalled" }), scenario.waitMs);
+        }),
+      ]);
+      if (outcome.kind === "stalled") {
+        stalledCallback?.(new Error("release stalled START callback for test cleanup"));
+        await settled;
+        assert.fail(`stalled START callback ignored ${scenario.label}`);
+      }
+      assert.deepEqual(outcome, { kind: "error", code: scenario.expectedCode });
+      assert.equal(startWrites, 1);
+      assert.equal(dispatches, 0);
+      await waitFor(() => gateClosed);
+
+      stalledCallback?.(new Error("late START callback failure"));
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } finally {
+      stalledCallback?.(new Error("test cleanup"));
+      if (startWriter !== null && startWriter !== undefined && "destroy" in startWriter) {
+        startWriter.destroy();
+      }
+      if (spawned !== undefined && spawned.exitCode === null && spawned.signalCode === null) {
+        spawned.kill("SIGKILL");
+      }
+      owned.cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const callbackMode of ["success", "error"] as const) {
+  test(`document child start gate retains owner-lifetime error handling after ${callbackMode} callback`, {
+    timeout: 10_000,
+  }, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hwp-gate-owner-error-${callbackMode}-`));
+    const owned = createOwnedFiles();
+    let listenersAfterCallback = -1;
+    let laterErrorEmitted = false;
+    let retainedStartWriter: ReturnType<typeof spawn>["stdio"][number] | undefined;
+    try {
+      const client = createProductionDocumentChildClient({
+        childEntry: fixturePath,
+        childArguments: ["success", "250"],
+        startGateEntry: startGatePath,
+        spoolRoot: root,
+        spawnFactory: (specification) => {
+          const child = spawn(
+            specification.command,
+            [...specification.args],
+            specification.options,
+          );
+          const startWriter = child.stdio[7];
+          assert.ok(startWriter !== null && startWriter !== undefined && "write" in startWriter);
+          retainedStartWriter = startWriter;
+          const write = startWriter.write.bind(startWriter);
+          startWriter.write = ((
+            chunk: Uint8Array | string,
+            callback?: (error?: Error | null) => void,
+          ) => write(chunk, (nativeError?: Error | null) => {
+            callback?.(
+              callbackMode === "error"
+                ? new Error("injected START callback failure")
+                : nativeError,
+            );
+            listenersAfterCallback = startWriter.listenerCount("error");
+            if (listenersAfterCallback > 0) {
+              laterErrorEmitted = true;
+              startWriter.emit("error", new Error("later fd7 pipe failure"));
+            }
+          })) as typeof startWriter.write;
+          return child;
+        },
+        jobSupervisorFactory: async (child) => ({
+          terminate: async () => terminateChildWithProof(child, "registered-groups-empty"),
+        }),
+      } as never);
+      const settled = client.run(
+        detectRequest(`gate-owner-error-${callbackMode}`),
+        spoolSnapshot(owned.inputFd, 3),
+      );
+      if (callbackMode === "success") {
+        assert.deepEqual(await settled, { format: "unknown" });
+      } else {
+        await assert.rejects(
+          settled,
+          (error: unknown) => safeCode(error) === "ENGINE_INIT_FAILED",
+        );
+      }
+      assert.equal(listenersAfterCallback, 1);
+      assert.equal(laterErrorEmitted, true);
+      await waitFor(() => retainedStartWriter?.listenerCount("error") === 0);
+    } finally {
+      owned.cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("document child start gate rejection closes fd7 without START or payload dispatch", async () => {
   const root = mkdtempSync(join(tmpdir(), "hwp-start-gate-rejection-"));
   const markerPath = join(root, "payload-ran.txt");
@@ -970,6 +1335,7 @@ test("document child client captures async spawn errors while supervisor readine
 test("document child start gate prevents payload OOM before supervisor readiness", async () => {
   const root = mkdtempSync(join(tmpdir(), "hwp-startup-output-oom-"));
   const owned = createOwnedFiles();
+  const snapshot = spoolSnapshot(owned.inputFd, 3);
   try {
     const client = createProductionDocumentChildClient({
       childEntry: fixturePath,
@@ -992,12 +1358,12 @@ test("document child start gate prevents payload OOM before supervisor readiness
     await assert.rejects(
       client.run(
         detectRequest("startup-output-oom"),
-        spoolSnapshot(owned.inputFd, 3),
+        snapshot,
         { deadlineMs: 1_000 },
       ),
-      (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
-    assert.deepEqual(readdirSync(root), []);
+    await waitFor(() => snapshot.cleanupCalls === 1 && readdirSync(root).length === 0);
   } finally {
     owned.cleanup();
     rmSync(root, { recursive: true, force: true });
@@ -1037,6 +1403,7 @@ test("document child start gate keeps supervisor rejection unverified after an e
   const root = mkdtempSync(join(tmpdir(), "hwp-supervisor-abort-first-"));
   const owned = createOwnedFiles();
   const abort = new AbortController();
+  const snapshot = spoolSnapshot(owned.inputFd, 3);
   let dispatches = 0;
   try {
     const client = createProductionDocumentChildClient({
@@ -1061,13 +1428,14 @@ test("document child start gate keeps supervisor rejection unverified after an e
     await assert.rejects(
       client.run(
         detectRequest("supervisor-abort-first"),
-        spoolSnapshot(owned.inputFd, 3),
+        snapshot,
         { signal: abort.signal, deadlineMs: 5_000 },
       ),
       (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.equal(dispatches, 0);
-    assert.deepEqual(readdirSync(root), []);
+    assert.equal(snapshot.cleanupCalls, 0);
+    assert.ok(readdirSync(root).length >= 1);
   } finally {
     owned.cleanup();
     rmSync(root, { recursive: true, force: true });
@@ -2118,10 +2486,9 @@ test("document child client closes the spawn-to-listener abort gap", async () =>
       client.run(detectRequest("child-spawn-abort"), snapshot, {
         signal: abort.signal,
       }),
-      (error: unknown) => safeCode(error) === "REQUEST_CANCELLED",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
-    assert.equal(snapshot.cleanupCalls, 1);
-    assert.deepEqual(readdirSync(root), []);
+    await waitFor(() => snapshot.cleanupCalls === 1 && readdirSync(root).length === 0);
   } finally {
     owned.cleanup();
     rmSync(root, { recursive: true, force: true });

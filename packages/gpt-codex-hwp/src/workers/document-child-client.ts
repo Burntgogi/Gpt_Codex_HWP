@@ -142,8 +142,12 @@ interface OutputSpoolOwner {
 
 interface StartGateOwner {
   readonly stream: NodeJS.WritableStream;
+  readonly onError: (error: Error) => void;
+  readonly onClose: () => void;
   started: boolean;
   closed: boolean;
+  failure?: Error;
+  settleStart?: (error?: unknown) => void;
 }
 
 type ProcessTreeTerminator = (
@@ -169,9 +173,15 @@ type StartupTerminationReason = "deadline" | "abort";
 interface StartupLifecycleState {
   readonly deadlineAt: number;
   terminationReason(): StartupTerminationReason | undefined;
+  waitForTermination(): Promise<StartupTerminationReason>;
   handoffAbort(callback: () => void): void;
   dispose(): void;
 }
+
+type StartupPhaseOutcome<Value> =
+  | Readonly<{ kind: "completed"; value: Value }>
+  | Readonly<{ kind: "failed"; error: unknown }>
+  | Readonly<{ kind: "terminated"; reason: StartupTerminationReason }>;
 
 const verifiedResultSpools = new WeakSet<object>();
 
@@ -399,13 +409,15 @@ export function createDocumentChildClient(
               )
           : (childProcess: ChildProcess) =>
               createPosixProcessTreeSupervisor(childProcess, process.platform));
-      try {
-        const supervisor = await supervisorFactory(
-          spawnedChild,
-          Math.min(5_000, remainingDeadlineMs),
-        );
-        supervisedTerminator = createVerifiedTerminator(supervisor, childStartGate);
-      } catch {
+      const supervisorPromise = Promise.resolve().then(() => supervisorFactory(
+        spawnedChild,
+        Math.min(5_000, remainingDeadlineMs),
+      ));
+      const supervisorOutcome = await waitForStartupPhase(
+        supervisorPromise,
+        startupLifecycle,
+      );
+      if (supervisorOutcome.kind === "failed") {
         closeStartGate(childStartGate);
         await fallbackTerminator(spawnedChild);
         await cleanupFailedPreDispatch(
@@ -420,6 +432,27 @@ export function createDocumentChildClient(
         );
         throw terminationFailedError();
       }
+      if (supervisorOutcome.kind === "terminated") {
+        closeStartGate(childStartGate);
+        retainUntilLateSupervisor(
+          supervisorPromise,
+          spawnedChild,
+          snapshot,
+          outputOwner,
+          release,
+          childStartupCapture,
+          startupLifecycle,
+          childStartGate,
+        );
+        void terminateWithReceipt(fallbackTerminator, spawnedChild).catch(() => {
+          // The provisional retention owns all resources until typed proof arrives.
+        });
+        throw terminationFailedError();
+      }
+      supervisedTerminator = createVerifiedTerminator(
+        supervisorOutcome.value,
+        childStartGate,
+      );
 
       remainingDeadlineMs = deadlineMs - (performance.now() - requestStartedAt);
       if (startupLifecycle.terminationReason() !== undefined) {
@@ -436,9 +469,24 @@ export function createDocumentChildClient(
         );
       }
 
-      try {
-        await writeStartFrame(childStartGate);
-      } catch {
+      const startOutcome = await waitForStartupPhase(
+        writeStartFrame(childStartGate),
+        startupLifecycle,
+      );
+      if (startOutcome.kind === "terminated") {
+        closeStartGate(childStartGate);
+        return terminateExpiredStartup(
+          spawnedChild,
+          snapshot,
+          outputOwner,
+          release,
+          supervisedTerminator,
+          childStartupCapture,
+          startupLifecycle,
+          childStartGate,
+        );
+      }
+      if (startOutcome.kind === "failed") {
         closeStartGate(childStartGate);
         const receipt = await terminateWithReceipt(
           supervisedTerminator,
@@ -511,38 +559,52 @@ function requireStartGateOwner(child: ChildProcess): StartGateOwner {
   if (stream === null || stream === undefined || typeof stream.write !== "function") {
     throw new Error("document child start gate pipe unavailable");
   }
-  return { stream, started: false, closed: false };
+  let owner!: StartGateOwner;
+  const onError = (error: Error): void => {
+    owner.failure ??= error;
+    owner.settleStart?.(error);
+  };
+  const onClose = (): void => {
+    owner.closed = true;
+    owner.failure ??= new Error("document child start gate closed");
+    owner.settleStart?.(owner.failure);
+    stream.removeListener("error", onError);
+  };
+  owner = {
+    stream,
+    onError,
+    onClose,
+    started: false,
+    closed: false,
+  };
+  stream.on("error", onError);
+  stream.once("close", onClose);
+  return owner;
 }
 
 async function writeStartFrame(owner: StartGateOwner): Promise<void> {
   if (owner.started || owner.closed) throw new Error("document child start gate unavailable");
+  if (owner.failure !== undefined) throw owner.failure;
   owner.started = true;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const cleanup = (): void => {
-      owner.stream.removeListener("error", onError);
-    };
-    const fail = (error: unknown): void => {
+    const settle = (error?: unknown): void => {
       if (settled) return;
       settled = true;
-      cleanup();
-      reject(error);
+      if (owner.settleStart === settle) owner.settleStart = undefined;
+      if (error === undefined || error === null) {
+        resolve();
+      } else {
+        reject(error);
+      }
     };
-    const onError = (error: Error): void => fail(error);
-    owner.stream.once("error", onError);
+    owner.settleStart = settle;
     try {
       owner.stream.write(DOCUMENT_START_FRAME, (error?: Error | null) => {
-        if (error != null) {
-          fail(error);
-          return;
-        }
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
+        settle(error);
       });
     } catch (error: unknown) {
-      fail(error);
+      settle(error);
     }
   });
 }
@@ -550,6 +612,8 @@ async function writeStartFrame(owner: StartGateOwner): Promise<void> {
 function closeStartGate(owner: StartGateOwner | undefined): void {
   if (owner === undefined || owner.closed) return;
   owner.closed = true;
+  owner.failure ??= new Error("document child start gate closed");
+  owner.settleStart?.(owner.failure);
   try {
     if ("destroy" in owner.stream && typeof owner.stream.destroy === "function") {
       owner.stream.destroy();
@@ -559,6 +623,85 @@ function closeStartGate(owner: StartGateOwner | undefined): void {
   } catch {
     // Closing the private gate is best-effort after ownership has been retained.
   }
+}
+
+function waitForStartupPhase<Value>(
+  phase: Promise<Value>,
+  startupLifecycle: StartupLifecycleState,
+): Promise<StartupPhaseOutcome<Value>> {
+  return Promise.race([
+    phase.then<StartupPhaseOutcome<Value>, StartupPhaseOutcome<Value>>(
+      (value) => {
+        const reason = startupLifecycle.terminationReason();
+        return reason === undefined
+          ? { kind: "completed", value }
+          : { kind: "terminated", reason };
+      },
+      (error: unknown) => {
+        const reason = startupLifecycle.terminationReason();
+        return reason === undefined
+          ? { kind: "failed", error }
+          : { kind: "terminated", reason };
+      },
+    ),
+    startupLifecycle.waitForTermination().then<StartupPhaseOutcome<Value>>(
+      (reason) => ({ kind: "terminated", reason }),
+    ),
+  ]);
+}
+
+function retainUntilLateSupervisor(
+  supervisorPromise: Promise<ChildLifecycleSupervisor>,
+  child: ChildProcess,
+  snapshot: SpoolDocumentSnapshot | undefined,
+  outputOwner: OutputSpoolOwner,
+  release: () => void,
+  capture: ChildStartupCapture,
+  startupLifecycle: StartupLifecycleState,
+  startGate: StartGateOwner,
+): void {
+  const retention = { child, snapshot, outputOwner, release, capture, startGate };
+  unsafeChildRetentions.add(retention);
+  startupLifecycle.dispose();
+
+  const finalizeWithProof = async (
+    supervisor: ChildLifecycleSupervisor,
+  ): Promise<void> => {
+    const terminator = createVerifiedTerminator(supervisor, startGate);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const receipt = await terminateWithReceipt(terminator, child);
+      if (!receipt.gone) {
+        await unrefDelay(100);
+        continue;
+      }
+      await drainCapturedChildStreams(child);
+      closeStartGate(startGate);
+      capture.detachAll();
+      try {
+        await cleanupSnapshot(snapshot);
+        await cleanupOutputSpool(outputOwner);
+        release();
+        unsafeChildRetentions.delete(retention);
+      } catch {
+        // Fail closed: recognized absence is required but cleanup must also complete.
+      }
+      return;
+    }
+    // The provisional record deliberately retains ownership after unverified cleanup.
+  };
+
+  void supervisorPromise.then(
+    (supervisor) => {
+      void finalizeWithProof(supervisor).catch(() => {
+        // A late supervisor failure leaves the provisional retention intact.
+      });
+    },
+    () => {
+      // A late readiness rejection has no proof authority; retain fail-closed.
+    },
+  ).catch(() => {
+    // Both handlers are non-throwing, but keep the terminal chain rejection-safe.
+  });
 }
 
 function createVerifiedTerminator(
@@ -2598,6 +2741,9 @@ function createStartupLifecycleState(
     ? performance.now()
     : undefined;
   let abortCallback: (() => void) | undefined;
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  let terminationPromise: Promise<StartupTerminationReason> | undefined;
+  let resolveTermination: ((reason: StartupTerminationReason) => void) | undefined;
   let disposed = false;
   const terminationReason = (): StartupTerminationReason | undefined => {
     const now = performance.now();
@@ -2607,8 +2753,32 @@ function createStartupLifecycleState(
     if (now >= deadlineAt) return "deadline";
     return abortObservedAt === undefined ? undefined : "abort";
   };
+  const publishTermination = (): void => {
+    const reason = terminationReason();
+    if (reason === undefined) return;
+    if (deadlineTimer !== undefined) {
+      clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
+    }
+    resolveTermination?.(reason);
+    resolveTermination = undefined;
+  };
+  const armDeadline = (): void => {
+    if (disposed || deadlineTimer !== undefined || resolveTermination === undefined) return;
+    const remainingMs = deadlineAt - performance.now();
+    if (remainingMs <= 0) {
+      publishTermination();
+      return;
+    }
+    deadlineTimer = setTimeout(() => {
+      deadlineTimer = undefined;
+      publishTermination();
+      if (resolveTermination !== undefined) armDeadline();
+    }, Math.max(1, Math.ceil(remainingMs)));
+  };
   const onAbort = (): void => {
     abortObservedAt ??= performance.now();
+    publishTermination();
     if (terminationReason() === "abort") abortCallback?.();
   };
   if (signal !== undefined && abortObservedAt === undefined) {
@@ -2617,6 +2787,15 @@ function createStartupLifecycleState(
   return {
     deadlineAt,
     terminationReason,
+    waitForTermination(): Promise<StartupTerminationReason> {
+      const current = terminationReason();
+      if (current !== undefined) return Promise.resolve(current);
+      terminationPromise ??= new Promise<StartupTerminationReason>((resolve) => {
+        resolveTermination = resolve;
+      });
+      armDeadline();
+      return terminationPromise;
+    },
     handoffAbort(callback: () => void): void {
       abortCallback = callback;
       if (terminationReason() === "abort") callback();
@@ -2624,6 +2803,9 @@ function createStartupLifecycleState(
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
+      resolveTermination = undefined;
       abortCallback = undefined;
       signal?.removeEventListener("abort", onAbort);
     },

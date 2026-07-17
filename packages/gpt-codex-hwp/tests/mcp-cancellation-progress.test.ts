@@ -616,7 +616,7 @@ function isolatedCancellationFacade(
     }
     const options = {
       ...(context?.signal === undefined ? {} : { signal: context.signal }),
-      deadlineMs: 2_000,
+      deadlineMs: engine === "supervised child" ? 5_000 : 2_000,
       onProgress: (completed: number, total: number) => {
         if (calls === 1 && engine === "supervised child" &&
           total === Number.MAX_SAFE_INTEGER) {
