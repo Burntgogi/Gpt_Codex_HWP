@@ -74,26 +74,37 @@ to the source length. Never derive this field from `actualBytes`, and never add
 copy or RSS data to MCP responses.
 
 RSS is owned by the outer supervisor, whose baseline is taken before inherited
-case control is released. It samples the full retained process tree at 20 ms on
+case control is released. Sampling uses a configured nominal cadence: 20 ms on
 Windows, 25 ms through Linux `/proc/<pid>/task/*/children` plus `VmRSS`, and
-about 100 ms with bounded macOS `ps`. Sampler processes are outside the target
-tree. macOS topology/RSS from `ps` is paired with microsecond `libproc` start
-identity; Windows keeps one synchronized process handle per retained identity.
-PID plus creation/start identity must be preserved until every retained
-identity is proven gone; missing process facts, incomplete fd4 telemetry, or an
-unverified termination invalidates the run rather than producing estimates.
+100 ms with bounded macOS `ps`. Scheduler delay and the work performed by a
+sample can make observations later than that configured cadence. Sampler
+processes are outside the target tree. macOS topology/RSS from `ps` is paired
+with microsecond `libproc` start identity; Windows keeps one synchronized
+process handle per retained identity. PID plus creation/start identity must be
+preserved until every retained identity is proven gone; missing process facts,
+incomplete fd4 telemetry, or an unverified termination invalidates the run
+rather than producing estimates.
 
 ## Child lifecycle descriptors and proof scope
 
-The supervised child owns no caller-selected filesystem path. Its descriptor
-contract is fixed: fd 5 is a parent-created result spool that the child may
-write; fd 6 carries bounded child-to-parent control frames; fd 7 is the
-parent-owned start gate and then the parent-lifeline; fd 8 is the
-benchmark-only child registration stream; and fd 9 is the parent coordinator's
-bounded acknowledgement stream. The document and optional image inputs remain
-inherited on fd 3 and fd 4. These descriptors are private transport, never MCP
-response fields, and do not carry user paths or document content in lifecycle
-control frames.
+The supervised child owns no caller-selected filesystem path. Descriptor
+numbers are local to each spawned process and must not be conflated. For an
+ordinary document child, the document and optional image inputs are inherited
+on fd 3 and fd 4; fd 5 is a parent-owned result spool created before spawn that
+the child may write; fd 6 carries bounded child-to-parent control frames; and
+fd 7 is the parent-owned start gate and then the parent-lifeline.
+
+The outer benchmark case has a separate descriptor namespace. Its fd 3 reads
+the one-shot ownership/control frame and fd 4 writes case telemetry. On POSIX,
+fd 5 is the registration-writer endpoint held by the case and inherited by its
+nested document children; the outer benchmark parent owns the reader endpoint.
+The case's fd 6 is the ACK-reader endpoint inherited by those children; the
+outer benchmark parent owns the writer endpoint. The case maps its fd 5 and fd 6
+to a nested document child's benchmark-only fd 8 registration-writer and fd 9
+ACK-reader, respectively. That mapping does not replace the nested child's own
+fd 5 result spool, fd 6 control stream, or fd 7 start gate/lifeline. These
+descriptors are private transport and never MCP response fields. Lifecycle
+control and registration frames carry neither user paths nor document content.
 
 The child registers first when registration descriptors are present, waits for
 one exact START frame on fd 7 only after the parent has obtained supervision,

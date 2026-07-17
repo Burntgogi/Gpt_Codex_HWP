@@ -133,6 +133,17 @@ export function createProcessRegistrationCoordinator(options: Readonly<{
   const readableEnd = new Promise<void>((resolvePromise) => {
     resolveReadableEnd = resolvePromise;
   });
+  let acknowledgementCloseSettled = false;
+  let settleAcknowledgementClose!: (receipt: Readonly<{
+    closed: boolean;
+    error: Error | null;
+  }>) => void;
+  const acknowledgementCloseReceipt = new Promise<Readonly<{
+    closed: boolean;
+    error: Error | null;
+  }>>((resolvePromise) => {
+    settleAcknowledgementClose = resolvePromise;
+  });
   const remaining = Math.max(0, options.deadlineAt - performance.now());
   const deadlineTimer = setTimeout(() => {
     fail("deadline");
@@ -140,11 +151,19 @@ export function createProcessRegistrationCoordinator(options: Readonly<{
   deadlineTimer.unref();
 
   const onAcknowledgementError = (error: Error): void => {
+    if (!acknowledgementCloseSettled) {
+      acknowledgementCloseSettled = true;
+      settleAcknowledgementClose({ closed: false, error });
+    }
     pendingAckReject?.(error);
     fail("channel");
   };
   const onAcknowledgementClose = (): void => {
     options.acknowledgementOutput.removeListener("error", onAcknowledgementError);
+    if (!acknowledgementCloseSettled) {
+      acknowledgementCloseSettled = true;
+      settleAcknowledgementClose({ closed: true, error: null });
+    }
   };
   options.acknowledgementOutput.on("error", onAcknowledgementError);
   options.acknowledgementOutput.once("close", onAcknowledgementClose);
@@ -402,6 +421,13 @@ export function createProcessRegistrationCoordinator(options: Readonly<{
             }
             end.call(options.acknowledgementOutput, () => settle());
         });
+        const closeReceipt = await bounded(acknowledgementCloseReceipt);
+        if (!closeReceipt.closed || closeReceipt.error !== null) {
+          throw closeReceipt.error ?? new Error("ACK channel failed to close cleanly");
+        }
+        if (poisonReason !== undefined || currentState() !== "closing") {
+          throw new Error("registration coordinator failed before ACK channel close");
+        }
         state = "sealed";
         clearTimeout(deadlineTimer);
       })()).catch((error: unknown) => {

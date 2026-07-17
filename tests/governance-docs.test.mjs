@@ -73,6 +73,29 @@ test("governance documentation defines reproducible contributor and architecture
   assert.match(performance, /512 MiB.{0,100}(boundary|ceiling|상한)/isu);
 });
 
+test("governance docs distinguish descriptor namespaces and nominal sampling cadence", async () => {
+  const [development, performance] = await Promise.all([
+    text("docs/DEVELOPMENT.md"),
+    text("docs/PERFORMANCE.md"),
+  ]);
+  assert.match(
+    development,
+    /ordinary document child.{0,300}fd 5.{0,120}parent-(?:created|owned) result spool.{0,160}fd 6.{0,120}child-to-parent control/isu,
+  );
+  assert.match(
+    development,
+    /outer benchmark case.{0,500}fd 5.{0,160}registration-writer.{0,240}parent.{0,120}reader.{0,240}fd 6.{0,160}ACK-reader.{0,240}parent.{0,120}writer/isu,
+  );
+  assert.match(
+    development,
+    /(?:configured nominal|nominal configured) cadence.{0,120}20 ms.{0,160}25 ms.{0,160}100 ms/isu,
+  );
+  assert.match(
+    performance,
+    /(?:configured nominal|nominal configured) cadence.{0,120}20 ms.{0,160}25 ms.{0,160}100 ms/isu,
+  );
+});
+
 test("governance documentation preserves project and upstream license boundaries", async () => {
   const [readmeKo, readmeEn, notices, contributing] = await Promise.all([
     text("README.md"),

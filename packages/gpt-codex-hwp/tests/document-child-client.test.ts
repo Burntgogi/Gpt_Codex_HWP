@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import {
   closeSync,
   existsSync,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmdir as removeDirectory, unlink as removeFile } from "node:fs/promises";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -36,6 +38,31 @@ const sourceClientPath = fileURLToPath(
   new URL("../src/workers/document-child-client.ts", import.meta.url),
 );
 const createProductionDocumentChildClient = childClientModule.createDocumentChildClient;
+
+test("production document lifecycle API does not expose the forced tracker switch", () => {
+  const source = readFileSync(sourceClientPath, "utf8");
+  assert.equal(source.includes("readonly forceWindowsTracker?: boolean;"), false);
+  assert.equal(source.includes("dependencies.forceWindowsTracker"), false);
+});
+
+const superviseDocumentProcessTree = (
+  childClientModule as unknown as Readonly<{
+    superviseDocumentProcessTree(
+      child: ReturnType<typeof spawn>,
+      options: Readonly<{
+        frameObserver?: (frame: string) => void;
+      }>,
+    ): Promise<unknown>;
+  }>
+).superviseDocumentProcessTree;
+const superviseDocumentProcessTreeWithForcedTrackerForTest = (
+  childClientModule as unknown as Readonly<{
+    superviseDocumentProcessTreeWithForcedTrackerForTest(
+      child: ReturnType<typeof spawn>,
+      frameObserver?: (frame: string) => void,
+    ): Promise<unknown>;
+  }>
+).superviseDocumentProcessTreeWithForcedTrackerForTest;
 const isIntegrityVerifiedResultSpool = (
   childClientModule as unknown as {
     isIntegrityVerifiedResultSpool(value: unknown): boolean;
@@ -81,6 +108,42 @@ const createJobHelperEnvironment = (
     createJobHelperEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   }
 ).createJobHelperEnvironment;
+const finalizeVerifiedWindowsSupervisor = (
+  childClientModule as unknown as Readonly<{
+    finalizeVerifiedWindowsSupervisor(options: Readonly<{
+      closeReceipt: Promise<Readonly<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+        error: Error | null;
+      }>>;
+      forceClose: () => boolean;
+      allowForceClose: boolean;
+      transcriptReceipt: () => Readonly<{
+        stdinFailed: boolean;
+        stderrBytes: number;
+        stdoutEnded: boolean;
+        stdoutFailed: boolean;
+        queuedFrames: number;
+        partialBytes: number;
+      }>;
+      gracefulExitMs?: number;
+      forcedExitMs?: number;
+    }>): Promise<boolean>;
+  }>
+).finalizeVerifiedWindowsSupervisor;
+const cleanupWindowsSupervisorHelper = (
+  childClientModule as unknown as Readonly<{
+    cleanupWindowsSupervisorHelper(
+      helper: ReturnType<typeof spawn>,
+      closeReceipt: Promise<Readonly<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+        error: Error | null;
+      }>>,
+      timeoutMs?: number,
+    ): Promise<boolean>;
+  }>
+).cleanupWindowsSupervisorHelper;
 const snapshotMacosIdentityTree = (
   childClientModule as unknown as {
     snapshotMacosIdentityTree(
@@ -446,6 +509,81 @@ test("document child late supervisor proof releases provisional startup retentio
   }
 });
 
+test("document child late mode 2 gated-root receipt releases retention without PID fallback", {
+  skip: process.platform !== "win32" ? "Windows process tracking is Windows-only" : false,
+  timeout: 15_000,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-late-mode2-root-"));
+  const owned = createOwnedFiles();
+  const snapshot = spoolSnapshot(owned.inputFd, 3);
+  const abort = new AbortController();
+  const gate = new HeavyChildGate();
+  let releaseTypedError!: () => void;
+  const holdTypedError = new Promise<void>((resolve) => { releaseTypedError = resolve; });
+  let typedErrorCaptured = false;
+  let dispatches = 0;
+  let legacyFallbackCalls = 0;
+  try {
+    const client = createProductionDocumentChildClient({
+      childEntry: fixturePath,
+      childArguments: ["success", "250"],
+      startGateEntry: startGatePath,
+      spoolRoot: root,
+      heavyChildGate: gate,
+      spawnFactory: (specification) => {
+        const child = spawn(specification.command, [...specification.args], specification.options);
+        const end = child.stdin!.end.bind(child.stdin);
+        child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+          dispatches += 1;
+          return end(...args);
+        }) as typeof child.stdin.end;
+        return child;
+      },
+      treeTerminator: async () => {
+        legacyFallbackCalls += 1;
+        return false;
+      },
+      jobSupervisorFactory: async (child) => {
+        try {
+          return await superviseDocumentProcessTreeWithForcedTrackerForTest(
+            child as ReturnType<typeof spawn>,
+            (frame) => {
+              if (/^GPT_CODEX_HWP_JOB READY [0-9]+ 2 /u.test(frame)) abort.abort();
+            },
+          ) as never;
+        } catch (error: unknown) {
+          typedErrorCaptured = true;
+          await holdTypedError;
+          throw error;
+        }
+      },
+    } as never);
+
+    await assert.rejects(
+      client.run(
+        detectRequest("late-mode2-root"),
+        snapshot,
+        { signal: abort.signal, deadlineMs: 5_000 },
+      ),
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
+    );
+    assert.equal(snapshot.cleanupCalls, 0);
+    assert.equal(dispatches, 0);
+    assert.equal(legacyFallbackCalls, 0);
+    await waitFor(() => typedErrorCaptured);
+    assert.equal(snapshot.cleanupCalls, 0);
+
+    releaseTypedError();
+    await waitFor(() => snapshot.cleanupCalls === 1 && readdirSync(root).length === 0);
+    const release = await gate.acquire(undefined, 500);
+    release();
+  } finally {
+    releaseTypedError?.();
+    owned.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const scenario of [
   {
     label: "abort",
@@ -620,6 +758,64 @@ for (const callbackMode of ["success", "error"] as const) {
     }
   });
 }
+
+test("document request stdin retains owner-lifetime error handling after its end callback", {
+  timeout: 10_000,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-request-owner-error-"));
+  const owned = createOwnedFiles();
+  let listenersAfterCallback = -1;
+  let laterErrorEmitted = false;
+  let retainedInput: ReturnType<typeof spawn>["stdin"] | undefined;
+  try {
+    const client = createProductionDocumentChildClient({
+      childEntry: fixturePath,
+      childArguments: ["success", "250"],
+      startGateEntry: startGatePath,
+      spoolRoot: root,
+      spawnFactory: (specification) => {
+        const child = spawn(
+          specification.command,
+          [...specification.args],
+          specification.options,
+        );
+        const input = child.stdin!;
+        retainedInput = input;
+        const end = input.end.bind(input);
+        input.end = ((
+          chunk: Uint8Array,
+          callback?: (error?: Error | null) => void,
+        ) => end(chunk, (nativeError?: Error | null) => {
+          callback?.(nativeError);
+          listenersAfterCallback = input.listenerCount("error");
+          if (listenersAfterCallback > 0) {
+            laterErrorEmitted = true;
+            const error = Object.assign(new Error("late request pipe failure"), { code: "EPIPE" });
+            input.emit("error", error);
+          }
+        })) as typeof input.end;
+        return child;
+      },
+      jobSupervisorFactory: async (child) => ({
+        terminate: async () => terminateChildWithProof(child, "registered-groups-empty"),
+      }),
+    } as never);
+
+    assert.deepEqual(
+      await client.run(
+        detectRequest("request-owner-error"),
+        spoolSnapshot(owned.inputFd, 3),
+      ),
+      { format: "unknown" },
+    );
+    assert.equal(listenersAfterCallback, 1);
+    assert.equal(laterErrorEmitted, true);
+    await waitFor(() => retainedInput?.listenerCount("error") === 0);
+  } finally {
+    owned.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("document child start gate rejection closes fd7 without START or payload dispatch", async () => {
   const root = mkdtempSync(join(tmpdir(), "hwp-start-gate-rejection-"));
@@ -1160,98 +1356,120 @@ test("Windows lifecycle supervisor removes a detached descendant after the engin
   }
 });
 
-test("forced Windows tracker retains a vanished intermediate before parent crash", {
+test("forced Windows tracker directly cleans a live descendant tree without a production gate", {
   skip: process.platform !== "win32" ? "Windows process tracking is Windows-only" : false,
-}, async (context) => {
-  const root = mkdtempSync(join(tmpdir(), "hwp-tracker-orphan-chain-"));
+  timeout: 15_000,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-tracker-direct-"));
   const pidLog = join(root, "pids.txt");
-  const owned = createOwnedFiles();
   const supervisorFrames: string[] = [];
   let observedPids: number[] = [];
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    child = spawn(process.execPath, [fixturePath, "race-spawner", "0", pidLog], {
+      shell: false,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    await waitFor(() => existsSync(pidLog) && readPidLog(pidLog).length >= 3, 5_000);
+    const supervision = superviseDocumentProcessTreeWithForcedTrackerForTest(
+      child,
+      (frame) => supervisorFrames.push(frame),
+    ).then(async (returned) => {
+        await (returned as { terminate(): Promise<unknown> }).terminate();
+        return returned;
+      });
+    await assert.rejects(
+      supervision,
+      /authority unavailable/u,
+    );
+    assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u);
+    const trackerFrame = supervisorFrames[1] ?? "";
+    assert.match(trackerFrame, /^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u);
+    assert.ok(Number.parseInt(trackerFrame.split(" ").at(-2)!, 10) < 200, trackerFrame);
+    assert.ok(Number.parseInt(trackerFrame.split(" ").at(-1)!, 10) >= 4, trackerFrame);
+    assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
+    assert.equal(supervisorFrames[3], "GPT_CODEX_HWP_JOB GONE 0 2");
+    observedPids = readPidLog(pidLog);
+    assert.ok(observedPids.length >= 3);
+    await waitUntilProcessIsGone(child.pid!);
+    for (const pid of observedPids) await waitUntilProcessIsGone(pid);
+  } finally {
+    if (existsSync(pidLog)) observedPids = readPidLog(pidLog);
+    if (child?.pid !== undefined) {
+      try { process.kill(child.pid, "SIGKILL"); } catch {}
+    }
+    for (const pid of observedPids) {
+      try { process.kill(pid, "SIGKILL"); } catch {}
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("forced Windows tracker remains cleanup-only and never opens document payload gates", {
+  skip: process.platform !== "win32" ? "Windows process tracking is Windows-only" : false,
+  timeout: 15_000,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-tracker-gate-"));
+  const markerPath = join(root, "payload.txt");
+  const owned = createOwnedFiles();
+  const supervisorFrames: string[] = [];
+  let startWrites = 0;
+  let dispatches = 0;
+  let legacyFallbackCalls = 0;
+  let targetCloseObserved = false;
   try {
     const client = createProductionDocumentChildClient({
       childEntry: fixturePath,
-      childArguments: ["multilevel-orphan-then-crash", "250", pidLog],
-      forceWindowsTracker: true,
-      jobSupervisorFrameObserver: (frame) => supervisorFrames.push(frame),
+      childArguments: ["gate-payload-marker", "250", markerPath],
+      startGateEntry: startGatePath,
+      spoolRoot: root,
+      jobSupervisorFactory: (child) => (
+        superviseDocumentProcessTreeWithForcedTrackerForTest(
+          child as ReturnType<typeof spawn>,
+          (frame) => supervisorFrames.push(frame),
+        ) as Promise<never>
+      ),
+      treeTerminator: async (child) => {
+        legacyFallbackCalls += 1;
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        return true;
+      },
+      spawnFactory: (specification) => {
+        const child = spawn(specification.command, [...specification.args], specification.options);
+        child.once("close", () => { targetCloseObserved = true; });
+        const startWriter = child.stdio[7];
+        if (startWriter !== null && startWriter !== undefined && "write" in startWriter) {
+          const write = startWriter.write.bind(startWriter);
+          startWriter.write = ((...args: Parameters<typeof startWriter.write>) => {
+            startWrites += 1;
+            return write(...args);
+          }) as typeof startWriter.write;
+        }
+        const end = child.stdin!.end.bind(child.stdin);
+        child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+          dispatches += 1;
+          return end(...args);
+        }) as typeof child.stdin.end;
+        return child;
+      },
     });
+
     await assert.rejects(
       client.run(
-        detectRequest("forced-tracker-orphan-chain"),
+        detectRequest("forced-tracker-gate"),
         spoolSnapshot(owned.inputFd, 3),
         { deadlineMs: 5_000 },
       ),
       (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u);
-    const trackerFrame = supervisorFrames[1] ?? "";
-    if (/^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(trackerFrame)) {
-      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-2)!, 10) < 200, trackerFrame);
-      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-1)!, 10) >= 3, trackerFrame);
-      assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
-      assert.equal(supervisorFrames[3], "GPT_CODEX_HWP_JOB GONE 0 2");
-    } else {
-      assert.equal(trackerFrame, "GPT_CODEX_HWP_JOB ERROR sampling Access_is_denied");
-    }
-    context.diagnostic(trackerFrame);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    observedPids = readPidLog(pidLog);
-    assert.ok(observedPids.length >= 2);
-    if (trackerFrame.startsWith("GPT_CODEX_HWP_JOB TRACKER ")) {
-      assert.match(readFileSync(pidLog, "utf8"), /^EXIT [0-9]+$/mu);
-    }
-    for (const pid of observedPids.slice(1)) await waitUntilProcessIsGone(pid);
+    assert.equal(startWrites, 0);
+    assert.equal(dispatches, 0);
+    assert.equal(targetCloseObserved, true);
+    assert.equal(legacyFallbackCalls, 0);
+    assert.equal(existsSync(markerPath), false);
   } finally {
-    for (const pid of observedPids) {
-      try { process.kill(pid, "SIGKILL"); } catch {}
-    }
-    owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("forced Windows tracker catches descendants spawned during timeout settlement", {
-  skip: process.platform !== "win32" ? "Windows process tracking is Windows-only" : false,
-}, async (context) => {
-  const root = mkdtempSync(join(tmpdir(), "hwp-tracker-spawn-race-"));
-  const pidLog = join(root, "pids.txt");
-  const owned = createOwnedFiles();
-  const supervisorFrames: string[] = [];
-  let observedPids: number[] = [];
-  try {
-    const client = createProductionDocumentChildClient({
-      childEntry: fixturePath,
-      childArguments: ["spawn-race-timeout", "250", pidLog],
-      forceWindowsTracker: true,
-      jobSupervisorFrameObserver: (frame) => supervisorFrames.push(frame),
-    });
-    await assert.rejects(
-      client.run(
-        detectRequest("forced-tracker-spawn-race"),
-        spoolSnapshot(owned.inputFd, 3),
-        { deadlineMs: 2_500 },
-      ),
-      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
-    );
-    assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u);
-    const trackerFrame = supervisorFrames[1] ?? "";
-    if (/^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(trackerFrame)) {
-      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-2)!, 10) < 200, trackerFrame);
-      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-1)!, 10) >= 10, trackerFrame);
-      assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
-      assert.equal(supervisorFrames[3], "GPT_CODEX_HWP_JOB GONE 0 2");
-    } else {
-      assert.equal(trackerFrame, "GPT_CODEX_HWP_JOB ERROR sampling Access_is_denied");
-    }
-    context.diagnostic(trackerFrame);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    observedPids = readPidLog(pidLog);
-    assert.ok(observedPids.length >= 1);
-    for (const pid of observedPids) await waitUntilProcessIsGone(pid);
-  } finally {
-    for (const pid of observedPids) {
-      try { process.kill(pid, "SIGKILL"); } catch {}
-    }
     owned.cleanup();
     rmSync(root, { recursive: true, force: true });
   }
@@ -1262,6 +1480,9 @@ test("Windows child refuses framed request dispatch when supervision is unavaila
   const owned = createOwnedFiles();
   const snapshot = spoolSnapshot(owned.inputFd, 3);
   let dispatches = 0;
+  let legacyFallbackCalls = 0;
+  let exactHandleProbes = 0;
+  let exactHandleKills = 0;
   try {
     const client = createDocumentChildClient({
       childEntry: fixturePath,
@@ -1270,8 +1491,19 @@ test("Windows child refuses framed request dispatch when supervision is unavaila
       jobSupervisorFactory: async () => {
         throw new Error("job assignment unavailable");
       },
+      treeTerminator: async (child) => {
+        legacyFallbackCalls += 1;
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        return true;
+      },
       spawnFactory: (specification) => {
         const child = spawn(specification.command, [...specification.args], specification.options);
+        const kill = child.kill.bind(child);
+        child.kill = ((...args: Parameters<typeof child.kill>) => {
+          if (args[0] === 0) exactHandleProbes += 1;
+          else exactHandleKills += 1;
+          return kill(...args);
+        }) as typeof child.kill;
         const end = child.stdin!.end.bind(child.stdin);
         child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
           dispatches += 1;
@@ -1285,6 +1517,9 @@ test("Windows child refuses framed request dispatch when supervision is unavaila
       (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.equal(dispatches, 0);
+    assert.equal(legacyFallbackCalls, 0);
+    assert.equal(exactHandleProbes, 1);
+    assert.equal(exactHandleKills, 1);
     assert.equal(snapshot.cleanupCalls, 1);
     assert.deepEqual(readdirSync(root), []);
   } finally {
@@ -2619,6 +2854,173 @@ test("Windows supervisor always performs discovery-free retained-handle cleanup"
   assert.match(windows, /if \(-not \$discoveryComplete\) \{ return \$false \}/u);
 });
 
+test("Windows supervisor natural close requires exact zero exit without signal or spawn error", async () => {
+  for (const [label, closeReceipt, expected] of [
+    ["zero", { code: 0, signal: null, error: null }, true],
+    ["nonzero", { code: 7, signal: null, error: null }, false],
+    ["signal", { code: null, signal: "SIGTERM", error: null }, false],
+    ["spawn error", { code: null, signal: null, error: new Error("spawn failed") }, false],
+  ] as const) {
+    let forceCalls = 0;
+    assert.equal(await finalizeWindowsSupervisorForTest({
+      closeReceipt: Promise.resolve(closeReceipt),
+      forceClose: () => { forceCalls += 1; return true; },
+      allowForceClose: true,
+      transcriptReceipt: cleanWindowsSupervisorTranscript,
+      gracefulExitMs: 20,
+      forcedExitMs: 20,
+    }), expected, label);
+    assert.equal(forceCalls, 0, label);
+  }
+});
+
+test("Windows supervisor rejects late stderr and trailing complete or partial stdout after GONE", async () => {
+  for (const [label, transcriptReceipt] of [
+    ["stdin error", { ...cleanWindowsSupervisorTranscript(), stdinFailed: true }],
+    ["late stderr", { ...cleanWindowsSupervisorTranscript(), stderrBytes: 1 }],
+    ["trailing frame", { ...cleanWindowsSupervisorTranscript(), queuedFrames: 1 }],
+    ["trailing partial", { ...cleanWindowsSupervisorTranscript(), partialBytes: 1 }],
+  ] as const) {
+    assert.equal(await finalizeWindowsSupervisorForTest({
+      closeReceipt: Promise.resolve({ code: 0, signal: null, error: null }),
+      forceClose: () => true,
+      allowForceClose: true,
+      transcriptReceipt: () => transcriptReceipt,
+      gracefulExitMs: 20,
+      forcedExitMs: 20,
+    }), false, label);
+  }
+});
+
+test("Windows supervisor accepts only the expected deliberate signalled close after valid GONE", async () => {
+  const close = telemetryDeferred<Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: Error | null;
+  }>>();
+  let forceCalls = 0;
+  const result = finalizeWindowsSupervisorForTest({
+    closeReceipt: close.promise,
+    forceClose: () => {
+      forceCalls += 1;
+      close.resolve({ code: null, signal: "SIGTERM", error: null });
+      return true;
+    },
+    allowForceClose: true,
+    transcriptReceipt: cleanWindowsSupervisorTranscript,
+    gracefulExitMs: 5,
+    forcedExitMs: 50,
+  });
+
+  assert.equal(await result, true);
+  assert.equal(forceCalls, 1);
+});
+
+test("Windows supervisor force-cleans invalid GONE without turning cleanup into proof", async () => {
+  const close = telemetryDeferred<Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: Error | null;
+  }>>();
+  let forceCalls = 0;
+  assert.equal(await finalizeWindowsSupervisorForTest({
+    closeReceipt: close.promise,
+    forceClose: () => {
+      forceCalls += 1;
+      close.resolve({ code: null, signal: "SIGTERM", error: null });
+      return true;
+    },
+    allowForceClose: false,
+    transcriptReceipt: cleanWindowsSupervisorTranscript,
+    gracefulExitMs: 5,
+    forcedExitMs: 50,
+  }), false);
+  assert.equal(forceCalls, 1);
+});
+
+test("Windows supervisor early invalid frame performs bounded helper cleanup", async () => {
+  assert.equal(typeof cleanupWindowsSupervisorHelper, "function");
+  const helper = new EventEmitter() as ReturnType<typeof spawn>;
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  Object.assign(helper, {
+    stdin,
+    stdout,
+    stderr,
+    stdio: [stdin, stdout, stderr],
+    exitCode: null,
+    signalCode: null,
+    unref() {},
+  });
+  const close = telemetryDeferred<Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: Error | null;
+  }>>();
+  const signals: NodeJS.Signals[] = [];
+  helper.kill = ((signal: NodeJS.Signals = "SIGTERM") => {
+    signals.push(signal);
+    close.resolve({ code: null, signal, error: null });
+    return true;
+  }) as typeof helper.kill;
+
+  assert.equal(await cleanupWindowsSupervisorHelper(helper, close.promise, 50), true);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(stdin.destroyed, true);
+  assert.equal(stdout.destroyed, true);
+  assert.equal(stderr.destroyed, true);
+});
+
+test("Windows supervisor retains an unclosed helper owner until its exact late close", async () => {
+  const helper = new EventEmitter() as ReturnType<typeof spawn>;
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let unrefCalls = 0;
+  Object.assign(helper, {
+    stdin,
+    stdout,
+    stderr,
+    stdio: [stdin, stdout, stderr],
+    exitCode: null,
+    signalCode: null,
+    unref() { unrefCalls += 1; },
+  });
+  const close = telemetryDeferred<Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: Error | null;
+  }>>();
+  const signals: NodeJS.Signals[] = [];
+  helper.kill = ((signal: NodeJS.Signals = "SIGTERM") => {
+    signals.push(signal);
+    return true;
+  }) as typeof helper.kill;
+
+  const firstCleanup = cleanupWindowsSupervisorHelper(helper, close.promise, 10);
+  const concurrentCleanup = cleanupWindowsSupervisorHelper(helper, close.promise, 10);
+  assert.equal(concurrentCleanup, firstCleanup);
+  assert.equal(await firstCleanup, false);
+  assert.equal(await concurrentCleanup, false);
+  const repeatedCleanup = cleanupWindowsSupervisorHelper(helper, close.promise, 10);
+  assert.equal(repeatedCleanup, firstCleanup);
+  assert.equal(await repeatedCleanup, false);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(stdin.destroyed, false);
+  assert.equal(stdout.destroyed, false);
+  assert.equal(stderr.destroyed, false);
+  assert.equal(unrefCalls, 0);
+
+  close.resolve({ code: null, signal: "SIGKILL", error: null });
+  await close.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(stdin.destroyed, true);
+  assert.equal(stdout.destroyed, true);
+  assert.equal(stderr.destroyed, true);
+  assert.equal(unrefCalls, 1);
+});
+
 test("Windows system executables fail closed without an absolute SystemRoot", () => {
   assert.throws(() => resolveWindowsSystemExecutable("taskkill.exe", "win32", undefined));
   assert.throws(() => resolveWindowsSystemExecutable("taskkill.exe", "win32", "relative"));
@@ -3454,6 +3856,23 @@ function createOwnedFiles() {
       rmSync(directory, { recursive: true, force: true });
     },
   };
+}
+
+function cleanWindowsSupervisorTranscript() {
+  return Object.freeze({
+    stdinFailed: false,
+    stderrBytes: 0,
+    stdoutEnded: true,
+    stdoutFailed: false,
+    queuedFrames: 0,
+    partialBytes: 0,
+  });
+}
+
+function finalizeWindowsSupervisorForTest(options: Parameters<
+  typeof finalizeVerifiedWindowsSupervisor
+>[0]): Promise<boolean> {
+  return finalizeVerifiedWindowsSupervisor(options);
 }
 
 async function waitUntilProcessIsGone(pid: number): Promise<void> {

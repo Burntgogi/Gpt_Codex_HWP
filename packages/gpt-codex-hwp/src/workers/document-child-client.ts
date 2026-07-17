@@ -114,8 +114,6 @@ export interface DocumentChildClientDependencies {
     readyDeadlineMs: number,
   ) => Promise<ChildLifecycleSupervisor>;
   readonly jobSupervisorFrameObserver?: (frame: string) => void;
-  /** Test seam: exercise the production tracker fallback even when Job assignment is available. */
-  readonly forceWindowsTracker?: boolean;
 }
 
 export interface ChildLifecycleSupervisor {
@@ -171,8 +169,54 @@ interface ChildStartupCapture {
     exit?: { code: number | null; signal: NodeJS.Signals | null };
     observedAt?: number;
   };
+  readonly closeReceipt: Promise<ChildProcessCloseReceipt>;
   detachTerminal(): void;
   detachAll(): void;
+}
+
+export interface ChildProcessCloseReceipt {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly error: Error | null;
+}
+
+const gatedRootGoneErrors = new WeakSet<object>();
+interface SupervisorHelperRetention {
+  readonly helper: ChildProcess;
+  readonly closeReceipt: Promise<ChildProcessCloseReceipt>;
+}
+
+const supervisorHelperUnclosedErrors = new WeakMap<object, SupervisorHelperRetention>();
+const supervisorHelperRetentionsByProcess = new WeakMap<object, SupervisorHelperRetention>();
+const supervisorHelperCleanupPromises = new WeakMap<object, Promise<boolean>>();
+const releasedSupervisorHelpers = new WeakSet<object>();
+const unsafeSupervisorHelperRetentions = new Set<SupervisorHelperRetention>();
+const childProcessCloseReceipts = new WeakMap<object, Promise<ChildProcessCloseReceipt>>();
+
+function gatedRootGoneError(): Error {
+  const error = new Error("Windows Job authority unavailable after gated root cleanup");
+  gatedRootGoneErrors.add(error);
+  return error;
+}
+
+function supervisorHelperUnclosedError(
+  helper: ChildProcess,
+  closeReceipt: Promise<ChildProcessCloseReceipt>,
+): Error {
+  const error = new Error("Windows Job supervisor cleanup unverified");
+  supervisorHelperUnclosedErrors.set(
+    error,
+    retainUnclosedWindowsSupervisorHelper(helper, closeReceipt),
+  );
+  return error;
+}
+
+export function isGatedRootGoneError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && gatedRootGoneErrors.has(error);
+}
+
+export function isSupervisorHelperUnclosedError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && supervisorHelperUnclosedErrors.has(error);
 }
 
 type StartupTerminationReason = "deadline" | "abort";
@@ -373,8 +417,8 @@ export function createDocumentChildClient(
         const terminationReason = startupLifecycle.terminationReason();
         if (child !== undefined) {
           closeStartGate(startGate);
-          await fallbackTerminator(child);
           const capture = startupCapture ?? createChildStartupCapture(child);
+          await terminateGatedChildByHandle(child, capture.closeReceipt);
           await cleanupFailedPreDispatch(
             child,
             snapshot,
@@ -382,7 +426,6 @@ export function createDocumentChildClient(
             release,
             capture,
             startupLifecycle,
-            fallbackTerminator,
             startGate,
           );
           throw terminationFailedError();
@@ -412,7 +455,6 @@ export function createDocumentChildClient(
                 childProcess,
                 readyMs,
                 dependencies.jobSupervisorFrameObserver,
-                dependencies.forceWindowsTracker,
               )
           : (childProcess: ChildProcess) =>
               createPosixProcessTreeSupervisor(childProcess, process.platform));
@@ -426,7 +468,21 @@ export function createDocumentChildClient(
       );
       if (supervisorOutcome.kind === "failed") {
         closeStartGate(childStartGate);
-        await fallbackTerminator(spawnedChild);
+        if (isSupervisorHelperUnclosedError(supervisorOutcome.error)) {
+          retainUnverifiedPreDispatch(
+            spawnedChild,
+            snapshot,
+            outputOwner,
+            release,
+            childStartupCapture,
+            startupLifecycle,
+            childStartGate,
+          );
+          throw terminationFailedError();
+        }
+        if (!isGatedRootGoneError(supervisorOutcome.error)) {
+          await terminateGatedChildByHandle(spawnedChild, childStartupCapture.closeReceipt);
+        }
         await cleanupFailedPreDispatch(
           spawnedChild,
           snapshot,
@@ -434,7 +490,6 @@ export function createDocumentChildClient(
           release,
           childStartupCapture,
           startupLifecycle,
-          fallbackTerminator,
           childStartGate,
         );
         throw terminationFailedError();
@@ -451,9 +506,6 @@ export function createDocumentChildClient(
           startupLifecycle,
           childStartGate,
         );
-        void terminateWithReceipt(fallbackTerminator, spawnedChild).catch(() => {
-          // The provisional retention owns all resources until typed proof arrives.
-        });
         throw terminationFailedError();
       }
       supervisedTerminator = createVerifiedTerminator(
@@ -520,7 +572,6 @@ export function createDocumentChildClient(
           release,
           childStartupCapture,
           startupLifecycle,
-          supervisedTerminator,
           childStartGate,
         );
         throw createDocumentEngineRunError("ENGINE_INIT_FAILED", { stage: "startup" });
@@ -671,6 +722,22 @@ function retainUntilLateSupervisor(
   unsafeChildRetentions.add(retention);
   startupLifecycle.dispose();
 
+  const finalizeGatedRoot = async (): Promise<void> => {
+    const close = await capture.closeReceipt;
+    if (close.error !== null) return;
+    await drainCapturedChildStreams(child);
+    closeStartGate(startGate);
+    capture.detachAll();
+    try {
+      await cleanupSnapshot(snapshot);
+      await cleanupOutputSpool(outputOwner);
+      release();
+      unsafeChildRetentions.delete(retention);
+    } catch {
+      // Exact root close is known, but owned-resource cleanup remains fail-closed.
+    }
+  };
+
   const finalizeWithProof = async (
     supervisor: ChildLifecycleSupervisor,
   ): Promise<void> => {
@@ -703,8 +770,13 @@ function retainUntilLateSupervisor(
         // A late supervisor failure leaves the provisional retention intact.
       });
     },
-    () => {
-      // A late readiness rejection has no proof authority; retain fail-closed.
+    (error: unknown) => {
+      if (isGatedRootGoneError(error)) {
+        void finalizeGatedRoot().catch(() => {
+          // Exact root close is known, but owned-resource cleanup remains fail-closed.
+        });
+      }
+      // Untyped late readiness rejection has no proof authority; retain fail-closed.
     },
   ).catch(() => {
     // Both handlers are non-throwing, but keep the terminal chain rejection-safe.
@@ -754,29 +826,65 @@ async function cleanupFailedPreDispatch(
   release: () => void,
   capture: ChildStartupCapture,
   startupLifecycle: StartupLifecycleState,
-  treeTerminator: ProcessTreeTerminator,
   startGate: StartGateOwner | undefined,
 ): Promise<void> {
-  const exit = await waitWithTimeout(waitForChildExit(child), 1_000);
-  if (exit === undefined) {
+  const close = await waitWithTimeout(capture.closeReceipt, 1_000);
+  if (close === undefined || close.error !== null) {
     startupLifecycle.dispose();
-    scheduleCleanupAfterActualExit(
+    retainUntilGatedRootClose(
       child,
       snapshot,
       outputOwner,
       release,
       capture,
-      treeTerminator,
       startGate,
     );
     return;
   }
+  closeStartGate(startGate);
   await drainCapturedChildStreams(child);
   capture.detachAll();
   startupLifecycle.dispose();
   await cleanupSnapshot(snapshot);
   await cleanupOutputSpool(outputOwner);
   release();
+}
+
+function retainUntilGatedRootClose(
+  child: ChildProcess,
+  snapshot: SpoolDocumentSnapshot | undefined,
+  outputOwner: OutputSpoolOwner,
+  release: () => void,
+  capture: ChildStartupCapture,
+  startGate: StartGateOwner | undefined,
+): void {
+  const retention = { child, snapshot, outputOwner, release, capture, startGate };
+  unsafeChildRetentions.add(retention);
+  void capture.closeReceipt.then(async (close) => {
+    if (close.error !== null) return;
+    closeStartGate(startGate);
+    await drainCapturedChildStreams(child);
+    capture.detachAll();
+    await cleanupSnapshot(snapshot);
+    await cleanupOutputSpool(outputOwner);
+    release();
+    unsafeChildRetentions.delete(retention);
+  }).catch(() => {
+    // A missing exact close receipt retains the gate and owned spools fail-closed.
+  });
+}
+
+function retainUnverifiedPreDispatch(
+  child: ChildProcess,
+  snapshot: SpoolDocumentSnapshot | undefined,
+  outputOwner: OutputSpoolOwner,
+  release: () => void,
+  capture: ChildStartupCapture,
+  startupLifecycle: StartupLifecycleState,
+  startGate: StartGateOwner | undefined,
+): void {
+  unsafeChildRetentions.add({ child, snapshot, outputOwner, release, capture, startGate });
+  startupLifecycle.dispose();
 }
 
 async function terminateExpiredStartup(
@@ -870,6 +978,8 @@ async function runChild<Operation extends DocumentEngineOperation>(
   return new Promise<IsolatedDocumentResult<Operation>>((resolve, reject) => {
     const onStdout = capture.onStdout;
     const onStderr = capture.onStderr;
+    const requestInput = child.stdin;
+    let requestDispatchSettled = false;
 
     const detachListeners = (): void => {
       child.off("error", onError);
@@ -975,6 +1085,18 @@ async function runChild<Operation extends DocumentEngineOperation>(
         resolve(resolvedResult!);
       })();
     };
+
+    const settleRequestDispatch = (error?: unknown): void => {
+      if (requestDispatchSettled) return;
+      requestDispatchSettled = true;
+      if (error !== undefined && error !== null) settle({ error });
+    };
+    const onRequestInputError = (error: Error): void => settleRequestDispatch(error);
+    const onRequestInputOwnerClose = (): void => {
+      requestInput?.removeListener("error", onRequestInputError);
+    };
+    requestInput?.on("error", onRequestInputError);
+    child.once("close", onRequestInputOwnerClose);
 
     const onMessage = (value: unknown): void => {
       if (settling) return;
@@ -1114,12 +1236,10 @@ async function runChild<Operation extends DocumentEngineOperation>(
       }
       const wire = createWireDocumentRequest(request, transports, "child");
       const frame = encodeBoundedJsonFrame(wire, MAX_CHILD_REQUEST_FRAME_BYTES);
-      if (child.stdin === null) throw new Error("child stdin unavailable");
-      child.stdin.end(frame, (error?: Error | null) => {
-        if (error != null) settle({ error });
-      });
+      if (requestInput === null) throw new Error("child stdin unavailable");
+      requestInput.end(frame, (error?: Error | null) => settleRequestDispatch(error));
     } catch (error: unknown) {
-      settle({ error });
+      settleRequestDispatch(error);
     }
   });
 }
@@ -1131,6 +1251,7 @@ async function createWindowsJobSupervisor(
   forceTracker = false,
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
+  const targetCloseReceipt = observeChildProcessClose(child);
   const powershell = resolveWindowsSystemExecutable(
     "powershell.exe",
     "win32",
@@ -1153,16 +1274,21 @@ async function createWindowsJobSupervisor(
     env: createJobHelperEnvironment(process.env),
     stdio: ["pipe", "pipe", "pipe"],
   });
+  const closeReceipt = observeChildProcessClose(helper);
+  let stdinFailed = helper.stdin === null;
+  helper.stdin?.on("error", () => { stdinFailed = true; });
   let stderrBytes = 0;
   helper.stderr?.on("data", (chunk: Buffer) => {
     stderrBytes = Math.min(MAX_DRAIN_ACCOUNTED_BYTES, stderrBytes + chunk.byteLength);
   });
-  if (helper.stdout === null || helper.stdin === null) {
-    helper.kill();
+  helper.stderr?.on("error", () => { stderrBytes = Math.max(1, stderrBytes); });
+  if (helper.stdout === null || helper.stdin === null || helper.stderr === null) {
+    if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
+      throw supervisorHelperUnclosedError(helper, closeReceipt);
+    }
     throw new Error("job supervisor pipes unavailable");
   }
   const lines = new BoundedSupervisorLineReader(helper.stdout, 128);
-  const exitReceipt = waitForChildExit(helper);
   let readyMode: 1 | 2;
   try {
     const ready = await lines.next(readyDeadlineMs);
@@ -1176,24 +1302,28 @@ async function createWindowsJobSupervisor(
     }
     readyMode = Number(readyMatch[1]) as 1 | 2;
   } catch (error: unknown) {
-    helper.stdin.destroy();
-    helper.kill();
+    if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
+      throw supervisorHelperUnclosedError(helper, closeReceipt);
+    }
     throw error;
   }
 
   let commandSent = false;
+  let gatedRootGone = false;
+  let helperCleanupVerified = true;
   let verifiedReceipt: ProcessTreeTerminationReceipt | undefined;
   let activeTermination: Promise<ProcessTreeTerminationReceipt> | undefined;
   let processTreeRss: Readonly<{
     baselineBytes: number;
     peakBytes: number;
   }> | undefined;
-  return {
+  const supervisor: ChildLifecycleSupervisor = {
     processTreeTelemetryReady: Promise.resolve(true),
     processTreeRss: () => processTreeRss,
     terminate(): Promise<ProcessTreeTerminationReceipt> {
       if (verifiedReceipt?.gone === true) return Promise.resolve(verifiedReceipt);
       activeTermination ??= (async () => {
+        let proved = false;
         try {
           if (!commandSent) {
             commandSent = true;
@@ -1208,53 +1338,117 @@ async function createWindowsJobSupervisor(
           processTreeRss = parseProcessTreeRssFrame(frame);
           const gone = await lines.next(3_000);
           frameObserver?.(gone);
-          const goneMatch = /^GPT_CODEX_HWP_JOB GONE 0 ([12])$/u.exec(gone);
-          if (goneMatch === null) return unverifiedTermination("termination");
+          const matchingGone = gone === `GPT_CODEX_HWP_JOB GONE 0 ${readyMode}`;
+          const authorityGone = readyMode === 1 && matchingGone;
           const finalized = await finalizeVerifiedWindowsSupervisor({
-            exitReceipt,
+            closeReceipt,
             forceClose: () => helper.kill(),
+            allowForceClose: authorityGone,
+            transcriptReceipt: () => Object.freeze({
+              stdinFailed,
+              stderrBytes,
+              ...lines.transcriptReceipt(),
+            }),
           });
           if (!finalized) return unverifiedTermination("termination");
-          if (readyMode !== 1 || goneMatch[1] !== "1") {
+          if (readyMode === 2 && matchingGone) {
+            const targetClose = await waitWithTimeout(targetCloseReceipt, 5_000);
+            gatedRootGone = targetClose !== undefined && targetClose.error === null;
+            return unverifiedTermination("identity");
+          }
+          if (!matchingGone || !authorityGone) {
             return unverifiedTermination("identity");
           }
           verifiedReceipt = Object.freeze({
             gone: true,
             proof: "windows-job-empty",
           });
+          proved = true;
           return verifiedReceipt;
         } catch {
           return unverifiedTermination("channel");
         } finally {
+          if (!proved) {
+            if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
+              helperCleanupVerified = false;
+            }
+          }
           activeTermination = undefined;
         }
       })();
       return activeTermination;
     },
   };
+  if (readyMode !== 1) {
+    await supervisor.terminate();
+    if (gatedRootGone) throw gatedRootGoneError();
+    if (!helperCleanupVerified) throw supervisorHelperUnclosedError(helper, closeReceipt);
+    throw new Error("Windows Job authority unavailable");
+  }
+  return supervisor;
 }
 
 export async function finalizeVerifiedWindowsSupervisor({
-  exitReceipt,
+  closeReceipt,
   forceClose,
+  allowForceClose,
+  transcriptReceipt,
   gracefulExitMs = 1_000,
-  forcedExitMs = 5_000,
+  forcedExitMs = 4_000,
 }: {
-  readonly exitReceipt: Promise<number | null>;
+  readonly closeReceipt: Promise<Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: Error | null;
+  }>>;
   readonly forceClose: () => boolean;
+  readonly allowForceClose: boolean;
+  readonly transcriptReceipt: () => Readonly<{
+    stdinFailed: boolean;
+    stderrBytes: number;
+    stdoutEnded: boolean;
+    stdoutFailed: boolean;
+    queuedFrames: number;
+    partialBytes: number;
+  }>;
   readonly gracefulExitMs?: number;
   readonly forcedExitMs?: number;
 }): Promise<boolean> {
-  const gracefulExit = await waitWithTimeout(exitReceipt, gracefulExitMs);
-  if (gracefulExit !== undefined) return true;
+  const gracefulClose = await waitWithTimeout(closeReceipt, gracefulExitMs);
+  if (gracefulClose !== undefined) {
+    return gracefulClose.code === 0 && gracefulClose.signal === null &&
+      gracefulClose.error === null && cleanWindowsSupervisorTranscript(transcriptReceipt);
+  }
   let closeRequested = false;
   try {
     closeRequested = forceClose();
   } catch {
     closeRequested = false;
   }
-  const forcedExit = await waitWithTimeout(exitReceipt, forcedExitMs);
-  return forcedExit !== undefined && (closeRequested || forcedExit === 0);
+  const forcedClose = await waitWithTimeout(closeReceipt, forcedExitMs);
+  return allowForceClose && closeRequested && forcedClose !== undefined && forcedClose.code === null &&
+    forcedClose.signal === "SIGTERM" && forcedClose.error === null &&
+    cleanWindowsSupervisorTranscript(transcriptReceipt);
+}
+
+function cleanWindowsSupervisorTranscript(
+  receipt: () => Readonly<{
+    stdinFailed: boolean;
+    stderrBytes: number;
+    stdoutEnded: boolean;
+    stdoutFailed: boolean;
+    queuedFrames: number;
+    partialBytes: number;
+  }>,
+): boolean {
+  try {
+    const value = receipt();
+    return value.stdinFailed === false && value.stderrBytes === 0 && value.stdoutEnded === true &&
+      value.stdoutFailed === false && value.queuedFrames === 0 &&
+      value.partialBytes === 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function superviseDocumentProcessTree(
@@ -1270,12 +1464,20 @@ export async function superviseDocumentProcessTree(
       child,
       5_000,
       options.frameObserver,
-      false,
     );
   }
   return createPosixProcessTreeSupervisor(child, process.platform, {
     deferProcessTreeTelemetryStop: options.deferProcessTreeTelemetryStop,
   });
+}
+
+/** Test-only authority-failure entrypoint; production callers cannot disable Job assignment. */
+export async function superviseDocumentProcessTreeWithForcedTrackerForTest(
+  child: ChildProcess,
+  frameObserver?: (frame: string) => void,
+): Promise<ChildLifecycleSupervisor> {
+  if (process.platform !== "win32") throw new Error("Windows tracker test is unavailable");
+  return createWindowsJobSupervisor(child, 5_000, frameObserver, true);
 }
 
 interface PosixProcessRecord {
@@ -2297,12 +2499,25 @@ class BoundedSupervisorLineReader {
     reject: (error: Error) => void;
   }> = [];
   #failed: Error | undefined;
+  #stdoutEnded = false;
+  #stdoutFailed = false;
 
   constructor(stream: NodeJS.ReadableStream, maxLineBytes: number) {
     this.#buffer = Buffer.alloc(maxLineBytes);
     stream.on("data", (chunk: Buffer) => this.#push(chunk));
-    stream.on("end", () => this.#fail(new Error("job supervisor stream ended")));
-    stream.on("error", () => this.#fail(new Error("job supervisor stream failed")));
+    stream.on("end", () => {
+      this.#stdoutEnded = true;
+      this.#fail(new Error("job supervisor stream ended"));
+    });
+    stream.on("error", () => {
+      this.#stdoutFailed = true;
+      this.#fail(new Error("job supervisor stream failed"));
+    });
+    stream.on("close", () => {
+      if (this.#stdoutEnded) return;
+      this.#stdoutFailed = true;
+      this.#fail(new Error("job supervisor stream closed before end"));
+    });
   }
 
   next(timeoutMs: number): Promise<string> {
@@ -2326,6 +2541,20 @@ class BoundedSupervisorLineReader {
         clearTimeout(timer);
         rejectOnce(error);
       };
+    });
+  }
+
+  transcriptReceipt(): Readonly<{
+    stdoutEnded: boolean;
+    stdoutFailed: boolean;
+    queuedFrames: number;
+    partialBytes: number;
+  }> {
+    return Object.freeze({
+      stdoutEnded: this.#stdoutEnded,
+      stdoutFailed: this.#stdoutFailed,
+      queuedFrames: this.#queue.length,
+      partialBytes: this.#length,
     });
   }
 
@@ -2361,6 +2590,103 @@ class BoundedSupervisorLineReader {
     this.#failed = error;
     for (const waiter of this.#waiters.splice(0)) waiter.reject(error);
   }
+}
+
+export function observeChildProcessClose(child: ChildProcess): Promise<ChildProcessCloseReceipt> {
+  const existing = childProcessCloseReceipts.get(child);
+  if (existing !== undefined) return existing;
+  const receipt = new Promise<ChildProcessCloseReceipt>((resolve) => {
+    let childError: Error | null = null;
+    const onError = (error: Error): void => { childError ??= error; };
+    child.on("error", onError);
+    child.once("close", (code, signal) => {
+      child.removeListener("error", onError);
+      resolve(Object.freeze({ code, signal, error: childError }));
+    });
+  });
+  childProcessCloseReceipts.set(child, receipt);
+  return receipt;
+}
+
+export function cleanupWindowsSupervisorHelper(
+  helper: ChildProcess,
+  closeReceipt: Promise<ChildProcessCloseReceipt>,
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  const existing = supervisorHelperCleanupPromises.get(helper);
+  if (existing !== undefined) return existing;
+  const cleanup = performWindowsSupervisorHelperCleanup(helper, closeReceipt, timeoutMs);
+  supervisorHelperCleanupPromises.set(helper, cleanup);
+  return cleanup;
+}
+
+async function performWindowsSupervisorHelperCleanup(
+  helper: ChildProcess,
+  closeReceipt: Promise<ChildProcessCloseReceipt>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let closed = await waitWithTimeout(closeReceipt, 1);
+  const firstWaitMs = Math.max(1, Math.floor(timeoutMs / 2));
+  if (closed === undefined) {
+    try { helper.kill(); } catch { /* escalate below */ }
+    closed = await waitWithTimeout(closeReceipt, firstWaitMs);
+  }
+  if (closed === undefined) {
+    try { helper.kill("SIGKILL"); } catch { /* bounded cleanup is exhausted */ }
+    closed = await waitWithTimeout(closeReceipt, Math.max(1, timeoutMs - firstWaitMs));
+  }
+  if (closed === undefined) {
+    retainUnclosedWindowsSupervisorHelper(helper, closeReceipt);
+    return false;
+  }
+  releaseClosedWindowsSupervisorHelper(helper);
+  return true;
+}
+
+function retainUnclosedWindowsSupervisorHelper(
+  helper: ChildProcess,
+  closeReceipt: Promise<ChildProcessCloseReceipt>,
+): SupervisorHelperRetention {
+  const existing = supervisorHelperRetentionsByProcess.get(helper);
+  if (existing !== undefined) return existing;
+  const retention = Object.freeze({ helper, closeReceipt });
+  supervisorHelperRetentionsByProcess.set(helper, retention);
+  unsafeSupervisorHelperRetentions.add(retention);
+  void closeReceipt.then(() => {
+    releaseClosedWindowsSupervisorHelper(helper);
+    unsafeSupervisorHelperRetentions.delete(retention);
+    supervisorHelperRetentionsByProcess.delete(helper);
+  }, () => {
+    // A rejected receipt cannot prove close; retain the exact helper owner.
+  });
+  return retention;
+}
+
+function releaseClosedWindowsSupervisorHelper(helper: ChildProcess): void {
+  if (releasedSupervisorHelpers.has(helper)) return;
+  releasedSupervisorHelpers.add(helper);
+  for (const stream of [helper.stdin, helper.stdout, helper.stderr]) {
+    try { stream?.destroy(); } catch { /* cleanup remains best effort */ }
+  }
+  try { helper.unref(); } catch { /* cleanup remains best effort */ }
+}
+
+export async function terminateGatedChildByHandle(
+  child: ChildProcess,
+  closeReceipt: Promise<ChildProcessCloseReceipt> = observeChildProcessClose(child),
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  let closed = await waitWithTimeout(closeReceipt, 1);
+  if (closed !== undefined) return closed.error === null;
+  if (child.exitCode === null && child.signalCode === null) {
+    let alive = false;
+    try { alive = child.kill(0); } catch { alive = false; }
+    if (alive) {
+      try { child.kill("SIGKILL"); } catch { /* exact close remains authoritative */ }
+    }
+  }
+  closed = await waitWithTimeout(closeReceipt, timeoutMs);
+  return closed !== undefined && closed.error === null;
 }
 
 function waitForChildExit(child: ChildProcess): Promise<number | null> {
@@ -2577,6 +2903,7 @@ class StreamingOomDetector {
 
 function createChildStartupCapture(child: ChildProcess): ChildStartupCapture {
   const oomDetector = new StreamingOomDetector();
+  const closeReceipt = observeChildProcessClose(child);
   const drainReceipt = { stdoutBytes: 0, stderrBytes: 0 };
   const terminal: ChildStartupCapture["terminal"] = {};
   const onStdout = (chunk: Buffer): void => {
@@ -2618,6 +2945,7 @@ function createChildStartupCapture(child: ChildProcess): ChildStartupCapture {
     onStdout,
     onStderr,
     terminal,
+    closeReceipt,
     detachTerminal,
     detachAll(): void {
       detachTerminal();

@@ -62,6 +62,7 @@ const FORBIDDEN_SEGMENTS = new Set([
   "temporary-evidence",
   "evidence",
 ]);
+const FORBIDDEN_FILENAME_TOKENS = new Set(["evidence", "plan", "plans", "spec", "specs"]);
 const FORBIDDEN_EXTENSIONS = new Set([
   ".docx", ".hml", ".hwp", ".hwpx", ".map", ".pdf", ".pyc",
   ".p12", ".pem", ".pfx",
@@ -337,7 +338,12 @@ async function assertRuntimeContract(runtimeRoot, metadata, runtimePackage) {
   for (const record of records) {
     publicRuntimeBytes += record.size;
     const segments = record.path.split("/");
-    if (segments.some((segment) => FORBIDDEN_SEGMENTS.has(segment.toLowerCase()))) {
+    const filename = basename(record.path, extname(record.path));
+    const filenameTokens = filename.toLowerCase().split(/[-_. ]+/u);
+    if (
+      segments.some((segment) => FORBIDDEN_SEGMENTS.has(segment.toLowerCase()))
+      || filenameTokens.some((token) => FORBIDDEN_FILENAME_TOKENS.has(token))
+    ) {
       throw runtimeBuildError(`Forbidden runtime path was staged: ${record.path}`);
     }
     if (segments.some((segment) => /^\.env(?:\.|$)/iu.test(segment))) {

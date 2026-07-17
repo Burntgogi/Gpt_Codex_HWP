@@ -45,14 +45,15 @@ Normal and abnormal receipts use the same outer registered-group RSS sampler.
 Its baseline is captured before the case receives control. Peak RSS is the
 sampled sum of the retained case identity plus identities in accepted lifecycle
 groups; it is not the coordinator's RSS and is never accepted from case
-telemetry. Windows samples retained Job/tracker identities every 20 ms. Linux
-walks `/proc/<pid>/task/*/children`, validates PID/start-time identities, and
-samples `VmRSS` every 25 ms. macOS uses a bounded `ps` sampler outside the
-measured group at approximately 100 ms and binds each PID to the microsecond
-kernel start time returned by `libproc` before exact signaling. Windows retains
-the synchronized process handle used to bind PID, parent PID, creation time,
-RSS, and termination. This is a sampled sum of per-process RSS, so
-operating-system shared pages can be counted in more than one process.
+telemetry. The configured nominal cadence is 20 ms for Windows retained
+Job/tracker identities, 25 ms for Linux `/proc/<pid>/task/*/children` and
+`VmRSS`, and 100 ms for the bounded macOS `ps` sampler outside the measured
+group. Scheduler delay and sampling work can make observations later than those
+configured intervals. macOS binds each PID to the microsecond kernel start time
+returned by `libproc` before exact signaling. Windows retains the synchronized
+process handle used to bind PID, parent PID, creation time, RSS, and termination.
+This is a sampled sum of per-process RSS, so operating-system shared pages can
+be counted in more than one process.
 
 Registration telemetry is closed and sealed before its registered-group receipt
 is accepted: closing is requested, the case and registration input end cleanly,

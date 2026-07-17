@@ -248,6 +248,67 @@ test("projection refuses plans specs and temporary evidence nested below an allo
   }
 });
 
+test("projection rejects forbidden filename tokens without substring false positives", async () => {
+  for (const [index, name] of [
+    "implementation-plan.md",
+    "api.spec.txt",
+    "release_evidence.json",
+    "temporary-evidence.txt",
+  ].entries()) {
+    const sourcePath = join(SOURCE, "assets", name);
+    const output = join(temporaryRoot, `forbidden-filename-${index}`);
+    await writeFile(sourcePath, "must not ship\n", { encoding: "utf8", flag: "wx" });
+    try {
+      await assert.rejects(
+        buildRuntime({ root: ROOT, outputRoot: output }),
+        new RegExp(`Forbidden runtime path was staged: assets/${name.replaceAll(".", "\\.")}$`, "u"),
+      );
+      await assert.rejects(lstat(output), { code: "ENOENT" });
+    } finally {
+      await rm(sourcePath, { force: true });
+    }
+  }
+
+  const binaryNearMiss = "planet.png";
+  const binarySourcePath = join(SOURCE, "assets", binaryNearMiss);
+  await writeFile(binarySourcePath, "allowed filename near miss\n", {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  try {
+    await assert.rejects(
+      buildRuntime({ root: ROOT, outputRoot: join(temporaryRoot, "allowed-binary-near-miss") }),
+      (error) => {
+        assert.doesNotMatch(error.message, /Forbidden runtime path was staged/u);
+        assert.match(
+          error.message,
+          /Runtime privacy violation \(binary not allowlisted\): assets\/planet\.png/u,
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(binarySourcePath, { force: true });
+  }
+
+  const allowed = ["planning.md", "specification.md", "evidenced.md"];
+  for (const name of allowed) {
+    await writeFile(join(SOURCE, "assets", name), "allowed near miss\n", {
+      encoding: "utf8",
+      flag: "wx",
+    });
+  }
+  const output = join(temporaryRoot, "allowed-filename-near-misses");
+  try {
+    await assert.doesNotReject(buildRuntime({ root: ROOT, outputRoot: output }));
+    for (const name of allowed) {
+      assert.equal(await readFile(join(output, "assets", name), "utf8"), "allowed near miss\n");
+    }
+  } finally {
+    await Promise.all(allowed.map((name) => rm(join(SOURCE, "assets", name), { force: true })));
+  }
+});
+
 test("root runtime fixtures canonicalize an injected aliased temp parent", async (t) => {
   const alias = await temporaryDirectoryAlias(t, "root-runtime-parent-");
   if (alias === undefined) return;

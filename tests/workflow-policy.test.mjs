@@ -67,6 +67,7 @@ test("CI pins every action to its approved immutable revision", async () => {
   assert.equal(countMatches(workflow, /^\s+persist-credentials: false$/gmu), 3);
   assert.equal(countMatches(workflow, /^\s+fetch-depth: 0$/gmu), 3);
   assert.equal(countMatches(workflow, /^\s+node-version: "22\.22\.2"$/gmu), 3);
+  assert.equal(countMatches(workflow, /^\s+package-manager-cache: false$/gmu), 3);
   assert.equal(countMatches(workflow, /^\s+python-version: "3\.12"$/gmu), 2);
   assert.doesNotMatch(workflow, /^\s+cache:/gmu);
 });
@@ -111,7 +112,7 @@ test("both CI jobs bind full release receipts to the exact feature head and uplo
   const workflow = await readFile(WORKFLOW_PATH, "utf8");
   const jobs = [
     ["Windows x64", jobSection(workflow, "windows", "macos"), "win32", "x64"],
-    ["macOS arm64", jobSection(workflow, "macos"), "darwin", "arm64"],
+    ["macOS arm64", jobSection(workflow, "macos", "linux"), "darwin", "arm64"],
   ];
 
   for (const [label, section, platform, arch] of jobs) {

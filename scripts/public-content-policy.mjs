@@ -876,11 +876,15 @@ export async function runBoundedProcess(tool, args, options = {}) {
   let lifecycle;
   try { lifecycle = await startProcess(tool, args, options); }
   catch (error) {
-    return failedProcessReceipt({ timedOut: error?.code === "PUBLIC_PROCESS_TIMEOUT" });
+    return failedProcessReceipt({
+      timedOut: error?.code === "PUBLIC_PROCESS_TIMEOUT",
+      terminationFailed: error?.terminationFailed === true,
+    });
   }
   return await collectBoundedProcess(lifecycle.child, {
     deadline: lifecycle.deadline,
     exit: lifecycle.exit,
+    closeReceipt: lifecycle.closeReceipt,
     maxOutputBytes,
     terminate: lifecycle.terminate,
     terminationTimeoutMs,
@@ -888,6 +892,25 @@ export async function runBoundedProcess(tool, args, options = {}) {
 }
 
 export async function startBoundedProcess(tool, args, options = {}) {
+  return startBoundedProcessInternal(tool, args, options, false, WINDOWS_RUNNER);
+}
+
+/** Test-only authority-failure entrypoint; production callers cannot force tracker mode. */
+export async function startBoundedProcessWithForcedWindowsTrackerForTest(tool, args, options = {}) {
+  return startBoundedProcessInternal(tool, args, options, true, WINDOWS_RUNNER);
+}
+
+/** Test-only runner protocol entrypoint for invalid READY integration coverage. */
+export async function startBoundedProcessWithWindowsRunnerForTest(
+  tool,
+  args,
+  options,
+  windowsRunner,
+) {
+  return startBoundedProcessInternal(tool, args, options, false, windowsRunner);
+}
+
+async function startBoundedProcessInternal(tool, args, options, forceTracker, windowsRunner) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS;
   if (typeof tool !== "string" || tool.length < 1 || tool.length > 4096
     || !Array.isArray(args) || args.some((value) => typeof value !== "string" || value.length > 4096)
@@ -898,26 +921,37 @@ export async function startBoundedProcess(tool, args, options = {}) {
   const deadline = Date.now() + timeoutMs;
   let child;
   let exit;
+  let childCloseReceipt;
   let supervisor;
   let startupHelper;
   try {
     if (process.platform === "win32") {
-      child = spawn(process.execPath, [WINDOWS_RUNNER], {
+      child = spawn(process.execPath, [windowsRunner], {
         cwd: options.cwd,
         env: options.env,
         shell: false,
         windowsHide: true,
         stdio: ["pipe", "pipe", "pipe", "pipe"],
       });
+      childCloseReceipt = observePublicProcessClose(child);
       exit = observeProcessExit(child);
       const control = child.stdio[3];
       if (control === null || typeof control.on !== "function") throw codedError("PUBLIC_PROCESS_START");
       const startup = await withinDeadline(Promise.all([
         readExactControlLine(control, "GPT_CODEX_HWP_SCAN_RUNNER_READY", 128),
-        createWindowsProcessSupervisor(child, (helper) => { startupHelper = helper; }),
+        createWindowsProcessSupervisor(
+          child,
+          (owner) => { startupHelper = owner; },
+          forceTracker,
+        ),
       ]), deadline);
       supervisor = startup[1];
-      child.stdin.end(encodeWindowsRunnerInput(tool, args, input));
+      await dispatchPublicProcessInput(
+        child,
+        child.stdin,
+        encodeWindowsRunnerInput(tool, args, input),
+        deadline,
+      );
     } else {
       child = spawn(tool, args, {
         cwd: options.cwd,
@@ -927,12 +961,24 @@ export async function startBoundedProcess(tool, args, options = {}) {
         windowsHide: true,
         stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
+      childCloseReceipt = observePublicProcessClose(child);
       exit = observeProcessExit(child);
-      if (options.input !== undefined) child.stdin.end(input);
+      if (options.input !== undefined) {
+        await dispatchPublicProcessInput(child, child.stdin, input, deadline);
+      }
     }
   } catch {
-    await abortStartup(child, supervisor, startupHelper);
+    const cleanup = await abortPublicProcessStartup({
+      child,
+      childCloseReceipt,
+      supervisor,
+      startupHelper,
+      platform: process.platform,
+      timeoutMs: 1_000,
+    });
     const error = codedError(Date.now() >= deadline ? "PUBLIC_PROCESS_TIMEOUT" : "PUBLIC_PROCESS_START");
+    error.terminationFailed = !cleanup.verified;
+    error.startupCleanup = cleanup;
     throw error;
   }
   let activeTermination;
@@ -941,7 +987,7 @@ export async function startBoundedProcess(tool, args, options = {}) {
       const gone = process.platform === "win32"
         ? await supervisor.terminate()
         : await terminatePosixProcessGroup(child);
-      destroyProcessPipes(child);
+      retainPublicProcessOwnerUntilClose(child, childCloseReceipt);
       return gone;
     })();
     return activeTermination;
@@ -950,6 +996,7 @@ export async function startBoundedProcess(tool, args, options = {}) {
     child,
     deadline,
     exit,
+    closeReceipt: childCloseReceipt,
     terminate,
   });
 }
@@ -957,10 +1004,12 @@ export async function startBoundedProcess(tool, args, options = {}) {
 async function collectBoundedProcess(child, {
   deadline,
   exit,
+  closeReceipt,
   maxOutputBytes,
   terminate,
   terminationTimeoutMs,
 }) {
+  const ownerCloseReceipt = closeReceipt ?? closeReceiptFromObservedExit(exit);
   return await new Promise((resolvePromise) => {
     const stdout = [];
     const stderr = [];
@@ -976,7 +1025,7 @@ async function collectBoundedProcess(child, {
       terminal = true;
       clearTimeout(timer);
       const treeGone = await boundedTermination(terminate, terminationTimeoutMs);
-      destroyProcessPipes(child);
+      releaseClosedPublicProcessOwner(child);
       resolvePromise(Object.freeze({
         code: overflow || timedOut || !treeGone ? -1 : code,
         signal,
@@ -993,7 +1042,7 @@ async function collectBoundedProcess(child, {
       if (reason === "overflow") overflow = true;
       if (reason === "timeout") timedOut = true;
       const treeGone = await boundedTermination(terminate, terminationTimeoutMs);
-      destroyProcessPipes(child);
+      retainPublicProcessOwnerUntilClose(child, ownerCloseReceipt);
       if (terminal) return;
       terminal = true;
       clearTimeout(timer);
@@ -1015,6 +1064,22 @@ async function collectBoundedProcess(child, {
       else void finish(code, signal);
     });
     timer = setTimeout(() => { void stop("timeout"); }, remaining);
+  });
+}
+
+function closeReceiptFromObservedExit(exit) {
+  return new Promise((resolvePromise) => {
+    void Promise.resolve(exit).then((receipt) => {
+      if (receipt?.error === false) {
+        resolvePromise(Object.freeze({
+          code: receipt.code,
+          signal: receipt.signal,
+          error: null,
+        }));
+      }
+    }, () => {
+      // A rejected exit receipt cannot prove close; remain unresolved and retain the owner.
+    });
   });
 }
 
@@ -1044,7 +1109,7 @@ function observeProcessExit(child) {
   });
 }
 
-function failedProcessReceipt({ overflow = false, timedOut = false } = {}) {
+function failedProcessReceipt({ overflow = false, timedOut = false, terminationFailed = false } = {}) {
   return Object.freeze({
     code: -1,
     signal: null,
@@ -1052,7 +1117,7 @@ function failedProcessReceipt({ overflow = false, timedOut = false } = {}) {
     stderr: Buffer.alloc(0),
     overflow,
     timedOut,
-    terminationFailed: false,
+    terminationFailed,
   });
 }
 
@@ -1066,7 +1131,33 @@ function encodeWindowsRunnerInput(tool, args, input) {
   return Buffer.concat([header, frame, input]);
 }
 
-async function createWindowsProcessSupervisor(child, observeHelper) {
+export async function dispatchPublicProcessInput(child, input, payload, deadline) {
+  if (input === null || input === undefined || typeof input.on !== "function"
+    || typeof input.end !== "function" || typeof child?.once !== "function") {
+    throw codedError("PUBLIC_PROCESS_START");
+  }
+  const dispatch = new Promise((resolvePromise, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (error == null) resolvePromise();
+      else reject(error);
+    };
+    const onError = (error) => finish(error);
+    const onOwnerClose = () => {
+      input.removeListener("error", onError);
+      finish(codedError("PUBLIC_PROCESS_START"));
+    };
+    input.on("error", onError);
+    child.once("close", onOwnerClose);
+    try { input.end(payload, (error) => finish(error)); }
+    catch (error) { finish(error); }
+  });
+  await withinDeadline(dispatch, deadline);
+}
+
+async function createWindowsProcessSupervisor(child, observeHelper, forceTracker = false) {
   if (!Number.isInteger(child?.pid)) throw codedError("PUBLIC_PROCESS_START");
   const systemRoot = process.env.SystemRoot;
   if (typeof systemRoot !== "string" || !/^[A-Za-z]:[\\/]/u.test(systemRoot)) {
@@ -1075,51 +1166,118 @@ async function createWindowsProcessSupervisor(child, observeHelper) {
   const powershell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const helper = spawn(powershell, [
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-    "-File", WINDOWS_SUPERVISOR, "-TargetPid", String(child.pid), "-ForceTracker",
+    "-File", WINDOWS_SUPERVISOR, "-TargetPid", String(child.pid),
+    ...(forceTracker ? ["-ForceTracker"] : []),
   ], {
     env: minimalWindowsHelperEnvironment(process.env),
     shell: false,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  observeHelper?.(helper);
+  const closeReceipt = observePublicProcessClose(helper);
+  const startupOwner = createPublicStartupCleanupOwner(helper, closeReceipt, false);
+  observeHelper?.(startupOwner);
+  let stdinFailed = helper.stdin === null;
+  helper.stdin?.on("error", () => { stdinFailed = true; });
+  if (helper.stdin === null || helper.stdout === null || helper.stderr === null) {
+    throw codedError("PUBLIC_PROCESS_START");
+  }
   const lines = new BoundedLineReader(helper.stdout, 256);
   let stderrBytes = 0;
   helper.stderr.on("data", (chunk) => { stderrBytes += chunk.length; });
+  helper.stderr.on("error", () => { stderrBytes = Math.max(1, stderrBytes); });
   const ready = await lines.next(10_000);
-  if (!new RegExp(`^GPT_CODEX_HWP_JOB READY ${child.pid} [12] [0-9]+$`, "u").test(ready)
+  if (!new RegExp(`^GPT_CODEX_HWP_JOB READY ${child.pid} 1 [0-9]+$`, "u").test(ready)
     || stderrBytes !== 0) {
     throw codedError("PUBLIC_PROCESS_START");
   }
   let active;
   return Object.freeze({
     terminate() {
-      active ??= (async () => {
-        try {
-          helper.stdin.end("TERMINATE\n");
-          let line = await lines.next(5_000);
-          if (/^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(line)) line = await lines.next(5_000);
-          const rss = /^GPT_CODEX_HWP_JOB RSS ([1-9][0-9]*) ([1-9][0-9]*)$/u.exec(line);
-          if (rss === null) return false;
-          const baselineRss = Number(rss[1]);
-          const peakRss = Number(rss[2]);
-          if (!Number.isSafeInteger(baselineRss)
-            || !Number.isSafeInteger(peakRss)
-            || peakRss < baselineRss) {
-            return false;
-          }
-          line = await lines.next(5_000);
-          if (!/^GPT_CODEX_HWP_JOB GONE 0 [12]$/u.test(line) || stderrBytes !== 0) return false;
-          return await waitForClose(helper, 5_000) === 0 && stderrBytes === 0;
-        } catch { return false; }
-      })();
+      active ??= terminatePublicWindowsSupervisor({
+        helper,
+        lines,
+        closeReceipt,
+        transcriptReceipt: () => Object.freeze({
+          stdinFailed,
+          stderrBytes,
+          ...lines.transcriptReceipt(),
+        }),
+      });
       return active;
     },
     cancel() {
-      destroyProcessPipes(helper);
-      try { helper.kill("SIGKILL"); } catch { /* gated child remains separately owned */ }
+      return startupOwner.cleanup(1_000);
     },
   });
+}
+
+export async function terminatePublicWindowsSupervisor({
+  helper,
+  lines,
+  closeReceipt,
+  transcriptReceipt,
+  frameTimeoutMs = 5_000,
+  cleanupTimeoutMs = 1_000,
+}) {
+  let proved = false;
+  try {
+    helper.stdin.end("TERMINATE\n");
+    const rss = parsePublicWindowsSupervisorRssFrame(await lines.next(frameTimeoutMs));
+    if (rss === undefined) return false;
+    const exactGone = await lines.next(frameTimeoutMs) === "GPT_CODEX_HWP_JOB GONE 0 1";
+    const finalized = await finalizePublicWindowsSupervisor({
+      closeReceipt,
+      forceClose: () => helper.kill(),
+      allowForceClose: exactGone,
+      transcriptReceipt,
+    });
+    proved = exactGone && finalized;
+    return proved;
+  } catch {
+    return false;
+  } finally {
+    if (!proved) {
+      await cleanupPublicProcessHelper(helper, closeReceipt, cleanupTimeoutMs);
+    }
+  }
+}
+
+export function cleanupPublicProcessHelper(helper, closeReceipt, timeoutMs = 1_000) {
+  const existing = publicHelperCleanupPromises.get(helper);
+  if (existing !== undefined) return existing;
+  const cleanup = performPublicProcessHelperCleanup(helper, closeReceipt, timeoutMs);
+  publicHelperCleanupPromises.set(helper, cleanup);
+  return cleanup;
+}
+
+async function performPublicProcessHelperCleanup(helper, closeReceipt, timeoutMs) {
+  let closed = await waitForReceipt(closeReceipt, 1);
+  const firstWaitMs = Math.max(1, Math.floor(timeoutMs / 2));
+  if (closed === undefined) {
+    try { helper.kill(); } catch { /* escalate below */ }
+    closed = await waitForReceipt(closeReceipt, firstWaitMs);
+  }
+  if (closed === undefined) {
+    try { helper.kill("SIGKILL"); } catch { /* bounded cleanup is exhausted */ }
+    closed = await waitForReceipt(closeReceipt, Math.max(1, timeoutMs - firstWaitMs));
+  }
+  if (!isExactPublicProcessCloseReceipt(closed)) {
+    retainPublicProcessOwnerUntilClose(helper, closeReceipt);
+    return false;
+  }
+  releaseClosedPublicProcessOwner(helper);
+  return true;
+}
+
+export function parsePublicWindowsSupervisorRssFrame(frame) {
+  const match = /^GPT_CODEX_HWP_JOB RSS ([1-9][0-9]*) ([1-9][0-9]*)$/u.exec(frame);
+  if (match === null) return undefined;
+  const baselineRss = Number(match[1]);
+  const peakRss = Number(match[2]);
+  if (!Number.isSafeInteger(baselineRss) || !Number.isSafeInteger(peakRss)
+    || peakRss < baselineRss) return undefined;
+  return Object.freeze({ baselineRss, peakRss });
 }
 
 function minimalWindowsHelperEnvironment(source) {
@@ -1130,17 +1288,30 @@ function minimalWindowsHelperEnvironment(source) {
   return result;
 }
 
-class BoundedLineReader {
+export class BoundedLineReader {
   #buffer = Buffer.alloc(0);
   #lines = [];
   #waiters = [];
   #failed;
+  #stdoutEnded = false;
+  #stdoutFailed = false;
+  #protocolFailed = false;
   constructor(stream, maxBytes) {
     this.maxBytes = maxBytes;
     stream.on("data", (chunk) => this.#push(Buffer.from(chunk)));
-    stream.on("end", () => this.#fail());
-    stream.on("error", () => this.#fail());
-    stream.on("close", () => this.#fail());
+    stream.on("end", () => {
+      this.#stdoutEnded = true;
+      this.#fail();
+    });
+    stream.on("error", () => {
+      this.#stdoutFailed = true;
+      this.#fail();
+    });
+    stream.on("close", () => {
+      if (this.#stdoutEnded) return;
+      this.#stdoutFailed = true;
+      this.#fail();
+    });
   }
   next(timeoutMs) {
     if (this.#lines.length > 0) return Promise.resolve(this.#lines.shift());
@@ -1154,10 +1325,29 @@ class BoundedLineReader {
       }, timeoutMs);
     });
   }
+  transcriptReceipt() {
+    return Object.freeze({
+      stdoutEnded: this.#stdoutEnded,
+      stdoutFailed: this.#stdoutFailed,
+      protocolFailed: this.#protocolFailed,
+      queuedFrames: this.#lines.length,
+      partialBytes: this.#buffer.length,
+    });
+  }
   #push(chunk) {
     if (this.#failed) return;
+    for (const byte of chunk) {
+      if (byte !== 0x0a && byte !== 0x0d && (byte < 0x20 || byte > 0x7e)) {
+        this.#protocolFailed = true;
+        this.#fail();
+        return;
+      }
+    }
     this.#buffer = Buffer.concat([this.#buffer, chunk]);
-    if (this.#buffer.length > this.maxBytes) return this.#fail();
+    if (this.#buffer.length > this.maxBytes) {
+      this.#protocolFailed = true;
+      return this.#fail();
+    }
     let newline;
     while ((newline = this.#buffer.indexOf(0x0a)) >= 0) {
       const raw = this.#buffer.subarray(0, newline);
@@ -1246,16 +1436,202 @@ async function pollPosixGroupGone(groupPid, liveness, delay, attempts, intervalM
   return false;
 }
 
-async function abortStartup(child, supervisor, startupHelper) {
-  try { supervisor?.cancel(); } catch { /* startup already failed */ }
-  if (supervisor === undefined && startupHelper !== undefined) {
-    destroyProcessPipes(startupHelper);
-    try { startupHelper.kill("SIGKILL"); } catch { /* startup helper may already be gone */ }
+const publicStartupCleanupPromises = new WeakMap();
+const publicStartupRunnerContinuationPromises = new WeakMap();
+const publicHelperCleanupPromises = new WeakMap();
+const publicProcessCloseReceipts = new WeakMap();
+const publicProcessRetentionsByOwner = new WeakMap();
+const releasedPublicProcessOwners = new WeakSet();
+const unsafePublicProcessRetentions = new Set();
+
+function createPublicStartupCleanupOwner(child, closeReceipt, probeBeforeKill) {
+  return Object.freeze({
+    helper: child,
+    closeReceipt,
+    cleanup: (timeoutMs) => cleanupPublicStartupProcessOnce(
+      child,
+      closeReceipt,
+      probeBeforeKill,
+      timeoutMs,
+    ),
+  });
+}
+
+function cleanupPublicStartupProcessOnce(
+  child,
+  closeReceipt,
+  probeBeforeKill,
+  timeoutMs,
+) {
+  const existing = publicStartupCleanupPromises.get(child);
+  if (existing !== undefined) return existing;
+  const cleanup = (async () => {
+    let close = await waitForReceipt(closeReceipt, 1);
+    if (close === undefined) {
+      let shouldKill = true;
+      if (probeBeforeKill && child.exitCode === null && child.signalCode === null) {
+        try { shouldKill = child.kill(0); } catch { shouldKill = false; }
+      } else if (probeBeforeKill) {
+        shouldKill = false;
+      }
+      if (shouldKill) {
+        try { child.kill(probeBeforeKill ? "SIGKILL" : "SIGTERM"); }
+        catch { /* the exact close receipt remains authoritative */ }
+      }
+      close = await waitForReceipt(closeReceipt, timeoutMs);
+    }
+    const closed = isExactPublicProcessCloseReceipt(close);
+    if (closed) releaseClosedPublicProcessOwner(child);
+    else retainPublicProcessOwnerUntilClose(child, closeReceipt);
+    return closed;
+  })();
+  publicStartupCleanupPromises.set(child, cleanup);
+  return cleanup;
+}
+
+export async function abortPublicProcessStartup({
+  child,
+  childCloseReceipt,
+  supervisor,
+  startupHelper,
+  platform = process.platform,
+  timeoutMs = 1_000,
+} = {}) {
+  let helperClosed = true;
+  if (supervisor !== undefined) {
+    let cancelled;
+    try {
+      cancelled = await waitForReceipt(Promise.resolve(supervisor.cancel()), timeoutMs + 10);
+    } catch {
+      cancelled = undefined;
+    }
+    helperClosed = cancelled === true;
+  } else if (startupHelper !== undefined) {
+    let cleaned;
+    try {
+      const helperOwner = typeof startupHelper.cleanup === "function"
+        ? startupHelper
+        : createPublicStartupCleanupOwner(
+          startupHelper.helper,
+          startupHelper.closeReceipt,
+          false,
+        );
+      cleaned = await waitForReceipt(
+        Promise.resolve(helperOwner.cleanup(timeoutMs)),
+        timeoutMs + 10,
+      );
+    } catch {
+      cleaned = undefined;
+    }
+    helperClosed = cleaned === true;
   }
+
+  let runnerClosed = child === undefined;
+  let runnerCloseReceipt = childCloseReceipt;
   if (child !== undefined) {
-    destroyProcessPipes(child);
-    try { child.kill("SIGKILL"); } catch { /* gated runner may already be gone */ }
+    runnerCloseReceipt ??= observePublicProcessClose(child);
+    if (platform === "win32") {
+      const naturalClose = await waitForReceipt(runnerCloseReceipt, 1);
+      runnerClosed = isExactPublicProcessCloseReceipt(naturalClose);
+      if (!runnerClosed && helperClosed) {
+        runnerClosed = await cleanupPublicStartupProcessOnce(
+          child,
+          runnerCloseReceipt,
+          true,
+          timeoutMs,
+        );
+      }
+    } else if (helperClosed) {
+      const groupGone = await waitForReceipt(terminatePosixProcessGroup(child), timeoutMs);
+      const exactClose = await waitForReceipt(runnerCloseReceipt, timeoutMs);
+      runnerClosed = groupGone === true && isExactPublicProcessCloseReceipt(exactClose);
+      if (runnerClosed) releaseClosedPublicProcessOwner(child);
+    }
   }
+
+  const cleanup = Object.freeze({
+    helperClosed,
+    runnerClosed,
+    verified: helperClosed && runnerClosed,
+  });
+  if (!cleanup.verified) {
+    if (!runnerClosed && child !== undefined) {
+      retainPublicProcessOwnerUntilClose(
+        child,
+        runnerCloseReceipt ?? observePublicProcessClose(child),
+      );
+    }
+    if (!helperClosed && startupHelper?.helper !== undefined
+      && startupHelper?.closeReceipt !== undefined) {
+      retainPublicProcessOwnerUntilClose(startupHelper.helper, startupHelper.closeReceipt);
+    }
+    if (platform === "win32" && !helperClosed && child !== undefined
+      && runnerCloseReceipt !== undefined && startupHelper?.closeReceipt !== undefined) {
+      void continuePublicRunnerCleanupAfterHelperClose(
+        child,
+        runnerCloseReceipt,
+        startupHelper.closeReceipt,
+        timeoutMs,
+      );
+    }
+  }
+  return cleanup;
+}
+
+function continuePublicRunnerCleanupAfterHelperClose(
+  child,
+  childCloseReceipt,
+  helperCloseReceipt,
+  timeoutMs,
+) {
+  const existing = publicStartupRunnerContinuationPromises.get(child);
+  if (existing !== undefined) return existing;
+  const continuation = (async () => {
+    let helperClose;
+    try { helperClose = await helperCloseReceipt; }
+    catch { return false; }
+    if (!isExactPublicProcessCloseReceipt(helperClose)) return false;
+    return await cleanupPublicStartupProcessOnce(
+      child,
+      childCloseReceipt,
+      true,
+      timeoutMs,
+    );
+  })();
+  publicStartupRunnerContinuationPromises.set(child, continuation);
+  return continuation;
+}
+
+function retainPublicProcessOwnerUntilClose(child, closeReceipt) {
+  if (releasedPublicProcessOwners.has(child)) return undefined;
+  const existing = publicProcessRetentionsByOwner.get(child);
+  if (existing !== undefined) return existing;
+  const retention = Object.freeze({ child, closeReceipt });
+  publicProcessRetentionsByOwner.set(child, retention);
+  unsafePublicProcessRetentions.add(retention);
+  void Promise.resolve(closeReceipt).then((receipt) => {
+    if (!isExactPublicProcessCloseReceipt(receipt)) return;
+    releaseClosedPublicProcessOwner(child);
+    unsafePublicProcessRetentions.delete(retention);
+    publicProcessRetentionsByOwner.delete(child);
+  }, () => {
+    // A rejected receipt cannot prove close; retain the exact process owner.
+  });
+  return retention;
+}
+
+function isExactPublicProcessCloseReceipt(receipt) {
+  return typeof receipt === "object" && receipt !== null &&
+    Object.hasOwn(receipt, "code") && Object.hasOwn(receipt, "signal") &&
+    Object.hasOwn(receipt, "error") &&
+    (receipt.code === null || Number.isInteger(receipt.code)) &&
+    (receipt.signal === null || typeof receipt.signal === "string");
+}
+
+function releaseClosedPublicProcessOwner(child) {
+  if (releasedPublicProcessOwners.has(child)) return;
+  releasedPublicProcessOwners.add(child);
+  destroyProcessPipes(child);
 }
 
 function destroyProcessPipes(child) {
@@ -1265,19 +1641,69 @@ function destroyProcessPipes(child) {
   try { child?.unref?.(); } catch { /* cleanup is best effort */ }
 }
 
-async function waitForClose(child, timeoutMs) {
-  if (child.exitCode !== null) return child.exitCode;
-  return await new Promise((resolvePromise) => {
-    let settled = false;
-    const finish = (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolvePromise(code);
-    };
-    child.once("close", finish);
-    const timer = setTimeout(() => finish(null), timeoutMs);
+export function observePublicProcessClose(child) {
+  const existing = publicProcessCloseReceipts.get(child);
+  if (existing !== undefined) return existing;
+  const receipt = new Promise((resolvePromise) => {
+    let childError = null;
+    const onError = (error) => { childError ??= error; };
+    child.on("error", onError);
+    child.once("close", (code, signal) => {
+      child.removeListener("error", onError);
+      resolvePromise(Object.freeze({ code, signal, error: childError }));
+    });
   });
+  publicProcessCloseReceipts.set(child, receipt);
+  return receipt;
+}
+
+export async function finalizePublicWindowsSupervisor({
+  closeReceipt,
+  forceClose,
+  allowForceClose,
+  transcriptReceipt,
+  gracefulCloseMs = 500,
+  forcedCloseMs = 3_500,
+}) {
+  const gracefulClose = await waitForReceipt(closeReceipt, gracefulCloseMs);
+  if (gracefulClose !== undefined) {
+    return gracefulClose.code === 0 && gracefulClose.signal === null &&
+      gracefulClose.error === null && cleanPublicSupervisorTranscript(transcriptReceipt);
+  }
+  let closeRequested = false;
+  try { closeRequested = forceClose(); }
+  catch { closeRequested = false; }
+  const forcedClose = await waitForReceipt(closeReceipt, forcedCloseMs);
+  return allowForceClose && closeRequested && forcedClose !== undefined && forcedClose.code === null &&
+    forcedClose.signal === "SIGTERM" && forcedClose.error === null &&
+    cleanPublicSupervisorTranscript(transcriptReceipt);
+}
+
+function cleanPublicSupervisorTranscript(receipt) {
+  try {
+    const value = receipt();
+    return value.stdinFailed === false && value.stderrBytes === 0 && value.stdoutEnded === true &&
+      value.stdoutFailed === false && value.protocolFailed === false && value.queuedFrames === 0 &&
+      value.partialBytes === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForReceipt(receipt, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      receipt,
+      new Promise((resolvePromise) => {
+        timer = setTimeout(() => resolvePromise(undefined), timeoutMs);
+      }),
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function runTreeCli() {

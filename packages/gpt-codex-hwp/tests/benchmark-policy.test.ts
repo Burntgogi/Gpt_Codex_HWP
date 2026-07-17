@@ -150,20 +150,37 @@ test("benchmark policy verifies descendant termination after abnormal case exit"
 });
 
 test("benchmark policy does not confuse verified tree termination with delayed helper close", async (t) => {
-  let releaseExit: ((code: number | null) => void) | undefined;
-  const exitReceipt = new Promise<number | null>((resolveExit) => {
-    releaseExit = resolveExit;
+  let releaseClose: ((receipt: Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: Error | null;
+  }>) => void) | undefined;
+  const closeReceipt = new Promise<Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: Error | null;
+  }>>((resolveClose) => {
+    releaseClose = resolveClose;
   });
   let forcedCloseCount = 0;
   const stages: string[] = [];
   const gone = await finalizeVerifiedWindowsSupervisor({
-    exitReceipt,
+    closeReceipt,
+    allowForceClose: true,
+    transcriptReceipt: () => ({
+      stdinFailed: false,
+      stderrBytes: 0,
+      stdoutEnded: true,
+      stdoutFailed: false,
+      queuedFrames: 0,
+      partialBytes: 0,
+    }),
     gracefulExitMs: 5,
     forcedExitMs: 50,
     forceClose: () => {
       forcedCloseCount += 1;
       stages.push(`stage=force-close count=${forcedCloseCount}`);
-      releaseExit!(null);
+      releaseClose!({ code: null, signal: "SIGTERM", error: null });
       return true;
     },
   });

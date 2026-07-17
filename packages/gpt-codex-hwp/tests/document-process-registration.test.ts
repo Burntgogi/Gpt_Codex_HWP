@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -760,6 +761,125 @@ test("registration ACK end error rejects sealing without an uncaught stream erro
     gone: false,
     proof: "unverified",
     reason: "channel",
+  });
+});
+
+test("registration sealing remains pending after ACK finish until the clean close", async () => {
+  const casePid = 6_321;
+  const acknowledgementOutput = new Writable({
+    autoDestroy: false,
+    write(_chunk, _encoding, callback) { callback(); },
+  });
+  const registrationInput = new PassThrough();
+  const coordinator = createProcessRegistrationCoordinator({
+    casePid,
+    registrationInput,
+    acknowledgementOutput,
+    supervisor: immediateRegisteredSupervisor(casePid),
+    deadlineAt: performance.now() + 5_000,
+    caseExited: Promise.resolve(),
+  });
+  coordinator.start();
+  await coordinator.beginClosing();
+  registrationInput.end();
+
+  let sealingSettled = false;
+  const sealing = coordinator.seal().finally(() => { sealingSettled = true; });
+  await once(acknowledgementOutput, "finish");
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(sealingSettled, false);
+  assert.equal(coordinator.state, "closing");
+
+  acknowledgementOutput.destroy();
+  await sealing;
+  assert.equal(coordinator.state, "sealed");
+});
+
+test("registration ACK error after finish but before close rejects sealing and poisons proof", async () => {
+  const casePid = 6_322;
+  const acknowledgementOutput = new Writable({
+    autoDestroy: false,
+    write(_chunk, _encoding, callback) { callback(); },
+  });
+  const registrationInput = new PassThrough();
+  const coordinator = createProcessRegistrationCoordinator({
+    casePid,
+    registrationInput,
+    acknowledgementOutput,
+    supervisor: immediateRegisteredSupervisor(casePid),
+    deadlineAt: performance.now() + 5_000,
+    caseExited: Promise.resolve(),
+  });
+  coordinator.start();
+  await coordinator.beginClosing();
+  registrationInput.end();
+
+  const sealing = coordinator.seal();
+  void sealing.catch(() => {});
+  await once(acknowledgementOutput, "finish");
+  acknowledgementOutput.emit("error", new Error("injected pre-close ACK error"));
+
+  await assert.rejects(sealing, /ACK|registration/u);
+  assert.equal(coordinator.state, "failed");
+  assert.deepEqual(await coordinator.terminateRegisteredGroups(), {
+    gone: false,
+    proof: "unverified",
+    reason: "channel",
+  });
+});
+
+test("registration ACK close after deadline cannot resurrect a failed coordinator", async () => {
+  const casePid = 6_323;
+  const originalSetTimeout = globalThis.setTimeout;
+  let triggerDeadline!: () => void;
+  globalThis.setTimeout = ((
+    callback: (...arguments_: unknown[]) => void,
+    _milliseconds?: number,
+    ...arguments_: unknown[]
+  ) => {
+    const handle = originalSetTimeout(() => {}, 60_000);
+    triggerDeadline = () => callback(...arguments_);
+    return handle;
+  }) as typeof setTimeout;
+
+  const acknowledgementOutput = new Writable({
+    autoDestroy: false,
+    write(_chunk, _encoding, callback) { callback(); },
+  });
+  const registrationInput = new PassThrough();
+  let coordinator: ProcessRegistrationCoordinator;
+  try {
+    coordinator = createProcessRegistrationCoordinator({
+      casePid,
+      registrationInput,
+      acknowledgementOutput,
+      supervisor: immediateRegisteredSupervisor(casePid),
+      deadlineAt: performance.now() + 5_000,
+      caseExited: Promise.resolve(),
+    });
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+  coordinator.start();
+  await coordinator.beginClosing();
+  registrationInput.end();
+
+  const sealing = coordinator.seal();
+  void sealing.catch(() => {});
+  await once(acknowledgementOutput, "finish");
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  const closed = once(acknowledgementOutput, "close");
+
+  triggerDeadline();
+  assert.equal(coordinator.state, "failed");
+  await closed;
+
+  await assert.rejects(sealing, /deadline|registration/u);
+  assert.equal(coordinator.state, "failed");
+  assert.deepEqual(await coordinator.terminateRegisteredGroups(), {
+    gone: false,
+    proof: "unverified",
+    reason: "deadline",
   });
 });
 

@@ -157,6 +157,77 @@ test("package runtime projection refuses plans specs and temporary evidence belo
   }
 });
 
+test("package runtime projection rejects forbidden filename tokens without substring false positives", { timeout: 120_000 }, async (t) => {
+  for (const [index, name] of [
+    "implementation-plan.md",
+    "api.spec.txt",
+    "release_evidence.json",
+    "temporary-evidence.txt",
+  ].entries()) {
+    const sourcePath = join(SOURCE_ROOT, "assets", name);
+    const outputRoot = await createCanonicalTemporaryDirectory({
+      prefix: `gpt-codex-hwp-runtime-forbidden-filename-${index}-`,
+    });
+    t.after(async () => rm(outputRoot, { recursive: true, force: true }));
+    await writeFile(sourcePath, "must not ship\n", { encoding: "utf8", flag: "wx" });
+    try {
+      await assert.rejects(
+        buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(outputRoot, "runtime") }),
+        new RegExp(`Forbidden runtime path was staged: assets/${name.replaceAll(".", "\\.")}$`, "u"),
+      );
+    } finally {
+      await rm(sourcePath, { force: true });
+    }
+  }
+
+  const binaryNearMiss = "planet.png";
+  const binarySourcePath = join(SOURCE_ROOT, "assets", binaryNearMiss);
+  await writeFile(binarySourcePath, "allowed filename near miss\n", {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  const binaryOutputRoot = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-runtime-allowed-binary-filename-",
+  });
+  t.after(async () => rm(binaryOutputRoot, { recursive: true, force: true }));
+  try {
+    await assert.rejects(
+      buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(binaryOutputRoot, "runtime") }),
+      (error: Error) => {
+        assert.doesNotMatch(error.message, /Forbidden runtime path was staged/u);
+        assert.match(
+          error.message,
+          /Runtime privacy violation \(binary not allowlisted\): assets\/planet\.png/u,
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(binarySourcePath, { force: true });
+  }
+
+  const allowed = ["planning.md", "specification.md", "evidenced.md"];
+  for (const name of allowed) {
+    await writeFile(join(SOURCE_ROOT, "assets", name), "allowed near miss\n", {
+      encoding: "utf8",
+      flag: "wx",
+    });
+  }
+  const outputRoot = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-runtime-allowed-filenames-",
+  });
+  t.after(async () => rm(outputRoot, { recursive: true, force: true }));
+  const output = join(outputRoot, "runtime");
+  try {
+    await assert.doesNotReject(buildRuntime({ root: REPOSITORY_ROOT, outputRoot: output }));
+    for (const name of allowed) {
+      assert.equal(await readFile(join(output, "assets", name), "utf8"), "allowed near miss\n");
+    }
+  } finally {
+    await Promise.all(allowed.map((name) => rm(join(SOURCE_ROOT, "assets", name), { force: true })));
+  }
+});
+
 test("package runtime fixtures canonicalize an injected aliased temp parent", async (t) => {
   const alias = await temporaryDirectoryAlias(t, "package-runtime-parent-");
   if (alias === undefined) return;

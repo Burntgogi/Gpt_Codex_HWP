@@ -10,7 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PROJECT_METADATA } from "./generated/project-metadata.js";
 import { registerTools } from "./tools/index.js";
 import { encodeBoundedJsonFrame } from "./workers/bounded-frame.js";
-import { superviseDocumentProcessTree, terminateDocumentProcessTreeByPid, } from "./workers/document-child-client.js";
+import { isGatedRootGoneError, isSupervisorHelperUnclosedError, observeChildProcessClose, superviseDocumentProcessTree, terminateGatedChildByHandle, terminateDocumentProcessTreeByPid, } from "./workers/document-child-client.js";
 import { DOCTOR_RUNNER_MAX_FRAME_BYTES, DOCTOR_RUNNER_READY, DOCTOR_RUNNER_SCHEMA_VERSION, } from "./workers/doctor-command-runner.js";
 export const DOCTOR_SCHEMA_VERSION = 1;
 const EXPECTED_TOOL_NAMES = Object.freeze([
@@ -30,6 +30,7 @@ const JSON_LIMIT_BYTES = 1024 * 1024;
 const KORDOC_FILE_LIMIT_BYTES = 16 * 1024 * 1024;
 const KORDOC_FILE_COUNT_LIMIT = 512;
 const KORDOC_TOTAL_LIMIT_BYTES = 64 * 1024 * 1024;
+const unsafeDoctorStartupRetentions = new Set();
 const REMEDIATION = Object.freeze({
     node: "Install a supported Node.js release and retry the diagnostic.",
     npm: "Install npm for the active Node.js runtime and retry the diagnostic.",
@@ -480,6 +481,7 @@ async function executeWindowsBoundedCommand(specification, runtimeRoot, dependen
         detached: false,
         stdio: ["pipe", "pipe", "pipe", "pipe"],
     });
+    const childCloseReceipt = observeChildProcessClose(child);
     let truncated = false;
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
@@ -520,15 +522,17 @@ async function executeWindowsBoundedCommand(specification, runtimeRoot, dependen
     const startupResult = await Promise.race([startupPromise, deadlinePromise]);
     if (startupResult.kind === "deadline") {
         const [supervisor] = await Promise.all([supervisorReceiptPromise, readyReceiptPromise]);
-        const gone = await terminateGatedRunner(child, supervisor);
-        destroyChildPipes(child, !gone);
+        const gone = await terminateGatedRunner(child, supervisor, childCloseReceipt);
+        if (!unsafeDoctorStartupRetentions.has(child))
+            destroyChildPipes(child, !gone);
         return commandResult(null, null, true, truncated, !gone, stdout, stderr);
     }
     if (!startupResult.supervisor.ok || !startupResult.ready.ok) {
         if (deadlineTimer !== undefined)
             clearTimeout(deadlineTimer);
-        const gone = await terminateGatedRunner(child, startupResult.supervisor);
-        destroyChildPipes(child, !gone);
+        const gone = await terminateGatedRunner(child, startupResult.supervisor, childCloseReceipt);
+        if (!unsafeDoctorStartupRetentions.has(child))
+            destroyChildPipes(child, !gone);
         return commandResult(null, null, false, truncated, !gone, stdout, stderr);
     }
     const input = child.stdin;
@@ -539,12 +543,7 @@ async function executeWindowsBoundedCommand(specification, runtimeRoot, dependen
         destroyChildPipes(child, !gone);
         return commandResult(null, null, false, truncated, !gone, stdout, stderr);
     }
-    const dispatchPromise = new Promise((resolveDispatch) => {
-        input.end(frame, (error) => resolveDispatch(Object.freeze({
-            kind: "dispatch",
-            ok: error == null,
-        })));
-    });
+    const dispatchPromise = dispatchDoctorRunnerInput(child, input, frame);
     const dispatchResult = await Promise.race([dispatchPromise, terminalPromise, deadlinePromise]);
     if ("kind" in dispatchResult && dispatchResult.kind === "deadline") {
         const gone = await terminateSupervised(startupResult.supervisor.value);
@@ -573,6 +572,29 @@ async function executeWindowsBoundedCommand(specification, runtimeRoot, dependen
     if ("kind" in completion)
         return commandResult(null, null, true, truncated, !gone, stdout, stderr);
     return commandResult(completion.code, completion.signal, false, truncated, !gone, stdout, stderr);
+}
+function dispatchDoctorRunnerInput(child, input, frame) {
+    return new Promise((resolveDispatch) => {
+        let settled = false;
+        const finish = (error) => {
+            if (settled)
+                return;
+            settled = true;
+            resolveDispatch(Object.freeze({ kind: "dispatch", ok: error == null }));
+        };
+        const onError = (error) => finish(error);
+        const onOwnerClose = () => {
+            input.removeListener("error", onError);
+        };
+        input.on("error", onError);
+        child.once("close", onOwnerClose);
+        try {
+            input.end(frame, (error) => finish(error));
+        }
+        catch (error) {
+            finish(error);
+        }
+    });
 }
 function waitForDoctorRunnerReady(stream, timeoutMs) {
     return new Promise((resolveReady, rejectReady) => {
@@ -611,12 +633,18 @@ function waitForDoctorRunnerReady(stream, timeoutMs) {
         stream.once("error", onError);
     });
 }
-async function terminateGatedRunner(child, supervisor) {
+async function terminateGatedRunner(child, supervisor, closeReceipt) {
     if (supervisor.ok)
         return terminateSupervised(supervisor.value);
-    if (child.pid === undefined)
-        return child.exitCode !== null;
-    return terminateDocumentProcessTreeByPid(child.pid).catch(() => false);
+    if (isGatedRootGoneError(supervisor.error)) {
+        const close = await closeReceipt;
+        return close.error === null;
+    }
+    if (isSupervisorHelperUnclosedError(supervisor.error)) {
+        unsafeDoctorStartupRetentions.add(child);
+        return false;
+    }
+    return terminateGatedChildByHandle(child, closeReceipt);
 }
 function terminateSupervised(supervisor) {
     return supervisor.terminate().then((receipt) => receipt.gone, () => false);
@@ -651,8 +679,8 @@ async function receipt(promise) {
     try {
         return Object.freeze({ ok: true, value: await promise });
     }
-    catch {
-        return Object.freeze({ ok: false });
+    catch (error) {
+        return Object.freeze({ ok: false, error });
     }
 }
 function resolveDoctorRunnerPath() {

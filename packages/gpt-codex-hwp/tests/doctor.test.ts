@@ -17,6 +17,9 @@ import {
   type DoctorDependencies,
 } from "../src/doctor.js";
 import { DOCTOR_RUNNER_READY } from "../src/workers/doctor-command-runner.js";
+import {
+  superviseDocumentProcessTreeWithForcedTrackerForTest,
+} from "../src/workers/document-child-client.js";
 
 const TOOL_NAMES = [
   "hwp_detect_format",
@@ -384,6 +387,104 @@ test("Windows doctor gate sends no command before Job readiness and verifies cle
   assert.ok(Buffer.concat(input).byteLength > 4);
   assert.equal(terminationCalls, 1);
   assert.equal(result.code, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.terminationFailed, false);
+});
+
+test("Windows doctor request stdin retains owner-lifetime error handling after its end callback", async () => {
+  const child = fakeWindowsRunner(4494);
+  const input = child.stdin;
+  let listenersAfterCallback = -1;
+  let laterErrorEmitted = false;
+  input.end = ((
+    _chunk: Uint8Array,
+    callback?: (error?: Error | null) => void,
+  ) => {
+    callback?.();
+    listenersAfterCallback = input.listenerCount("error");
+    if (listenersAfterCallback > 0) {
+      laterErrorEmitted = true;
+      const error = Object.assign(new Error("late doctor pipe failure"), { code: "EPIPE" });
+      input.emit("error", error);
+    }
+    setImmediate(() => child.emit("close", 0, null));
+    return input;
+  }) as typeof input.end;
+
+  const execution = doctorModule.executeBoundedCommand(commandSpecification(500), process.cwd(), {
+    platform: "win32",
+    runnerPath: "fixed-doctor-runner.js",
+    spawnProcess: (() => child) as typeof import("node:child_process").spawn,
+    superviseProcessTree: async () => ({
+      terminate: async () => ({ gone: true, proof: "windows-job-empty" }),
+    }),
+  });
+  child.stdio[3].end(DOCTOR_RUNNER_READY);
+
+  const result = await execution;
+  assert.equal(result.code, 0);
+  assert.equal(result.terminationFailed, false);
+  assert.equal(listenersAfterCallback, 1);
+  assert.equal(laterErrorEmitted, true);
+  assert.equal(input.listenerCount("error"), 0);
+});
+
+test("Windows doctor supervisor failure terminates the gated runner by its exact child handle", async () => {
+  const child = fakeWindowsRunner(2_000_000_000) as ReturnType<typeof fakeWindowsRunner> & {
+    kill(signal?: NodeJS.Signals | number): boolean;
+  };
+  let exactHandleProbes = 0;
+  let exactHandleKills = 0;
+  child.kill = (signal: NodeJS.Signals | number = "SIGTERM") => {
+    if (signal === 0) {
+      exactHandleProbes += 1;
+      return true;
+    }
+    exactHandleKills += 1;
+    child.signalCode = signal as NodeJS.Signals;
+    setImmediate(() => child.emit("close", null, signal));
+    return true;
+  };
+  const execution = doctorModule.executeBoundedCommand(commandSpecification(500), process.cwd(), {
+    platform: "win32",
+    runnerPath: "fixed-doctor-runner.js",
+    spawnProcess: (() => child) as typeof import("node:child_process").spawn,
+    superviseProcessTree: async () => {
+      throw new Error("job authority unavailable");
+    },
+  });
+  child.stdio[3].end(DOCTOR_RUNNER_READY);
+
+  const result = await execution;
+  assert.equal(exactHandleProbes, 1);
+  assert.equal(exactHandleKills, 1);
+  assert.equal(result.code, null);
+  assert.equal(result.terminationFailed, false);
+});
+
+test("Windows doctor gate never dispatches through a forced cleanup-only tracker", {
+  skip: process.platform !== "win32" ? "Windows process tracking is Windows-only" : false,
+  timeout: 15_000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "doctor-tracker-gate-"));
+  const markerPath = join(root, "dispatched.txt");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const supervisorFrames: string[] = [];
+  const result = await doctorModule.executeBoundedCommand({
+    ...commandSpecification(5_000),
+    command: process.execPath,
+    args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "dispatched")`],
+  }, process.cwd(), {
+    platform: "win32",
+    superviseProcessTree: (child) => superviseDocumentProcessTreeWithForcedTrackerForTest(
+      child,
+      (frame) => supervisorFrames.push(frame),
+    ),
+  });
+
+  assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u);
+  await assert.rejects(access(markerPath), { code: "ENOENT" });
+  assert.equal(result.code, null);
   assert.equal(result.timedOut, false);
   assert.equal(result.terminationFailed, false);
 });

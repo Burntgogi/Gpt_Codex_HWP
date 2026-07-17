@@ -7,14 +7,16 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import * as publicContentPolicy from "../scripts/public-content-policy.mjs";
 import {
   PUBLIC_BINARY_ALLOWLIST,
   assertPublicContentBuffer,
@@ -744,6 +746,562 @@ test("bounded process proves termination while keeping fast target bytes separat
   assert.deepEqual(result.stderr, Buffer.from([66, 0, 254]));
 });
 
+test("public runner stdin retains owner-lifetime error handling after its end callback", async () => {
+  const dispatch = publicContentPolicy.dispatchPublicProcessInput;
+  assert.equal(typeof dispatch, "function");
+  const child = new EventEmitter();
+  const input = new PassThrough();
+  child.stdin = input;
+  let listenersAfterCallback = -1;
+  let laterErrorEmitted = false;
+  input.end = ((_chunk, callback) => {
+    callback?.();
+    listenersAfterCallback = input.listenerCount("error");
+    if (listenersAfterCallback > 0) {
+      laterErrorEmitted = true;
+      input.emit("error", Object.assign(new Error("late public runner pipe failure"), { code: "EPIPE" }));
+    }
+    return input;
+  });
+
+  await dispatch(child, input, Buffer.from("request"), Date.now() + 100);
+  assert.equal(listenersAfterCallback, 1);
+  assert.equal(laterErrorEmitted, true);
+  assert.equal(input.listenerCount("error"), 1);
+  child.emit("close", 0, null);
+  assert.equal(input.listenerCount("error"), 0);
+});
+
+test("public runner stdin dispatch is bounded by the startup deadline", async () => {
+  const dispatch = publicContentPolicy.dispatchPublicProcessInput;
+  assert.equal(typeof dispatch, "function");
+  const child = new EventEmitter();
+  const input = new PassThrough();
+  child.stdin = input;
+  input.end = (() => input);
+  const started = Date.now();
+  await assert.rejects(
+    dispatch(child, input, Buffer.from("request"), Date.now() + 20),
+    (error) => error?.code === "PUBLIC_PROCESS_TIMEOUT",
+  );
+  assert.ok(Date.now() - started < 1_000);
+  child.emit("close", null, "SIGKILL");
+  assert.equal(input.listenerCount("error"), 0);
+});
+
+test("public supervisor line reader rejects high-bit bytes before ASCII decoding", async () => {
+  const Reader = publicContentPolicy.BoundedLineReader;
+  assert.equal(typeof Reader, "function");
+  const stream = new PassThrough();
+  const reader = new Reader(stream, 128);
+  const exactAsciiAlias = Buffer.from("GPT_CODEX_HWP_JOB READY 7 1 9\n", "ascii");
+  exactAsciiAlias[0] |= 0x80;
+  const pending = reader.next(50);
+  stream.end(exactAsciiAlias);
+  await assert.rejects(pending, (error) => error?.code === "PUBLIC_PROCESS_START");
+});
+
+test("public supervisor raw-byte rejection permanently poisons final transcript proof", async () => {
+  const Reader = publicContentPolicy.BoundedLineReader;
+  const finalize = publicContentPolicy.finalizePublicWindowsSupervisor;
+  assert.equal(typeof Reader, "function");
+  assert.equal(typeof finalize, "function");
+  const stream = new PassThrough();
+  const reader = new Reader(stream, 128);
+  stream.write("GPT_CODEX_HWP_JOB RSS 10 20\nGPT_CODEX_HWP_JOB GONE 0 1\n", "ascii");
+  assert.equal(await reader.next(50), "GPT_CODEX_HWP_JOB RSS 10 20");
+  assert.equal(await reader.next(50), "GPT_CODEX_HWP_JOB GONE 0 1");
+
+  const ended = new Promise((resolvePromise) => stream.once("end", resolvePromise));
+  stream.write(Buffer.from([0x80]));
+  stream.end();
+  await ended;
+
+  const finalized = await finalize({
+    closeReceipt: Promise.resolve({ code: 0, signal: null, error: null }),
+    forceClose: () => true,
+    allowForceClose: true,
+    transcriptReceipt: () => ({
+      stdinFailed: false,
+      stderrBytes: 0,
+      ...reader.transcriptReceipt(),
+    }),
+    gracefulCloseMs: 20,
+    forcedCloseMs: 20,
+  });
+  assert.equal(finalized, false);
+  assert.equal(reader.transcriptReceipt().protocolFailed, true);
+});
+
+test("production public process API does not expose the forced tracker switch", async () => {
+  const source = await readFile(join(REPOSITORY_ROOT, "scripts", "public-content-policy.mjs"), "utf8");
+  assert.equal(source.includes("options.forceWindowsTracker"), false);
+  assert.equal(source.includes("async function abortStartup("), false);
+});
+
+test("public startup failure receipt preserves unverified cleanup", async () => {
+  const error = Object.assign(new Error("startup cleanup unverified"), {
+    code: "PUBLIC_PROCESS_START",
+    terminationFailed: true,
+  });
+  const result = await runBoundedProcess("unused-tool", [], {
+    maxOutputBytes: 64,
+    startProcess: async () => { throw error; },
+  });
+  assert.equal(result.code, -1);
+  assert.equal(result.terminationFailed, true);
+});
+
+test("public startup abort proves actual helper and runner close receipts", async (t) => {
+  const abort = publicContentPolicy.abortPublicProcessStartup;
+  assert.equal(typeof abort, "function");
+  const runner = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+    shell: false,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const helper = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+    shell: false,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  t.after(() => {
+    try { runner.kill("SIGKILL"); } catch {}
+    try { helper.kill("SIGKILL"); } catch {}
+  });
+  const runnerClose = publicContentPolicy.observePublicProcessClose(runner);
+  const helperClose = publicContentPolicy.observePublicProcessClose(helper);
+  await Promise.all([
+    new Promise((resolvePromise, reject) => runner.once("spawn", resolvePromise).once("error", reject)),
+    new Promise((resolvePromise, reject) => helper.once("spawn", resolvePromise).once("error", reject)),
+  ]);
+
+  const cleanup = await abort({
+    child: runner,
+    childCloseReceipt: runnerClose,
+    startupHelper: { helper, closeReceipt: helperClose },
+    platform: "win32",
+    timeoutMs: 1_000,
+  });
+  assert.deepEqual(cleanup, {
+    helperClosed: true,
+    runnerClosed: true,
+    verified: true,
+  });
+  assert.equal((await helperClose).error, null);
+  assert.equal((await runnerClose).error, null);
+});
+
+test("public startup abort never signals the runner before helper close proof", async () => {
+  const abort = publicContentPolicy.abortPublicProcessStartup;
+  assert.equal(typeof abort, "function");
+  const helper = new EventEmitter();
+  helper.stdin = new PassThrough();
+  helper.stdout = new PassThrough();
+  helper.stderr = new PassThrough();
+  helper.stdio = [helper.stdin, helper.stdout, helper.stderr];
+  helper.exitCode = null;
+  helper.signalCode = null;
+  helper.unref = () => {};
+  let helperKills = 0;
+  helper.kill = () => { helperKills += 1; return true; };
+  const runner = new EventEmitter();
+  runner.stdin = new PassThrough();
+  runner.stdout = new PassThrough();
+  runner.stderr = new PassThrough();
+  runner.stdio = [runner.stdin, runner.stdout, runner.stderr];
+  runner.exitCode = null;
+  runner.signalCode = null;
+  runner.unref = () => {};
+  let runnerSignals = 0;
+  runner.kill = () => { runnerSignals += 1; return true; };
+  const cleanup = await abort({
+    child: runner,
+    childCloseReceipt: publicContentPolicy.observePublicProcessClose(runner),
+    startupHelper: {
+      helper,
+      closeReceipt: publicContentPolicy.observePublicProcessClose(helper),
+    },
+    platform: "win32",
+    timeoutMs: 20,
+  });
+  assert.deepEqual(cleanup, {
+    helperClosed: false,
+    runnerClosed: false,
+    verified: false,
+  });
+  assert.equal(helperKills, 1);
+  assert.equal(runnerSignals, 0);
+});
+
+test("public startup abort resumes exact runner cleanup after a late helper close", {
+  timeout: 2_000,
+}, async () => {
+  const abort = publicContentPolicy.abortPublicProcessStartup;
+  const helper = trackedPublicProcessOwner();
+  const runner = trackedPublicProcessOwner();
+  const helperSignals = [];
+  const runnerSignals = [];
+  helper.child.kill = (signal = "SIGTERM") => {
+    helperSignals.push(signal);
+    return true;
+  };
+  runner.child.kill = (signal = "SIGTERM") => {
+    runnerSignals.push(signal);
+    if (signal === "SIGKILL") {
+      queueMicrotask(() => runner.child.emit("close", null, "SIGKILL"));
+    }
+    return true;
+  };
+  const helperClose = publicContentPolicy.observePublicProcessClose(helper.child);
+  const runnerClose = publicContentPolicy.observePublicProcessClose(runner.child);
+
+  const cleanup = await abort({
+    child: runner.child,
+    childCloseReceipt: runnerClose,
+    startupHelper: { helper: helper.child, closeReceipt: helperClose },
+    platform: "win32",
+    timeoutMs: 20,
+  });
+  assert.deepEqual(cleanup, {
+    helperClosed: false,
+    runnerClosed: false,
+    verified: false,
+  });
+  assert.deepEqual(helperSignals, ["SIGTERM"]);
+  assert.deepEqual(runnerSignals, []);
+
+  helper.child.emit("close", null, "SIGTERM");
+  await helperClose;
+  await runnerClose;
+  assert.deepEqual(runnerSignals, [0, "SIGKILL"]);
+  assert.deepEqual(helper.destroyCalls, [1, 1, 1]);
+  assert.equal(helper.unrefCalls(), 1);
+  assert.deepEqual(runner.destroyCalls, [1, 1, 1]);
+  assert.equal(runner.unrefCalls(), 1);
+});
+
+test("public startup treats an error followed by exact helper close as closed", async () => {
+  const abort = publicContentPolicy.abortPublicProcessStartup;
+  const helper = trackedPublicProcessOwner();
+  const runner = trackedPublicProcessOwner();
+  const runnerSignals = [];
+  helper.child.kill = () => {
+    queueMicrotask(() => {
+      helper.child.emit("error", new Error("helper failed before close"));
+      helper.child.emit("close", null, null);
+    });
+    return true;
+  };
+  runner.child.kill = (signal = "SIGTERM") => {
+    runnerSignals.push(signal);
+    if (signal === "SIGKILL") {
+      queueMicrotask(() => runner.child.emit("close", null, "SIGKILL"));
+    }
+    return true;
+  };
+  const helperClose = publicContentPolicy.observePublicProcessClose(helper.child);
+  const runnerClose = publicContentPolicy.observePublicProcessClose(runner.child);
+
+  const cleanup = await abort({
+    child: runner.child,
+    childCloseReceipt: runnerClose,
+    startupHelper: { helper: helper.child, closeReceipt: helperClose },
+    platform: "win32",
+    timeoutMs: 50,
+  });
+
+  assert.deepEqual(cleanup, {
+    helperClosed: true,
+    runnerClosed: true,
+    verified: true,
+  });
+  assert.notEqual((await helperClose).error, null);
+  assert.deepEqual(runnerSignals, [0, "SIGKILL"]);
+  assert.deepEqual(helper.destroyCalls, [1, 1, 1]);
+  assert.equal(helper.unrefCalls(), 1);
+  assert.deepEqual(runner.destroyCalls, [1, 1, 1]);
+  assert.equal(runner.unrefCalls(), 1);
+});
+
+test("Windows public invalid READY path reports verified helper and runner close", {
+  skip: process.platform !== "win32" ? "Windows process supervision is Windows-only" : false,
+}, async () => {
+  const start = publicContentPolicy.startBoundedProcessWithWindowsRunnerForTest;
+  assert.equal(typeof start, "function");
+  const runnerPath = fileURLToPath(new URL("./fixtures/public-invalid-ready-runner.mjs", import.meta.url));
+  await assert.rejects(
+    start(process.execPath, ["-e", "process.exit(99)"], { timeoutMs: 2_000 }, runnerPath),
+    (error) => {
+      assert.equal(error?.code, "PUBLIC_PROCESS_START");
+      assert.equal(error?.terminationFailed, false);
+      assert.deepEqual(error?.startupCleanup, {
+        helperClosed: true,
+        runnerClosed: true,
+        verified: true,
+      });
+      return true;
+    },
+  );
+});
+
+test("Windows public scanner rejects mode 2 before dispatching an ephemeral-intermediate payload", {
+  skip: process.platform !== "win32" ? "Windows process tracking is Windows-only" : false,
+  timeout: 15_000,
+}, async (t) => {
+  const root = await temporaryDirectory(t, "public-mode2-gate-");
+  const dispatchMarker = join(root, "dispatched.txt");
+  const leafPidPath = join(root, "leaf.pid");
+  t.after(async () => {
+    try { process.kill(Number(await readFile(leafPidPath, "utf8")), "SIGKILL"); } catch {}
+  });
+  const leaf = [
+    "const fs=require('node:fs');",
+    `fs.writeFileSync(${JSON.stringify(leafPidPath)},String(process.pid));`,
+    "setInterval(()=>{},1000);",
+  ].join("");
+  const intermediate = [
+    "const {spawn}=require('node:child_process');",
+    `spawn(process.execPath,['-e',${JSON.stringify(leaf)}],{detached:true,stdio:'ignore'}).unref();`,
+  ].join("");
+  const payload = [
+    "const {spawn}=require('node:child_process');const fs=require('node:fs');",
+    `fs.writeFileSync(${JSON.stringify(dispatchMarker)},'dispatched');`,
+    `spawn(process.execPath,['-e',${JSON.stringify(intermediate)}],{stdio:'ignore'});`,
+    "setInterval(()=>{},1000);",
+  ].join("");
+
+  let startupError;
+  const result = await runBoundedProcess(process.execPath, ["-e", payload], {
+    timeoutMs: 3_000,
+    maxOutputBytes: 1_024,
+    startProcess: async (tool, args, options) => {
+      try {
+        return await publicContentPolicy.startBoundedProcessWithForcedWindowsTrackerForTest(
+          tool,
+          args,
+          options,
+        );
+      } catch (error) {
+        startupError = error;
+        throw error;
+      }
+    },
+  });
+
+  assert.equal(result.code, -1);
+  assert.equal(result.terminationFailed, false);
+  assert.deepEqual(startupError?.startupCleanup, {
+    helperClosed: true,
+    runnerClosed: true,
+    verified: true,
+  });
+  await assert.rejects(readFile(dispatchMarker), { code: "ENOENT" });
+  await assert.rejects(readFile(leafPidPath), { code: "ENOENT" });
+});
+
+test("public scanner supervisor finalizer requires exact close and an exhausted transcript", async () => {
+  const finalize = publicContentPolicy.finalizePublicWindowsSupervisor;
+  assert.equal(typeof finalize, "function");
+  for (const [label, closeReceipt, transcriptReceipt, expected] of [
+    ["clean zero", { code: 0, signal: null, error: null }, cleanPublicSupervisorTranscript(), true],
+    ["nonzero", { code: 9, signal: null, error: null }, cleanPublicSupervisorTranscript(), false],
+    ["signal", { code: null, signal: "SIGTERM", error: null }, cleanPublicSupervisorTranscript(), false],
+    ["spawn error", { code: null, signal: null, error: new Error("spawn failed") }, cleanPublicSupervisorTranscript(), false],
+    ["stdin error", { code: 0, signal: null, error: null }, { ...cleanPublicSupervisorTranscript(), stdinFailed: true }, false],
+    ["late stderr", { code: 0, signal: null, error: null }, { ...cleanPublicSupervisorTranscript(), stderrBytes: 1 }, false],
+    ["trailing frame", { code: 0, signal: null, error: null }, { ...cleanPublicSupervisorTranscript(), queuedFrames: 1 }, false],
+    ["trailing partial", { code: 0, signal: null, error: null }, { ...cleanPublicSupervisorTranscript(), partialBytes: 1 }, false],
+  ]) {
+    let forceCalls = 0;
+    assert.equal(await finalize({
+      closeReceipt: Promise.resolve(closeReceipt),
+      forceClose: () => { forceCalls += 1; return true; },
+      allowForceClose: true,
+      transcriptReceipt: () => transcriptReceipt,
+      gracefulCloseMs: 20,
+      forcedCloseMs: 20,
+    }), expected, label);
+    assert.equal(forceCalls, 0, label);
+  }
+});
+
+test("public scanner mode 1 protocol rejects an unexpected TRACKER frame before RSS", () => {
+  const parseRss = publicContentPolicy.parsePublicWindowsSupervisorRssFrame;
+  assert.equal(typeof parseRss, "function");
+  assert.equal(parseRss("GPT_CODEX_HWP_JOB TRACKER 1 3"), undefined);
+  assert.deepEqual(parseRss("GPT_CODEX_HWP_JOB RSS 10 20"), {
+    baselineRss: 10,
+    peakRss: 20,
+  });
+});
+
+test("public scanner invalid frame performs bounded helper cleanup without proof", async () => {
+  const terminate = publicContentPolicy.terminatePublicWindowsSupervisor;
+  assert.equal(typeof terminate, "function");
+  const helper = new EventEmitter();
+  helper.stdin = new PassThrough();
+  helper.stdout = new PassThrough();
+  helper.stderr = new PassThrough();
+  helper.stdio = [helper.stdin, helper.stdout, helper.stderr];
+  helper.exitCode = null;
+  helper.signalCode = null;
+  helper.unref = () => {};
+  const signals = [];
+  helper.kill = (signal = "SIGTERM") => {
+    signals.push(signal);
+    queueMicrotask(() => helper.emit("close", null, signal));
+    return true;
+  };
+  const closeReceipt = publicContentPolicy.observePublicProcessClose(helper);
+
+  const result = await terminate({
+    helper,
+    lines: { next: async () => "GPT_CODEX_HWP_JOB TRACKER 1 3" },
+    closeReceipt,
+    transcriptReceipt: cleanPublicSupervisorTranscript,
+    frameTimeoutMs: 20,
+    cleanupTimeoutMs: 50,
+  });
+
+  assert.equal(result, false);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(helper.stdin.destroyed, true);
+  assert.equal(helper.stdout.destroyed, true);
+  assert.equal(helper.stderr.destroyed, true);
+});
+
+test("public scanner retains an unclosed helper until its exact late close", async () => {
+  const cleanup = publicContentPolicy.cleanupPublicProcessHelper;
+  assert.equal(typeof cleanup, "function");
+  const owner = trackedPublicProcessOwner();
+  const signals = [];
+  owner.child.kill = (signal = "SIGTERM") => {
+    signals.push(signal);
+    return true;
+  };
+  const closeReceipt = publicContentPolicy.observePublicProcessClose(owner.child);
+
+  const results = await Promise.all([
+    cleanup(owner.child, closeReceipt, 20),
+    cleanup(owner.child, closeReceipt, 20),
+  ]);
+  assert.deepEqual(results, [false, false]);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(owner.destroyCalls, [0, 0, 0]);
+  assert.equal(owner.unrefCalls(), 0);
+
+  owner.child.emit("close", null, "SIGKILL");
+  await closeReceipt;
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.deepEqual(owner.destroyCalls, [1, 1, 1]);
+  assert.equal(owner.unrefCalls(), 1);
+});
+
+test("bounded process retains an unclosed runner after failed termination proof", async () => {
+  const owner = trackedPublicProcessOwner();
+  const closeReceipt = publicContentPolicy.observePublicProcessClose(owner.child);
+  const result = await runBoundedProcess("unused-tool", [], {
+    maxOutputBytes: 64,
+    terminationTimeoutMs: 20,
+    startProcess: async () => ({
+      child: owner.child,
+      closeReceipt,
+      deadline: Date.now() + 10,
+      exit: new Promise(() => {}),
+      terminate: async () => false,
+    }),
+  });
+
+  assert.equal(result.terminationFailed, true);
+  assert.deepEqual(owner.destroyCalls, [0, 0, 0]);
+  assert.equal(owner.unrefCalls(), 0);
+
+  owner.child.emit("close", null, "SIGKILL");
+  await closeReceipt;
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.deepEqual(owner.destroyCalls, [1, 1, 1]);
+  assert.equal(owner.unrefCalls(), 1);
+});
+
+test("public scanner supervisor force-close requires valid GONE and expected SIGTERM", async () => {
+  const finalize = publicContentPolicy.finalizePublicWindowsSupervisor;
+  assert.equal(typeof finalize, "function");
+  let forceCalls = 0;
+  let resolveInvalidClose;
+  const invalidClose = new Promise((resolvePromise) => { resolveInvalidClose = resolvePromise; });
+  assert.equal(await finalize({
+    closeReceipt: invalidClose,
+    forceClose: () => {
+      forceCalls += 1;
+      resolveInvalidClose({ code: null, signal: "SIGTERM", error: null });
+      return true;
+    },
+    allowForceClose: false,
+    transcriptReceipt: cleanPublicSupervisorTranscript,
+    gracefulCloseMs: 5,
+    forcedCloseMs: 50,
+  }), false);
+  assert.equal(forceCalls, 1);
+
+  forceCalls = 0;
+  let resolveClose;
+  const closeReceipt = new Promise((resolvePromise) => { resolveClose = resolvePromise; });
+  assert.equal(await finalize({
+    closeReceipt,
+    forceClose: () => {
+      forceCalls += 1;
+      resolveClose({ code: null, signal: "SIGTERM", error: null });
+      return true;
+    },
+    allowForceClose: true,
+    transcriptReceipt: cleanPublicSupervisorTranscript,
+    gracefulCloseMs: 5,
+    forcedCloseMs: 50,
+  }), true);
+  assert.equal(forceCalls, 1);
+});
+
+test("Windows public scanner observes actual helper.kill as an expected SIGTERM close", {
+  skip: process.platform !== "win32" ? "Windows helper signal receipts are Windows-only" : false,
+  timeout: 10_000,
+}, async (t) => {
+  const observeClose = publicContentPolicy.observePublicProcessClose;
+  const finalize = publicContentPolicy.finalizePublicWindowsSupervisor;
+  assert.equal(typeof observeClose, "function");
+  assert.equal(typeof finalize, "function");
+  const powershell = join(
+    process.env.SystemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const helper = spawn(powershell, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "Start-Sleep -Seconds 30",
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  t.after(() => { try { helper.kill("SIGKILL"); } catch {} });
+  await new Promise((resolvePromise, rejectPromise) => {
+    helper.once("spawn", resolvePromise);
+    helper.once("error", rejectPromise);
+  });
+  const closeReceipt = observeClose(helper);
+  const finalized = await finalize({
+    closeReceipt,
+    forceClose: () => helper.kill(),
+    allowForceClose: true,
+    transcriptReceipt: cleanPublicSupervisorTranscript,
+    gracefulCloseMs: 5,
+    forcedCloseMs: 2_000,
+  });
+
+  assert.equal(finalized, true);
+  assert.deepEqual(await closeReceipt, { code: null, signal: "SIGTERM", error: null });
+});
+
 test("bounded process kills a descendant after its parent exits with inherited pipes", async (t) => {
   const root = await temporaryDirectory(t, "public-process-tree-");
   const pidPath = join(root, "descendant.pid");
@@ -1070,4 +1628,41 @@ function treeWithEntryAtPath(root, path, mode, type, objectId) {
 function processExists(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return error?.code === "EPERM"; }
+}
+
+function cleanPublicSupervisorTranscript() {
+  return Object.freeze({
+    stdinFailed: false,
+    stderrBytes: 0,
+    stdoutEnded: true,
+    stdoutFailed: false,
+    protocolFailed: false,
+    queuedFrames: 0,
+    partialBytes: 0,
+  });
+}
+
+function trackedPublicProcessOwner() {
+  const child = new EventEmitter();
+  const streams = [new PassThrough(), new PassThrough(), new PassThrough()];
+  const destroyCalls = [0, 0, 0];
+  for (const [index, stream] of streams.entries()) {
+    const destroy = stream.destroy.bind(stream);
+    stream.destroy = (...args) => {
+      destroyCalls[index] += 1;
+      return destroy(...args);
+    };
+  }
+  [child.stdin, child.stdout, child.stderr] = streams;
+  child.stdio = streams;
+  child.exitCode = null;
+  child.signalCode = null;
+  let unrefCalls = 0;
+  child.unref = () => { unrefCalls += 1; };
+  child.kill = () => true;
+  return Object.freeze({
+    child,
+    destroyCalls,
+    unrefCalls: () => unrefCalls,
+  });
 }

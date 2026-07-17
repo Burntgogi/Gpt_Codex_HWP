@@ -29,6 +29,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
+          package-manager-cache: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
@@ -55,7 +56,7 @@ jobs:
         run: node scripts/platform-receipts.mjs checksum
       - name: Reject generated repository changes
         run: git diff --exit-code -- .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gpt-codex-hwp-windows-x64-platform-receipt
           path: |
@@ -85,6 +86,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
+          package-manager-cache: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
@@ -111,7 +113,7 @@ jobs:
         run: node scripts/platform-receipts.mjs checksum
       - name: Reject generated repository changes
         run: git diff --exit-code -- .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gpt-codex-hwp-macos-arm64-platform-receipt
           path: |
@@ -136,6 +138,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
+          package-manager-cache: false
       - name: Assert Linux x64 runtime
         run: node -e "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
       - name: Assert exact feature head
