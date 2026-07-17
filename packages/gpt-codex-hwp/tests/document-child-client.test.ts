@@ -2210,6 +2210,162 @@ test("POSIX telemetry freezes only a complete active RSS receipt at stop", async
   assert.equal(cleared, 1);
 });
 
+test("POSIX termination retries after an unverified receipt and caches later proof", async () => {
+  const rootPid = 8_110;
+  const receipts: ProcessTreeTerminationReceipt[] = [
+    Object.freeze({ gone: false, proof: "unverified", reason: "deadline" }),
+    Object.freeze({ gone: true, proof: "registered-groups-empty" }),
+  ];
+  let authorityCalls = 0;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryScriptedRegisteredSupervisor(rootPid, async () => {
+        const receipt = receipts[authorityCalls];
+        authorityCalls += 1;
+        if (receipt === undefined) throw new Error("unexpected authority retry");
+        return receipt;
+      }),
+      tracker: telemetryTracker(),
+      scheduleInterval: () => ({ unref() {} }),
+      clearScheduledInterval: () => {},
+    },
+  );
+
+  assert.deepEqual(await supervisor.terminate(), receipts[0]);
+  assert.deepEqual(await supervisor.terminate(), receipts[1]);
+  assert.deepEqual(await supervisor.terminate(), receipts[1]);
+  assert.equal(authorityCalls, 2);
+});
+
+test("POSIX termination retries after authority rejection", async () => {
+  const rootPid = 8_111;
+  const verified = Object.freeze({
+    gone: true as const,
+    proof: "registered-groups-empty" as const,
+  });
+  let authorityCalls = 0;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryScriptedRegisteredSupervisor(rootPid, async () => {
+        authorityCalls += 1;
+        if (authorityCalls === 1) throw new Error("first authority attempt rejected");
+        return verified;
+      }),
+      tracker: telemetryTracker(),
+      scheduleInterval: () => ({ unref() {} }),
+      clearScheduledInterval: () => {},
+    },
+  );
+
+  await assert.rejects(supervisor.terminate(), /first authority attempt rejected/u);
+  assert.deepEqual(await supervisor.terminate(), verified);
+  assert.equal(authorityCalls, 2);
+});
+
+test("POSIX termination deduplicates concurrent authority attempts", async () => {
+  const rootPid = 8_112;
+  const attempt = telemetryDeferred<ProcessTreeTerminationReceipt>();
+  const unverified = Object.freeze({
+    gone: false as const,
+    proof: "unverified" as const,
+    reason: "deadline" as const,
+  });
+  let authorityCalls = 0;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryScriptedRegisteredSupervisor(rootPid, () => {
+        authorityCalls += 1;
+        return attempt.promise;
+      }),
+      tracker: telemetryTracker(),
+      scheduleInterval: () => ({ unref() {} }),
+      clearScheduledInterval: () => {},
+    },
+  );
+
+  const first = supervisor.terminate();
+  const concurrent = supervisor.terminate();
+  assert.equal(first, concurrent);
+  assert.equal(authorityCalls, 1);
+  attempt.resolve(unverified);
+  assert.deepEqual(await first, unverified);
+  assert.deepEqual(await concurrent, unverified);
+});
+
+test("POSIX termination reuses verified proof without another authority attempt", async () => {
+  const rootPid = 8_113;
+  const verified = Object.freeze({
+    gone: true as const,
+    proof: "registered-groups-empty" as const,
+  });
+  let authorityCalls = 0;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryScriptedRegisteredSupervisor(rootPid, async () => {
+        authorityCalls += 1;
+        return verified;
+      }),
+      tracker: telemetryTracker(),
+      scheduleInterval: () => ({ unref() {} }),
+      clearScheduledInterval: () => {},
+    },
+  );
+
+  assert.deepEqual(await supervisor.terminate(), verified);
+  assert.deepEqual(await supervisor.terminate(), verified);
+  assert.equal(authorityCalls, 1);
+});
+
+test("POSIX termination retries never resurrect stopped pending telemetry", async () => {
+  const rootPid = 8_114;
+  const initialize = telemetryDeferred<void>();
+  let authorityCalls = 0;
+  let scheduled = 0;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "linux",
+    {
+      registeredSupervisor: telemetryScriptedRegisteredSupervisor(rootPid, async () => {
+        authorityCalls += 1;
+        return authorityCalls === 1
+          ? Object.freeze({ gone: false, proof: "unverified", reason: "deadline" })
+          : Object.freeze({ gone: true, proof: "registered-groups-empty" });
+      }),
+      tracker: telemetryTracker({ initialize: () => initialize.promise }),
+      scheduleInterval: () => {
+        scheduled += 1;
+        return { unref() {} };
+      },
+      clearScheduledInterval: () => {},
+    },
+  );
+
+  assert.deepEqual(
+    await supervisor.terminate(),
+    { gone: false, proof: "unverified", reason: "deadline" },
+  );
+  assert.equal(await supervisor.processTreeTelemetryReady, false);
+  initialize.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(scheduled, 0);
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  assert.deepEqual(
+    await supervisor.terminate(),
+    { gone: true, proof: "registered-groups-empty" },
+  );
+  assert.equal(await supervisor.processTreeTelemetryReady, false);
+  assert.equal(supervisor.processTreeRss?.(), undefined);
+  assert.equal(authorityCalls, 2);
+});
+
 test("Windows supervisor always performs discovery-free retained-handle cleanup", () => {
   const windows = readFileSync(
     fileURLToPath(new URL("../src/workers/windows-job-supervisor.ps1", import.meta.url)),
@@ -3147,6 +3303,33 @@ function telemetryRegisteredSupervisor(
     delay: async () => {},
     terminationGraceMs: 0,
   });
+}
+
+function telemetryScriptedRegisteredSupervisor(
+  rootPid: number,
+  terminate: () => Promise<ProcessTreeTerminationReceipt>,
+): RegisteredProcessGroupSupervisor {
+  let registered = false;
+  const identity = Object.freeze({
+    pid: rootPid,
+    parentPid: process.pid,
+    processGroupId: rootPid,
+    identity: `scripted:${rootPid}`,
+    startOrder: rootPid,
+  });
+  return {
+    async registerRoot(pid, expectedParentPid) {
+      assert.equal(registered, false);
+      assert.equal(pid, rootPid);
+      assert.equal(expectedParentPid, process.pid);
+      registered = true;
+      return identity;
+    },
+    terminate() {
+      assert.equal(registered, true);
+      return terminate();
+    },
+  };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {

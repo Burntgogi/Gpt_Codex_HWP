@@ -1349,7 +1349,8 @@ async function createPosixProcessTreeSupervisor(
     baselineBytes: number;
     peakBytes: number;
   }> | undefined;
-  let termination: Promise<ProcessTreeTerminationReceipt> | undefined;
+  let verifiedTerminationReceipt: ProcessTreeTerminationReceipt | undefined;
+  let activeTermination: Promise<ProcessTreeTerminationReceipt> | undefined;
 
   const clearSampler = (): void => {
     const handle = sampler;
@@ -1441,33 +1442,46 @@ async function createPosixProcessTreeSupervisor(
     });
   }
 
+  const stopTelemetry = (): void => {
+    if (telemetryState === "stopped") return;
+    stoppedProcessTreeRss = readCompleteProcessTreeRss();
+    deactivateTelemetry("stopped");
+  };
+
   return {
     processTreeTelemetryReady,
     processTreeRss: () => telemetryState === "stopped"
       ? stoppedProcessTreeRss
       : readCompleteProcessTreeRss(),
     terminate(): Promise<ProcessTreeTerminationReceipt> {
-      if (termination !== undefined) return termination;
-      try {
-        const registeredTermination = registeredSupervisor.terminate();
-        termination = registeredTermination.then(
-          (receipt) => {
-            stoppedProcessTreeRss = readCompleteProcessTreeRss();
-            deactivateTelemetry("stopped");
-            return receipt;
-          },
-          (error: unknown) => {
-            stoppedProcessTreeRss = readCompleteProcessTreeRss();
-            deactivateTelemetry("stopped");
-            throw error;
-          },
-        );
-      } catch (error: unknown) {
-        stoppedProcessTreeRss = readCompleteProcessTreeRss();
-        deactivateTelemetry("stopped");
-        termination = Promise.reject(error);
+      if (verifiedTerminationReceipt?.gone === true) {
+        return Promise.resolve(verifiedTerminationReceipt);
       }
-      return termination;
+      if (activeTermination !== undefined) return activeTermination;
+      let registeredTermination: Promise<ProcessTreeTerminationReceipt>;
+      try {
+        registeredTermination = registeredSupervisor.terminate();
+      } catch (error: unknown) {
+        registeredTermination = Promise.reject(error);
+      }
+      const settledAttempt = registeredTermination.then(
+        (receipt) => {
+          stopTelemetry();
+          const recognized = normalizeProcessTreeTerminationReceipt(receipt);
+          if (recognized.gone === true) verifiedTerminationReceipt = recognized;
+          return receipt;
+        },
+        (error: unknown) => {
+          stopTelemetry();
+          throw error;
+        },
+      );
+      let sharedAttempt: Promise<ProcessTreeTerminationReceipt>;
+      sharedAttempt = settledAttempt.finally(() => {
+        if (activeTermination === sharedAttempt) activeTermination = undefined;
+      });
+      activeTermination = sharedAttempt;
+      return sharedAttempt;
     },
   };
 }
