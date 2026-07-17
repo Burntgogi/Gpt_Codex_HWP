@@ -11,6 +11,8 @@ import {
   lstat,
   mkdtemp,
   open,
+  opendir,
+  readFile,
   readdir,
   rename,
   rmdir,
@@ -20,7 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, win32 } from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { SpoolDocumentSnapshot } from "../shared/document-snapshot.js";
 import {
@@ -52,6 +54,15 @@ import {
   type LogicalDocumentRequest,
   validateLogicalDocumentRequest,
 } from "./document-protocol.js";
+import { DOCUMENT_START_FRAME } from "./document-process-registration.js";
+import {
+  createRegisteredPosixProcessGroupSupervisor,
+  normalizeProcessTreeTerminationReceipt,
+  unverifiedTermination,
+  type ProcessTreeTerminationReceipt,
+  type RegisteredProcessGroupIdentity,
+  type UnverifiedTerminationReason,
+} from "./registered-process-supervisor.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_DRAIN_ACCOUNTED_BYTES = 64 * 1024;
@@ -60,6 +71,15 @@ const OUTPUT_SPOOL_PREFIX = "gpt-codex-hwp-result-";
 const OUTPUT_SPOOL_FILENAME = "output.bin";
 const OUTPUT_READ_CHUNK_BYTES = 1024 * 1024;
 const WINDOWS_SYSTEM_SID = "S-1-5-18";
+const LINUX_PROCESS_SAMPLE_MS = 25;
+const MACOS_PROCESS_SAMPLE_MS = 100;
+const MAX_TRACKED_PROCESS_IDENTITIES = 4_096;
+const MAX_LINUX_TASKS_PER_PROCESS = 1_024;
+const MAX_LINUX_CHILDREN_PER_PROCESS = 4_096;
+const MAX_LINUX_PROC_STAT_BYTES = 64 * 1024;
+const MAX_LINUX_PROC_STATUS_BYTES = 256 * 1024;
+const MAX_LINUX_TASK_CHILDREN_BYTES = 64 * 1024;
+const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
 
 export interface DocumentChildSpawnSpecification {
   readonly command: string;
@@ -70,6 +90,11 @@ export interface DocumentChildSpawnSpecification {
 export interface DocumentChildClientDependencies {
   readonly childEntry?: string;
   readonly childArguments?: readonly string[];
+  readonly startGateEntry?: string;
+  readonly benchmarkRegistrationDescriptors?: Readonly<{
+    writeFd: number;
+    ackFd: number;
+  }>;
   readonly spoolRoot?: string;
   readonly heavyChildGate?: HeavyChildGate;
   readonly spawnFactory?: (
@@ -93,7 +118,11 @@ export interface DocumentChildClientDependencies {
 }
 
 export interface ChildLifecycleSupervisor {
-  terminate(): Promise<boolean>;
+  terminate(): Promise<ProcessTreeTerminationReceipt>;
+  processTreeRss?(): Readonly<{
+    baselineBytes: number;
+    peakBytes: number;
+  }> | undefined;
 }
 
 interface OutputSpoolOwner {
@@ -110,6 +139,16 @@ interface OutputSpoolOwner {
   readonly cleanupUnlink: (path: string) => Promise<void>;
   readonly cleanupRmdir: (path: string) => Promise<void>;
 }
+
+interface StartGateOwner {
+  readonly stream: NodeJS.WritableStream;
+  started: boolean;
+  closed: boolean;
+}
+
+type ProcessTreeTerminator = (
+  child: ChildProcess,
+) => Promise<ProcessTreeTerminationReceipt>;
 
 interface ChildStartupCapture {
   readonly oomDetector: StreamingOomDetector;
@@ -150,10 +189,26 @@ export function createDocumentChildClient(
     new URL("./document-child.js", import.meta.url),
   );
   const childArguments = dependencies.childArguments ?? [];
+  const startGateEntry = dependencies.startGateEntry ?? fileURLToPath(
+    import.meta.url.endsWith(".ts")
+      ? new URL("../../dist/workers/document-child-start-gate.js", import.meta.url)
+      : new URL("./document-child-start-gate.js", import.meta.url),
+  );
+  if (!isAbsolute(startGateEntry)) {
+    throw new Error("absolute document child start gate entry is required");
+  }
   const gate = dependencies.heavyChildGate ?? new HeavyChildGate();
   const spawnFactory = dependencies.spawnFactory ?? ((specification) =>
     spawn(specification.command, [...specification.args], specification.options));
-  const treeTerminator = dependencies.treeTerminator ?? terminateProcessTree;
+  const legacyTreeTerminator = dependencies.treeTerminator ?? terminateProcessTree;
+  const fallbackTerminator: ProcessTreeTerminator = async (child) => {
+    try {
+      await legacyTreeTerminator(child);
+    } catch {
+      // Generic cleanup has no identity-bound proof authority.
+    }
+    return unverifiedTermination("termination");
+  };
 
   return {
     concurrencyManaged: true,
@@ -248,8 +303,9 @@ export function createDocumentChildClient(
         throw startupTerminationError(postSpoolTerminationReason);
       }
 
-      let child: ChildProcess;
-      let startupCapture: ChildStartupCapture;
+      let child: ChildProcess | undefined;
+      let startGate: StartGateOwner | undefined;
+      let startupCapture: ChildStartupCapture | undefined;
       try {
         const input = request.operation === "generateHwpx"
           ? undefined
@@ -265,10 +321,22 @@ export function createDocumentChildClient(
           imageInputFd ?? "ignore",
           outputOwner.handle.fd,
           "pipe",
+          "pipe",
+          ...(dependencies.benchmarkRegistrationDescriptors === undefined
+            ? []
+            : [
+                dependencies.benchmarkRegistrationDescriptors.writeFd,
+                dependencies.benchmarkRegistrationDescriptors.ackFd,
+              ]),
         ];
         const specification: DocumentChildSpawnSpecification = {
           command: process.execPath,
-          args: [childEntry, ...childArguments],
+          args: [
+            "--import",
+            pathToFileURL(startGateEntry).href,
+            childEntry,
+            ...childArguments,
+          ],
           options: {
             shell: false,
             windowsHide: true,
@@ -283,8 +351,25 @@ export function createDocumentChildClient(
         }
         child = spawnFactory(specification);
         startupCapture = createChildStartupCapture(child);
+        startGate = requireStartGateOwner(child);
       } catch (error: unknown) {
         const terminationReason = startupLifecycle.terminationReason();
+        if (child !== undefined) {
+          closeStartGate(startGate);
+          await fallbackTerminator(child);
+          const capture = startupCapture ?? createChildStartupCapture(child);
+          await cleanupFailedPreDispatch(
+            child,
+            snapshot,
+            outputOwner,
+            release,
+            capture,
+            startupLifecycle,
+            fallbackTerminator,
+            startGate,
+          );
+          throw terminationFailedError();
+        }
         startupLifecycle.dispose();
         release();
         await cleanupOutputSpool(outputOwner);
@@ -299,7 +384,10 @@ export function createDocumentChildClient(
         }));
       }
 
-      let supervisedTerminator = treeTerminator;
+      const spawnedChild = child!;
+      const childStartGate = startGate!;
+      const childStartupCapture = startupCapture!;
+      let supervisedTerminator: ProcessTreeTerminator = fallbackTerminator;
       const supervisorFactory = dependencies.jobSupervisorFactory ??
         (process.platform === "win32"
           ? (childProcess: ChildProcess, readyMs: number) =>
@@ -309,68 +397,92 @@ export function createDocumentChildClient(
                 dependencies.jobSupervisorFrameObserver,
                 dependencies.forceWindowsTracker,
               )
-          : undefined);
-      if (supervisorFactory !== undefined) {
-        try {
-          const supervisor = await supervisorFactory(
-            child,
-            Math.min(5_000, remainingDeadlineMs),
-          );
-          supervisedTerminator = () => supervisor.terminate();
-        } catch (error: unknown) {
-          const terminated = await treeTerminator(child).catch(() => false);
-          const exitCode = terminated
-            ? await waitWithTimeout(waitForChildExit(child), 1_000)
-            : undefined;
-          if (terminated && exitCode !== undefined) {
-            await drainCapturedChildStreams(child);
-            startupCapture.detachAll();
-            await cleanupOutputSpool(outputOwner);
-            await cleanupSnapshot(snapshot);
-            release();
-            startupLifecycle.dispose();
-          } else {
-            startupLifecycle.dispose();
-            scheduleCleanupAfterActualExit(
-              child,
-              snapshot,
-              outputOwner,
-              release,
-              startupCapture,
-              treeTerminator,
-            );
-            throw createDocumentEngineRunError("ENGINE_TERMINATION_FAILED", {
-              stage: "shutdown",
-              remediation: "check_installation",
-            });
-          }
-          if (startupCapture.oomDetector.matched) {
-            throw createDocumentEngineRunError("ENGINE_OOM", {
-              stage: "startup",
-              remediation: "reduce_input",
-            });
-          }
-          const terminationReason = startupLifecycle.terminationReason();
-          if (terminationReason !== undefined) {
-            throw startupTerminationError(terminationReason);
-          }
-          throw new DocumentEngineRunError(normalizeDocumentEngineError(error, {
-            ready: false,
-            stage: "startup",
-          }));
-        }
+          : (childProcess: ChildProcess) =>
+              createPosixProcessTreeSupervisor(childProcess, process.platform));
+      try {
+        const supervisor = await supervisorFactory(
+          spawnedChild,
+          Math.min(5_000, remainingDeadlineMs),
+        );
+        supervisedTerminator = createVerifiedTerminator(supervisor, childStartGate);
+      } catch {
+        closeStartGate(childStartGate);
+        await fallbackTerminator(spawnedChild);
+        await cleanupFailedPreDispatch(
+          spawnedChild,
+          snapshot,
+          outputOwner,
+          release,
+          childStartupCapture,
+          startupLifecycle,
+          fallbackTerminator,
+          childStartGate,
+        );
+        throw terminationFailedError();
       }
 
       remainingDeadlineMs = deadlineMs - (performance.now() - requestStartedAt);
       if (startupLifecycle.terminationReason() !== undefined) {
+        closeStartGate(childStartGate);
         return terminateExpiredStartup(
-          child,
+          spawnedChild,
           snapshot,
           outputOwner,
           release,
           supervisedTerminator,
-          startupCapture,
+          childStartupCapture,
           startupLifecycle,
+          childStartGate,
+        );
+      }
+
+      try {
+        await writeStartFrame(childStartGate);
+      } catch {
+        closeStartGate(childStartGate);
+        const receipt = await terminateWithReceipt(
+          supervisedTerminator,
+          spawnedChild,
+          "channel",
+        );
+        if (!receipt.gone) {
+          scheduleCleanupAfterActualExit(
+            spawnedChild,
+            snapshot,
+            outputOwner,
+            release,
+            childStartupCapture,
+            supervisedTerminator,
+            childStartGate,
+          );
+          startupLifecycle.dispose();
+          throw terminationFailedError();
+        }
+        await cleanupFailedPreDispatch(
+          spawnedChild,
+          snapshot,
+          outputOwner,
+          release,
+          childStartupCapture,
+          startupLifecycle,
+          supervisedTerminator,
+          childStartGate,
+        );
+        throw createDocumentEngineRunError("ENGINE_INIT_FAILED", { stage: "startup" });
+      }
+
+      remainingDeadlineMs = deadlineMs - (performance.now() - requestStartedAt);
+      if (startupLifecycle.terminationReason() !== undefined) {
+        closeStartGate(childStartGate);
+        return terminateExpiredStartup(
+          spawnedChild,
+          snapshot,
+          outputOwner,
+          release,
+          supervisedTerminator,
+          childStartupCapture,
+          startupLifecycle,
+          childStartGate,
         );
       }
 
@@ -379,16 +491,142 @@ export function createDocumentChildClient(
         snapshot,
         options,
         remainingDeadlineMs,
-        child,
+        spawnedChild,
         release,
         outputOwner,
         supervisedTerminator,
         dependencies.controlFrameAllocationObserver,
-        startupCapture,
+        childStartupCapture,
         startupLifecycle,
+        childStartGate,
       );
     },
   };
+}
+
+function requireStartGateOwner(child: ChildProcess): StartGateOwner {
+  const stream = (
+    child.stdio as unknown as Array<NodeJS.WritableStream | null | undefined>
+  )[7];
+  if (stream === null || stream === undefined || typeof stream.write !== "function") {
+    throw new Error("document child start gate pipe unavailable");
+  }
+  return { stream, started: false, closed: false };
+}
+
+async function writeStartFrame(owner: StartGateOwner): Promise<void> {
+  if (owner.started || owner.closed) throw new Error("document child start gate unavailable");
+  owner.started = true;
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      owner.stream.removeListener("error", onError);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onError = (error: Error): void => fail(error);
+    owner.stream.once("error", onError);
+    try {
+      owner.stream.write(DOCUMENT_START_FRAME, (error?: Error | null) => {
+        if (error != null) {
+          fail(error);
+          return;
+        }
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      });
+    } catch (error: unknown) {
+      fail(error);
+    }
+  });
+}
+
+function closeStartGate(owner: StartGateOwner | undefined): void {
+  if (owner === undefined || owner.closed) return;
+  owner.closed = true;
+  try {
+    if ("destroy" in owner.stream && typeof owner.stream.destroy === "function") {
+      owner.stream.destroy();
+    } else {
+      owner.stream.end();
+    }
+  } catch {
+    // Closing the private gate is best-effort after ownership has been retained.
+  }
+}
+
+function createVerifiedTerminator(
+  supervisor: ChildLifecycleSupervisor,
+  startGate: StartGateOwner,
+): ProcessTreeTerminator {
+  return async () => {
+    const receipt = await terminateWithReceipt(
+      async () => supervisor.terminate(),
+      undefined,
+    );
+    if (receipt.gone) closeStartGate(startGate);
+    return receipt;
+  };
+}
+
+async function terminateWithReceipt(
+  terminator: ProcessTreeTerminator,
+  child: ChildProcess | undefined,
+  failureReason: UnverifiedTerminationReason = "termination",
+): Promise<ProcessTreeTerminationReceipt> {
+  try {
+    return normalizeProcessTreeTerminationReceipt(
+      await terminator(child as ChildProcess),
+      failureReason,
+    );
+  } catch {
+    return unverifiedTermination(failureReason);
+  }
+}
+
+function terminationFailedError(): DocumentEngineRunError {
+  return createDocumentEngineRunError("ENGINE_TERMINATION_FAILED", {
+    stage: "shutdown",
+    remediation: "check_installation",
+  });
+}
+
+async function cleanupFailedPreDispatch(
+  child: ChildProcess,
+  snapshot: SpoolDocumentSnapshot | undefined,
+  outputOwner: OutputSpoolOwner,
+  release: () => void,
+  capture: ChildStartupCapture,
+  startupLifecycle: StartupLifecycleState,
+  treeTerminator: ProcessTreeTerminator,
+  startGate: StartGateOwner | undefined,
+): Promise<void> {
+  const exit = await waitWithTimeout(waitForChildExit(child), 1_000);
+  if (exit === undefined) {
+    startupLifecycle.dispose();
+    scheduleCleanupAfterActualExit(
+      child,
+      snapshot,
+      outputOwner,
+      release,
+      capture,
+      treeTerminator,
+      startGate,
+    );
+    return;
+  }
+  await drainCapturedChildStreams(child);
+  capture.detachAll();
+  startupLifecycle.dispose();
+  await cleanupSnapshot(snapshot);
+  await cleanupOutputSpool(outputOwner);
+  release();
 }
 
 async function terminateExpiredStartup(
@@ -396,17 +634,13 @@ async function terminateExpiredStartup(
   snapshot: SpoolDocumentSnapshot | undefined,
   outputOwner: OutputSpoolOwner,
   release: () => void,
-  treeTerminator: (child: ChildProcess) => Promise<boolean>,
+  treeTerminator: ProcessTreeTerminator,
   startupCapture: ChildStartupCapture,
   startupLifecycle: StartupLifecycleState,
+  startGate: StartGateOwner,
 ): Promise<never> {
-  let terminated = false;
-  try {
-    terminated = await treeTerminator(child);
-  } catch {
-    terminated = false;
-  }
-  if (!terminated) {
+  const receipt = await terminateWithReceipt(treeTerminator, child);
+  if (!receipt.gone) {
     startupLifecycle.dispose();
     scheduleCleanupAfterActualExit(
       child,
@@ -415,11 +649,9 @@ async function terminateExpiredStartup(
       release,
       startupCapture,
       treeTerminator,
+      startGate,
     );
-    throw createDocumentEngineRunError("ENGINE_TERMINATION_FAILED", {
-      stage: "shutdown",
-      remediation: "check_installation",
-    });
+    throw terminationFailedError();
   }
   await drainCapturedChildStreams(child);
   startupCapture.detachAll();
@@ -453,15 +685,19 @@ async function runChild<Operation extends DocumentEngineOperation>(
   child: ChildProcess,
   release: () => void,
   outputOwner: OutputSpoolOwner,
-  treeTerminator: (child: ChildProcess) => Promise<boolean>,
+  treeTerminator: ProcessTreeTerminator,
   controlFrameAllocationObserver?: (bytes: number) => void,
   startupCapture?: ChildStartupCapture,
   startupLifecycle?: StartupLifecycleState,
+  startGate?: StartGateOwner,
 ): Promise<IsolatedDocumentResult<Operation>> {
   const startedAt = Date.now();
   const validator = createChildDocumentEventValidator(
     request.requestId,
     request.operation,
+    request.operation === "generateHwpx"
+      ? 0
+      : snapshot?.metadata.sizeBytes ?? 0,
   );
   let ready = false;
   let settling = false;
@@ -510,13 +746,8 @@ async function runChild<Operation extends DocumentEngineOperation>(
       detachListeners();
       void (async () => {
         let terminalError = "error" in outcome ? outcome.error : undefined;
-        let terminated = false;
-        try {
-          terminated = await treeTerminator(child);
-        } catch {
-          terminated = false;
-        }
-        if (!terminated) {
+        const receipt = await terminateWithReceipt(treeTerminator, child);
+        if (!receipt.gone) {
           scheduleCleanupAfterActualExit(
             child,
             snapshot,
@@ -524,11 +755,9 @@ async function runChild<Operation extends DocumentEngineOperation>(
             release,
             capture,
             treeTerminator,
+            startGate,
           );
-          reject(createDocumentEngineRunError("ENGINE_TERMINATION_FAILED", {
-            stage: "shutdown",
-            remediation: "check_installation",
-          }));
+          reject(terminationFailedError());
           return;
         }
         await drainCapturedChildStreams(child);
@@ -607,6 +836,10 @@ async function runChild<Operation extends DocumentEngineOperation>(
         }
         if (event.type === "progress") {
           options.onProgress?.(event.completed, event.total);
+          return;
+        }
+        if (event.type === "metrics") {
+          options.onMetrics?.(Object.freeze({ copiedBytes: event.copiedBytes }));
           return;
         }
         if (event.type === "failure") {
@@ -780,15 +1013,18 @@ async function createWindowsJobSupervisor(
   }
   const lines = new BoundedSupervisorLineReader(helper.stdout, 128);
   const exitReceipt = waitForChildExit(helper);
+  let readyMode: 1 | 2;
   try {
     const ready = await lines.next(readyDeadlineMs);
     frameObserver?.(ready);
-    if (!new RegExp(
-      `^GPT_CODEX_HWP_JOB READY ${child.pid} [12] [0-9]+$`,
+    const readyMatch = new RegExp(
+      `^GPT_CODEX_HWP_JOB READY ${child.pid} ([12]) [0-9]+$`,
       "u",
-    ).test(ready)) {
+    ).exec(ready);
+    if (readyMatch === null) {
       throw new Error("invalid job supervisor READY frame");
     }
+    readyMode = Number(readyMatch[1]) as 1 | 2;
   } catch (error: unknown) {
     helper.stdin.destroy();
     helper.kill();
@@ -796,31 +1032,48 @@ async function createWindowsJobSupervisor(
   }
 
   let commandSent = false;
-  let terminationComplete = false;
-  let activeTermination: Promise<boolean> | undefined;
+  let verifiedReceipt: ProcessTreeTerminationReceipt | undefined;
+  let activeTermination: Promise<ProcessTreeTerminationReceipt> | undefined;
+  let processTreeRss: Readonly<{
+    baselineBytes: number;
+    peakBytes: number;
+  }> | undefined;
   return {
-    terminate(): Promise<boolean> {
-      if (terminationComplete) return Promise.resolve(true);
+    processTreeRss: () => processTreeRss,
+    terminate(): Promise<ProcessTreeTerminationReceipt> {
+      if (verifiedReceipt?.gone === true) return Promise.resolve(verifiedReceipt);
       activeTermination ??= (async () => {
         try {
           if (!commandSent) {
             commandSent = true;
             helper.stdin!.end("TERMINATE\n");
           }
-          let gone = await lines.next(3_000);
-          if (forceTracker && /^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(gone)) {
-            frameObserver?.(gone);
-            gone = await lines.next(3_000);
+          let frame = await lines.next(3_000);
+          if (forceTracker && /^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(frame)) {
+            frameObserver?.(frame);
+            frame = await lines.next(3_000);
           }
+          frameObserver?.(frame);
+          processTreeRss = parseProcessTreeRssFrame(frame);
+          const gone = await lines.next(3_000);
           frameObserver?.(gone);
-          if (!/^GPT_CODEX_HWP_JOB GONE 0 [12]$/u.test(gone)) return false;
-          terminationComplete = await finalizeVerifiedWindowsSupervisor({
+          const goneMatch = /^GPT_CODEX_HWP_JOB GONE 0 ([12])$/u.exec(gone);
+          if (goneMatch === null) return unverifiedTermination("termination");
+          const finalized = await finalizeVerifiedWindowsSupervisor({
             exitReceipt,
             forceClose: () => helper.kill(),
           });
-          return terminationComplete;
+          if (!finalized) return unverifiedTermination("termination");
+          if (readyMode !== 1 || goneMatch[1] !== "1") {
+            return unverifiedTermination("identity");
+          }
+          verifiedReceipt = Object.freeze({
+            gone: true,
+            proof: "windows-job-empty",
+          });
+          return verifiedReceipt;
         } catch {
-          return false;
+          return unverifiedTermination("channel");
         } finally {
           activeTermination = undefined;
         }
@@ -855,19 +1108,776 @@ export async function finalizeVerifiedWindowsSupervisor({
 
 export async function superviseDocumentProcessTree(
   child: ChildProcess,
+  options: Readonly<{ frameObserver?: (frame: string) => void }> = {},
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
   if (process.platform === "win32") {
-    return createWindowsJobSupervisor(child, 5_000, undefined, true);
+    return createWindowsJobSupervisor(
+      child,
+      5_000,
+      options.frameObserver,
+      false,
+    );
   }
-  let terminationComplete = false;
+  return createPosixProcessTreeSupervisor(child, process.platform);
+}
+
+interface PosixProcessRecord {
+  readonly pid: number;
+  readonly parentPid: number;
+  readonly processGroupId: number;
+  readonly identity: string;
+  readonly startOrder: number;
+  readonly rssBytes: number;
+}
+
+interface RetainedPosixProcess extends PosixProcessRecord {
+  readonly depth: number;
+}
+
+async function createPosixProcessTreeSupervisor(
+  child: ChildProcess,
+  platform: NodeJS.Platform,
+): Promise<ChildLifecycleSupervisor> {
+  if (child.pid === undefined) throw new Error("child pid unavailable");
+  if (platform !== "linux" && platform !== "darwin") {
+    throw new Error(`unsupported process-tree metrics platform: ${platform}`);
+  }
+  const registeredSupervisor = createRegisteredPosixProcessGroupSupervisor({
+    inspectIdentity: (pid) => snapshotRegisteredPosixProcessGroupIdentity(pid, platform),
+  });
+  await registeredSupervisor.registerRoot(child.pid, process.pid);
+  const tracker = new PosixProcessTreeTracker(child.pid, platform);
+  let samplingFailure: unknown;
+  try {
+    await tracker.initialize();
+  } catch (error: unknown) {
+    samplingFailure = error;
+    tracker.disableTelemetry();
+  }
+  let sampleRunning = false;
+  let sampleRequested = false;
+  let sampleTail = Promise.resolve();
+  const queueSample = (): void => {
+    if (samplingFailure !== undefined) return;
+    if (sampleRunning) {
+      sampleRequested = true;
+      return;
+    }
+    sampleRunning = true;
+    sampleTail = (async () => {
+      do {
+        sampleRequested = false;
+        try { await tracker.sample(); } catch (error: unknown) { samplingFailure = error; }
+      } while (sampleRequested && samplingFailure === undefined);
+    })().finally(() => { sampleRunning = false; });
+  };
+  const sampler = samplingFailure === undefined
+    ? setInterval(
+        queueSample,
+        platform === "linux" ? LINUX_PROCESS_SAMPLE_MS : MACOS_PROCESS_SAMPLE_MS,
+      )
+    : undefined;
+  sampler?.unref();
   return {
-    async terminate(): Promise<boolean> {
-      if (terminationComplete) return true;
-      terminationComplete = await terminateProcessTree(child);
-      return terminationComplete;
+    processTreeRss: () => samplingFailure === undefined
+      && tracker.telemetryAvailable()
+      ? tracker.processTreeRss()
+      : undefined,
+    async terminate(): Promise<ProcessTreeTerminationReceipt> {
+      if (sampler !== undefined) clearInterval(sampler);
+      await sampleTail;
+      if (samplingFailure !== undefined) tracker.disableTelemetry();
+      return registeredSupervisor.terminate();
     },
   };
+}
+
+class PosixProcessTreeTracker {
+  readonly #rootPid: number;
+  readonly #platform: "linux" | "darwin";
+  readonly #retained = new Map<string, RetainedPosixProcess>();
+  readonly #retainedByPid = new Map<number, RetainedPosixProcess[]>();
+  #baselineBytes = 0;
+  #peakBytes = 0;
+  #telemetryAvailable = true;
+
+  constructor(rootPid: number, platform: "linux" | "darwin") {
+    this.#rootPid = rootPid;
+    this.#platform = platform;
+  }
+
+  async initialize(): Promise<void> {
+    const root = this.#platform === "linux"
+      ? await snapshotLinuxProcess(this.#rootPid)
+      : (await snapshotPosixProcesses(this.#platform))
+        .find((record) => record.pid === this.#rootPid);
+    if (root === undefined || root.rssBytes <= 0) {
+      throw new Error("root process identity or RSS unavailable");
+    }
+    this.#retain({ ...root, depth: 0 });
+    const records = await this.#snapshot();
+    const live = this.#observe(records);
+    this.#baselineBytes = sumProcessRss(live);
+    if (this.#baselineBytes <= 0) throw new Error("baseline process-tree RSS unavailable");
+    this.#peakBytes = this.#baselineBytes;
+  }
+
+  async sample(): Promise<readonly RetainedPosixProcess[]> {
+    const live = this.#observe(await this.#snapshot());
+    this.#peakBytes = Math.max(this.#peakBytes, sumProcessRss(live));
+    return live;
+  }
+
+  async #snapshot(): Promise<PosixProcessRecord[]> {
+    return this.#platform === "linux"
+      ? snapshotLinuxRetainedTree(this.#retained)
+      : snapshotPosixProcesses(this.#platform, this.#retained);
+  }
+
+  processTreeRss(): Readonly<{ baselineBytes: number; peakBytes: number }> {
+    return Object.freeze({
+      baselineBytes: this.#baselineBytes,
+      peakBytes: this.#peakBytes,
+    });
+  }
+
+  telemetryAvailable(): boolean {
+    return this.#telemetryAvailable;
+  }
+
+  disableTelemetry(): void {
+    this.#telemetryAvailable = false;
+  }
+
+  #observe(records: readonly PosixProcessRecord[]): RetainedPosixProcess[] {
+    const liveByPid = new Map(records.map((record) => [record.pid, record]));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const record of records) {
+        const key = posixIdentityKey(record);
+        if (this.#retained.has(key)) continue;
+        const parent = this.#retainedParent(record, liveByPid);
+        if (parent === undefined || record.startOrder < parent.startOrder) continue;
+        this.#retain({ ...record, depth: parent.depth + 1 });
+        changed = true;
+      }
+    }
+    return records.flatMap((record) => {
+      const retained = this.#retained.get(posixIdentityKey(record));
+      return retained === undefined ? [] : [{ ...retained, rssBytes: record.rssBytes }];
+    });
+  }
+
+  #retainedParent(
+    record: PosixProcessRecord,
+    liveByPid: ReadonlyMap<number, PosixProcessRecord>,
+  ): RetainedPosixProcess | undefined {
+    const liveParent = liveByPid.get(record.parentPid);
+    if (liveParent !== undefined) {
+      return this.#retained.get(posixIdentityKey(liveParent));
+    }
+    return this.#retainedByPid.get(record.parentPid)
+      ?.filter((candidate) => candidate.startOrder <= record.startOrder)
+      .sort((left, right) => right.startOrder - left.startOrder)[0];
+  }
+
+  #retain(record: RetainedPosixProcess): void {
+    if (this.#retained.size >= MAX_TRACKED_PROCESS_IDENTITIES) {
+      throw new Error("retained process identity limit exceeded");
+    }
+    const key = posixIdentityKey(record);
+    this.#retained.set(key, record);
+    const identities = this.#retainedByPid.get(record.pid) ?? [];
+    identities.push(record);
+    this.#retainedByPid.set(record.pid, identities);
+  }
+
+}
+
+function posixIdentityKey(record: Pick<PosixProcessRecord, "pid" | "identity">): string {
+  return `${record.pid}:${record.identity}`;
+}
+
+function sumProcessRss(records: readonly Pick<PosixProcessRecord, "rssBytes">[]): number {
+  let total = 0;
+  for (const record of records) {
+    if (!Number.isSafeInteger(record.rssBytes) || record.rssBytes < 0
+      || total > Number.MAX_SAFE_INTEGER - record.rssBytes) {
+      throw new Error("process-tree RSS overflow");
+    }
+    total += record.rssBytes;
+  }
+  return total;
+}
+
+async function snapshotPosixProcesses(
+  platform: "linux" | "darwin",
+  retained: ReadonlyMap<string, RetainedPosixProcess> = new Map(),
+): Promise<PosixProcessRecord[]> {
+  if (platform === "linux") throw new Error("Linux uses retained /proc task traversal");
+  const identitiesBefore = await macosKernelIdentities();
+  const psRecords = await snapshotMacosPsRecords();
+  const retainedPids = [...new Set([...retained.values()].map((record) => record.pid))];
+  const identitiesAfter = await macosKernelIdentities(
+    [...new Set([...psRecords.map((record) => record.pid), ...retainedPids])],
+  );
+  return bindMacosProcessRecords(
+    psRecords,
+    identitiesBefore,
+    identitiesAfter,
+    retained,
+  );
+}
+
+interface MacosPsRecord {
+  readonly pid: number;
+  readonly parentPid: number;
+  readonly rssBytes: number;
+}
+
+interface MacosKernelIdentity {
+  readonly identity: string;
+  readonly startOrder: number;
+  readonly parentPid: number;
+  readonly processGroupId: number;
+}
+
+async function snapshotMacosPsRecords(): Promise<MacosPsRecord[]> {
+  const result = await execFileAsync(
+    "/bin/ps",
+    ["-axo", "pid=,ppid=,rss="],
+    { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" },
+  );
+  const records: MacosPsRecord[] = [];
+  for (const line of String(result.stdout).split(/\r?\n/u)) {
+    if (line.trim() === "") continue;
+    if (records.length >= MAX_TRACKED_PROCESS_IDENTITIES) {
+      throw new Error("macOS ps process limit exceeded");
+    }
+    const match = /^\s*([1-9][0-9]*)\s+([0-9]+)\s+([0-9]+)\s*$/u.exec(line);
+    if (match === null) throw new Error("invalid macOS ps record");
+    const pid = Number(match[1]);
+    const parentPid = Number(match[2]);
+    const rssBytes = Number(match[3]) * 1024;
+    if (![pid, parentPid, rssBytes].every(Number.isSafeInteger)
+      || pid <= 0 || parentPid < 0 || rssBytes < 0) {
+      throw new Error("invalid macOS process record");
+    }
+    records.push(Object.freeze({ pid, parentPid, rssBytes }));
+  }
+  return records;
+}
+
+function bindMacosProcessRecords(
+  psRecords: readonly MacosPsRecord[],
+  identitiesBefore: ReadonlyMap<number, MacosKernelIdentity>,
+  identitiesAfter: ReadonlyMap<number, MacosKernelIdentity>,
+  retained: ReadonlyMap<string, RetainedPosixProcess>,
+): PosixProcessRecord[] {
+  const records: PosixProcessRecord[] = [];
+  const retainedPids = new Set([...retained.values()].map((record) => record.pid));
+  for (const psRecord of psRecords) {
+    const before = identitiesBefore.get(psRecord.pid);
+    const after = identitiesAfter.get(psRecord.pid);
+    if (before === undefined || after === undefined) {
+      if (retainedPids.has(psRecord.pid)) {
+        throw new Error("visible retained macOS identity unavailable");
+      }
+      continue;
+    }
+    if (before.identity !== after.identity
+      || before.startOrder !== after.startOrder
+      || before.parentPid !== after.parentPid
+      || psRecord.parentPid !== before.parentPid) {
+      if (retainedPids.has(psRecord.pid)) {
+        throw new Error("retained macOS identity changed during ps sample");
+      }
+      continue;
+    }
+    records.push(Object.freeze({
+      ...psRecord,
+      identity: before.identity,
+      startOrder: before.startOrder,
+      processGroupId: before.processGroupId,
+    }));
+  }
+  const psPids = new Set(psRecords.map((record) => record.pid));
+  for (const retainedProcess of retained.values()) {
+    if (psPids.has(retainedProcess.pid)) continue;
+    const before = identitiesBefore.get(retainedProcess.pid);
+    const after = identitiesAfter.get(retainedProcess.pid);
+    if (before?.identity === retainedProcess.identity
+      && after?.identity === retainedProcess.identity) {
+      throw new Error("live retained macOS process missing from ps");
+    }
+  }
+  return records;
+}
+
+export async function snapshotMacosIdentityTree(
+  retained: ReadonlyMap<string, RetainedPosixProcess>,
+  identitySource: (
+    pids?: readonly number[],
+  ) => Promise<ReadonlyMap<number, MacosKernelIdentity>> = macosKernelIdentities,
+): Promise<PosixProcessRecord[]> {
+  const identitiesBefore = await identitySource();
+  const identitiesAfter = await identitySource();
+  assertMacosIdentityLimit(identitiesBefore, "before snapshot");
+  assertMacosIdentityLimit(identitiesAfter, "after snapshot");
+  if (retained.size > MAX_TRACKED_PROCESS_IDENTITIES) {
+    throw new Error("retained macOS identity limit exceeded");
+  }
+  const accepted = new Map<number, PosixProcessRecord>();
+
+  for (const retainedProcess of retained.values()) {
+    const before = identitiesBefore.get(retainedProcess.pid);
+    const after = identitiesAfter.get(retainedProcess.pid);
+    if (after?.identity !== retainedProcess.identity) continue;
+    if (before === undefined || !sameMacosKernelIdentity(before, after)) {
+      throw new Error("live retained macOS identity did not stabilize");
+    }
+    addAcceptedMacosIdentity(accepted, Object.freeze({
+      pid: retainedProcess.pid,
+      ...after,
+      rssBytes: 0,
+    }));
+  }
+
+  const childrenByParent = new Map<number, Array<readonly [number, MacosKernelIdentity]>>();
+  for (const entry of identitiesAfter) {
+    const [pid, identity] = entry;
+    const children = childrenByParent.get(identity.parentPid) ?? [];
+    children.push(entry);
+    childrenByParent.set(identity.parentPid, children);
+  }
+
+  const queue = [...accepted.values()];
+  let queueIndex = 0;
+  let pendingCandidates = new Map<number, Readonly<{
+    identity: MacosKernelIdentity;
+    parent: PosixProcessRecord;
+  }>>();
+  const collectReachableCandidates = (): void => {
+    while (queueIndex < queue.length) {
+      const parent = queue[queueIndex]!;
+      queueIndex += 1;
+      for (const [pid, after] of childrenByParent.get(parent.pid) ?? []) {
+        if (accepted.has(pid) || pendingCandidates.has(pid)) continue;
+        if (after.startOrder < parent.startOrder) {
+          throw new Error("macOS child predates its accepted parent");
+        }
+        const before = identitiesBefore.get(pid);
+        const parentBefore = identitiesBefore.get(parent.pid);
+        const parentAfter = identitiesAfter.get(parent.pid);
+        const stableAcrossFullSnapshots = before !== undefined
+          && sameMacosKernelIdentity(before, after);
+        const stableExactParent = parentBefore !== undefined
+          && parentAfter !== undefined
+          && sameMacosKernelIdentity(parentBefore, parentAfter)
+          && sameMacosKernelIdentity(parentAfter, parent);
+        if (stableAcrossFullSnapshots && stableExactParent) {
+          const record = Object.freeze({ pid, ...after, rssBytes: 0 });
+          addAcceptedMacosIdentity(accepted, record);
+          queue.push(record);
+          continue;
+        }
+        pendingCandidates.set(pid, Object.freeze({ identity: after, parent }));
+      }
+    }
+  };
+  collectReachableCandidates();
+
+  for (let round = 0;
+    pendingCandidates.size > 0 && round < MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS;
+    round += 1) {
+    const queriedPids = new Set<number>();
+    for (const [pid, candidate] of pendingCandidates) {
+      queriedPids.add(pid);
+      queriedPids.add(candidate.parent.pid);
+    }
+    if (queriedPids.size > MAX_TRACKED_PROCESS_IDENTITIES) {
+      throw new Error("macOS targeted PID limit exceeded");
+    }
+    const identities = await identitySource([...queriedPids]);
+    assertMacosIdentityLimit(identities, "targeted snapshot");
+    for (const observedPid of identities.keys()) {
+      if (!queriedPids.has(observedPid)) {
+        throw new Error("macOS targeted identity query returned an unexpected PID");
+      }
+    }
+
+    const previousCandidates = pendingCandidates;
+    pendingCandidates = new Map();
+    for (const [pid, candidate] of previousCandidates) {
+      const currentParent = identities.get(candidate.parent.pid);
+      if (currentParent === undefined
+        || !sameMacosKernelIdentity(currentParent, candidate.parent)) {
+        throw new Error("accepted macOS parent identity changed during stabilization");
+      }
+      const current = identities.get(pid);
+      if (current === undefined || current.parentPid !== candidate.parent.pid
+        || current.startOrder < candidate.parent.startOrder) {
+        throw new Error("macOS child identity changed ancestry during stabilization");
+      }
+      if (!sameMacosKernelIdentity(candidate.identity, current)) {
+        pendingCandidates.set(pid, Object.freeze({
+          identity: current,
+          parent: candidate.parent,
+        }));
+        continue;
+      }
+      const record = Object.freeze({ pid, ...current, rssBytes: 0 });
+      addAcceptedMacosIdentity(accepted, record);
+      queue.push(record);
+    }
+    collectReachableCandidates();
+  }
+  if (pendingCandidates.size > 0) {
+    throw new Error("macOS child identity stabilization rounds exhausted");
+  }
+  return [...accepted.values()];
+}
+
+function sameMacosKernelIdentity(
+  left: MacosKernelIdentity,
+  right: MacosKernelIdentity,
+): boolean {
+  return left.identity === right.identity
+    && left.startOrder === right.startOrder
+    && left.parentPid === right.parentPid
+    && left.processGroupId === right.processGroupId;
+}
+
+function assertMacosIdentityLimit(
+  identities: ReadonlyMap<number, MacosKernelIdentity>,
+  label: string,
+): void {
+  if (identities.size > MAX_TRACKED_PROCESS_IDENTITIES) {
+    throw new Error(`macOS ${label} identity limit exceeded`);
+  }
+}
+
+function addAcceptedMacosIdentity(
+  accepted: Map<number, PosixProcessRecord>,
+  record: PosixProcessRecord,
+): void {
+  if (!accepted.has(record.pid) && accepted.size >= MAX_TRACKED_PROCESS_IDENTITIES) {
+    throw new Error("accepted macOS identity limit exceeded");
+  }
+  accepted.set(record.pid, record);
+}
+
+async function snapshotLinuxRetainedTree(
+  retained: ReadonlyMap<string, RetainedPosixProcess>,
+  requireRss = true,
+): Promise<PosixProcessRecord[]> {
+  const records = new Map<string, PosixProcessRecord>();
+  const queued = new Set<string>();
+  const queue: Array<{ pid: number; expectedIdentity: string }> = [];
+  for (const process of retained.values()) {
+    enqueueLinuxProcess(queue, queued, {
+      pid: process.pid,
+      expectedIdentity: process.identity,
+    });
+  }
+  while (queue.length > 0) {
+    const item = queue.shift()!;
+    const process = await snapshotLinuxProcess(item.pid, requireRss);
+    if (process === undefined || process.identity !== item.expectedIdentity) continue;
+    const processKey = posixIdentityKey(process);
+    if (!records.has(processKey) && records.size >= MAX_TRACKED_PROCESS_IDENTITIES) {
+      throw new Error("Linux process record limit exceeded");
+    }
+    records.set(processKey, process);
+    for (const childPid of await linuxTaskChildren(process.pid)) {
+      const child = await snapshotLinuxProcess(childPid, requireRss);
+      if (child === undefined) continue;
+      if (child.parentPid !== process.pid) continue;
+      enqueueLinuxProcess(queue, queued, {
+        pid: childPid,
+        expectedIdentity: child.identity,
+      });
+    }
+  }
+  return [...records.values()];
+}
+
+function enqueueLinuxProcess(
+  queue: Array<{ pid: number; expectedIdentity: string }>,
+  queued: Set<string>,
+  item: { pid: number; expectedIdentity: string },
+): void {
+  const key = `${item.pid}:${item.expectedIdentity}`;
+  if (queued.has(key)) return;
+  if (queued.size >= MAX_TRACKED_PROCESS_IDENTITIES) {
+    throw new Error("Linux process queue limit exceeded");
+  }
+  queued.add(key);
+  queue.push(item);
+}
+
+async function linuxTaskChildren(pid: number): Promise<number[]> {
+  try {
+    const taskDirectories: string[] = [];
+    const directory = await opendir(`/proc/${pid}/task`);
+    for await (const entry of directory) {
+      if (!entry.isDirectory() || !/^[1-9][0-9]*$/u.test(entry.name)) continue;
+      if (taskDirectories.length >= MAX_LINUX_TASKS_PER_PROCESS) {
+        throw new Error("Linux task limit exceeded");
+      }
+      taskDirectories.push(entry.name);
+    }
+    const children = new Set<number>();
+    for (const taskName of taskDirectories) {
+      const content = await readBoundedProcText(
+        `/proc/${pid}/task/${taskName}/children`,
+        MAX_LINUX_TASK_CHILDREN_BYTES,
+      ).catch((error: unknown) => {
+        if (isMissingProcessError(error)) return "";
+        throw error;
+      });
+      for (const token of content.trim().split(/\s+/u)) {
+        if (token === "") continue;
+        const childPid = Number(token);
+        if (!Number.isSafeInteger(childPid) || childPid <= 0) {
+          throw new Error("invalid Linux task children record");
+        }
+        if (!children.has(childPid) && children.size >= MAX_LINUX_CHILDREN_PER_PROCESS) {
+          throw new Error("Linux child limit exceeded");
+        }
+        children.add(childPid);
+      }
+    }
+    return [...children];
+  } catch (error: unknown) {
+    if (isMissingProcessError(error)) return [];
+    throw error;
+  }
+}
+
+async function snapshotPosixIdentity(
+  platform: "linux" | "darwin",
+  pid: number,
+): Promise<PosixProcessRecord | undefined> {
+  if (platform === "linux") return snapshotLinuxProcess(pid, false);
+  const identity = (await macosKernelIdentities([pid])).get(pid);
+  return identity === undefined
+    ? undefined
+    : Object.freeze({ pid, ...identity, rssBytes: 0 });
+}
+
+export async function snapshotRegisteredPosixProcessGroupIdentity(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+): Promise<RegisteredProcessGroupIdentity | undefined> {
+  if (platform !== "linux" && platform !== "darwin") {
+    throw new Error(`unsupported registered process-group platform: ${platform}`);
+  }
+  const record = await snapshotPosixIdentity(platform, pid);
+  if (record === undefined) return undefined;
+  return Object.freeze({
+    pid: record.pid,
+    parentPid: record.parentPid,
+    processGroupId: record.processGroupId,
+    identity: record.identity,
+    startOrder: record.startOrder,
+  });
+}
+
+async function snapshotLinuxProcess(
+  pid: number,
+  requireRss = true,
+): Promise<PosixProcessRecord | undefined> {
+  try {
+    const statBefore = await readBoundedProcText(
+      `/proc/${pid}/stat`,
+      MAX_LINUX_PROC_STAT_BYTES,
+    );
+    const status = requireRss
+      ? await readBoundedProcText(`/proc/${pid}/status`, MAX_LINUX_PROC_STATUS_BYTES)
+      : undefined;
+    const statAfter = await readBoundedProcText(
+      `/proc/${pid}/stat`,
+      MAX_LINUX_PROC_STAT_BYTES,
+    );
+    const before = parseLinuxStat(pid, statBefore);
+    const after = parseLinuxStat(pid, statAfter);
+    if (before.identity !== after.identity || before.parentPid !== after.parentPid) return undefined;
+    if (status === undefined) return Object.freeze({ ...after, rssBytes: 0 });
+    const rssMatch = /^VmRSS:\s+([0-9]+)\s+kB$/mu.exec(status);
+    if (rssMatch === null) throw new Error("Linux VmRSS unavailable");
+    const rssBytes = Number(rssMatch[1]) * 1024;
+    if (!Number.isSafeInteger(rssBytes) || rssBytes < 0) throw new Error("invalid Linux VmRSS");
+    return Object.freeze({ ...after, rssBytes });
+  } catch (error: unknown) {
+    if (isMissingProcessError(error)) return undefined;
+    throw error;
+  }
+}
+
+async function readBoundedProcText(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const bytes = Buffer.allocUnsafe(maxBytes + 1);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const receipt = await handle.read(
+        bytes,
+        offset,
+        bytes.byteLength - offset,
+        null,
+      );
+      if (receipt.bytesRead === 0) break;
+      offset += receipt.bytesRead;
+    }
+    if (offset > maxBytes) throw new Error("Linux proc record is oversized");
+    return bytes.toString("utf8", 0, offset);
+  } finally {
+    await handle.close();
+  }
+}
+
+function parseLinuxStat(pid: number, stat: string): Omit<PosixProcessRecord, "rssBytes"> {
+    if (stat.length > 64 * 1024) throw new Error("Linux process stat is oversized");
+    const close = stat.lastIndexOf(")");
+    if (close < 0) throw new Error("invalid Linux process stat");
+    const fields = stat.slice(close + 1).trim().split(/\s+/u);
+    if (fields.length < 20 || fields.length > 64) throw new Error("invalid Linux process stat fields");
+    const parentPid = Number(fields[1]);
+    const processGroupId = Number(fields[2]);
+    const startOrder = Number(fields[19]);
+    if (![pid, parentPid, processGroupId, startOrder].every(Number.isSafeInteger)
+      || pid <= 0 || parentPid < 0 || processGroupId <= 0 || startOrder <= 0) {
+      throw new Error("invalid Linux process record");
+    }
+    return Object.freeze({
+      pid,
+      parentPid,
+      processGroupId,
+      identity: String(startOrder),
+      startOrder,
+    });
+}
+
+const MACOS_LIBPROC_IDENTITY_SCRIPT = String.raw`
+import ctypes, errno, json, os, sys
+class ProcBsdInfo(ctypes.Structure):
+    _fields_ = [("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
+      ("pbi_xstatus", ctypes.c_uint32), ("pbi_pid", ctypes.c_uint32),
+      ("pbi_ppid", ctypes.c_uint32), ("pbi_uid", ctypes.c_uint32),
+      ("pbi_gid", ctypes.c_uint32), ("pbi_ruid", ctypes.c_uint32),
+      ("pbi_rgid", ctypes.c_uint32), ("pbi_svuid", ctypes.c_uint32),
+      ("pbi_svgid", ctypes.c_uint32), ("rfu_1", ctypes.c_uint32),
+      ("pbi_comm", ctypes.c_char * 16), ("pbi_name", ctypes.c_char * 32),
+      ("pbi_nfiles", ctypes.c_uint32), ("pbi_pgid", ctypes.c_uint32),
+      ("pbi_pjobc", ctypes.c_uint32), ("e_tdev", ctypes.c_uint32),
+      ("e_tpgid", ctypes.c_uint32), ("pbi_nice", ctypes.c_int32),
+      ("pbi_start_tvsec", ctypes.c_uint64), ("pbi_start_tvusec", ctypes.c_uint64)]
+lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+if ctypes.sizeof(ProcBsdInfo) != 136: raise RuntimeError("unexpected proc_bsdinfo layout")
+lib.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+lib.proc_listpids.restype = ctypes.c_int
+lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+lib.proc_pidinfo.restype = ctypes.c_int
+if len(sys.argv) > 1:
+    pids = [int(value) for value in sys.argv[1:]]
+else:
+    values = (ctypes.c_int * 4096)()
+    size = lib.proc_listpids(1, 0, values, ctypes.sizeof(values))
+    if size < 0: raise OSError(ctypes.get_errno(), "proc_listpids")
+    if size >= ctypes.sizeof(values): raise RuntimeError("process identity limit exceeded")
+    pids = list(values)[:size // ctypes.sizeof(ctypes.c_int)]
+out = []
+for pid in pids:
+    if pid <= 0: continue
+    info = ProcBsdInfo(); ctypes.set_errno(0)
+    size = lib.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+    if size == 0:
+        error = ctypes.get_errno()
+        if error not in (0, errno.ESRCH): raise OSError(error, "proc_pidinfo")
+        try:
+            os.kill(pid, 0)
+            exists = True
+        except ProcessLookupError:
+            exists = False
+        except PermissionError:
+            exists = True
+        if exists: raise RuntimeError("proc_pidinfo unavailable for live pid")
+        continue
+    if size != ctypes.sizeof(info) or info.pbi_pid != pid: raise RuntimeError("invalid proc_pidinfo")
+    out.append({"pid": pid, "ppid": info.pbi_ppid, "pgid": info.pbi_pgid, "sec": info.pbi_start_tvsec, "usec": info.pbi_start_tvusec})
+print(json.dumps(out, separators=(",", ":")))
+`;
+
+async function macosKernelIdentities(
+  pids: readonly number[] = [],
+): Promise<ReadonlyMap<number, MacosKernelIdentity>> {
+  if (pids.length > MAX_TRACKED_PROCESS_IDENTITIES) throw new Error("macOS PID limit exceeded");
+  const result = await execFileAsync(
+    "/usr/bin/python3",
+    ["-c", MACOS_LIBPROC_IDENTITY_SCRIPT, ...pids.map(String)],
+    { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" },
+  );
+  const value: unknown = JSON.parse(String(result.stdout));
+  if (!Array.isArray(value) || value.length > MAX_TRACKED_PROCESS_IDENTITIES) {
+    throw new Error("invalid macOS identity receipt");
+  }
+  const identities = new Map<number, MacosKernelIdentity>();
+  for (const item of value) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)
+      || Object.keys(item).sort().join(",") !== "pgid,pid,ppid,sec,usec") {
+      throw new Error("invalid macOS identity receipt");
+    }
+    const { pid, ppid, pgid, sec, usec } = item as {
+      pid: unknown;
+      ppid: unknown;
+      pgid: unknown;
+      sec: unknown;
+      usec: unknown;
+    };
+    if (![pid, ppid, pgid, sec, usec].every(Number.isSafeInteger)
+      || Number(pid) <= 0 || Number(ppid) < 0 || Number(pgid) <= 0 || Number(sec) <= 0
+      || Number(usec) < 0 || Number(usec) >= 1_000_000) {
+      throw new Error("invalid macOS kernel identity");
+    }
+    const startOrder = Number(sec) * 1_000_000 + Number(usec);
+    if (!Number.isSafeInteger(startOrder) || identities.has(Number(pid))) {
+      throw new Error("invalid macOS kernel identity");
+    }
+    identities.set(Number(pid), Object.freeze({
+      identity: `${sec}:${usec}`,
+      startOrder,
+      parentPid: Number(ppid),
+      processGroupId: Number(pgid),
+    }));
+  }
+  return identities;
+}
+
+function isMissingProcessError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error
+    && ["ENOENT", "ESRCH"].includes(String((error as { code?: unknown }).code));
+}
+
+function parseProcessTreeRssFrame(frame: string): Readonly<{
+  baselineBytes: number;
+  peakBytes: number;
+}> {
+  const match = /^GPT_CODEX_HWP_JOB RSS ([0-9]+) ([0-9]+)$/u.exec(frame);
+  if (match === null) throw new Error("invalid job supervisor RSS frame");
+  const baselineBytes = Number(match[1]);
+  const peakBytes = Number(match[2]);
+  if (
+    !Number.isSafeInteger(baselineBytes) ||
+    baselineBytes <= 0 ||
+    !Number.isSafeInteger(peakBytes) ||
+    peakBytes < baselineBytes
+  ) {
+    throw new Error("invalid job supervisor RSS values");
+  }
+  return Object.freeze({ baselineBytes, peakBytes });
 }
 
 export function resolveWindowsJobSupervisorScript(): string {
@@ -1052,23 +2062,20 @@ function scheduleCleanupAfterActualExit(
   outputOwner: OutputSpoolOwner,
   release: () => void,
   capture: ChildStartupCapture,
-  treeTerminator: (child: ChildProcess) => Promise<boolean>,
+  treeTerminator: ProcessTreeTerminator,
+  startGate?: StartGateOwner,
 ): void {
-  const retention = { child, snapshot, outputOwner, release, capture };
+  const retention = { child, snapshot, outputOwner, release, capture, startGate };
   unsafeChildRetentions.add(retention);
   void (async () => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      let gone = false;
-      try {
-        gone = await treeTerminator(child);
-      } catch {
-        gone = false;
-      }
-      if (!gone) {
+      const receipt = await terminateWithReceipt(treeTerminator, child);
+      if (!receipt.gone) {
         await unrefDelay(100);
         continue;
       }
       await drainCapturedChildStreams(child);
+      closeStartGate(startGate);
       capture.detachAll();
       try {
         await cleanupSnapshot(snapshot);

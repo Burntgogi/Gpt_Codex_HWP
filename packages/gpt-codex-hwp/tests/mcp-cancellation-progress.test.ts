@@ -579,7 +579,7 @@ function isolatedCancellationFacade(
           spoolRoot,
           spawnFactory: (specification) => {
             const args = [...specification.args];
-            args[1] = activeMode;
+            args[3] = activeMode;
             const child = spawn(
               specification.command,
               args,

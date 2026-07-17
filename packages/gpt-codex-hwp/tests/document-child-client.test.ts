@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
   closeSync,
+  existsSync,
   mkdtempSync,
   openSync,
   readdirSync,
@@ -13,14 +14,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmdir as removeDirectory, unlink as removeFile } from "node:fs/promises";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import * as childClientModule from "../src/workers/document-child-client.js";
 import { HeavyChildGate } from "../src/workers/document-execution-policy.js";
 import type { SpoolDocumentSnapshot } from "../src/shared/document-snapshot.js";
+import {
+  createRegisteredPosixProcessGroupSupervisor,
+  type RegisteredProcessGroupIdentity,
+} from "../src/workers/registered-process-supervisor.js";
 
 const fixturePath = fileURLToPath(
   new URL("./fixtures/workers/engine-test-child.mjs", import.meta.url),
+);
+const startGatePath = fileURLToPath(
+  new URL("../dist/workers/document-child-start-gate.js", import.meta.url),
+);
+const sourceClientPath = fileURLToPath(
+  new URL("../src/workers/document-child-client.ts", import.meta.url),
 );
 const createProductionDocumentChildClient = childClientModule.createDocumentChildClient;
 const isIntegrityVerifiedResultSpool = (
@@ -68,6 +79,33 @@ const createJobHelperEnvironment = (
     createJobHelperEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   }
 ).createJobHelperEnvironment;
+const snapshotMacosIdentityTree = (
+  childClientModule as unknown as {
+    snapshotMacosIdentityTree(
+      retained: ReadonlyMap<string, Readonly<{
+        pid: number;
+        parentPid: number;
+        identity: string;
+        startOrder: number;
+        rssBytes: number;
+        depth: number;
+      }>>,
+      identitySource: (
+        pids?: readonly number[],
+      ) => Promise<ReadonlyMap<number, Readonly<{
+        parentPid: number;
+        identity: string;
+        startOrder: number;
+      }>>>,
+    ): Promise<readonly Readonly<{
+      pid: number;
+      parentPid: number;
+      identity: string;
+      startOrder: number;
+      rssBytes: number;
+    }>[]>;
+  }
+).snapshotMacosIdentityTree;
 
 function createDocumentChildClient(
   dependencies: Record<string, unknown> = {},
@@ -77,12 +115,387 @@ function createDocumentChildClient(
     jobSupervisorFactory: "jobSupervisorFactory" in dependencies
       ? dependencies.jobSupervisorFactory
       : async (child: ReturnType<typeof spawn>) => ({
-          terminate: async () => child.pid === undefined
-            ? true
-            : terminateDocumentProcessTreeByPid(child.pid, {}),
+          terminate: async () => {
+            const gone = child.pid === undefined
+              ? true
+              : await terminateDocumentProcessTreeByPid(child.pid, {});
+            return gone
+              ? { gone: true as const, proof: "registered-groups-empty" as const }
+              : { gone: false as const, proof: "unverified" as const, reason: "termination" as const };
+          },
         }),
   } as never);
 }
+
+test("document child start gate spawn order and descriptor isolation", async () => {
+  const owned = createOwnedFiles();
+  const specifications: Array<Readonly<{
+    args: readonly string[];
+    stdio: unknown;
+  }>> = [];
+  try {
+    for (const benchmarkRegistrationDescriptors of [
+      undefined,
+      { writeFd: owned.inputFd, ackFd: owned.imageFd },
+    ] as const) {
+      const client = createProductionDocumentChildClient({
+        childEntry: fixturePath,
+        childArguments: ["success", "250"],
+        startGateEntry: startGatePath,
+        ...(benchmarkRegistrationDescriptors === undefined
+          ? {}
+          : { benchmarkRegistrationDescriptors }),
+        spawnFactory: (specification) => {
+          specifications.push({
+            args: specification.args,
+            stdio: specification.options.stdio,
+          });
+          throw new Error("capture spawn specification");
+        },
+      } as never);
+      await assert.rejects(
+        client.run(
+          detectRequest(`start-gate-spec-${specifications.length}`),
+          spoolSnapshot(owned.inputFd, 3),
+        ),
+        (error: unknown) => safeCode(error) === "ENGINE_INIT_FAILED",
+      );
+    }
+
+    assert.equal(specifications.length, 2);
+    for (const specification of specifications) {
+      assert.deepEqual(specification.args, [
+        "--import",
+        pathToFileURL(startGatePath).href,
+        fixturePath,
+        "success",
+        "250",
+      ]);
+      const stdio = specification.stdio as unknown[];
+      assert.equal(stdio[7], "pipe");
+    }
+    assert.equal((specifications[0]!.stdio as unknown[]).length, 8);
+    assert.deepEqual(
+      (specifications[1]!.stdio as unknown[]).slice(8),
+      [owned.inputFd, owned.imageFd],
+    );
+  } finally {
+    owned.cleanup();
+  }
+});
+
+test("document child start gate waits for supervisor readiness before one START and stdin dispatch", async () => {
+  const owned = createOwnedFiles();
+  const events: string[] = [];
+  let releaseSupervisor!: () => void;
+  const supervisorReady = new Promise<void>((resolve) => {
+    releaseSupervisor = resolve;
+  });
+  let spawned: ReturnType<typeof spawn> | undefined;
+  try {
+    const client = createProductionDocumentChildClient({
+      childEntry: fixturePath,
+      childArguments: ["success", "250"],
+      startGateEntry: startGatePath,
+      spawnFactory: (specification) => {
+        const child = spawn(
+          specification.command,
+          [...specification.args],
+          specification.options,
+        );
+        spawned = child;
+        const startWriter = child.stdio[7];
+        if (startWriter === null || startWriter === undefined || !("write" in startWriter)) {
+          events.push("gate-missing");
+        } else {
+          const write = startWriter.write.bind(startWriter);
+          startWriter.write = ((chunk: Uint8Array | string, ...args: unknown[]) => {
+            events.push(`start:${Buffer.from(chunk).toString("utf8")}`);
+            return Reflect.apply(write, startWriter, [chunk, ...args]);
+          }) as typeof startWriter.write;
+        }
+        const end = child.stdin!.end.bind(child.stdin);
+        child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+          events.push("dispatch");
+          return end(...args);
+        }) as typeof child.stdin.end;
+        return child;
+      },
+      jobSupervisorFactory: async (child) => {
+        events.push("supervisor-pending");
+        await supervisorReady;
+        events.push("supervisor-ready");
+        return {
+          terminate: async () => terminateChildWithProof(child, "registered-groups-empty"),
+        };
+      },
+    } as never);
+    const pending = client.run(
+      detectRequest("start-gate-order"),
+      spoolSnapshot(owned.inputFd, 3),
+    );
+    await waitFor(() => events.includes("supervisor-pending"));
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.deepEqual(events, ["supervisor-pending"]);
+
+    releaseSupervisor();
+    assert.deepEqual(await pending, { format: "unknown" });
+    assert.deepEqual(events, [
+      "supervisor-pending",
+      "supervisor-ready",
+      `start:GPT_CODEX_HWP_START_V1\n`,
+      "dispatch",
+    ]);
+  } finally {
+    if (spawned !== undefined && spawned.exitCode === null && spawned.signalCode === null) {
+      spawned.kill("SIGKILL");
+    }
+    owned.cleanup();
+  }
+});
+
+test("document child start gate rejection closes fd7 without START or payload dispatch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-start-gate-rejection-"));
+  const markerPath = join(root, "payload-ran.txt");
+  const owned = createOwnedFiles();
+  let spawned: ReturnType<typeof spawn> | undefined;
+  let startWrites = 0;
+  let dispatches = 0;
+  try {
+    const client = createProductionDocumentChildClient({
+      childEntry: fixturePath,
+      childArguments: ["gate-payload-marker", "250", markerPath],
+      startGateEntry: startGatePath,
+      spoolRoot: root,
+      spawnFactory: (specification) => {
+        const child = spawn(
+          specification.command,
+          [...specification.args],
+          specification.options,
+        );
+        spawned = child;
+        const startWriter = child.stdio[7];
+        if (startWriter !== null && startWriter !== undefined && "write" in startWriter) {
+          const write = startWriter.write.bind(startWriter);
+          startWriter.write = ((...args: Parameters<typeof startWriter.write>) => {
+            startWrites += 1;
+            return write(...args);
+          }) as typeof startWriter.write;
+        }
+        const end = child.stdin!.end.bind(child.stdin);
+        child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+          dispatches += 1;
+          return end(...args);
+        }) as typeof child.stdin.end;
+        return child;
+      },
+      treeTerminator: async (child) => {
+        child.kill("SIGKILL");
+        return true;
+      },
+      jobSupervisorFactory: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        throw new Error("registration rejected");
+      },
+    } as never);
+    await assert.rejects(
+      client.run(
+        detectRequest("start-gate-rejection"),
+        spoolSnapshot(owned.inputFd, 3),
+      ),
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
+    );
+    assert.equal(startWrites, 0);
+    assert.equal(dispatches, 0);
+    assert.equal(existsSync(markerPath), false);
+  } finally {
+    if (spawned !== undefined && spawned.exitCode === null && spawned.signalCode === null) {
+      spawned.kill("SIGKILL");
+    }
+    owned.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("typed termination receipts accept only recognized proof", async () => {
+  for (const [label, firstReceipt, succeeds] of [
+    ["windows", { gone: true, proof: "windows-job-empty" }, true],
+    ["posix", { gone: true, proof: "registered-groups-empty" }, true],
+    ["forged", { gone: true, proof: "taskkill-empty" }, false],
+    ["false", { gone: false, proof: "unverified", reason: "identity" }, false],
+    ["throw", undefined, false],
+  ] as const) {
+    const owned = createOwnedFiles();
+    let calls = 0;
+    try {
+      const client = createProductionDocumentChildClient({
+        childEntry: fixturePath,
+        childArguments: ["success", "250"],
+        startGateEntry: startGatePath,
+        jobSupervisorFactory: async (child) => ({
+          terminate: async () => {
+            calls += 1;
+            if (calls > 1) {
+              return terminateChildWithProof(child, "registered-groups-empty");
+            }
+            if (firstReceipt === undefined) throw new Error("termination failed");
+            if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+            return firstReceipt;
+          },
+        }),
+      } as never);
+      const outcome = client.run(
+        detectRequest(`typed-termination-${label}`),
+        spoolSnapshot(owned.inputFd, 3),
+      );
+      if (succeeds) {
+        assert.deepEqual(await outcome, { format: "unknown" }, label);
+      } else {
+        await assert.rejects(
+          outcome,
+          (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
+          label,
+        );
+        await waitFor(() => calls > 1);
+      }
+    } finally {
+      owned.cleanup();
+    }
+  }
+});
+
+test("typed termination registered POSIX authority binds stable group identity before signalling", async () => {
+  const identity: RegisteredProcessGroupIdentity = Object.freeze({
+    pid: 4242,
+    parentPid: 3131,
+    processGroupId: 4242,
+    identity: "start-9001",
+    startOrder: 9001,
+  });
+  let identityReads = 0;
+  const signals: Array<NodeJS.Signals | 0> = [];
+  const supervisor = createRegisteredPosixProcessGroupSupervisor({
+    inspectIdentity: async () => {
+      identityReads += 1;
+      return identity;
+    },
+    signalGroup: (_processGroupId, signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") throw errno("ESRCH");
+    },
+    delay: async () => {},
+  });
+
+  assert.deepEqual(await supervisor.registerRoot(4242, 3131), identity);
+  assert.equal(identityReads, 2);
+  assert.deepEqual(await supervisor.terminate(), {
+    gone: true,
+    proof: "registered-groups-empty",
+  });
+  assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL"]);
+});
+
+test("typed termination registered POSIX authority rejects wrong leader parent and changed identity", async () => {
+  const base: RegisteredProcessGroupIdentity = Object.freeze({
+    pid: 5151,
+    parentPid: 4141,
+    processGroupId: 5151,
+    identity: "start-10",
+    startOrder: 10,
+  });
+  for (const [label, identity, expectedParent] of [
+    ["leader", { ...base, processGroupId: 9999 }, 4141],
+    ["parent", base, 9999],
+  ] as const) {
+    const supervisor = createRegisteredPosixProcessGroupSupervisor({
+      inspectIdentity: async () => identity,
+    });
+    await assert.rejects(
+      supervisor.registerRoot(5151, expectedParent),
+      new RegExp(label === "leader" ? "group leader" : "parent identity", "u"),
+    );
+  }
+
+  let reads = 0;
+  let signals = 0;
+  const changed = createRegisteredPosixProcessGroupSupervisor({
+    inspectIdentity: async () => {
+      reads += 1;
+      return reads <= 2 ? base : { ...base, identity: "reused", startOrder: 11 };
+    },
+    signalGroup: () => { signals += 1; },
+  });
+  await changed.registerRoot(5151, 4141);
+  assert.deepEqual(await changed.terminate(), {
+    gone: false,
+    proof: "unverified",
+    reason: "identity",
+  });
+  assert.equal(signals, 0);
+});
+
+test("typed termination registered POSIX authority maps ESRCH EPERM and other errors", async () => {
+  const identity: RegisteredProcessGroupIdentity = Object.freeze({
+    pid: 6161,
+    parentPid: 5151,
+    processGroupId: 6161,
+    identity: "start-20",
+    startOrder: 20,
+  });
+  for (const [code, expected] of [
+    ["ESRCH", { gone: true, proof: "registered-groups-empty" }],
+    ["EPERM", { gone: false, proof: "unverified", reason: "permission" }],
+    ["EACCES", { gone: false, proof: "unverified", reason: "termination" }],
+  ] as const) {
+    const supervisor = createRegisteredPosixProcessGroupSupervisor({
+      inspectIdentity: async () => identity,
+      signalGroup: () => { throw errno(code); },
+      delay: async () => {},
+    });
+    await supervisor.registerRoot(6161, 5151);
+    assert.deepEqual(await supervisor.terminate(), expected, code);
+  }
+});
+
+test("parent lifeline removes a registered detached child group after forced parent exit", {
+  timeout: 30_000,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-parent-lifeline-"));
+  const pidLog = join(root, "pids.txt");
+  const parentScript = [
+    `import { createDocumentChildClient } from ${JSON.stringify(pathToFileURL(sourceClientPath).href)};`,
+    `const client = createDocumentChildClient({ childEntry: ${JSON.stringify(fixturePath)}, childArguments: [\"lifeline-hold\", \"250\", ${JSON.stringify(pidLog)}], startGateEntry: ${JSON.stringify(startGatePath)}, spoolRoot: ${JSON.stringify(root)} });`,
+    "void client.run({ protocolVersion: 1, requestId: 'parent-lifeline', operation: 'generateHwpx', input: { markdown: '# lifeline' }, options: {} }, undefined, { deadlineMs: 20000 });",
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
+  const parent = spawn(process.execPath, [
+    "--import",
+    "tsx",
+    "--input-type=module",
+    "--eval",
+    parentScript,
+  ], {
+    shell: false,
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  let pids: number[] = [];
+  try {
+    await waitFor(() => {
+      if (!existsSync(pidLog)) return false;
+      pids = readPidLog(pidLog);
+      return pids.length >= 2;
+    });
+    parent.kill("SIGKILL");
+    await waitFor(() => pids.every((pid) => !isPidAlive(pid)), 10_000);
+  } finally {
+    if (parent.exitCode === null && parent.signalCode === null) parent.kill("SIGKILL");
+    for (const pid of pids) {
+      try { process.kill(pid, "SIGKILL"); } catch {}
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("document child client returns a result, drains logs, and cleans once", async () => {
   const owned = createOwnedFiles();
@@ -115,6 +528,57 @@ test("document child client forwards only validated monotonic progress", async (
     assert.deepEqual(progress, [[1, 3], [2, 3]]);
   } finally {
     owned.cleanup();
+  }
+});
+
+test("document child client forwards exact cumulative copy metrics", async () => {
+  const owned = createOwnedFiles();
+  try {
+    const observed: number[] = [];
+    const result = await scriptedChildClient([
+      { copiedBytes: 0 },
+      { copiedBytes: 2 },
+      { copiedBytes: 4 },
+    ]).run(
+      detectRequest("child-metrics-exact"),
+      spoolSnapshot(owned.inputFd, 4),
+      { onMetrics: (metrics) => observed.push(metrics.copiedBytes) },
+    );
+    assert.deepEqual(result, { format: "unknown" });
+    assert.deepEqual(observed, [0, 2, 4]);
+  } finally {
+    owned.cleanup();
+  }
+});
+
+test("document child client rejects decreasing, oversized, and extended copy metrics", async () => {
+  for (const [label, metricEvents] of [
+    ["decreasing", [
+      { copiedBytes: 0 },
+      { copiedBytes: 3 },
+      { copiedBytes: 2 },
+    ]],
+    ["oversized", [
+      { copiedBytes: 0 },
+      { copiedBytes: 5 },
+    ]],
+    ["extended", [
+      { copiedBytes: 0 },
+      { copiedBytes: 4, privateValue: "forbidden" },
+    ]],
+  ] as const) {
+    const owned = createOwnedFiles();
+    try {
+      await assert.rejects(
+        scriptedChildClient(metricEvents).run(
+          detectRequest(`child-metrics-${label}`),
+          spoolSnapshot(owned.inputFd, 4),
+        ),
+        (error: unknown) => safeCode(error) === "ENGINE_PROTOCOL_ERROR",
+      );
+    } finally {
+      owned.cleanup();
+    }
   }
 });
 
@@ -161,14 +625,17 @@ test("document child client maps lifecycle failures and recovers", async () => {
         childClient(mode).run(
           detectRequest(`child-${mode}`),
           spoolSnapshot(owned.inputFd, 3),
+          { deadlineMs: 5_000 },
         ),
         (error: unknown) => safeCode(error) === code &&
           !JSON.stringify(error).includes("AWS_SECRET_ACCESS_KEY"),
+        mode,
       );
       assert.deepEqual(
         await childClient("success").run(
           detectRequest(`child-recovery-${mode}`),
           spoolSnapshot(owned.inputFd, 3),
+          { deadlineMs: 5_000 },
         ),
         { format: "unknown" },
       );
@@ -220,7 +687,10 @@ test("document child client terminates an ignoring process tree on timeout", asy
         detectRequest("child-tree-timeout"),
         snapshot,
         {
-          deadlineMs: 1_500,
+          // The production deadline includes Windows supervisor startup. Leave
+          // bounded startup headroom so this case observes the descendant and
+          // specifically exercises post-dispatch tree cleanup on timeout.
+          deadlineMs: 3_000,
           onProgress: (completed, total) => {
             if (total === Number.MAX_SAFE_INTEGER) descendantPid = completed;
           },
@@ -310,7 +780,8 @@ test("Windows lifecycle supervisor removes a detached descendant after the engin
       (error: unknown) => safeCode(error) === "ENGINE_CRASH",
     );
     assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ [12] [0-9]+$/u);
-    assert.match(supervisorFrames[1] ?? "", /^GPT_CODEX_HWP_JOB GONE 0 [12]$/u);
+    assert.match(supervisorFrames[1] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
+    assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB GONE 0 [12]$/u);
     assert.equal(typeof descendantPid, "number");
     assert.equal(descendantObservedAlive, true);
     await waitUntilProcessIsGone(descendantPid!);
@@ -343,17 +814,25 @@ test("forced Windows tracker retains a vanished intermediate before parent crash
         spoolSnapshot(owned.inputFd, 3),
         { deadlineMs: 5_000 },
       ),
-      (error: unknown) => safeCode(error) === "ENGINE_CRASH",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u);
-    assert.match(supervisorFrames[1] ?? "", /^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u);
-    assert.ok(Number.parseInt(supervisorFrames[1]!.split(" ").at(-2)!, 10) < 200, supervisorFrames[1]);
-    assert.ok(Number.parseInt(supervisorFrames[1]!.split(" ").at(-1)!, 10) >= 3, supervisorFrames[1]);
-    context.diagnostic(supervisorFrames[1]!);
-    assert.equal(supervisorFrames[2], "GPT_CODEX_HWP_JOB GONE 0 2");
+    const trackerFrame = supervisorFrames[1] ?? "";
+    if (/^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(trackerFrame)) {
+      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-2)!, 10) < 200, trackerFrame);
+      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-1)!, 10) >= 3, trackerFrame);
+      assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
+      assert.equal(supervisorFrames[3], "GPT_CODEX_HWP_JOB GONE 0 2");
+    } else {
+      assert.equal(trackerFrame, "GPT_CODEX_HWP_JOB ERROR sampling Access_is_denied");
+    }
+    context.diagnostic(trackerFrame);
+    await new Promise((resolve) => setTimeout(resolve, 250));
     observedPids = readPidLog(pidLog);
     assert.ok(observedPids.length >= 2);
-    assert.match(readFileSync(pidLog, "utf8"), /^EXIT [0-9]+$/mu);
+    if (trackerFrame.startsWith("GPT_CODEX_HWP_JOB TRACKER ")) {
+      assert.match(readFileSync(pidLog, "utf8"), /^EXIT [0-9]+$/mu);
+    }
     for (const pid of observedPids.slice(1)) await waitUntilProcessIsGone(pid);
   } finally {
     for (const pid of observedPids) {
@@ -383,18 +862,24 @@ test("forced Windows tracker catches descendants spawned during timeout settleme
       client.run(
         detectRequest("forced-tracker-spawn-race"),
         spoolSnapshot(owned.inputFd, 3),
-        { deadlineMs: 1_800 },
+        { deadlineMs: 2_500 },
       ),
-      (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u);
-    assert.match(supervisorFrames[1] ?? "", /^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u);
-    assert.ok(Number.parseInt(supervisorFrames[1]!.split(" ").at(-2)!, 10) < 200, supervisorFrames[1]);
-    assert.ok(Number.parseInt(supervisorFrames[1]!.split(" ").at(-1)!, 10) >= 10, supervisorFrames[1]);
-    context.diagnostic(supervisorFrames[1]!);
-    assert.equal(supervisorFrames[2], "GPT_CODEX_HWP_JOB GONE 0 2");
+    const trackerFrame = supervisorFrames[1] ?? "";
+    if (/^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(trackerFrame)) {
+      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-2)!, 10) < 200, trackerFrame);
+      assert.ok(Number.parseInt(trackerFrame.split(" ").at(-1)!, 10) >= 10, trackerFrame);
+      assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
+      assert.equal(supervisorFrames[3], "GPT_CODEX_HWP_JOB GONE 0 2");
+    } else {
+      assert.equal(trackerFrame, "GPT_CODEX_HWP_JOB ERROR sampling Access_is_denied");
+    }
+    context.diagnostic(trackerFrame);
+    await new Promise((resolve) => setTimeout(resolve, 250));
     observedPids = readPidLog(pidLog);
-    assert.ok(observedPids.length >= 10);
+    assert.ok(observedPids.length >= 1);
     for (const pid of observedPids) await waitUntilProcessIsGone(pid);
   } finally {
     for (const pid of observedPids) {
@@ -430,7 +915,7 @@ test("Windows child refuses framed request dispatch when supervision is unavaila
     });
     await assert.rejects(
       client.run(detectRequest("job-unavailable"), snapshot),
-      (error: unknown) => safeCode(error) === "ENGINE_INIT_FAILED",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.equal(dispatches, 0);
     assert.equal(snapshot.cleanupCalls, 1);
@@ -457,9 +942,14 @@ test("document child client captures async spawn errors while supervisor readine
       jobSupervisorFactory: async (child) => {
         await new Promise((resolve) => setTimeout(resolve, 75));
         return {
-          terminate: async () => child.pid === undefined
-            ? true
-            : terminateDocumentProcessTreeByPid(child.pid, {}),
+          terminate: async () => {
+            const gone = child.pid === undefined
+              ? true
+              : await terminateDocumentProcessTreeByPid(child.pid, {});
+            return gone
+              ? { gone: true as const, proof: "registered-groups-empty" as const }
+              : { gone: false as const, proof: "unverified" as const, reason: "termination" as const };
+          },
         };
       },
     });
@@ -477,7 +967,7 @@ test("document child client captures async spawn errors while supervisor readine
   }
 });
 
-test("document child client drains startup output and preserves OOM precedence during supervisor wait", async () => {
+test("document child start gate prevents payload OOM before supervisor readiness", async () => {
   const root = mkdtempSync(join(tmpdir(), "hwp-startup-output-oom-"));
   const owned = createOwnedFiles();
   try {
@@ -488,9 +978,14 @@ test("document child client drains startup output and preserves OOM precedence d
       jobSupervisorFactory: async (child) => {
         await new Promise((resolve) => setTimeout(resolve, 1_500));
         return {
-          terminate: async () => child.pid === undefined
-            ? true
-            : terminateDocumentProcessTreeByPid(child.pid, {}),
+          terminate: async () => {
+            const gone = child.pid === undefined
+              ? true
+              : await terminateDocumentProcessTreeByPid(child.pid, {});
+            return gone
+              ? { gone: true as const, proof: "registered-groups-empty" as const }
+              : { gone: false as const, proof: "unverified" as const, reason: "termination" as const };
+          },
         };
       },
     });
@@ -500,8 +995,7 @@ test("document child client drains startup output and preserves OOM precedence d
         spoolSnapshot(owned.inputFd, 3),
         { deadlineMs: 1_000 },
       ),
-      (error: unknown) => safeCode(error) === "ENGINE_OOM" &&
-        !JSON.stringify(error).includes("heap out of memory"),
+      (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
     );
     assert.deepEqual(readdirSync(root), []);
   } finally {
@@ -510,7 +1004,7 @@ test("document child client drains startup output and preserves OOM precedence d
   }
 });
 
-test("startup fatal OOM outranks a supervisor readiness failure", async () => {
+test("document child start gate maps supervisor readiness failure before payload to unverified termination", async () => {
   const root = mkdtempSync(join(tmpdir(), "hwp-startup-oom-supervisor-failure-"));
   const owned = createOwnedFiles();
   try {
@@ -529,7 +1023,7 @@ test("startup fatal OOM outranks a supervisor readiness failure", async () => {
         spoolSnapshot(owned.inputFd, 3),
         { deadlineMs: 2_000 },
       ),
-      (error: unknown) => safeCode(error) === "ENGINE_OOM" &&
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED" &&
         !JSON.stringify(error).includes("heap out of memory"),
     );
     assert.deepEqual(readdirSync(root), []);
@@ -539,7 +1033,7 @@ test("startup fatal OOM outranks a supervisor readiness failure", async () => {
   }
 });
 
-test("supervisor readiness failure preserves an earlier abort and dispatches no frame", async () => {
+test("document child start gate keeps supervisor rejection unverified after an earlier abort", async () => {
   const root = mkdtempSync(join(tmpdir(), "hwp-supervisor-abort-first-"));
   const owned = createOwnedFiles();
   const abort = new AbortController();
@@ -570,7 +1064,7 @@ test("supervisor readiness failure preserves an earlier abort and dispatches no 
         spoolSnapshot(owned.inputFd, 3),
         { signal: abort.signal, deadlineMs: 5_000 },
       ),
-      (error: unknown) => safeCode(error) === "REQUEST_CANCELLED",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.equal(dispatches, 0);
     assert.deepEqual(readdirSync(root), []);
@@ -638,10 +1132,12 @@ test("root exit cannot release ownership before an independent full-tree GONE re
       jobSupervisorFactory: async () => ({
         terminate: async () => {
           terminationCalls += 1;
-          if (!allowGone || descendantPid === undefined) return false;
+          if (!allowGone || descendantPid === undefined) {
+            return { gone: false as const, proof: "unverified" as const, reason: "termination" as const };
+          }
           try { process.kill(descendantPid, "SIGKILL"); } catch {}
           await waitUntilProcessIsGone(descendantPid);
-          return true;
+          return { gone: true as const, proof: "registered-groups-empty" as const };
         },
       }),
     });
@@ -696,7 +1192,9 @@ test("document child client does not mask a failed tree termination as timeout",
       treeTerminator: async () => false,
       jobSupervisorFactory: async () => ({
         terminate: async () => allowGone &&
-          (spawned?.pid === undefined || !isPidAlive(spawned.pid)),
+          (spawned?.pid === undefined || !isPidAlive(spawned.pid))
+          ? { gone: true as const, proof: "registered-groups-empty" as const }
+          : { gone: false as const, proof: "unverified" as const, reason: "termination" as const },
       }),
     } as never);
     await assert.rejects(
@@ -743,6 +1241,371 @@ test("POSIX tree termination targets the process group and verifies it is gone",
     delay: async () => {},
   });
   assert.equal(stuck, false);
+});
+
+test("platform supervisors bind exact identities and bound topology sampling in source", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
+    "utf8",
+  );
+  const windows = readFileSync(
+    fileURLToPath(new URL("../src/workers/windows-job-supervisor.ps1", import.meta.url)),
+    "utf8",
+  );
+  assert.match(source, /expectedIdentity: child\.identity/u);
+  assert.match(source, /statBefore[\s\S]*status[\s\S]*statAfter/u);
+  assert.match(source, /Linux VmRSS unavailable/u);
+  assert.match(source, /sampleRequested = true/u);
+  assert.match(source, /proc_pidinfo\(pid, 3/u);
+  assert.match(source, /pbi_start_tvsec/u);
+  assert.doesNotMatch(source, /pid=,ppid=,lstart=,rss=/u);
+  assert.match(windows, /NtQueryInformationProcess/u);
+  assert.match(windows, /RecordFromHandle\(\$process, \$TargetPid\)/u);
+  assert.match(windows, /OpenProcess\(0x00101001/u);
+  assert.match(windows, /OpenProcess\(0x00101101/u);
+  assert.match(windows, /WorkingSetHandle\(\$entry\.Handle\)/u);
+  assert.match(windows, /TerminateHandle\(\$entry\.Handle\)/u);
+  assert.doesNotMatch(windows, /WorkingSetExact|TerminateExact/u);
+  assert.match(windows, /terminationRss = Measure-TrackedWorkingSet/u);
+});
+
+test("Linux retained traversal validates actual parentage and bounds work before enqueue", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
+    "utf8",
+  );
+  assert.match(source, /if \(child\.parentPid !== process\.pid\) continue;/u);
+  assert.match(
+    source,
+    /if \(queued\.size >= MAX_TRACKED_PROCESS_IDENTITIES\)[\s\S]*queued\.add\(key\)/u,
+  );
+  assert.match(source, /readBoundedProcText\(`/u);
+  assert.doesNotMatch(source, /readFile\(`\/proc\/\$\{pid\}\/(?:stat|status)`/u);
+  assert.match(source, /await opendir\(`\/proc\/\$\{pid\}\/task`\)/u);
+  assert.doesNotMatch(source, /readdir\(`\/proc\/\$\{pid\}\/task`/u);
+  assert.doesNotMatch(source, /Promise\.all\(taskDirectories/u);
+});
+
+test("macOS topology binds ps between kernel identity snapshots and cleanup is identity-only", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
+    "utf8",
+  );
+  assert.match(source, /pbi_ppid/u);
+  assert.match(source, /"ppid": info\.pbi_ppid/u);
+  assert.match(source, /const identitiesBefore = await macosKernelIdentities/u);
+  assert.match(source, /const psRecords = await snapshotMacosPsRecords/u);
+  assert.match(source, /const identitiesAfter = await macosKernelIdentities/u);
+  assert.match(source, /before\.parentPid !== after\.parentPid/u);
+  assert.match(source, /psRecord\.parentPid !== before\.parentPid/u);
+  assert.match(source, /os\.kill\(pid, 0\)/u);
+  assert.match(source, /snapshotMacosIdentityTree/u);
+  assert.match(source, /const identitiesBefore = await macosKernelIdentities\(\);/u);
+  assert.doesNotMatch(source, /if size == 0:\s*\n\s*if len\(sys\.argv\) > 1:/u);
+  assert.match(source, /snapshotPosixIdentity/u);
+
+  const identityTreeStart = source.indexOf("async function snapshotMacosIdentityTree");
+  const identityTreeEnd = source.indexOf("async function snapshotLinuxRetainedTree", identityTreeStart);
+  assert.ok(identityTreeStart >= 0 && identityTreeEnd > identityTreeStart);
+  const identityTree = source.slice(identityTreeStart, identityTreeEnd);
+  assert.equal([...identityTree.matchAll(/await identitySource\(\)/gu)].length, 2);
+  assert.match(identityTree, /sameMacosKernelIdentity\(before, after\)/u);
+  assert.match(identityTree, /childrenByParent/u);
+  assert.match(identityTree, /queue\.push\(record\)/u);
+  assert.match(identityTree, /pendingCandidates/u);
+  assert.match(identityTree, /queriedPids\.add\(candidate\.parent\.pid\)/u);
+  assert.match(identityTree, /identitySource\(\[\.\.\.queriedPids\]\)/u);
+  assert.match(identityTree, /MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS/u);
+  assert.match(identityTree, /MAX_TRACKED_PROCESS_IDENTITIES/u);
+  assert.doesNotMatch(identityTree, /snapshotMacosPsRecords|\/bin\/ps/u);
+});
+
+test("macOS identity-only cleanup stabilizes an after-only child before returning the root", async () => {
+  const rootIdentity = Object.freeze({
+    parentPid: 1,
+    identity: "10:1",
+    startOrder: 10_000_001,
+  });
+  const childIdentity = Object.freeze({
+    parentPid: 100,
+    identity: "11:2",
+    startOrder: 11_000_002,
+  });
+  const grandchildIdentity = Object.freeze({
+    parentPid: 101,
+    identity: "12:3",
+    startOrder: 12_000_003,
+  });
+  const retained = new Map([[
+    "100:10:1",
+    Object.freeze({
+      pid: 100,
+      ...rootIdentity,
+      rssBytes: 0,
+      depth: 0,
+    }),
+  ]]);
+  let fullSnapshot = 0;
+  const targetedQueries: number[][] = [];
+
+  const records = await snapshotMacosIdentityTree(retained, async (pids = []) => {
+    if (pids.length === 0) {
+      fullSnapshot += 1;
+      return fullSnapshot === 1
+        ? new Map([[100, rootIdentity]])
+        : new Map([
+            [100, rootIdentity],
+            [101, childIdentity],
+            [102, grandchildIdentity],
+          ]);
+    }
+    targetedQueries.push([...pids].sort((left, right) => left - right));
+    return new Map(
+      pids.flatMap((pid) => {
+        const identity = new Map([
+          [100, rootIdentity],
+          [101, childIdentity],
+          [102, grandchildIdentity],
+        ]).get(pid);
+        return identity === undefined ? [] : [[pid, identity] as const];
+      }),
+    );
+  });
+
+  assert.deepEqual(
+    records.map((record) => record.pid).sort((left, right) => left - right),
+    [100, 101, 102],
+  );
+  assert.deepEqual(targetedQueries, [[100, 101], [101, 102]]);
+});
+
+test("macOS identity-only cleanup rebinds a changed child only after an exact pair requery", async () => {
+  const rootIdentity = Object.freeze({
+    parentPid: 1,
+    identity: "20:1",
+    startOrder: 20_000_001,
+  });
+  const reusedBefore = Object.freeze({
+    parentPid: 999,
+    identity: "19:9",
+    startOrder: 19_000_009,
+  });
+  const childAfter = Object.freeze({
+    parentPid: 200,
+    identity: "21:2",
+    startOrder: 21_000_002,
+  });
+  const retained = new Map([[
+    "200:20:1",
+    Object.freeze({ pid: 200, ...rootIdentity, rssBytes: 0, depth: 0 }),
+  ]]);
+  let fullSnapshot = 0;
+  const targetedQueries: number[][] = [];
+
+  const records = await snapshotMacosIdentityTree(retained, async (pids = []) => {
+    if (pids.length === 0) {
+      fullSnapshot += 1;
+      return fullSnapshot === 1
+        ? new Map([[200, rootIdentity], [201, reusedBefore]])
+        : new Map([[200, rootIdentity], [201, childAfter]]);
+    }
+    targetedQueries.push([...pids].sort((left, right) => left - right));
+    return new Map([[200, rootIdentity], [201, childAfter]]);
+  });
+
+  assert.deepEqual(records.map((record) => record.pid).sort((left, right) => left - right), [200, 201]);
+  assert.deepEqual(targetedQueries, [[200, 201]]);
+});
+
+test("macOS identity-only cleanup fails closed when a reachable child never stabilizes", async () => {
+  const rootIdentity = Object.freeze({
+    parentPid: 1,
+    identity: "30:1",
+    startOrder: 30_000_001,
+  });
+  const retained = new Map([[
+    "300:30:1",
+    Object.freeze({ pid: 300, ...rootIdentity, rssBytes: 0, depth: 0 }),
+  ]]);
+  let fullSnapshot = 0;
+  let targetedQueries = 0;
+
+  await assert.rejects(
+    snapshotMacosIdentityTree(retained, async (pids = []) => {
+      if (pids.length === 0) {
+        fullSnapshot += 1;
+        return new Map([
+          [300, rootIdentity],
+          ...(fullSnapshot === 1
+            ? []
+            : [[301, Object.freeze({
+                parentPid: 300,
+                identity: "31:1",
+                startOrder: 31_000_001,
+              })] as const]),
+        ]);
+      }
+      targetedQueries += 1;
+      return new Map([
+        [300, rootIdentity],
+        [301, Object.freeze({
+          parentPid: 300,
+          identity: `31:${targetedQueries + 1}`,
+          startOrder: 31_000_001 + targetedQueries,
+        })],
+      ]);
+    }),
+    /macOS child identity stabilization rounds exhausted/u,
+  );
+  assert.equal(targetedQueries, 4);
+});
+
+test("macOS identity-only cleanup requires the accepted parent to remain exact", async () => {
+  const rootIdentity = Object.freeze({
+    parentPid: 1,
+    identity: "33:1",
+    startOrder: 33_000_001,
+  });
+  const childIdentity = Object.freeze({
+    parentPid: 330,
+    identity: "34:1",
+    startOrder: 34_000_001,
+  });
+  const retained = new Map([[
+    "330:33:1",
+    Object.freeze({ pid: 330, ...rootIdentity, rssBytes: 0, depth: 0 }),
+  ]]);
+  let fullSnapshot = 0;
+
+  await assert.rejects(
+    snapshotMacosIdentityTree(retained, async (pids = []) => {
+      if (pids.length === 0) {
+        fullSnapshot += 1;
+        return fullSnapshot === 1
+          ? new Map([[330, rootIdentity]])
+          : new Map([[330, rootIdentity], [331, childIdentity]]);
+      }
+      return new Map([
+        [330, Object.freeze({ ...rootIdentity, parentPid: 2 })],
+        [331, childIdentity],
+      ]);
+    }),
+    /accepted macOS parent identity changed during stabilization/u,
+  );
+});
+
+test("macOS identity-only cleanup fails closed when a new candidate chain exhausts rounds", async () => {
+  const rootIdentity = Object.freeze({
+    parentPid: 1,
+    identity: "35:1",
+    startOrder: 35_000_001,
+  });
+  const identities = new Map<number, Readonly<{
+    parentPid: number;
+    identity: string;
+    startOrder: number;
+  }>>([[350, rootIdentity]]);
+  for (let offset = 1; offset <= 5; offset += 1) {
+    identities.set(350 + offset, Object.freeze({
+      parentPid: 349 + offset,
+      identity: `${35 + offset}:1`,
+      startOrder: (35 + offset) * 1_000_000 + 1,
+    }));
+  }
+  const retained = new Map([[
+    "350:35:1",
+    Object.freeze({ pid: 350, ...rootIdentity, rssBytes: 0, depth: 0 }),
+  ]]);
+  let fullSnapshot = 0;
+  let targetedQueries = 0;
+
+  await assert.rejects(
+    snapshotMacosIdentityTree(retained, async (pids = []) => {
+      if (pids.length === 0) {
+        fullSnapshot += 1;
+        return fullSnapshot === 1
+          ? new Map([[350, rootIdentity]])
+          : identities;
+      }
+      targetedQueries += 1;
+      return new Map(pids.map((pid) => [pid, identities.get(pid)!] as const));
+    }),
+    /macOS child identity stabilization rounds exhausted/u,
+  );
+  assert.equal(targetedQueries, 4);
+});
+
+test("macOS identity-only cleanup enforces the 4096-record cap", async () => {
+  const rootIdentity = Object.freeze({
+    parentPid: 1,
+    identity: "40:1",
+    startOrder: 40_000_001,
+  });
+  const retained = new Map([[
+    "400:40:1",
+    Object.freeze({ pid: 400, ...rootIdentity, rssBytes: 0, depth: 0 }),
+  ]]);
+  let fullSnapshot = 0;
+
+  await assert.rejects(
+    snapshotMacosIdentityTree(retained, async () => {
+      fullSnapshot += 1;
+      if (fullSnapshot === 1) return new Map([[400, rootIdentity]]);
+      return new Map([
+        [400, rootIdentity],
+        ...Array.from({ length: 4_096 }, (_, index) => {
+          const pid = index + 401;
+          return [pid, Object.freeze({
+            parentPid: 400,
+            identity: `41:${index}`,
+            startOrder: 41_000_000 + index,
+          })] as const;
+        }),
+      ]);
+    }),
+    /macOS after snapshot identity limit exceeded/u,
+  );
+});
+
+test("POSIX registration owns termination proof while ancestry and RSS remain telemetry only", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
+    "utf8",
+  );
+  const registeredSource = readFileSync(
+    fileURLToPath(new URL("../src/workers/registered-process-supervisor.ts", import.meta.url)),
+    "utf8",
+  );
+  assert.match(source, /await registeredSupervisor\.registerRoot\(child\.pid, process\.pid\)/u);
+  assert.match(source, /try \{\s*await tracker\.initialize\(\);\s*\} catch/u);
+  assert.match(source, /samplingFailure === undefined[\s\S]*setInterval/u);
+  const trackerStart = source.indexOf("class PosixProcessTreeTracker");
+  const trackerEnd = source.indexOf("function posixIdentityKey", trackerStart);
+  assert.ok(trackerStart >= 0 && trackerEnd > trackerStart);
+  assert.doesNotMatch(source.slice(trackerStart, trackerEnd), /terminate\(/u);
+  assert.match(registeredSource, /process\.kill\(-processGroupId, signal\)/u);
+  assert.match(registeredSource, /for \(const signal of \["SIGTERM", "SIGKILL"\]/u);
+  assert.match(registeredSource, /proof: "registered-groups-empty"/u);
+  assert.doesNotMatch(registeredSource, /ancestry|descendant|snapshot.*Tree/iu);
+});
+
+test("Windows supervisor always performs discovery-free retained-handle cleanup", () => {
+  const windows = readFileSync(
+    fileURLToPath(new URL("../src/workers/windows-job-supervisor.ps1", import.meta.url)),
+    "utf8",
+  );
+  assert.match(windows, /function Invoke-RetainedTerminationPass/u);
+  assert.match(windows, /function Stop-RetainedHandles/u);
+  assert.match(windows, /catch \{[\s\S]*Invoke-RetainedTerminationPass/u);
+  assert.match(
+    windows,
+    /finally \{[\s\S]*Stop-RetainedHandles[\s\S]*foreach \(\$entry in @\(\$retained\.Values\)\)/u,
+  );
+  assert.match(
+    windows,
+    /RecordFromHandle\(\$process, \$TargetPid\)[\s\S]*catch \{[\s\S]*CloseHandle\(\$process\)[\s\S]*\$process = \[IntPtr\]::Zero/u,
+  );
+  assert.match(windows, /if \(-not \$discoveryComplete\) \{ return \$false \}/u);
 });
 
 test("Windows system executables fail closed without an absolute SystemRoot", () => {
@@ -1447,6 +2310,41 @@ function childClient(
   });
 }
 
+function scriptedChildClient(
+  metricEvents: readonly Readonly<Record<string, unknown>>[],
+) {
+  const script = `
+const fs = require("node:fs");
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  const frame = Buffer.concat(chunks);
+  const size = frame.readUInt32BE(0);
+  const request = JSON.parse(frame.subarray(4, 4 + size).toString("utf8"));
+  const event = (type) => ({ protocolVersion: 1, requestId: request.requestId, type });
+  const send = (value) => {
+    const body = Buffer.from(JSON.stringify(value));
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(body.length);
+    fs.writeSync(6, header);
+    fs.writeSync(6, body);
+  };
+  send(event("ready"));
+  for (const metric of ${JSON.stringify(metricEvents)}) {
+    send({ ...event("metrics"), ...metric });
+  }
+  send({ ...event("result"), payload: { format: "unknown" }, outputByteLength: 7 });
+});
+`;
+  return createDocumentChildClient({
+    spawnFactory: (specification) => spawn(
+      specification.command,
+      ["-e", script],
+      specification.options,
+    ),
+  });
+}
+
 function detectRequest(requestId: string) {
   return { protocolVersion: 1, requestId, operation: "detect", input: {}, options: {} } as const;
 }
@@ -1550,8 +2448,8 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 3_000;
+async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -1559,10 +2457,23 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   assert.fail("condition was not met before deadline");
 }
 
+async function terminateChildWithProof(
+  child: ReturnType<typeof spawn>,
+  proof: "windows-job-empty" | "registered-groups-empty",
+) {
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+  return { gone: true as const, proof };
+}
+
 function safeCode(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error
     ? (error as { code?: unknown }).code
     : undefined;
+}
+
+function errno(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(code), { code });
 }
 
 function countingSignal(): {

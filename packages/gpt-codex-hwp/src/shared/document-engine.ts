@@ -27,6 +27,7 @@ import {
 } from "../workers/document-child-client.js";
 import {
   createIsolatedDocumentEngine,
+  type DocumentEngineMetrics,
   type DocumentEngineRunOptions,
   type IsolatedDocumentEngine,
   type IsolatedDocumentResult,
@@ -45,6 +46,7 @@ export interface DocumentEngineExecutionContext {
   readonly signal?: AbortSignal;
   readonly deadlineMs?: number;
   readonly onProgress?: (completed: number, total: number) => void;
+  readonly onMetrics?: (metrics: DocumentEngineMetrics) => void;
 }
 
 export interface DocumentFacadeResult<Operation extends DocumentEngineOperation> {
@@ -693,6 +695,7 @@ function toRunOptions(
     ...(context.signal === undefined ? {} : { signal: context.signal }),
     ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
     ...(context.onProgress === undefined ? {} : { onProgress: context.onProgress }),
+    ...(context.onMetrics === undefined ? {} : { onMetrics: context.onMetrics }),
   };
 }
 
@@ -714,12 +717,14 @@ function copyFillFields(
 function createDefaultIsolatedEngine(): IsolatedDocumentEngine {
   const workerEntry = runtimeEntry("document-worker.js");
   const childEntry = runtimeEntry("document-child.js");
+  const childStartGateEntry = runtimeEntry("document-child-start-gate.js");
   return createIsolatedDocumentEngine({
     workerClient: createDocumentWorkerClient({
       workerFactory: (options) => new Worker(workerEntry, options),
     }),
     childClient: createDocumentChildClient({
       childEntry: fileURLToPath(childEntry),
+      startGateEntry: fileURLToPath(childStartGateEntry),
     }),
   });
 }

@@ -664,7 +664,7 @@ async function executeWindowsBoundedCommand(
   const input = child.stdin;
   if (input === null) {
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+    const gone = await terminateSupervised(startupResult.supervisor.value);
     destroyChildPipes(child, !gone);
     return commandResult(null, null, false, truncated, !gone, stdout, stderr);
   }
@@ -676,13 +676,13 @@ async function executeWindowsBoundedCommand(
   });
   const dispatchResult = await Promise.race([dispatchPromise, terminalPromise, deadlinePromise]);
   if ("kind" in dispatchResult && dispatchResult.kind === "deadline") {
-    const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+    const gone = await terminateSupervised(startupResult.supervisor.value);
     destroyChildPipes(child, !gone);
     return commandResult(null, null, true, truncated, !gone, stdout, stderr);
   }
   if (!("kind" in dispatchResult)) {
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+    const gone = await terminateSupervised(startupResult.supervisor.value);
     destroyChildPipes(child, !gone);
     return commandResult(
       dispatchResult.code,
@@ -696,14 +696,14 @@ async function executeWindowsBoundedCommand(
   }
   if (dispatchResult.kind !== "dispatch" || !dispatchResult.ok) {
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+    const gone = await terminateSupervised(startupResult.supervisor.value);
     destroyChildPipes(child, !gone);
     return commandResult(null, null, false, truncated, !gone, stdout, stderr);
   }
 
   const completion = await Promise.race([terminalPromise, deadlinePromise]);
   if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-  const gone = await startupResult.supervisor.value.terminate().catch(() => false);
+  const gone = await terminateSupervised(startupResult.supervisor.value);
   destroyChildPipes(child, !gone);
   if ("kind" in completion) return commandResult(null, null, true, truncated, !gone, stdout, stderr);
   return commandResult(completion.code, completion.signal, false, truncated, !gone, stdout, stderr);
@@ -752,9 +752,13 @@ async function terminateGatedRunner(
   child: ChildProcess,
   supervisor: Readonly<{ ok: true; value: ChildLifecycleSupervisor } | { ok: false }>,
 ): Promise<boolean> {
-  if (supervisor.ok) return supervisor.value.terminate().catch(() => false);
+  if (supervisor.ok) return terminateSupervised(supervisor.value);
   if (child.pid === undefined) return child.exitCode !== null;
   return terminateDocumentProcessTreeByPid(child.pid).catch(() => false);
+}
+
+function terminateSupervised(supervisor: ChildLifecycleSupervisor): Promise<boolean> {
+  return supervisor.terminate().then((receipt) => receipt.gone, () => false);
 }
 
 function destroyChildPipes(child: ChildProcess, unref: boolean): void {

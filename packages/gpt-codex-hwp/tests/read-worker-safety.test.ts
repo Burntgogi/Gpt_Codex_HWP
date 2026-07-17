@@ -336,13 +336,16 @@ test("read worker safety routes an above-threshold valid HWPX through the real s
         spoolRoot: resultRoot,
         jobSupervisorFactory: async (child) => ({
           terminate: async () => {
-            if (child.exitCode !== null || child.signalCode !== null) return true;
-            child.kill();
-            await Promise.race([
-              once(child, "exit"),
-              new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
-            ]);
-            return child.exitCode !== null || child.signalCode !== null;
+            if (child.exitCode === null && child.signalCode === null) {
+              child.kill();
+              await Promise.race([
+                once(child, "exit"),
+                new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+              ]);
+            }
+            return child.exitCode !== null || child.signalCode !== null
+              ? { gone: true as const, proof: "registered-groups-empty" as const }
+              : { gone: false as const, proof: "unverified" as const, reason: "termination" as const };
           },
         }),
       }),
@@ -975,12 +978,19 @@ async function unitTestChildSupervisor(child: {
   exitCode: number | null;
   signalCode: string | null;
   kill(): boolean;
-}): Promise<{ terminate(): Promise<boolean> }> {
+}) {
   return {
-    async terminate(): Promise<boolean> {
-      if (child.exitCode !== null || child.signalCode !== null) return true;
-      child.kill();
-      return true;
+    async terminate() {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+        const deadline = Date.now() + 2_000;
+        while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+        }
+      }
+      return child.exitCode !== null || child.signalCode !== null
+        ? { gone: true as const, proof: "registered-groups-empty" as const }
+        : { gone: false as const, proof: "unverified" as const, reason: "termination" as const };
     },
   };
 }

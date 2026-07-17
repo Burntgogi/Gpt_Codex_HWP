@@ -376,7 +376,7 @@ test("Windows doctor gate sends no command before Job readiness and verifies cle
   resolveSupervisor({
     terminate: async () => {
       terminationCalls += 1;
-      return true;
+      return { gone: true, proof: "windows-job-empty" };
     },
   });
 
@@ -404,7 +404,9 @@ test("Windows doctor gate rejects abnormal READY without dispatch and still fina
       superviseProcessTree: async () => ({
         terminate: async () => {
           terminationCalls += 1;
-          return true;
+          return index === 0
+            ? { gone: true as const, proof: "windows-job-empty" as const }
+            : { gone: false as const, proof: "unverified" as const, reason: "identity" as const };
         },
       }),
     });
@@ -414,7 +416,7 @@ test("Windows doctor gate rejects abnormal READY without dispatch and still fina
     assert.equal(Buffer.concat(input).byteLength, 0);
     assert.equal(terminationCalls, 1);
     assert.equal(result.code, null);
-    assert.equal(result.terminationFailed, false);
+    assert.equal(result.terminationFailed, index === 1);
   }
 });
 

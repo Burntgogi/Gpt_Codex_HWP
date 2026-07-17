@@ -1,10 +1,15 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, writeSync } from "node:fs";
+import { appendFileSync, writeFileSync, writeSync } from "node:fs";
 
 const mode = process.argv[2] ?? "success";
 const delayMs = Number.parseInt(process.argv[3] ?? "250", 10);
 let retainedExternal;
+
+if (mode === "gate-payload-marker") {
+  writeFileSync(process.argv[4], "payload evaluated\n");
+  setInterval(() => {}, 1000);
+}
 
 if (mode === "race-spawner") {
   const pidLogPath = process.argv[4];
@@ -80,7 +85,7 @@ readRequest().then((request) => {
     const retained = [];
     while (true) retained.push(new Array(1_000_000).fill(retained.length));
   }
-  if (mode === "crash-after-ready") process.exit(18);
+  if (mode === "crash-after-ready") process.kill(process.pid, "SIGKILL");
   if (mode === "oom") {
     sendControl({
       ...event(request, "failure"),
@@ -145,17 +150,26 @@ readRequest().then((request) => {
     setInterval(() => {}, 1000);
     return;
   }
+  if (mode === "lifeline-hold") {
+    const pidLogPath = process.argv[4];
+    const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    appendFileSync(pidLogPath, `${process.pid}\n${descendant.pid}\n`);
+    setInterval(() => {}, 1000);
+    return;
+  }
   if (mode === "descendant-then-crash") {
     const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       stdio: "ignore",
-      detached: true,
+      detached: process.platform === "win32",
     });
     sendControl({
       ...event(request, "progress"),
       completed: descendant.pid,
       total: Number.MAX_SAFE_INTEGER,
     });
-    setTimeout(() => process.exit(18), 100);
+    setTimeout(() => process.kill(process.pid, "SIGKILL"), 100);
     return;
   }
   if (mode === "multilevel-orphan-then-crash") {
@@ -163,7 +177,7 @@ readRequest().then((request) => {
     const intermediate = spawn(
       process.execPath,
       [new URL(import.meta.url).pathname.slice(1), "orphan-intermediate", "0", pidLogPath],
-      { stdio: "ignore", detached: true },
+      { stdio: "ignore", detached: process.platform === "win32" },
     );
     intermediate.unref();
     sendControl({
@@ -171,7 +185,7 @@ readRequest().then((request) => {
       completed: intermediate.pid,
       total: Number.MAX_SAFE_INTEGER,
     });
-    setTimeout(() => process.exit(18), 650);
+    setTimeout(() => process.kill(process.pid, "SIGKILL"), 650);
     return;
   }
   if (mode === "spawn-race-timeout") {
@@ -179,7 +193,7 @@ readRequest().then((request) => {
     const spawner = spawn(
       process.execPath,
       [new URL(import.meta.url).pathname.slice(1), "race-spawner", String(process.pid), pidLogPath],
-      { stdio: "ignore", detached: true },
+      { stdio: "ignore", detached: process.platform === "win32" },
     );
     spawner.unref();
     appendFileSync(pidLogPath, `${spawner.pid}\n`);

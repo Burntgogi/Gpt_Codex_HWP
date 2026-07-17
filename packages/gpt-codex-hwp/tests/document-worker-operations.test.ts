@@ -20,7 +20,11 @@ import JSZip from "jszip";
 import { markdownToHwpx } from "kordoc";
 import sharp from "sharp";
 
-import { encodeBoundedJsonFrame } from "../src/workers/bounded-frame.js";
+import {
+  BoundedFrameDecoder,
+  encodeBoundedJsonFrame,
+  parseBoundedJsonFrame,
+} from "../src/workers/bounded-frame.js";
 
 import {
   createDocumentChildClient,
@@ -369,6 +373,44 @@ test("document worker operations child route uses inherited handles and the one-
   owned.cleanup();
 });
 
+test("built worker and child detect report one measured defensive input copy", { timeout: 60_000 }, async () => {
+  const worker = createBuiltWorkerClient();
+  const generated = await worker.run(
+    request("generateHwpx", { input: { markdown: "# Copy metrics\n" } }),
+    undefined,
+  );
+  const actualBytes = generated.bytes.byteLength;
+
+  const workerMetrics: Array<{ copiedBytes: number }> = [];
+  const workerDetected = await worker.run(
+    request("detect"),
+    workerSnapshot(generated.bytes.slice(0)),
+    { onMetrics: (metrics) => workerMetrics.push(metrics) },
+  );
+  assert.deepEqual(workerDetected, { format: "hwpx" });
+  assert.deepEqual(workerMetrics, [
+    { copiedBytes: 0 },
+    { copiedBytes: actualBytes },
+  ]);
+
+  const childOwned = spoolSnapshot(new Uint8Array(generated.bytes));
+  try {
+    const childMetrics: Array<{ copiedBytes: number }> = [];
+    const childDetected = await createBuiltChildClient().run(
+      request("detect"),
+      childOwned.snapshot,
+      { onMetrics: (metrics) => childMetrics.push(metrics) },
+    );
+    assert.deepEqual(childDetected, { format: "hwpx" });
+    assert.deepEqual(childMetrics, [
+      { copiedBytes: 0 },
+      { copiedBytes: actualBytes },
+    ]);
+  } finally {
+    childOwned.cleanup();
+  }
+});
+
 test("compiled child performs default, explicit after-paragraph, and seal-anchor placement through fd4 and refuses HWP mutation", { timeout: 120_000 }, async () => {
   const worker = createBuiltWorkerClient();
   const generated = await worker.run(request("generateHwpx", {
@@ -446,6 +488,23 @@ test("Python insert-image descriptor mode directly consumes fd3/fd4 and writes f
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("production Python helper descriptors remain non-detached and exclude fd7 through fd9", async () => {
+  const source = await readFile(
+    join(PACKAGE_ROOT, "src", "workers", "document-child.ts"),
+    "utf8",
+  );
+  const helperStart = source.indexOf("const helper = spawn(command, args");
+  const helperEnd = source.indexOf("let outputBytes = 0", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helperSpawn = source.slice(helperStart, helperEnd);
+  assert.match(
+    helperSpawn,
+    /stdio:\s*\["pipe",\s*"pipe",\s*"pipe",\s*3,\s*"pipe",\s*5\]/u,
+  );
+  assert.doesNotMatch(helperSpawn, /detached:\s*true/u);
+  assert.doesNotMatch(helperSpawn, /\b[789]\b/u);
 });
 
 test("descriptor helper command line never contains a distinctive document anchor", {
@@ -851,6 +910,44 @@ test("document child waits for EOF and rejects a later second frame or trailing 
   }
 });
 
+test("document child emits no dispatch metrics when inherited fd ingestion fails", { timeout: 30_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "gpt-codex-hwp-pre-dispatch-fd-"));
+  const inputPath = join(root, "input.bin");
+  const outputPath = join(root, "output.bin");
+  writeFileSync(inputPath, Buffer.from([0x50]));
+  const inputFd = openSync(inputPath, "r");
+  const outputFd = openSync(outputPath, "w+");
+  try {
+    const child = spawn(process.execPath, [CHILD_ENTRY], {
+      shell: false,
+      windowsHide: true,
+      stdio: ["pipe", "ignore", "ignore", inputFd, "ignore", outputFd, "pipe"],
+    });
+    const control: Buffer[] = [];
+    child.stdio[6]?.on("data", (chunk: Buffer) => control.push(chunk));
+    child.stdin.end(encodeBoundedJsonFrame({
+      protocolVersion: 1,
+      requestId: "pre-dispatch-fd-failure",
+      operation: "detect",
+      input: {
+        document: { transport: "spool", descriptor: 3, sizeBytes: 2 },
+      },
+      options: {},
+    }, 512 * 1024));
+    await once(child, "close");
+
+    const decoder = new BoundedFrameDecoder(8 * 1024 * 1024);
+    const events = decoder.push(Buffer.concat(control)).map((frame) =>
+      parseBoundedJsonFrame(frame) as { type?: unknown });
+    decoder.finish();
+    assert.deepEqual(events.map((event) => event.type), ["ready", "failure"]);
+  } finally {
+    closeSync(inputFd);
+    closeSync(outputFd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("document worker operations isolate requests contain no source path or Node IPC fields", () => {
   const requests = [
     request("detect"),
@@ -903,10 +1000,11 @@ async function runBuiltChildInsert(
       childEntry: CHILD_ENTRY,
       jobSupervisorFactory: async (child) => ({
         terminate: async () => {
-          if (child.exitCode !== null || child.signalCode !== null) return true;
-          child.kill();
-          await once(child, "exit");
-          return true;
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill();
+            await once(child, "exit");
+          }
+          return { gone: true as const, proof: "registered-groups-empty" as const };
         },
       }),
     });
@@ -974,13 +1072,16 @@ function createChildClient(childEntry: string, childArguments: string[]) {
     childArguments,
     jobSupervisorFactory: async (child) => ({
       terminate: async () => {
-        if (child.exitCode !== null || child.signalCode !== null) return true;
-        child.kill();
-        await Promise.race([
-          once(child, "exit"),
-          new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
-        ]);
-        return child.exitCode !== null || child.signalCode !== null;
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill();
+          await Promise.race([
+            once(child, "exit"),
+            new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+          ]);
+        }
+        return child.exitCode !== null || child.signalCode !== null
+          ? { gone: true as const, proof: "registered-groups-empty" as const }
+          : { gone: false as const, proof: "unverified" as const, reason: "termination" as const };
       },
     }),
   });
