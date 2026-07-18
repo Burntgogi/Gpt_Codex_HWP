@@ -240,7 +240,7 @@ test("document child start gate spawn order and descriptor isolation", async () 
           ]
         : [startGatePath, fixturePath, "success", "250"]);
       const stdio = specification.stdio as unknown[];
-      assert.equal(stdio[7], "pipe");
+      assert.equal(stdio[7], process.platform === "win32" ? "pipe" : "ipc");
     }
     assert.equal((specifications[0]!.stdio as unknown[]).length, 8);
     assert.deepEqual(
@@ -272,16 +272,9 @@ test("document child start gate waits for supervisor readiness before one START 
           specification.options,
         );
         spawned = child;
-        const startWriter = child.stdio[7];
-        if (startWriter === null || startWriter === undefined || !("write" in startWriter)) {
-          events.push("gate-missing");
-        } else {
-          const write = startWriter.write.bind(startWriter);
-          startWriter.write = ((chunk: Uint8Array | string, ...args: unknown[]) => {
-            events.push(`start:${Buffer.from(chunk).toString("utf8")}`);
-            return Reflect.apply(write, startWriter, [chunk, ...args]);
-          }) as typeof startWriter.write;
-        }
+        instrumentStartSend(child, (frame) => {
+          events.push(`start:${String(frame)}`);
+        });
         const end = child.stdin!.end.bind(child.stdin);
         child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
           events.push("dispatch");
@@ -354,16 +347,12 @@ for (const scenario of [
             specification.options,
           );
           spawned = child;
-          const startWriter = child.stdio[7];
-          assert.ok(startWriter !== null && startWriter !== undefined && "write" in startWriter);
-          startWriter.once("close", () => {
+          startTransportEmitter(child).once(startTransportCloseEvent(), () => {
             gateClosed = true;
           });
-          const write = startWriter.write.bind(startWriter);
-          startWriter.write = ((...args: Parameters<typeof startWriter.write>) => {
+          instrumentStartSend(child, () => {
             startWrites += 1;
-            return write(...args);
-          }) as typeof startWriter.write;
+          });
           const end = child.stdin!.end.bind(child.stdin);
           child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
             dispatches += 1;
@@ -610,7 +599,7 @@ for (const scenario of [
     const owned = createOwnedFiles();
     const abort = new AbortController();
     let spawned: ReturnType<typeof spawn> | undefined;
-    let startWriter: ReturnType<typeof spawn>["stdio"][number] | undefined;
+    let startTransport: EventEmitter | undefined;
     let stalledCallback: ((error?: Error | null) => void) | undefined;
     let startWrites = 0;
     let dispatches = 0;
@@ -628,19 +617,14 @@ for (const scenario of [
             specification.options,
           );
           spawned = child;
-          startWriter = child.stdio[7];
-          assert.ok(startWriter !== null && startWriter !== undefined && "write" in startWriter);
-          startWriter.once("close", () => {
+          startTransport = startTransportEmitter(child);
+          startTransport.once(startTransportCloseEvent(), () => {
             gateClosed = true;
           });
-          startWriter.write = ((
-            _chunk: Uint8Array | string,
-            callback?: (error?: Error | null) => void,
-          ) => {
+          replaceStartSend(child, (_frame, callback) => {
             startWrites += 1;
             stalledCallback = callback;
-            return true;
-          }) as typeof startWriter.write;
+          });
           const end = child.stdin!.end.bind(child.stdin);
           child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
             dispatches += 1;
@@ -682,9 +666,7 @@ for (const scenario of [
       await new Promise((resolve) => setTimeout(resolve, 25));
     } finally {
       stalledCallback?.(new Error("test cleanup"));
-      if (startWriter !== null && startWriter !== undefined && "destroy" in startWriter) {
-        startWriter.destroy();
-      }
+      closeStartTransport(spawned);
       if (spawned !== undefined && spawned.exitCode === null && spawned.signalCode === null) {
         spawned.kill("SIGKILL");
       }
@@ -702,7 +684,7 @@ for (const callbackMode of ["success", "error"] as const) {
     const owned = createOwnedFiles();
     let listenersAfterCallback = -1;
     let laterErrorEmitted = false;
-    let retainedStartWriter: ReturnType<typeof spawn>["stdio"][number] | undefined;
+    let retainedStartTransport: EventEmitter | undefined;
     try {
       const client = createProductionDocumentChildClient({
         childEntry: fixturePath,
@@ -715,25 +697,20 @@ for (const callbackMode of ["success", "error"] as const) {
             [...specification.args],
             specification.options,
           );
-          const startWriter = child.stdio[7];
-          assert.ok(startWriter !== null && startWriter !== undefined && "write" in startWriter);
-          retainedStartWriter = startWriter;
-          const write = startWriter.write.bind(startWriter);
-          startWriter.write = ((
-            chunk: Uint8Array | string,
-            callback?: (error?: Error | null) => void,
-          ) => write(chunk, (nativeError?: Error | null) => {
+          const transport = startTransportEmitter(child);
+          retainedStartTransport = transport;
+          instrumentStartSend(child, (_frame, nativeError, callback) => {
             callback?.(
               callbackMode === "error"
                 ? new Error("injected START callback failure")
                 : nativeError,
             );
-            listenersAfterCallback = startWriter.listenerCount("error");
+            listenersAfterCallback = transport.listenerCount("error");
             if (listenersAfterCallback > 0) {
               laterErrorEmitted = true;
-              startWriter.emit("error", new Error("later fd7 pipe failure"));
+              transport.emit("error", new Error("later start transport failure"));
             }
-          })) as typeof startWriter.write;
+          });
           return child;
         },
         jobSupervisorFactory: async (child) => ({
@@ -754,7 +731,7 @@ for (const callbackMode of ["success", "error"] as const) {
       }
       assert.equal(listenersAfterCallback, 1);
       assert.equal(laterErrorEmitted, true);
-      await waitFor(() => retainedStartWriter?.listenerCount("error") === 0);
+      await waitFor(() => retainedStartTransport?.listenerCount("error") === 0);
     } finally {
       owned.cleanup();
       rmSync(root, { recursive: true, force: true });
@@ -840,14 +817,7 @@ test("document child start gate rejection closes fd7 without START or payload di
           specification.options,
         );
         spawned = child;
-        const startWriter = child.stdio[7];
-        if (startWriter !== null && startWriter !== undefined && "write" in startWriter) {
-          const write = startWriter.write.bind(startWriter);
-          startWriter.write = ((...args: Parameters<typeof startWriter.write>) => {
-            startWrites += 1;
-            return write(...args);
-          }) as typeof startWriter.write;
-        }
+        instrumentStartSend(child, () => { startWrites += 1; });
         const end = child.stdin!.end.bind(child.stdin);
         child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
           dispatches += 1;
@@ -4040,6 +4010,87 @@ function telemetryScriptedRegisteredSupervisor(
       return terminate();
     },
   };
+}
+
+type StartSendCallback = (error?: Error | null) => void;
+type StartSendObserver = (
+  frame: unknown,
+  nativeError?: Error | null,
+  callback?: StartSendCallback,
+) => void;
+
+function startTransportEmitter(child: ReturnType<typeof spawn>): EventEmitter {
+  if (process.platform !== "win32") return child;
+  const writer = child.stdio[7];
+  assert.ok(writer !== null && writer !== undefined && "write" in writer);
+  return writer;
+}
+
+function startTransportCloseEvent(): "close" | "disconnect" {
+  return process.platform === "win32" ? "close" : "disconnect";
+}
+
+function instrumentStartSend(
+  child: ReturnType<typeof spawn>,
+  observer: StartSendObserver,
+): void {
+  if (process.platform === "win32") {
+    const writer = child.stdio[7];
+    assert.ok(writer !== null && writer !== undefined && "write" in writer);
+    const write = writer.write.bind(writer);
+    writer.write = ((frame: Uint8Array | string, callback?: StartSendCallback) => (
+      write(frame, (nativeError?: Error | null) => {
+        if (observer.length >= 2) observer(frame, nativeError, callback);
+        else {
+          observer(frame);
+          callback?.(nativeError);
+        }
+      })
+    )) as typeof writer.write;
+    return;
+  }
+  assert.equal(child.connected, true);
+  type SimpleSend = (message: unknown, callback?: StartSendCallback) => boolean;
+  const nativeSend = child.send!.bind(child) as unknown as SimpleSend;
+  (child as unknown as { send: SimpleSend }).send = (frame, callback) => (
+    nativeSend(frame, (nativeError?: Error | null) => {
+      if (observer.length >= 2) observer(frame, nativeError, callback);
+      else {
+        observer(frame);
+        callback?.(nativeError);
+      }
+    })
+  );
+}
+
+function replaceStartSend(
+  child: ReturnType<typeof spawn>,
+  replacement: (frame: unknown, callback?: StartSendCallback) => void,
+): void {
+  if (process.platform === "win32") {
+    const writer = child.stdio[7];
+    assert.ok(writer !== null && writer !== undefined && "write" in writer);
+    writer.write = ((frame: Uint8Array | string, callback?: StartSendCallback) => {
+      replacement(frame, callback);
+      return true;
+    }) as typeof writer.write;
+    return;
+  }
+  type SimpleSend = (message: unknown, callback?: StartSendCallback) => boolean;
+  (child as unknown as { send: SimpleSend }).send = (frame, callback) => {
+    replacement(frame, callback);
+    return true;
+  };
+}
+
+function closeStartTransport(child: ReturnType<typeof spawn> | undefined): void {
+  if (child === undefined) return;
+  if (process.platform === "win32") {
+    const writer = child.stdio[7];
+    if (writer !== null && writer !== undefined && "destroy" in writer) writer.destroy();
+  } else if (child.connected) {
+    child.disconnect();
+  }
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {

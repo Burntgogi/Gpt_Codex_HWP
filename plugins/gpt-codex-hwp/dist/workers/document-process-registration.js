@@ -580,31 +580,24 @@ async function readOneRegistrationFrame(descriptor) {
     }
 }
 async function waitForStartAndInstallLifelineWatcher() {
-    const received = Buffer.allocUnsafeSlow(START_BYTES.byteLength + 1);
-    let offset = 0;
-    while (offset < START_BYTES.byteLength) {
-        const count = await readDescriptor(DOCUMENT_START_DESCRIPTOR, received, offset, received.byteLength - offset);
-        if (count === 0)
-            privateExit(75 /* PrivateExitCode.StartFrame */);
-        offset += count;
-        if (offset > START_BYTES.byteLength ||
-            !received.subarray(0, offset).equals(START_BYTES.subarray(0, offset))) {
-            privateExit(75 /* PrivateExitCode.StartFrame */);
-        }
-    }
-    void monitorLifelineDescriptor();
-}
-async function monitorLifelineDescriptor() {
-    const byte = Buffer.allocUnsafeSlow(1);
-    try {
-        const count = await readDescriptor(DOCUMENT_START_DESCRIPTOR, byte, 0, 1);
-        if (count === 0)
-            return handleLifelineEnd();
-        return privateExit(76 /* PrivateExitCode.LifelineData */);
-    }
-    catch {
-        return privateExit(77 /* PrivateExitCode.LifelineError */);
-    }
+    if (!process.connected)
+        privateExit(75 /* PrivateExitCode.StartFrame */);
+    await new Promise((resolvePromise) => {
+        let started = false;
+        process.on("message", (message) => {
+            if (!started && message === DOCUMENT_START_FRAME) {
+                started = true;
+                resolvePromise();
+                return;
+            }
+            privateExit(started ? 76 /* PrivateExitCode.LifelineData */ : 75 /* PrivateExitCode.StartFrame */);
+        });
+        process.once("disconnect", () => {
+            if (!started)
+                privateExit(75 /* PrivateExitCode.StartFrame */);
+            handleLifelineEnd();
+        });
+    });
 }
 function readDescriptor(descriptor, buffer, offset, length) {
     return new Promise((resolvePromise, rejectPromise) => {

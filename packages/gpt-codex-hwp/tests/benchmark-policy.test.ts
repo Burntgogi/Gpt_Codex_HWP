@@ -96,6 +96,10 @@ test("benchmark diagnostics expose only bounded stage labels", () => {
     "posix-root-authority",
   );
   assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_POSIX ERROR telemetry-sample"),
+    "posix-telemetry-sample",
+  );
+  assert.equal(
     formatBenchmarkFailure({
       code: "BENCHMARK_TERMINATION_FAILED",
       diagnosticStage: "ready-mode-2",
@@ -300,9 +304,8 @@ test("benchmark registration measures accepted-group RSS outside the case and te
     "} else {",
     "  readFileSync(3, 'utf8');",
     "  const baseline = process.memoryUsage().rss;",
-    `  const child = spawn(process.execPath, ['--import', 'tsx', '--import', ${JSON.stringify(startGatePath)}, ${JSON.stringify(fixture)}, '--payload'], { detached: true, stdio: ['ignore', 'pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe', 5, 6] });`,
-    "  child.stdio[7].on('error', () => {});",
-    "  child.stdio[7].write('GPT_CODEX_HWP_START_V1\\n');",
+    `  const child = spawn(process.execPath, ['--import', 'tsx', ${JSON.stringify(startGatePath)}, ${JSON.stringify(fixture)}, '--payload'], { detached: true, stdio: ['ignore', 'pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ipc', 5, 6] });`,
+    "  child.send('GPT_CODEX_HWP_START_V1\\n');",
     "  child.stdout.once('data', () => {",
     "    const rootRssDeltaBytes = Math.max(0, process.memoryUsage().rss - baseline);",
     "    process.stdout.write(JSON.stringify({ childPid: child.pid, rootRssDeltaBytes }));",

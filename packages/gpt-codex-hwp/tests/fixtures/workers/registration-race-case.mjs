@@ -15,8 +15,7 @@ if (mode === "--descriptor-case") {
     ["--descriptor-payload", markerPath],
   );
   process.stdout.write(`${JSON.stringify({ bootstrapPid: bootstrap.pid })}\n`);
-  bootstrap.stdio[7].on("error", () => {});
-  bootstrap.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
+  sendStart(bootstrap);
   bootstrap.unref();
   await waitForPath(markerPath);
   await waitForPath(`${markerPath}.helper`);
@@ -32,11 +31,10 @@ if (mode === "--descriptor-case") {
       ["--descriptor-payload", markerPath],
     );
     bootstrapPids.push(bootstrap.pid);
-    bootstrap.stdio[7].on("error", () => {});
-    bootstrap.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
+    sendStart(bootstrap);
     await waitForPath(markerPath);
     await waitForPath(`${markerPath}.helper`);
-    bootstrap.stdio[7].end();
+    closeStart(bootstrap);
     await once(bootstrap, "close");
   }
   process.stdout.write(`${JSON.stringify({ bootstrapPids })}\n`);
@@ -48,8 +46,7 @@ if (mode === "--descriptor-case") {
     fixturePath,
     ["--descriptor-payload", `${markerPrefix}-0.json`],
   );
-  first.stdio[7].on("error", () => {});
-  first.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
+  sendStart(first);
   await waitForPath(identityBarrierPath);
   const second = spawnGatedBootstrap(
     startGatePath,
@@ -60,8 +57,7 @@ if (mode === "--descriptor-case") {
   process.stdout.write(`${JSON.stringify({
     bootstrapPids: bootstraps.map((bootstrap) => bootstrap.pid),
   })}\n`);
-  second.stdio[7].on("error", () => {});
-  second.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
+  sendStart(second);
   await Promise.all(bootstraps.map((bootstrap) => once(bootstrap, "close")));
   process.exit(0);
 } else if (mode === "--stale-ack-case") {
@@ -82,8 +78,7 @@ if (mode === "--descriptor-case") {
     fixturePath,
     ["--race-payload", `${payloadMarkerPath}.pids`, payloadMarkerPath],
   );
-  second.stdio[7].on("error", () => {});
-  second.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
+  sendStart(second);
   await once(second, "close");
   process.stdout.write(`${JSON.stringify({ firstPid: first.pid, secondPid: second.pid })}\n`);
   process.exit(0);
@@ -112,13 +107,14 @@ if (mode === "--descriptor-case") {
     helperPid: helper.pid,
     registrationAbsent,
     acknowledgementAbsent,
+    ipcConnected: process.platform === "win32" ? false : process.connected,
   }));
   setInterval(() => {}, 1_000);
 } else if (mode === "--descriptor-helper") {
   const markerPath = process.argv[3];
   writeFileSync(markerPath, JSON.stringify({
     pid: process.pid,
-    descriptorsAbsent: [7, 8, 9].map(descriptorAbsent),
+    descriptorsAbsent: [8, 9].map(descriptorAbsent),
   }));
 } else if (mode === "--leak-case") {
   const holder = spawn(process.execPath, [process.argv[1], "--holder"], {
@@ -142,8 +138,7 @@ if (mode === "--descriptor-case") {
       ["--race-payload", pidLogPath, payloadMarkerPath],
     );
     appendFileSync(pidLogPath, `${bootstrap.pid}\n`);
-    bootstrap.stdio[7].on("error", () => {});
-    bootstrap.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
+    sendStart(bootstrap);
     bootstrap.unref();
     process.exit(0);
   });
@@ -162,12 +157,10 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
   const startGateSpecifier = process.platform === "win32"
     ? pathToFileURL(startGatePath).href
     : startGatePath;
-  return spawn(process.execPath, [
-    "--import",
-    "tsx",
-    "--import",
-    startGateSpecifier,
-    fixturePath,
+  return spawn(process.execPath, ["--import", "tsx",
+    ...(process.platform === "win32"
+      ? ["--import", startGateSpecifier, fixturePath]
+      : [startGateSpecifier, fixturePath]),
     ...fixtureArguments,
   ], {
     detached: true,
@@ -181,11 +174,25 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
       "ignore",
       "ignore",
       "ignore",
-      "pipe",
+      process.platform === "win32" ? "pipe" : "ipc",
       5,
       6,
     ],
   });
+}
+
+function sendStart(child) {
+  if (process.platform === "win32") {
+    child.stdio[7].on("error", () => {});
+    child.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
+  } else {
+    child.send("GPT_CODEX_HWP_START_V1\n");
+  }
+}
+
+function closeStart(child) {
+  if (process.platform === "win32") child.stdio[7].end();
+  else if (child.connected) child.disconnect();
 }
 
 function descriptorAbsent(descriptor) {

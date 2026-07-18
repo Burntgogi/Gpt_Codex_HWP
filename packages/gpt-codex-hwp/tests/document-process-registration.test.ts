@@ -1291,11 +1291,8 @@ test("document child gate blocks payload until exact START and preserves entry a
   const payloadArgument = `payload-${randomUUID()}`;
   const child = spawnGatedFixture(markerPath, payloadArgument);
   t.after(() => terminate(child));
-  const writer = child.stdio[7];
-  assert.notEqual(writer, null);
-
   await assertFileMissing(markerPath, 200);
-  writer!.write(DOCUMENT_START_FRAME);
+  await sendStart(child, DOCUMENT_START_FRAME);
   await waitForFile(markerPath);
   assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), [
     FIXTURE_ENTRY,
@@ -1303,7 +1300,7 @@ test("document child gate blocks payload until exact START and preserves entry a
     payloadArgument,
   ]);
 
-  writer!.end();
+  closeStartChannel(child);
   const result = await waitForClose(child);
   assert.notEqual(result.code, 0);
   assert.equal(result.stdout, "");
@@ -1324,9 +1321,7 @@ test("document child gate rejects EOF partial extended and incorrect START witho
     const markerPath = join(temporaryRoot, `${label}.json`);
     const child = spawnGatedFixture(markerPath, label);
     t.after(() => terminate(child));
-    const writer = child.stdio[7];
-    assert.notEqual(writer, null);
-    writer!.end(bytes);
+    await closeStartChannel(child, bytes);
     const result = await waitForClose(child);
     await assert.rejects(access(markerPath), { code: "ENOENT" }, label);
     assert.notEqual(result.code, 0, label);
@@ -1360,9 +1355,7 @@ test("document child registration accepts a matching ACK and closes channels bef
   });
   await assertFileMissing(markerPath, 100);
 
-  const startWriter = child.stdio[7] as Writable | null;
-  assert.notEqual(startWriter, null);
-  startWriter!.write(DOCUMENT_START_FRAME);
+  await sendStart(child, DOCUMENT_START_FRAME);
   await waitForFile(markerPath);
   assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), [
     FIXTURE_ENTRY,
@@ -1370,7 +1363,7 @@ test("document child registration accepts a matching ACK and closes channels bef
     payloadArgument,
   ]);
 
-  startWriter!.end();
+  closeStartChannel(child);
   const result = await waitForClose(child);
   assert.notEqual(result.code, 0);
   assert.equal(result.stdout, "");
@@ -1395,9 +1388,7 @@ test("document child registration remains gated across delayed ACK and START del
   });
   await assertFileMissing(markerPath, 250);
 
-  const startWriter = child.stdio[7] as Writable | null;
-  assert.notEqual(startWriter, null);
-  startWriter!.write(DOCUMENT_START_FRAME);
+  await sendStart(child, DOCUMENT_START_FRAME);
   await waitForFile(markerPath);
   assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), [
     FIXTURE_ENTRY,
@@ -1405,7 +1396,7 @@ test("document child registration remains gated across delayed ACK and START del
     payloadArgument,
   ]);
 
-  startWriter!.end();
+  closeStartChannel(child);
   const result = await waitForClose(child);
   assert.notEqual(result.code, 0);
   assert.equal(result.stdout, "");
@@ -1526,6 +1517,7 @@ test("registration descriptor ownership produces clean EOF after case and bootst
     helperPid: number;
     registrationAbsent: boolean;
     acknowledgementAbsent: boolean;
+    ipcConnected: boolean;
   };
   const helper = JSON.parse(await readFile(`${markerPath}.helper`, "utf8")) as {
     pid: number;
@@ -1543,7 +1535,8 @@ test("registration descriptor ownership produces clean EOF after case and bootst
   assert.equal(payload.payloadPid, caseMessage.bootstrapPid);
   assert.equal(payload.registrationAbsent, true);
   assert.equal(payload.acknowledgementAbsent, true);
-  assert.deepEqual(helper.descriptorsAbsent, [true, true, true]);
+  assert.equal(payload.ipcConnected, process.platform !== "win32");
+  assert.deepEqual(helper.descriptorsAbsent, [true, true]);
   await waitForPidAbsent(payload.payloadPid);
   await waitForPidAbsent(payload.helperPid);
   await waitForPidAbsent(helper.pid);
@@ -1841,7 +1834,7 @@ function spawnGatedFixture(
 ): ChildProcess {
   const stdio: Array<"ignore" | "pipe"> = [
     "ignore",
-    "pipe",
+    process.platform === "win32" ? "pipe" : "ipc",
     "pipe",
     "ignore",
     "ignore",
@@ -1922,6 +1915,38 @@ async function receiveRegisterFrame(child: ChildProcess): Promise<RegisterFrame>
     registration!.once("end", onEnd);
     registration!.once("error", onError);
   });
+}
+
+async function sendStart(child: ChildProcess, frame: string | Buffer): Promise<void> {
+  if (process.platform === "win32") {
+    const writer = child.stdio[7] as Writable | null;
+    assert.notEqual(writer, null);
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      writer!.write(frame, (error?: Error | null) => {
+        if (error === undefined || error === null) resolvePromise();
+        else rejectPromise(error);
+      });
+    });
+    return;
+  }
+  assert.equal(child.connected, true);
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    child.send!(frame, (error) => {
+      if (error === null) resolvePromise();
+      else rejectPromise(error);
+    });
+  });
+}
+
+async function closeStartChannel(child: ChildProcess, frame?: Buffer): Promise<void> {
+  if (process.platform === "win32") {
+    const writer = child.stdio[7] as Writable | null;
+    assert.notEqual(writer, null);
+    writer!.end(frame);
+    return;
+  }
+  if (frame !== undefined && frame.byteLength > 0) await sendStart(child, frame);
+  if (child.connected) child.disconnect();
 }
 
 function sendAck(child: ChildProcess, frame: AckFrame): void {

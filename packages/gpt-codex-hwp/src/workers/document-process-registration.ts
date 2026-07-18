@@ -658,34 +658,22 @@ async function readOneRegistrationFrame(descriptor: number): Promise<Uint8Array>
 }
 
 async function waitForStartAndInstallLifelineWatcher(): Promise<void> {
-  const received = Buffer.allocUnsafeSlow(START_BYTES.byteLength + 1);
-  let offset = 0;
-  while (offset < START_BYTES.byteLength) {
-    const count = await readDescriptor(
-      DOCUMENT_START_DESCRIPTOR,
-      received,
-      offset,
-      received.byteLength - offset,
-    );
-    if (count === 0) privateExit(PrivateExitCode.StartFrame);
-    offset += count;
-    if (offset > START_BYTES.byteLength ||
-      !received.subarray(0, offset).equals(START_BYTES.subarray(0, offset))) {
-      privateExit(PrivateExitCode.StartFrame);
-    }
-  }
-  void monitorLifelineDescriptor();
-}
-
-async function monitorLifelineDescriptor(): Promise<never> {
-  const byte = Buffer.allocUnsafeSlow(1);
-  try {
-    const count = await readDescriptor(DOCUMENT_START_DESCRIPTOR, byte, 0, 1);
-    if (count === 0) return handleLifelineEnd();
-    return privateExit(PrivateExitCode.LifelineData);
-  } catch {
-    return privateExit(PrivateExitCode.LifelineError);
-  }
+  if (!process.connected) privateExit(PrivateExitCode.StartFrame);
+  await new Promise<void>((resolvePromise) => {
+    let started = false;
+    process.on("message", (message: unknown) => {
+      if (!started && message === DOCUMENT_START_FRAME) {
+        started = true;
+        resolvePromise();
+        return;
+      }
+      privateExit(started ? PrivateExitCode.LifelineData : PrivateExitCode.StartFrame);
+    });
+    process.once("disconnect", () => {
+      if (!started) privateExit(PrivateExitCode.StartFrame);
+      handleLifelineEnd();
+    });
+  });
 }
 
 function readDescriptor(

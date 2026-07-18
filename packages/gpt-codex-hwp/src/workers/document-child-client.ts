@@ -149,9 +149,8 @@ interface OutputSpoolOwner {
 }
 
 interface StartGateOwner {
-  readonly stream: NodeJS.WritableStream;
-  readonly onError: (error: Error) => void;
-  readonly onClose: () => void;
+  readonly sendStart: (callback: (error?: Error | null) => void) => void;
+  readonly close: () => void;
   started: boolean;
   closed: boolean;
   failure?: Error;
@@ -378,7 +377,7 @@ export function createDocumentChildClient(
           ? options.imageInput.fd
           : undefined;
         const stdio: StdioOptions = [
-          "pipe",
+          process.platform === "win32" ? "pipe" : "ipc",
           "pipe",
           "pipe",
           input?.fd ?? "ignore",
@@ -616,6 +615,7 @@ export function createDocumentChildClient(
 }
 
 function requireStartGateOwner(child: ChildProcess): StartGateOwner {
+  if (process.platform !== "win32") return requireIpcStartGateOwner(child);
   const stream = (
     child.stdio as unknown as Array<NodeJS.WritableStream | null | undefined>
   )[7];
@@ -634,14 +634,46 @@ function requireStartGateOwner(child: ChildProcess): StartGateOwner {
     stream.removeListener("error", onError);
   };
   owner = {
-    stream,
-    onError,
-    onClose,
+    sendStart: (callback) => stream.write(DOCUMENT_START_FRAME, callback),
+    close: () => {
+      if ("destroy" in stream && typeof stream.destroy === "function") stream.destroy();
+      else stream.end();
+    },
     started: false,
     closed: false,
   };
   stream.on("error", onError);
   stream.once("close", onClose);
+  return owner;
+}
+
+function requireIpcStartGateOwner(child: ChildProcess): StartGateOwner {
+  if (!child.connected || typeof child.send !== "function") {
+    throw new Error("document child start gate IPC unavailable");
+  }
+  let owner!: StartGateOwner;
+  const onError = (error: Error): void => {
+    owner.failure ??= error;
+    owner.settleStart?.(error);
+  };
+  const onDisconnect = (): void => {
+    owner.closed = true;
+    owner.failure ??= new Error("document child start gate disconnected");
+    owner.settleStart?.(owner.failure);
+    child.removeListener("error", onError);
+  };
+  owner = {
+    sendStart: (callback) => {
+      child.send!(DOCUMENT_START_FRAME, (error) => callback(error));
+    },
+    close: () => {
+      if (child.connected) child.disconnect();
+    },
+    started: false,
+    closed: false,
+  };
+  child.on("error", onError);
+  child.once("disconnect", onDisconnect);
   return owner;
 }
 
@@ -663,9 +695,7 @@ async function writeStartFrame(owner: StartGateOwner): Promise<void> {
     };
     owner.settleStart = settle;
     try {
-      owner.stream.write(DOCUMENT_START_FRAME, (error?: Error | null) => {
-        settle(error);
-      });
+      owner.sendStart(settle);
     } catch (error: unknown) {
       settle(error);
     }
@@ -678,11 +708,7 @@ function closeStartGate(owner: StartGateOwner | undefined): void {
   owner.failure ??= new Error("document child start gate closed");
   owner.settleStart?.(owner.failure);
   try {
-    if ("destroy" in owner.stream && typeof owner.stream.destroy === "function") {
-      owner.stream.destroy();
-    } else {
-      owner.stream.end();
-    }
+    owner.close();
   } catch {
     // Closing the private gate is best-effort after ownership has been retained.
   }
@@ -1674,11 +1700,17 @@ async function createPosixProcessTreeSupervisor(
       },
       () => {
         sampleRunning = false;
-        if (telemetryState === "active") deactivateTelemetry("disabled");
+        if (telemetryState === "active") {
+          dependencies.frameObserver?.("GPT_CODEX_HWP_POSIX ERROR telemetry-sample");
+          deactivateTelemetry("disabled");
+        }
       },
     ).catch(() => {
       sampleRunning = false;
-      if (telemetryState === "active") deactivateTelemetry("disabled");
+      if (telemetryState === "active") {
+        dependencies.frameObserver?.("GPT_CODEX_HWP_POSIX ERROR telemetry-sample");
+        deactivateTelemetry("disabled");
+      }
     });
   };
 

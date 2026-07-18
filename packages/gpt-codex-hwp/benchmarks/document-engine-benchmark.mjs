@@ -72,6 +72,7 @@ const SAFE_BENCHMARK_DIAGNOSTIC_STAGES = new Set([
   "windows-rss-receipt",
   "posix-root-authority",
   "posix-telemetry-initialize",
+  "posix-telemetry-sample",
 ]);
 const RECEIPT_KEYS = [
   "actualBytes",
@@ -98,7 +99,7 @@ export function classifyBenchmarkSupervisorFrame(frame) {
   if (typeof frame !== "string") return "channel";
   const windowsError = /^GPT_CODEX_HWP_JOB ERROR (startup|baseline-rss|sampling|termination|termination-(?:discovery-or-rss-unavailable|retained-handle-unavailable|scan-exhausted)|rss-receipt) [A-Za-z0-9_-]+$/u.exec(frame);
   if (windowsError !== null) return `windows-${windowsError[1]}`;
-  const posixError = /^GPT_CODEX_HWP_POSIX ERROR (root-authority|telemetry-initialize)$/u.exec(frame);
+  const posixError = /^GPT_CODEX_HWP_POSIX ERROR (root-authority|telemetry-initialize|telemetry-sample)$/u.exec(frame);
   if (posixError !== null) return `posix-${posixError[1]}`;
   const ready = /^GPT_CODEX_HWP_JOB READY [1-9][0-9]* ([12]) [0-9]+$/u.exec(frame);
   if (ready !== null) return ready[1] === "1" ? "ready-mode-1" : "ready-mode-2";
@@ -663,7 +664,7 @@ export async function executeBounded(
             diagnosticStage = "error-termination";
           }
         } else if (rss === undefined) {
-          diagnosticStage = "error-rss-receipt";
+          if (!diagnosticStage.startsWith("posix-")) diagnosticStage = "error-rss-receipt";
         } else if (!completeTelemetry) {
           diagnosticStage = "error-sampling";
         } else {
