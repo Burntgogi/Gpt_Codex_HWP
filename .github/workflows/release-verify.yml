@@ -11,8 +11,6 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    env:
-      RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -43,10 +41,16 @@ jobs:
           HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
         run: npm run release:verify
       - name: Build checksummed candidate outputs
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
         run: npm run release:artifacts -- --output "$RELEASE_ARTIFACT_DIR"
       - name: Verify candidate outputs
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
         run: npm run verify:release-artifacts -- --artifacts "$RELEASE_ARTIFACT_DIR"
       - name: Require checksum manifest and clean tree
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
         run: |
           node -e "require('node:fs').accessSync(require('node:path').join(process.env.RELEASE_ARTIFACT_DIR, 'SHA256SUMS'))"
           git diff --exit-code -- .

@@ -16,7 +16,6 @@ jobs:
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       EXPECTED_SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -48,8 +47,12 @@ jobs:
           git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
           git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
       - name: Build candidate artifacts
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
         run: npm run release:artifacts -- --output "$RELEASE_ARTIFACT_DIR"
       - name: Verify candidate artifacts
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
         run: npm run verify:release-artifacts -- --artifacts "$RELEASE_ARTIFACT_DIR"
       - name: Reject generated repository changes
         run: git diff --exit-code -- .

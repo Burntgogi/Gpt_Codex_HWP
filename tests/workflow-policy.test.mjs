@@ -236,7 +236,13 @@ test("workflow policy: security is the least-privilege stable Security policy ga
   assert.match(job, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
   assert.match(job, /git config --local user\.email "224273819\+Burntgogi@users\.noreply\.github\.com"/u);
   assert.match(job, /git remote set-url origin "https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\.git"/u);
-  assert.match(job, /^      RELEASE_ARTIFACT_DIR: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts$/mu);
+  assert.doesNotMatch(job, /^      RELEASE_ARTIFACT_DIR:/mu,
+    "runner context is unavailable in job-level env");
+  assert.equal(
+    countMatches(job, /^        env:\r?\n          RELEASE_ARTIFACT_DIR: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts$/gmu),
+    2,
+    "each security artifact step scopes runner.temp at step level",
+  );
   assert.match(job, /release:artifacts -- --output "\$RELEASE_ARTIFACT_DIR"/u);
   assert.match(job, /verify:release-artifacts -- --artifacts "\$RELEASE_ARTIFACT_DIR"/u);
   assert.doesNotMatch(job, /--(?:output|artifacts) release-artifacts(?:\s|$)/u);
@@ -257,7 +263,13 @@ test("workflow policy: release verification uploads checksummed candidates and o
   assert.match(build, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
   assert.match(build, /git config --local user\.email "224273819\+Burntgogi@users\.noreply\.github\.com"/u);
   assert.match(build, /git remote set-url origin "https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\.git"/u);
-  assert.match(build, /^      RELEASE_ARTIFACT_DIR: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts$/mu);
+  assert.doesNotMatch(build, /^      RELEASE_ARTIFACT_DIR:/mu,
+    "runner context is unavailable in job-level env");
+  assert.equal(
+    countMatches(build, /^        env:\r?\n          RELEASE_ARTIFACT_DIR: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts$/gmu),
+    3,
+    "each release artifact command scopes runner.temp at step level",
+  );
   assert.match(build, /^          HWP_BENCH_LARGE: "1"$/mu);
   assert.match(build, /benchmark:documents -- --sizes 100,256,512 --output \.superpowers\/benchmarks\/release-large\.json/u);
   assert.match(build, /^          HWP_BENCH_REQUIRE_LARGE: "1"$/mu);
