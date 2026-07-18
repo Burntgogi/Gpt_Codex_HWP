@@ -1829,6 +1829,22 @@ function without(
 
 type RegistrationMode = "absent" | "both" | "registration-only";
 const startGateReadyReceipts = new WeakMap<ChildProcess, Promise<void>>();
+const fixtureCloseReceipts = new WeakMap<ChildProcess, Promise<Readonly<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}>>>();
+
+function observeFixtureClose(child: ChildProcess): void {
+  const receipt = new Promise<Readonly<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>>((resolvePromise, rejectPromise) => {
+    child.once("error", rejectPromise);
+    child.once("close", (code, signal) => resolvePromise({ code, signal }));
+  });
+  void receipt.catch(() => {});
+  fixtureCloseReceipts.set(child, receipt);
+}
 
 function spawnGatedFixture(
   markerPath: string,
@@ -1865,6 +1881,7 @@ function spawnGatedFixture(
     },
     stdio,
   });
+  observeFixtureClose(child);
   if (process.platform !== "win32") {
     const readyReceipt = new Promise<void>((resolvePromise, rejectPromise) => {
       const timeout = setTimeout(() => {
@@ -1905,13 +1922,15 @@ function spawnGatedFixture(
 }
 
 function spawnRegistrationCase(arguments_: readonly string[]): ChildProcess {
-  return spawn(process.execPath, [REGISTRATION_RACE_FIXTURE, ...arguments_], {
+  const child = spawn(process.execPath, [REGISTRATION_RACE_FIXTURE, ...arguments_], {
     cwd: PACKAGE_ROOT,
     detached: process.platform !== "win32",
     shell: false,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "pipe", "pipe"],
   });
+  observeFixtureClose(child);
+  return child;
 }
 
 async function receiveRegisterFrame(child: ChildProcess): Promise<RegisterFrame> {
@@ -2113,24 +2132,38 @@ async function waitForClose(child: ChildProcess): Promise<Readonly<{
       stderr,
     };
   }
+  const observedClose = fixtureCloseReceipts.get(child);
   return await new Promise((resolvePromise, rejectPromise) => {
     const timeout = setTimeout(() => {
       terminate(child);
       rejectPromise(new Error("timed out waiting for gated fixture exit"));
     }, 5_000);
+    const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
+      clearTimeout(timeout);
+      resolvePromise({ code, signal, stdout, stderr });
+    };
+    if (observedClose !== undefined) {
+      void observedClose.then(
+        (receipt) => settle(receipt.code, receipt.signal),
+        (error: unknown) => {
+          clearTimeout(timeout);
+          rejectPromise(error);
+        },
+      );
+      return;
+    }
     child.once("error", (error) => {
       clearTimeout(timeout);
       rejectPromise(error);
     });
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolvePromise({ code, signal, stdout, stderr });
-    });
+    child.once("close", settle);
   });
 }
 
 function childExitPromise(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  const observedClose = fixtureCloseReceipts.get(child);
+  if (observedClose !== undefined) return observedClose.then(() => undefined);
   return new Promise((resolvePromise, rejectPromise) => {
     child.once("error", rejectPromise);
     child.once("close", () => resolvePromise());

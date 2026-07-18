@@ -771,7 +771,7 @@ function isRetryableNonBlockingError(error: Error): boolean {
 function closeDescriptor(descriptor: number): Promise<void> {
   return new Promise<void>((resolvePromise, rejectPromise) => {
     close(descriptor, (error) => {
-      if (error === null) resolvePromise();
+      if (error === null || error === undefined) resolvePromise();
       else rejectPromise(error);
     });
   });
