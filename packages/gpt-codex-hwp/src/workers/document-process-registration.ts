@@ -22,7 +22,6 @@ export const DOCUMENT_START_DESCRIPTOR = 7;
 export const BENCHMARK_REGISTRATION_DESCRIPTOR = 8;
 export const BENCHMARK_ACK_DESCRIPTOR = 9;
 export const DOCUMENT_START_FRAME = "GPT_CODEX_HWP_START_V1\n";
-export const DOCUMENT_START_GATE_READY_FRAME = "GPT_CODEX_HWP_START_GATE_READY_V1";
 export const DOCUMENT_REGISTRATION_ENV = "GPT_CODEX_HWP_REGISTRATION";
 export const MAX_REGISTRATION_FRAME_BYTES = 1_024;
 export const MAX_REGISTRATION_CHANNEL_BYTES = 16 * 1_024;
@@ -664,26 +663,36 @@ async function readOneRegistrationFrame(descriptor: number): Promise<Uint8Array>
 }
 
 async function waitForStartAndInstallLifelineWatcher(): Promise<void> {
-  if (!process.connected || typeof process.send !== "function") {
-    privateExit(PrivateExitCode.StartFrame);
-  }
+  const input = createReadStream("", {
+    fd: DOCUMENT_START_DESCRIPTOR,
+    autoClose: false,
+    highWaterMark: START_BYTES.byteLength + 1,
+  });
+  let started = false;
+  let received = Buffer.alloc(0);
   await new Promise<void>((resolvePromise) => {
-    let started = false;
-    process.on("message", (message: unknown) => {
-      if (!started && message === DOCUMENT_START_FRAME) {
-        started = true;
-        resolvePromise();
-        return;
+    input.on("data", (chunk: string | Buffer) => {
+      if (started) privateExit(PrivateExitCode.LifelineData);
+      received = Buffer.concat([
+        received,
+        typeof chunk === "string" ? Buffer.from(chunk) : chunk,
+      ]);
+      if (received.byteLength > START_BYTES.byteLength ||
+        !received.equals(START_BYTES.subarray(0, received.byteLength))) {
+        privateExit(PrivateExitCode.StartFrame);
       }
-      privateExit(started ? PrivateExitCode.LifelineData : PrivateExitCode.StartFrame);
+      if (received.byteLength !== START_BYTES.byteLength) return;
+      started = true;
+      resolvePromise();
     });
-    process.once("disconnect", () => {
+    input.on("error", () => {
+      privateExit(started ? PrivateExitCode.LifelineError : PrivateExitCode.StartFrame);
+    });
+    input.on("end", () => {
       if (!started) privateExit(PrivateExitCode.StartFrame);
       handleLifelineEnd();
     });
-    process.send!(DOCUMENT_START_GATE_READY_FRAME, (error) => {
-      if (error !== null && error !== undefined) privateExit(PrivateExitCode.StartFrame);
-    });
+    input.resume();
   });
 }
 
