@@ -23,6 +23,7 @@ export const BENCHMARK_REGISTRATION_DESCRIPTOR = 8;
 export const BENCHMARK_ACK_DESCRIPTOR = 9;
 export const DOCUMENT_START_FRAME = "GPT_CODEX_HWP_START_V1\n";
 export const DOCUMENT_START_GATE_READY_FRAME = "GPT_CODEX_HWP_START_GATE_READY_V1";
+export const DOCUMENT_REGISTRATION_ENV = "GPT_CODEX_HWP_REGISTRATION";
 export const MAX_REGISTRATION_FRAME_BYTES = 1_024;
 export const MAX_REGISTRATION_CHANNEL_BYTES = 16 * 1_024;
 export const MAX_REGISTERED_DOCUMENT_GROUPS = 16;
@@ -575,6 +576,10 @@ function isSafePositiveInteger(value: unknown): value is number {
 }
 
 function probeRegistrationDescriptors(): boolean {
+  const declared = process.env[DOCUMENT_REGISTRATION_ENV];
+  delete process.env[DOCUMENT_REGISTRATION_ENV];
+  if (declared !== "0" && declared !== "1") privateExit(PrivateExitCode.DescriptorProbe);
+  if (declared === "0") return false;
   let registration: boolean;
   let acknowledgement: boolean;
   try {

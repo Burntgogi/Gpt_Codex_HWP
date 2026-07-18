@@ -166,6 +166,7 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
     detached: true,
     shell: false,
     windowsHide: true,
+    env: { ...process.env, GPT_CODEX_HWP_REGISTRATION: "1" },
     stdio: [
       "ignore",
       "ignore",

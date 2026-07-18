@@ -9,7 +9,7 @@ import { BoundedFrameDecoder, encodeBoundedJsonFrame, parseBoundedJsonFrame, } f
 import { DocumentEngineRunError, createDocumentEngineRunError, normalizeDocumentEngineError, } from "./document-errors.js";
 import { defaultDocumentDeadlineMs, HeavyChildGate, } from "./document-execution-policy.js";
 import { createChildDocumentEventValidator, createWireDocumentRequest, MAX_CHILD_INLINE_RESULT_BYTES, MAX_CHILD_REQUEST_FRAME_BYTES, validateLogicalDocumentRequest, } from "./document-protocol.js";
-import { DOCUMENT_START_FRAME, DOCUMENT_START_GATE_READY_FRAME, } from "./document-process-registration.js";
+import { DOCUMENT_START_FRAME, DOCUMENT_START_GATE_READY_FRAME, DOCUMENT_REGISTRATION_ENV, } from "./document-process-registration.js";
 import { createRegisteredPosixProcessGroupSupervisor, normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 const execFileAsync = promisify(execFile);
 const MAX_DRAIN_ACCOUNTED_BYTES = 64 * 1024;
@@ -196,7 +196,12 @@ export function createDocumentChildClient(dependencies = {}) {
                         shell: false,
                         windowsHide: true,
                         detached: process.platform !== "win32",
-                        env: minimalChildEnvironment(),
+                        env: {
+                            ...minimalChildEnvironment(),
+                            [DOCUMENT_REGISTRATION_ENV]: dependencies.benchmarkRegistrationDescriptors === undefined
+                                ? "0"
+                                : "1",
+                        },
                         stdio,
                     },
                 };
@@ -953,8 +958,10 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
                             ...lines.transcriptReceipt(),
                         }),
                     });
-                    if (!finalized)
+                    if (!finalized) {
+                        frameObserver?.("GPT_CODEX_HWP_JOB ERROR finalizer invalid");
                         return unverifiedTermination("termination");
+                    }
                     if (readyMode === 2 && matchingGone) {
                         const targetClose = await waitWithTimeout(targetCloseReceipt, 5_000);
                         gatedRootGone = targetClose !== undefined && targetClose.error === null;
@@ -971,6 +978,7 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
                     return verifiedReceipt;
                 }
                 catch {
+                    frameObserver?.("GPT_CODEX_HWP_JOB ERROR channel invalid");
                     return unverifiedTermination("channel");
                 }
                 finally {

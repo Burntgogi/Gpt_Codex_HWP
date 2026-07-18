@@ -1881,7 +1881,8 @@ test("macOS topology binds ps between kernel identity snapshots and cleanup is i
   assert.match(source, /const identitiesAfter = await macosKernelIdentities/u);
   assert.match(source, /before\.parentPid !== after\.parentPid/u);
   assert.match(source, /psRecord\.parentPid !== before\.parentPid/u);
-  assert.match(source, /os\.kill\(pid, 0\)/u);
+  assert.match(source, /error not in \(0, errno\.EPERM, errno\.ESRCH\)/u);
+  assert.match(source, /visible retained macOS identity unavailable/u);
   assert.match(source, /snapshotMacosIdentityTree/u);
   assert.match(source, /const identitiesBefore = await macosKernelIdentities\(\);/u);
   assert.doesNotMatch(source, /if size == 0:\s*\n\s*if len\(sys\.argv\) > 1:/u);

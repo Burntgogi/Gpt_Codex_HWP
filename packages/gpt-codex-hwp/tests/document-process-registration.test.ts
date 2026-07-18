@@ -18,6 +18,7 @@ import {
   DOCUMENT_START_DESCRIPTOR,
   DOCUMENT_START_FRAME,
   DOCUMENT_START_GATE_READY_FRAME,
+  DOCUMENT_REGISTRATION_ENV,
   MAX_REGISTRATION_CHANNEL_BYTES,
   MAX_REGISTRATION_FRAME_BYTES,
   MAX_REGISTERED_DOCUMENT_GROUPS,
@@ -1858,6 +1859,10 @@ function spawnGatedFixture(
     detached: true,
     shell: false,
     windowsHide: true,
+    env: {
+      ...process.env,
+      [DOCUMENT_REGISTRATION_ENV]: registrationMode === "absent" ? "0" : "1",
+    },
     stdio,
   });
   if (process.platform !== "win32") startGateReadyReceipts.set(child, new Promise<void>((resolvePromise, rejectPromise) => {

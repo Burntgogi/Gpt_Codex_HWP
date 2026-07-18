@@ -57,6 +57,7 @@ import {
 import {
   DOCUMENT_START_FRAME,
   DOCUMENT_START_GATE_READY_FRAME,
+  DOCUMENT_REGISTRATION_ENV,
 } from "./document-process-registration.js";
 import {
   createRegisteredPosixProcessGroupSupervisor,
@@ -409,7 +410,12 @@ export function createDocumentChildClient(
             shell: false,
             windowsHide: true,
             detached: process.platform !== "win32",
-            env: minimalChildEnvironment(),
+            env: {
+              ...minimalChildEnvironment(),
+              [DOCUMENT_REGISTRATION_ENV]: dependencies.benchmarkRegistrationDescriptors === undefined
+                ? "0"
+                : "1",
+            },
             stdio,
           },
         };
@@ -1411,7 +1417,10 @@ async function createWindowsJobSupervisor(
               ...lines.transcriptReceipt(),
             }),
           });
-          if (!finalized) return unverifiedTermination("termination");
+          if (!finalized) {
+            frameObserver?.("GPT_CODEX_HWP_JOB ERROR finalizer invalid");
+            return unverifiedTermination("termination");
+          }
           if (readyMode === 2 && matchingGone) {
             const targetClose = await waitWithTimeout(targetCloseReceipt, 5_000);
             gatedRootGone = targetClose !== undefined && targetClose.error === null;
@@ -1427,6 +1436,7 @@ async function createWindowsJobSupervisor(
           proved = true;
           return verifiedReceipt;
         } catch {
+          frameObserver?.("GPT_CODEX_HWP_JOB ERROR channel invalid");
           return unverifiedTermination("channel");
         } finally {
           if (!proved) {

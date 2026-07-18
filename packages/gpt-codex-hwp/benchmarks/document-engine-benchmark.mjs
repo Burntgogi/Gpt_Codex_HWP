@@ -34,7 +34,7 @@ const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, "..", "..");
 const MAX_CASE_OUTPUT_BYTES = 64 * 1024;
 const MAX_RECEIPT_BYTES = 64 * 1024;
 const CASE_DEADLINE_MS = 10 * 60 * 1000;
-const POSIX_TELEMETRY_FLUSH_MS = 5_000;
+const POSIX_TELEMETRY_FLUSH_MS = 20_000;
 const LARGE_EVIDENCE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CASE_METADATA_FILENAME = "case-source.json";
 const CASE_CONTROL_FILENAME = ".case-owner-control";
@@ -70,6 +70,8 @@ const SAFE_BENCHMARK_DIAGNOSTIC_STAGES = new Set([
   "windows-termination-retained-handle-unavailable",
   "windows-termination-scan-exhausted",
   "windows-rss-receipt",
+  "windows-finalizer",
+  "windows-channel",
   "posix-root-authority",
   "posix-telemetry-initialize",
   "posix-telemetry-sample",
@@ -97,7 +99,7 @@ const CASE_OUTCOME_KEYS = ["errorCode", "responseBytes", "status"];
 
 export function classifyBenchmarkSupervisorFrame(frame) {
   if (typeof frame !== "string") return "channel";
-  const windowsError = /^GPT_CODEX_HWP_JOB ERROR (startup|baseline-rss|sampling|termination|termination-(?:discovery-or-rss-unavailable|retained-handle-unavailable|scan-exhausted)|rss-receipt) [A-Za-z0-9_-]+$/u.exec(frame);
+  const windowsError = /^GPT_CODEX_HWP_JOB ERROR (startup|baseline-rss|sampling|termination|termination-(?:discovery-or-rss-unavailable|retained-handle-unavailable|scan-exhausted)|rss-receipt|finalizer|channel) [A-Za-z0-9_-]+$/u.exec(frame);
   if (windowsError !== null) return `windows-${windowsError[1]}`;
   const posixError = /^GPT_CODEX_HWP_POSIX ERROR (root-authority|telemetry-initialize|telemetry-sample)$/u.exec(frame);
   if (posixError !== null) return `posix-${posixError[1]}`;

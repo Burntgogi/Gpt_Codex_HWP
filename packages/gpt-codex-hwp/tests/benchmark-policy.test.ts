@@ -100,6 +100,14 @@ test("benchmark diagnostics expose only bounded stage labels", () => {
     "posix-telemetry-sample",
   );
   assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_JOB ERROR finalizer invalid"),
+    "windows-finalizer",
+  );
+  assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_JOB ERROR channel invalid"),
+    "windows-channel",
+  );
+  assert.equal(
     formatBenchmarkFailure({
       code: "BENCHMARK_TERMINATION_FAILED",
       diagnosticStage: "ready-mode-2",
@@ -304,7 +312,7 @@ test("benchmark registration measures accepted-group RSS outside the case and te
     "} else {",
     "  readFileSync(3, 'utf8');",
     "  const baseline = process.memoryUsage().rss;",
-    `  const child = spawn(process.execPath, ['--import', 'tsx', ${JSON.stringify(startGatePath)}, ${JSON.stringify(fixture)}, '--payload'], { detached: true, stdio: ['ignore', 'pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ipc', 5, 6] });`,
+    `  const child = spawn(process.execPath, ['--import', 'tsx', ${JSON.stringify(startGatePath)}, ${JSON.stringify(fixture)}, '--payload'], { detached: true, env: { ...process.env, GPT_CODEX_HWP_REGISTRATION: '1' }, stdio: ['ignore', 'pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ipc', 5, 6] });`,
     "  child.once('message', (message) => { if (message === 'GPT_CODEX_HWP_START_GATE_READY_V1') child.send('GPT_CODEX_HWP_START_V1\\n'); });",
     "  child.stdout.once('data', () => {",
     "    const rootRssDeltaBytes = Math.max(0, process.memoryUsage().rss - baseline);",
