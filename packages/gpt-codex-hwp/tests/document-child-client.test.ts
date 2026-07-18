@@ -38,6 +38,35 @@ const sourceClientPath = fileURLToPath(
   new URL("../src/workers/document-child-client.ts", import.meta.url),
 );
 const createProductionDocumentChildClient = childClientModule.createDocumentChildClient;
+const bindMacosProcessRecords = (
+  childClientModule as unknown as Readonly<{
+    bindMacosProcessRecords(
+      psRecords: readonly Readonly<{ pid: number; parentPid: number; rssBytes: number }>[],
+      identitiesBefore: ReadonlyMap<number, Readonly<{
+        identity: string;
+        startOrder: number;
+        parentPid: number;
+        processGroupId: number;
+      }>>,
+      identitiesAfter: ReadonlyMap<number, Readonly<{
+        identity: string;
+        startOrder: number;
+        parentPid: number;
+        processGroupId: number;
+      }>>,
+      retained: ReadonlyMap<string, Readonly<{
+        pid: number;
+        identity: string;
+        startOrder: number;
+        parentPid: number;
+        processGroupId: number;
+        rssBytes: number;
+        depth: number;
+      }>>,
+      confirmedAbsentRetainedPids: ReadonlySet<number>,
+    ): readonly unknown[];
+  }>
+).bindMacosProcessRecords;
 
 test("production document lifecycle API does not expose the forced tracker switch", () => {
   const source = readFileSync(sourceClientPath, "utf8");
@@ -1883,6 +1912,9 @@ test("macOS topology binds ps between kernel identity snapshots and cleanup is i
   assert.match(source, /psRecord\.parentPid !== before\.parentPid/u);
   assert.match(source, /error not in \(0, errno\.EPERM, errno\.ESRCH\)/u);
   assert.match(source, /visible retained macOS identity unavailable/u);
+  assert.match(source, /const confirmedAbsentRetainedPids = new Set<number>\(\)/u);
+  assert.match(source, /confirmedAbsentRetainedPids\.add\(pid\)/u);
+  assert.match(source, /confirmedAbsentRetainedPids\.has\(psRecord\.pid\)/u);
   assert.match(source, /snapshotMacosIdentityTree/u);
   assert.match(source, /const identitiesBefore = await macosKernelIdentities\(\);/u);
   assert.doesNotMatch(source, /if size == 0:\s*\n\s*if len\(sys\.argv\) > 1:/u);
@@ -1902,6 +1934,42 @@ test("macOS topology binds ps between kernel identity snapshots and cleanup is i
   assert.match(identityTree, /MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS/u);
   assert.match(identityTree, /MAX_TRACKED_PROCESS_IDENTITIES/u);
   assert.doesNotMatch(identityTree, /snapshotMacosPsRecords|\/bin\/ps/u);
+});
+
+test("macOS RSS binding accepts only a retained PID confirmed absent by the final ps", () => {
+  const identity = Object.freeze({
+    identity: "100:1",
+    startOrder: 100_000_001,
+    parentPid: 1,
+    processGroupId: 100,
+  });
+  const psRecords = [Object.freeze({ pid: 100, parentPid: 1, rssBytes: 4096 })];
+  const retained = new Map([["100:100:1", Object.freeze({
+    pid: 100,
+    ...identity,
+    rssBytes: 4096,
+    depth: 0,
+  })]]);
+  assert.throws(
+    () => bindMacosProcessRecords(
+      psRecords,
+      new Map([[100, identity]]),
+      new Map(),
+      retained,
+      new Set(),
+    ),
+    /visible retained macOS identity unavailable/u,
+  );
+  assert.deepEqual(
+    bindMacosProcessRecords(
+      psRecords,
+      new Map([[100, identity]]),
+      new Map(),
+      retained,
+      new Set([100]),
+    ),
+    [],
+  );
 });
 
 test("macOS identity-only cleanup stabilizes an after-only child before returning the root", async () => {

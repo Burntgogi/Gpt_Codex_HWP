@@ -125,6 +125,20 @@ test("benchmark diagnostics expose only bounded stage labels", () => {
   );
 });
 
+test("benchmark shutdown preserves an earlier bounded startup diagnostic", async () => {
+  const result = await executeBounded(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd: PACKAGE_ROOT,
+    timeoutMs: 100,
+    env: process.env,
+    controlFrame: Object.freeze({}),
+    supervisorFactory: async () => {
+      throw new Error("synthetic startup failure");
+    },
+  });
+  assert.equal(result.status, "termination-failed");
+  assert.equal(result.diagnosticStage, "error-startup");
+});
+
 test("benchmark policy records a real nonempty detect dispatch before its one defensive copy", { timeout: 120_000 }, async (t) => {
   const outputPath = join(
     REPOSITORY_ROOT,

@@ -1450,7 +1450,16 @@ async function snapshotPosixProcesses(platform, retained = new Map()) {
     const psRecords = await snapshotMacosPsRecords();
     const retainedPids = [...new Set([...retained.values()].map((record) => record.pid))];
     const identitiesAfter = await macosKernelIdentities([...new Set([...psRecords.map((record) => record.pid), ...retainedPids])]);
-    return bindMacosProcessRecords(psRecords, identitiesBefore, identitiesAfter, retained);
+    const confirmedAbsentRetainedPids = new Set();
+    const missingRetainedPids = retainedPids.filter((pid) => !identitiesAfter.has(pid));
+    if (missingRetainedPids.length > 0) {
+        const finalPsPids = new Set((await snapshotMacosPsRecords()).map((record) => record.pid));
+        for (const pid of missingRetainedPids) {
+            if (!finalPsPids.has(pid))
+                confirmedAbsentRetainedPids.add(pid);
+        }
+    }
+    return bindMacosProcessRecords(psRecords, identitiesBefore, identitiesAfter, retained, confirmedAbsentRetainedPids);
 }
 async function snapshotMacosPsRecords() {
     const result = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,rss="], { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" });
@@ -1475,7 +1484,7 @@ async function snapshotMacosPsRecords() {
     }
     return records;
 }
-function bindMacosProcessRecords(psRecords, identitiesBefore, identitiesAfter, retained) {
+export function bindMacosProcessRecords(psRecords, identitiesBefore, identitiesAfter, retained, confirmedAbsentRetainedPids) {
     const records = [];
     const retainedPids = new Set([...retained.values()].map((record) => record.pid));
     for (const psRecord of psRecords) {
@@ -1483,6 +1492,8 @@ function bindMacosProcessRecords(psRecords, identitiesBefore, identitiesAfter, r
         const after = identitiesAfter.get(psRecord.pid);
         if (before === undefined || after === undefined) {
             if (retainedPids.has(psRecord.pid)) {
+                if (confirmedAbsentRetainedPids.has(psRecord.pid))
+                    continue;
                 throw new Error("visible retained macOS identity unavailable");
             }
             continue;

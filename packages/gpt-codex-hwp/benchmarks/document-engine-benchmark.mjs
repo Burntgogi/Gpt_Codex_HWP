@@ -665,6 +665,10 @@ export async function executeBounded(
           : null;
         if (!termination.gone) {
           if (diagnosticStage !== "ready-mode-2"
+            && diagnosticStage !== "error-startup"
+            && diagnosticStage !== "error-baseline-rss"
+            && diagnosticStage !== "error-sampling"
+            && diagnosticStage !== "error-rss-receipt"
             && !diagnosticStage.startsWith("windows-")
             && !diagnosticStage.startsWith("posix-")) {
             diagnosticStage = "error-termination";

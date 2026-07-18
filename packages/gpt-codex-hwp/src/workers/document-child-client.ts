@@ -2044,11 +2044,22 @@ async function snapshotPosixProcesses(
   const identitiesAfter = await macosKernelIdentities(
     [...new Set([...psRecords.map((record) => record.pid), ...retainedPids])],
   );
+  const confirmedAbsentRetainedPids = new Set<number>();
+  const missingRetainedPids = retainedPids.filter((pid) => !identitiesAfter.has(pid));
+  if (missingRetainedPids.length > 0) {
+    const finalPsPids = new Set(
+      (await snapshotMacosPsRecords()).map((record) => record.pid),
+    );
+    for (const pid of missingRetainedPids) {
+      if (!finalPsPids.has(pid)) confirmedAbsentRetainedPids.add(pid);
+    }
+  }
   return bindMacosProcessRecords(
     psRecords,
     identitiesBefore,
     identitiesAfter,
     retained,
+    confirmedAbsentRetainedPids,
   );
 }
 
@@ -2091,11 +2102,12 @@ async function snapshotMacosPsRecords(): Promise<MacosPsRecord[]> {
   return records;
 }
 
-function bindMacosProcessRecords(
+export function bindMacosProcessRecords(
   psRecords: readonly MacosPsRecord[],
   identitiesBefore: ReadonlyMap<number, MacosKernelIdentity>,
   identitiesAfter: ReadonlyMap<number, MacosKernelIdentity>,
   retained: ReadonlyMap<string, RetainedPosixProcess>,
+  confirmedAbsentRetainedPids: ReadonlySet<number>,
 ): PosixProcessRecord[] {
   const records: PosixProcessRecord[] = [];
   const retainedPids = new Set([...retained.values()].map((record) => record.pid));
@@ -2104,6 +2116,7 @@ function bindMacosProcessRecords(
     const after = identitiesAfter.get(psRecord.pid);
     if (before === undefined || after === undefined) {
       if (retainedPids.has(psRecord.pid)) {
+        if (confirmedAbsentRetainedPids.has(psRecord.pid)) continue;
         throw new Error("visible retained macOS identity unavailable");
       }
       continue;

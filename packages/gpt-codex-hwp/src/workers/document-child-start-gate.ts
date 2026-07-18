@@ -13,7 +13,9 @@ if (process.platform === "win32") {
   if (childEntry === undefined || !isAbsolute(childEntry)) process.exit(79);
   process.argv.splice(1, 1);
   await runDocumentChildStartGate();
-  setImmediate(() => {
-    void import(pathToFileURL(childEntry).href).catch(() => process.exit(79));
-  });
+  try {
+    await import(pathToFileURL(childEntry).href);
+  } catch {
+    process.exit(79);
+  }
 }
