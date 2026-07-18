@@ -685,6 +685,7 @@ for (const callbackMode of ["success", "error"] as const) {
     let listenersAfterCallback = -1;
     let laterErrorEmitted = false;
     let retainedStartTransport: EventEmitter | undefined;
+    let baselineErrorListeners = 0;
     try {
       const client = createProductionDocumentChildClient({
         childEntry: fixturePath,
@@ -699,13 +700,14 @@ for (const callbackMode of ["success", "error"] as const) {
           );
           const transport = startTransportEmitter(child);
           retainedStartTransport = transport;
+          baselineErrorListeners = transport.listenerCount("error");
           instrumentStartSend(child, (_frame, nativeError, callback) => {
             callback?.(
               callbackMode === "error"
                 ? new Error("injected START callback failure")
                 : nativeError,
             );
-            listenersAfterCallback = transport.listenerCount("error");
+            listenersAfterCallback = transport.listenerCount("error") - baselineErrorListeners;
             if (listenersAfterCallback > 0) {
               laterErrorEmitted = true;
               transport.emit("error", new Error("later start transport failure"));
@@ -731,7 +733,8 @@ for (const callbackMode of ["success", "error"] as const) {
       }
       assert.equal(listenersAfterCallback, 1);
       assert.equal(laterErrorEmitted, true);
-      await waitFor(() => retainedStartTransport?.listenerCount("error") === 0);
+      await waitFor(() =>
+        retainedStartTransport?.listenerCount("error") === baselineErrorListeners);
     } finally {
       owned.cleanup();
       rmSync(root, { recursive: true, force: true });
@@ -1835,6 +1838,8 @@ test("platform supervisors bind exact identities and bound topology sampling in 
   assert.match(source, /Linux VmRSS unavailable/u);
   assert.match(source, /sampleRequested = true/u);
   assert.match(source, /proc_pidinfo\(pid, 3/u);
+  assert.match(source, /error not in \(0, errno\.EPERM, errno\.ESRCH\)/u);
+  assert.match(source, /WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 15_000/u);
   assert.match(source, /pbi_start_tvsec/u);
   assert.doesNotMatch(source, /pid=,ppid=,lstart=,rss=/u);
   assert.match(windows, /NtQueryInformationProcess/u);

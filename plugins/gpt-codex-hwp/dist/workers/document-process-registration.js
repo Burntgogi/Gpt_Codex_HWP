@@ -6,6 +6,7 @@ export const DOCUMENT_START_DESCRIPTOR = 7;
 export const BENCHMARK_REGISTRATION_DESCRIPTOR = 8;
 export const BENCHMARK_ACK_DESCRIPTOR = 9;
 export const DOCUMENT_START_FRAME = "GPT_CODEX_HWP_START_V1\n";
+export const DOCUMENT_START_GATE_READY_FRAME = "GPT_CODEX_HWP_START_GATE_READY_V1";
 export const MAX_REGISTRATION_FRAME_BYTES = 1_024;
 export const MAX_REGISTRATION_CHANNEL_BYTES = 16 * 1_024;
 export const MAX_REGISTERED_DOCUMENT_GROUPS = 16;
@@ -580,8 +581,9 @@ async function readOneRegistrationFrame(descriptor) {
     }
 }
 async function waitForStartAndInstallLifelineWatcher() {
-    if (!process.connected)
+    if (!process.connected || typeof process.send !== "function") {
         privateExit(75 /* PrivateExitCode.StartFrame */);
+    }
     await new Promise((resolvePromise) => {
         let started = false;
         process.on("message", (message) => {
@@ -596,6 +598,10 @@ async function waitForStartAndInstallLifelineWatcher() {
             if (!started)
                 privateExit(75 /* PrivateExitCode.StartFrame */);
             handleLifelineEnd();
+        });
+        process.send(DOCUMENT_START_GATE_READY_FRAME, (error) => {
+            if (error !== null)
+                privateExit(75 /* PrivateExitCode.StartFrame */);
         });
     });
 }

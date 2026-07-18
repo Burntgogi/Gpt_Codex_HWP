@@ -9,7 +9,7 @@ import { BoundedFrameDecoder, encodeBoundedJsonFrame, parseBoundedJsonFrame, } f
 import { DocumentEngineRunError, createDocumentEngineRunError, normalizeDocumentEngineError, } from "./document-errors.js";
 import { defaultDocumentDeadlineMs, HeavyChildGate, } from "./document-execution-policy.js";
 import { createChildDocumentEventValidator, createWireDocumentRequest, MAX_CHILD_INLINE_RESULT_BYTES, MAX_CHILD_REQUEST_FRAME_BYTES, validateLogicalDocumentRequest, } from "./document-protocol.js";
-import { DOCUMENT_START_FRAME } from "./document-process-registration.js";
+import { DOCUMENT_START_FRAME, DOCUMENT_START_GATE_READY_FRAME, } from "./document-process-registration.js";
 import { createRegisteredPosixProcessGroupSupervisor, normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 const execFileAsync = promisify(execFile);
 const MAX_DRAIN_ACCOUNTED_BYTES = 64 * 1024;
@@ -27,7 +27,7 @@ const MAX_LINUX_PROC_STAT_BYTES = 64 * 1024;
 const MAX_LINUX_PROC_STATUS_BYTES = 256 * 1024;
 const MAX_LINUX_TASK_CHILDREN_BYTES = 64 * 1024;
 const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
-const WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 5_000;
+const WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 15_000;
 const gatedRootGoneErrors = new WeakSet();
 const supervisorHelperUnclosedErrors = new WeakMap();
 const supervisorHelperRetentionsByProcess = new WeakMap();
@@ -327,19 +327,47 @@ function requireIpcStartGateOwner(child) {
         throw new Error("document child start gate IPC unavailable");
     }
     let owner;
+    let ready = false;
+    let settleReady;
+    const readyReceipt = new Promise((resolvePromise, rejectPromise) => {
+        settleReady = (error) => {
+            if (error === undefined)
+                resolvePromise();
+            else
+                rejectPromise(error);
+        };
+    });
+    void readyReceipt.catch(() => { });
+    const onMessage = (message) => {
+        if (ready || message !== DOCUMENT_START_GATE_READY_FRAME) {
+            const error = new Error("document child start gate readiness invalid");
+            owner.failure ??= error;
+            settleReady(error);
+            owner.settleStart?.(error);
+            return;
+        }
+        ready = true;
+        child.removeListener("message", onMessage);
+        settleReady();
+    };
     const onError = (error) => {
         owner.failure ??= error;
+        settleReady(error);
         owner.settleStart?.(error);
     };
     const onDisconnect = () => {
         owner.closed = true;
         owner.failure ??= new Error("document child start gate disconnected");
+        settleReady(owner.failure);
         owner.settleStart?.(owner.failure);
         child.removeListener("error", onError);
+        child.removeListener("message", onMessage);
     };
     owner = {
         sendStart: (callback) => {
-            child.send(DOCUMENT_START_FRAME, (error) => callback(error));
+            void readyReceipt.then(() => {
+                child.send(DOCUMENT_START_FRAME, (error) => callback(error));
+            }, callback);
         },
         close: () => {
             if (child.connected)
@@ -349,6 +377,7 @@ function requireIpcStartGateOwner(child) {
         closed: false,
     };
     child.on("error", onError);
+    child.on("message", onMessage);
     child.once("disconnect", onDisconnect);
     return owner;
 }
@@ -1783,7 +1812,7 @@ function parseLinuxStat(pid, stat) {
     });
 }
 const MACOS_LIBPROC_IDENTITY_SCRIPT = String.raw `
-import ctypes, errno, json, os, sys
+import ctypes, errno, json, sys
 class ProcBsdInfo(ctypes.Structure):
     _fields_ = [("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
       ("pbi_xstatus", ctypes.c_uint32), ("pbi_pid", ctypes.c_uint32),
@@ -1817,15 +1846,7 @@ for pid in pids:
     size = lib.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
     if size == 0:
         error = ctypes.get_errno()
-        if error not in (0, errno.ESRCH): raise OSError(error, "proc_pidinfo")
-        try:
-            os.kill(pid, 0)
-            exists = True
-        except ProcessLookupError:
-            exists = False
-        except PermissionError:
-            exists = True
-        if exists: raise RuntimeError("proc_pidinfo unavailable for live pid")
+        if error not in (0, errno.EPERM, errno.ESRCH): raise OSError(error, "proc_pidinfo")
         continue
     if size != ctypes.sizeof(info) or info.pbi_pid != pid: raise RuntimeError("invalid proc_pidinfo")
     out.append({"pid": pid, "ppid": info.pbi_ppid, "pgid": info.pbi_pgid, "sec": info.pbi_start_tvsec, "usec": info.pbi_start_tvusec})

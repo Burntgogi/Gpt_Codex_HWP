@@ -17,6 +17,7 @@ import {
   BENCHMARK_REGISTRATION_DESCRIPTOR,
   DOCUMENT_START_DESCRIPTOR,
   DOCUMENT_START_FRAME,
+  DOCUMENT_START_GATE_READY_FRAME,
   MAX_REGISTRATION_CHANNEL_BYTES,
   MAX_REGISTRATION_FRAME_BYTES,
   MAX_REGISTERED_DOCUMENT_GROUPS,
@@ -1826,6 +1827,7 @@ function without(
 }
 
 type RegistrationMode = "absent" | "both" | "registration-only";
+const startGateReadyReceipts = new WeakMap<ChildProcess, Promise<void>>();
 
 function spawnGatedFixture(
   markerPath: string,
@@ -1844,7 +1846,7 @@ function spawnGatedFixture(
   ];
   if (registrationMode !== "absent") stdio.push("pipe");
   if (registrationMode === "both") stdio.push("pipe");
-  return spawn(process.execPath, [
+  const child = spawn(process.execPath, [
     "--import",
     "tsx",
     ...(process.platform === "win32"
@@ -1858,6 +1860,33 @@ function spawnGatedFixture(
     windowsHide: true,
     stdio,
   });
+  if (process.platform !== "win32") startGateReadyReceipts.set(child, new Promise<void>((resolvePromise, rejectPromise) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      rejectPromise(new Error("timed out waiting for start gate readiness"));
+    }, 5_000);
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      child.removeListener("message", onMessage);
+      child.removeListener("error", onError);
+    };
+    const onMessage = (message: unknown): void => {
+      if (message !== DOCUMENT_START_GATE_READY_FRAME) {
+        cleanup();
+        rejectPromise(new Error("invalid start gate readiness receipt"));
+        return;
+      }
+      cleanup();
+      resolvePromise();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      rejectPromise(error);
+    };
+    child.on("message", onMessage);
+    child.once("error", onError);
+  }));
+  return child;
 }
 
 function spawnRegistrationCase(arguments_: readonly string[]): ChildProcess {
@@ -1929,6 +1958,7 @@ async function sendStart(child: ChildProcess, frame: string | Buffer): Promise<v
     });
     return;
   }
+  await startGateReadyReceipts.get(child);
   assert.equal(child.connected, true);
   await new Promise<void>((resolvePromise, rejectPromise) => {
     child.send!(frame, (error) => {

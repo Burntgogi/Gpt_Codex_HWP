@@ -15,7 +15,7 @@ if (mode === "--descriptor-case") {
     ["--descriptor-payload", markerPath],
   );
   process.stdout.write(`${JSON.stringify({ bootstrapPid: bootstrap.pid })}\n`);
-  sendStart(bootstrap);
+  await sendStart(bootstrap);
   bootstrap.unref();
   await waitForPath(markerPath);
   await waitForPath(`${markerPath}.helper`);
@@ -31,7 +31,7 @@ if (mode === "--descriptor-case") {
       ["--descriptor-payload", markerPath],
     );
     bootstrapPids.push(bootstrap.pid);
-    sendStart(bootstrap);
+    await sendStart(bootstrap);
     await waitForPath(markerPath);
     await waitForPath(`${markerPath}.helper`);
     closeStart(bootstrap);
@@ -46,7 +46,7 @@ if (mode === "--descriptor-case") {
     fixturePath,
     ["--descriptor-payload", `${markerPrefix}-0.json`],
   );
-  sendStart(first);
+  await sendStart(first);
   await waitForPath(identityBarrierPath);
   const second = spawnGatedBootstrap(
     startGatePath,
@@ -57,7 +57,7 @@ if (mode === "--descriptor-case") {
   process.stdout.write(`${JSON.stringify({
     bootstrapPids: bootstraps.map((bootstrap) => bootstrap.pid),
   })}\n`);
-  sendStart(second);
+  await sendStart(second);
   await Promise.all(bootstraps.map((bootstrap) => once(bootstrap, "close")));
   process.exit(0);
 } else if (mode === "--stale-ack-case") {
@@ -78,7 +78,7 @@ if (mode === "--descriptor-case") {
     fixturePath,
     ["--race-payload", `${payloadMarkerPath}.pids`, payloadMarkerPath],
   );
-  sendStart(second);
+  await sendStart(second);
   await once(second, "close");
   process.stdout.write(`${JSON.stringify({ firstPid: first.pid, secondPid: second.pid })}\n`);
   process.exit(0);
@@ -131,14 +131,14 @@ if (mode === "--descriptor-case") {
 } else if (mode === "--race-case") {
   const [pidLogPath, payloadMarkerPath, startGatePath, fixturePath] = process.argv.slice(3);
   appendFileSync(pidLogPath, `${process.pid}\n`);
-  process.once("SIGTERM", () => {
+  process.once("SIGTERM", async () => {
     const bootstrap = spawnGatedBootstrap(
       startGatePath,
       fixturePath,
       ["--race-payload", pidLogPath, payloadMarkerPath],
     );
     appendFileSync(pidLogPath, `${bootstrap.pid}\n`);
-    sendStart(bootstrap);
+    await sendStart(bootstrap);
     bootstrap.unref();
     process.exit(0);
   });
@@ -157,7 +157,7 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
   const startGateSpecifier = process.platform === "win32"
     ? pathToFileURL(startGatePath).href
     : startGatePath;
-  return spawn(process.execPath, ["--import", "tsx",
+  const child = spawn(process.execPath, ["--import", "tsx",
     ...(process.platform === "win32"
       ? ["--import", startGateSpecifier, fixturePath]
       : [startGateSpecifier, fixturePath]),
@@ -179,13 +179,37 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
       6,
     ],
   });
+  if (process.platform !== "win32") child.startGateReady = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("start gate readiness timeout"));
+    }, 5_000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.removeListener("message", onMessage);
+      child.removeListener("error", onError);
+    };
+    const onMessage = (message) => {
+      cleanup();
+      if (message === "GPT_CODEX_HWP_START_GATE_READY_V1") resolve();
+      else reject(new Error("invalid start gate readiness"));
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    child.on("message", onMessage);
+    child.once("error", onError);
+  });
+  return child;
 }
 
-function sendStart(child) {
+async function sendStart(child) {
   if (process.platform === "win32") {
     child.stdio[7].on("error", () => {});
     child.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
   } else {
+    await child.startGateReady;
     child.send("GPT_CODEX_HWP_START_V1\n");
   }
 }
