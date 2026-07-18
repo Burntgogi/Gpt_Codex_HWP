@@ -221,6 +221,8 @@ test("workflow policy: security is the least-privilege stable Security policy ga
     /^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}$/mu,
   );
   assert.match(job, /^\s+fetch-depth: 0$/mu);
+  assert.equal(countMatches(job, /^\s+package-manager-cache: false$/gmu), 1,
+    "Security must not enable setup-node's implicit npm cache without a root lockfile");
   assert.match(job, /process\.env\.EXPECTED_HEAD_SHA[^\n]+rev-parse[^\n]+HEAD/u);
   assert.match(job, /process\.env\.EXPECTED_SOURCE_REPOSITORY[^\n]+Burntgogi\/Gpt_Codex_HWP/u);
   assert.doesNotMatch(job, /^          repository: .*head\.repo/mu);
@@ -258,6 +260,8 @@ test("workflow policy: release verification uploads checksummed candidates and o
   const build = jobSection(workflow, "build", "attest");
   const attest = jobSection(workflow, "attest");
   assert.match(build, /^    permissions:\n      contents: read$/mu);
+  assert.equal(countMatches(build, /^\s+package-manager-cache: false$/gmu), 1,
+    "release verification must not enable setup-node's implicit npm cache without a root lockfile");
   assert.match(build, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp/u);
   assert.match(build, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev/u);
   assert.match(build, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
