@@ -10,6 +10,16 @@ export const DOCUMENT_REGISTRATION_ENV = "GPT_CODEX_HWP_REGISTRATION";
 export const MAX_REGISTRATION_FRAME_BYTES = 1_024;
 export const MAX_REGISTRATION_CHANNEL_BYTES = 16 * 1_024;
 export const MAX_REGISTERED_DOCUMENT_GROUPS = 16;
+/** @internal */
+export async function closeChildRegistrationDescriptors(closeOperation) {
+    await closeOperation(BENCHMARK_ACK_DESCRIPTOR);
+    await closeOperation(BENCHMARK_REGISTRATION_DESCRIPTOR);
+}
+/** @internal */
+export function closeChildRegistrationDescriptorsSync(closeOperation) {
+    closeOperation(BENCHMARK_ACK_DESCRIPTOR);
+    closeOperation(BENCHMARK_REGISTRATION_DESCRIPTOR);
+}
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -549,8 +559,7 @@ async function registerDocumentProcess() {
         privateExit(73 /* PrivateExitCode.RegistrationAck */);
     }
     try {
-        await closeDescriptor(BENCHMARK_REGISTRATION_DESCRIPTOR);
-        await closeDescriptor(BENCHMARK_ACK_DESCRIPTOR);
+        await closeChildRegistrationDescriptors(closeDescriptor);
     }
     catch {
         privateExit(74 /* PrivateExitCode.RegistrationClose */);
@@ -731,8 +740,7 @@ function registerDocumentProcessSync() {
         privateExit(73 /* PrivateExitCode.RegistrationAck */);
     }
     try {
-        closeSync(BENCHMARK_REGISTRATION_DESCRIPTOR);
-        closeSync(BENCHMARK_ACK_DESCRIPTOR);
+        closeChildRegistrationDescriptorsSync(closeSync);
     }
     catch {
         privateExit(74 /* PrivateExitCode.RegistrationClose */);

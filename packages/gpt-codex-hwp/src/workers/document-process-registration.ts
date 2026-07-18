@@ -27,6 +27,22 @@ export const MAX_REGISTRATION_FRAME_BYTES = 1_024;
 export const MAX_REGISTRATION_CHANNEL_BYTES = 16 * 1_024;
 export const MAX_REGISTERED_DOCUMENT_GROUPS = 16;
 
+/** @internal */
+export async function closeChildRegistrationDescriptors(
+  closeOperation: (descriptor: number) => Promise<void>,
+): Promise<void> {
+  await closeOperation(BENCHMARK_ACK_DESCRIPTOR);
+  await closeOperation(BENCHMARK_REGISTRATION_DESCRIPTOR);
+}
+
+/** @internal */
+export function closeChildRegistrationDescriptorsSync(
+  closeOperation: (descriptor: number) => void,
+): void {
+  closeOperation(BENCHMARK_ACK_DESCRIPTOR);
+  closeOperation(BENCHMARK_REGISTRATION_DESCRIPTOR);
+}
+
 export interface RegisterFrame {
   readonly schemaVersion: 1;
   readonly type: "register";
@@ -626,8 +642,7 @@ async function registerDocumentProcess(): Promise<void> {
     privateExit(PrivateExitCode.RegistrationAck);
   }
   try {
-    await closeDescriptor(BENCHMARK_REGISTRATION_DESCRIPTOR);
-    await closeDescriptor(BENCHMARK_ACK_DESCRIPTOR);
+    await closeChildRegistrationDescriptors(closeDescriptor);
   } catch {
     privateExit(PrivateExitCode.RegistrationClose);
   }
@@ -811,8 +826,7 @@ function registerDocumentProcessSync(): void {
     privateExit(PrivateExitCode.RegistrationAck);
   }
   try {
-    closeSync(BENCHMARK_REGISTRATION_DESCRIPTOR);
-    closeSync(BENCHMARK_ACK_DESCRIPTOR);
+    closeChildRegistrationDescriptorsSync(closeSync);
   } catch {
     privateExit(PrivateExitCode.RegistrationClose);
   }

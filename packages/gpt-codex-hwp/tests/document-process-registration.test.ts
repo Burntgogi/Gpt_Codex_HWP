@@ -15,6 +15,8 @@ import * as registrationProtocol from "../src/workers/document-process-registrat
 import {
   BENCHMARK_ACK_DESCRIPTOR,
   BENCHMARK_REGISTRATION_DESCRIPTOR,
+  closeChildRegistrationDescriptors,
+  closeChildRegistrationDescriptorsSync,
   DOCUMENT_START_DESCRIPTOR,
   DOCUMENT_START_FRAME,
   DOCUMENT_REGISTRATION_ENV,
@@ -94,6 +96,39 @@ test("registration frames use the fixed descriptor protocol limits", () => {
   assert.equal(MAX_REGISTRATION_CHANNEL_BYTES, 16 * 1_024);
   assert.equal(MAX_REGISTERED_DOCUMENT_GROUPS, 16);
   assert.equal(DOCUMENT_START_FRAME, "GPT_CODEX_HWP_START_V1\n");
+});
+
+test("async child registration close waits for ACK-reader close before registration-writer close", async () => {
+  const events: string[] = [];
+  const acknowledgementClosed = deferred<void>();
+  const closing = closeChildRegistrationDescriptors(async (descriptor) => {
+    if (descriptor === BENCHMARK_ACK_DESCRIPTOR) {
+      events.push("ack:start");
+      await acknowledgementClosed.promise;
+      events.push("ack:closed");
+      return;
+    }
+    assert.equal(descriptor, BENCHMARK_REGISTRATION_DESCRIPTOR);
+    events.push("registration:closed");
+  });
+
+  try {
+    await waitFor(() => events.length > 0);
+    assert.deepEqual(events, ["ack:start"]);
+  } finally {
+    acknowledgementClosed.resolve();
+    await closing;
+  }
+  assert.deepEqual(events, ["ack:start", "ack:closed", "registration:closed"]);
+});
+
+test("Windows-sync child registration close calls ACK reader before registration writer", () => {
+  const descriptors: number[] = [];
+  closeChildRegistrationDescriptorsSync((descriptor) => descriptors.push(descriptor));
+  assert.deepEqual(descriptors, [
+    BENCHMARK_ACK_DESCRIPTOR,
+    BENCHMARK_REGISTRATION_DESCRIPTOR,
+  ]);
 });
 
 test("register frames round-trip one exact newline-terminated schema 1 frame", () => {
@@ -1308,6 +1343,61 @@ test("document child gate blocks payload until exact START and preserves entry a
   assert.equal(result.stderr, "");
 });
 
+test("document child gate accepts representative split START writes on the same fd 7 pipe", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "document-start-gate-split-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const cases = [
+    ["prefix", [DOCUMENT_START_FRAME.slice(0, 1), DOCUMENT_START_FRAME.slice(1)]],
+    ["newline", [DOCUMENT_START_FRAME.slice(0, 7), DOCUMENT_START_FRAME.slice(7, -1), "\n"]],
+  ] as const;
+
+  for (const [label, chunks] of cases) {
+    const markerPath = join(temporaryRoot, `${label}.json`);
+    const child = spawnGatedFixture(markerPath, label);
+    t.after(() => terminate(child));
+    const startWriter = child.stdio[DOCUMENT_START_DESCRIPTOR] as Writable | null;
+    assert.notEqual(startWriter, null, label);
+
+    await sendStartChunks(startWriter!, chunks);
+    await waitForFile(markerPath);
+    assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), [
+      FIXTURE_ENTRY,
+      markerPath,
+      label,
+    ]);
+
+    closeStartChannel(child);
+    const result = await waitForClose(child);
+    assert.notEqual(result.code, 0, label);
+    assert.equal(result.stdout, "", label);
+    assert.equal(result.stderr, "", label);
+  }
+});
+
+test("document child gate exits on an extra post-START byte after payload evaluation", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "document-start-gate-post-start-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const markerPath = join(temporaryRoot, "marker.json");
+  const child = spawnGatedFixture(markerPath, "post-start-extra-byte");
+  t.after(() => terminate(child));
+  const startWriter = child.stdio[DOCUMENT_START_DESCRIPTOR] as Writable | null;
+  assert.notEqual(startWriter, null);
+
+  await sendStartChunks(startWriter!, [DOCUMENT_START_FRAME]);
+  await waitForFile(markerPath);
+  await sendStartChunks(startWriter!, [Buffer.from([0x78])]);
+  const result = await waitForClose(child);
+
+  assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), [
+    FIXTURE_ENTRY,
+    markerPath,
+    "post-start-extra-byte",
+  ]);
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
 test("document child gate rejects EOF partial extended and incorrect START without payload evaluation", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-start-gate-invalid-"));
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
@@ -1338,8 +1428,10 @@ test("document child registration accepts a matching ACK and closes channels bef
   const payloadArgument = `registered-${randomUUID()}`;
   const child = spawnGatedFixture(markerPath, payloadArgument, "both");
   t.after(() => terminate(child));
+  const registrationOutput = child.stdio[BENCHMARK_REGISTRATION_DESCRIPTOR] as Readable | null;
+  assert.notEqual(registrationOutput, null);
 
-  const registration = await receiveRegisterFrame(child);
+  const registration = await receiveRegisterFrame(registrationOutput!);
   assert.deepEqual(registration, {
     schemaVersion: 1,
     type: "register",
@@ -1348,12 +1440,17 @@ test("document child registration accepts a matching ACK and closes channels bef
     parentPid: process.pid,
   });
   await assertFileMissing(markerPath, 100);
+  assert.equal(registrationOutput!.readableEnded, false);
+  const registrationEof = observeReadableEof(registrationOutput!);
   sendAck(child, {
     schemaVersion: 1,
     type: "ack",
     nonce: registration.nonce,
     status: "accepted",
   });
+  await registrationEof;
+  assert.equal(registrationOutput!.readableEnded, true);
+  assert.equal(child.stdio[BENCHMARK_REGISTRATION_DESCRIPTOR], registrationOutput);
   await assertFileMissing(markerPath, 100);
 
   await sendStart(child, DOCUMENT_START_FRAME);
@@ -1379,7 +1476,9 @@ test("document child registration remains gated across delayed ACK and START del
   const child = spawnGatedFixture(markerPath, payloadArgument, "both");
   t.after(() => terminate(child));
 
-  const registration = await receiveRegisterFrame(child);
+  const registrationOutput = child.stdio[BENCHMARK_REGISTRATION_DESCRIPTOR] as Readable | null;
+  assert.notEqual(registrationOutput, null);
+  const registration = await receiveRegisterFrame(registrationOutput!);
   await assertFileMissing(markerPath, 250);
   sendAck(child, {
     schemaVersion: 1,
@@ -1412,7 +1511,9 @@ test("document child registration rejects rejected and wrong-nonce ACKs before p
     const markerPath = join(temporaryRoot, `${ackCase}.json`);
     const child = spawnGatedFixture(markerPath, ackCase, "both");
     t.after(() => terminate(child));
-    const registration = await receiveRegisterFrame(child);
+    const registrationOutput = child.stdio[BENCHMARK_REGISTRATION_DESCRIPTOR] as Readable | null;
+    assert.notEqual(registrationOutput, null, ackCase);
+    const registration = await receiveRegisterFrame(registrationOutput!);
     assert.equal(registration.pid, child.pid, ackCase);
     assert.equal(registration.parentPid, process.pid, ackCase);
     sendAck(child, {
@@ -1436,7 +1537,9 @@ test("document child registration rejects concatenated ACK frames before payload
   const markerPath = join(temporaryRoot, "payload.json");
   const child = spawnGatedFixture(markerPath, "concatenated", "both");
   t.after(() => terminate(child));
-  const registration = await receiveRegisterFrame(child);
+  const registrationOutput = child.stdio[BENCHMARK_REGISTRATION_DESCRIPTOR] as Readable | null;
+  assert.notEqual(registrationOutput, null);
+  const registration = await receiveRegisterFrame(registrationOutput!);
   const acknowledgement = child.stdio[9] as Writable | null;
   assert.notEqual(acknowledgement, null);
   acknowledgement!.end(Buffer.concat([
@@ -1893,9 +1996,7 @@ function spawnRegistrationCase(arguments_: readonly string[]): ChildProcess {
   return child;
 }
 
-async function receiveRegisterFrame(child: ChildProcess): Promise<RegisterFrame> {
-  const registration = child.stdio[8] as Readable | null;
-  assert.notEqual(registration, null);
+async function receiveRegisterFrame(registration: Readable): Promise<RegisterFrame> {
   return await new Promise((resolvePromise, rejectPromise) => {
     let encoded = Buffer.alloc(0);
     const timeout = setTimeout(() => {
@@ -1904,9 +2005,9 @@ async function receiveRegisterFrame(child: ChildProcess): Promise<RegisterFrame>
     }, 5_000);
     const cleanup = (): void => {
       clearTimeout(timeout);
-      registration!.removeListener("data", onData);
-      registration!.removeListener("end", onEnd);
-      registration!.removeListener("error", onError);
+      registration.removeListener("data", onData);
+      registration.removeListener("end", onEnd);
+      registration.removeListener("error", onError);
     };
     const fail = (error: unknown): void => {
       cleanup();
@@ -1934,21 +2035,55 @@ async function receiveRegisterFrame(child: ChildProcess): Promise<RegisterFrame>
     };
     const onEnd = (): void => fail(new Error("registration channel ended before a frame"));
     const onError = (error: Error): void => fail(error);
-    registration!.on("data", onData);
-    registration!.once("end", onEnd);
-    registration!.once("error", onError);
+    registration.on("data", onData);
+    registration.once("end", onEnd);
+    registration.once("error", onError);
+  });
+}
+
+function observeReadableEof(stream: Readable): Promise<void> {
+  if (stream.readableEnded) return Promise.resolve();
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      rejectPromise(new Error("timed out waiting for registration writer EOF"));
+    }, 5_000);
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      stream.removeListener("end", onEnd);
+      stream.removeListener("error", onError);
+    };
+    const onEnd = (): void => {
+      cleanup();
+      resolvePromise();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      rejectPromise(error);
+    };
+    stream.once("end", onEnd);
+    stream.once("error", onError);
   });
 }
 
 async function sendStart(child: ChildProcess, frame: string | Buffer): Promise<void> {
   const writer = child.stdio[7] as Writable | null;
   assert.notEqual(writer, null);
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    writer!.write(frame, (error?: Error | null) => {
-      if (error === undefined || error === null) resolvePromise();
-      else rejectPromise(error);
+  await sendStartChunks(writer!, [frame]);
+}
+
+async function sendStartChunks(
+  writer: Writable,
+  chunks: readonly (string | Buffer)[],
+): Promise<void> {
+  for (const chunk of chunks) {
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      writer.write(chunk, (error?: Error | null) => {
+        if (error === undefined || error === null) resolvePromise();
+        else rejectPromise(error);
+      });
     });
-  });
+  }
 }
 
 async function closeStartChannel(child: ChildProcess, frame?: Buffer): Promise<void> {
