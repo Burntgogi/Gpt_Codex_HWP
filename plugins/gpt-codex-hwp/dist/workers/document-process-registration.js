@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, createReadStream, createWriteStream, fstatSync, readSync, writeSync, } from "node:fs";
+import { closeSync, fstatSync, readSync, writeSync, } from "node:fs";
+import { Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 export const DOCUMENT_START_DESCRIPTOR = 7;
@@ -525,9 +526,10 @@ async function registerDocumentProcess() {
         pid: process.pid,
         parentPid: process.ppid,
     });
-    const registration = createWriteStream("", {
+    const registration = new Socket({
         fd: BENCHMARK_REGISTRATION_DESCRIPTOR,
-        autoClose: true,
+        readable: false,
+        writable: true,
     });
     const onRegistrationError = () => {
         privateExit(72 /* PrivateExitCode.RegistrationWrite */);
@@ -589,10 +591,10 @@ function closeRegistrationOutput(output) {
     });
 }
 function readOneRegistrationFrame(descriptor) {
-    const input = createReadStream("", {
+    const input = new Socket({
         fd: descriptor,
-        autoClose: true,
-        highWaterMark: MAX_REGISTRATION_CHANNEL_BYTES,
+        readable: true,
+        writable: false,
     });
     return new Promise((resolvePromise, rejectPromise) => {
         let frame = Buffer.alloc(0);
@@ -647,10 +649,10 @@ function readOneRegistrationFrame(descriptor) {
     });
 }
 function waitForStartAndInstallLifelineWatcher() {
-    const lifeline = createReadStream("", {
+    const lifeline = new Socket({
         fd: DOCUMENT_START_DESCRIPTOR,
-        autoClose: false,
-        highWaterMark: START_BYTES.byteLength + 1,
+        readable: true,
+        writable: false,
     });
     return new Promise((resolvePromise) => {
         let phase = "start";
@@ -781,9 +783,10 @@ function readStartFrameSync() {
     }
 }
 function installLifelineWatcher() {
-    const lifeline = createReadStream("", {
+    const lifeline = new Socket({
         fd: DOCUMENT_START_DESCRIPTOR,
-        autoClose: false,
+        readable: true,
+        writable: false,
     });
     let terminal = false;
     lifeline.on("data", () => {

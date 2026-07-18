@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
-  createReadStream,
-  createWriteStream,
   fstatSync,
   readSync,
   writeSync,
 } from "node:fs";
+import { Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 
 import {
@@ -604,9 +603,10 @@ async function registerDocumentProcess(): Promise<void> {
     pid: process.pid,
     parentPid: process.ppid,
   });
-  const registration = createWriteStream("", {
+  const registration = new Socket({
     fd: BENCHMARK_REGISTRATION_DESCRIPTOR,
-    autoClose: true,
+    readable: false,
+    writable: true,
   });
   const onRegistrationError = (): void => {
     privateExit(PrivateExitCode.RegistrationWrite);
@@ -667,10 +667,10 @@ function closeRegistrationOutput(output: NodeJS.WritableStream): Promise<void> {
 }
 
 function readOneRegistrationFrame(descriptor: number): Promise<Uint8Array> {
-  const input = createReadStream("", {
+  const input = new Socket({
     fd: descriptor,
-    autoClose: true,
-    highWaterMark: MAX_REGISTRATION_CHANNEL_BYTES,
+    readable: true,
+    writable: false,
   });
   return new Promise<Uint8Array>((resolvePromise, rejectPromise) => {
     let frame = Buffer.alloc(0);
@@ -720,10 +720,10 @@ function readOneRegistrationFrame(descriptor: number): Promise<Uint8Array> {
 }
 
 function waitForStartAndInstallLifelineWatcher(): Promise<void> {
-  const lifeline = createReadStream("", {
+  const lifeline = new Socket({
     fd: DOCUMENT_START_DESCRIPTOR,
-    autoClose: false,
-    highWaterMark: START_BYTES.byteLength + 1,
+    readable: true,
+    writable: false,
   });
   return new Promise<void>((resolvePromise) => {
     let phase: "start" | "lifeline" = "start";
@@ -852,9 +852,10 @@ function readStartFrameSync(): void {
 }
 
 function installLifelineWatcher(): void {
-  const lifeline = createReadStream("", {
+  const lifeline = new Socket({
     fd: DOCUMENT_START_DESCRIPTOR,
-    autoClose: false,
+    readable: true,
+    writable: false,
   });
   let terminal = false;
   lifeline.on("data", () => {
