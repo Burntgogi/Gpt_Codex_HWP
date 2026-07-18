@@ -34,6 +34,7 @@ const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, "..", "..");
 const MAX_CASE_OUTPUT_BYTES = 64 * 1024;
 const MAX_RECEIPT_BYTES = 64 * 1024;
 const CASE_DEADLINE_MS = 10 * 60 * 1000;
+const POSIX_TELEMETRY_FLUSH_MS = 5_000;
 const LARGE_EVIDENCE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CASE_METADATA_FILENAME = "case-source.json";
 const CASE_CONTROL_FILENAME = ".case-owner-control";
@@ -656,7 +657,11 @@ export async function executeBounded(
             })
           : null;
         if (!termination.gone) {
-          if (diagnosticStage !== "ready-mode-2") diagnosticStage = "error-termination";
+          if (diagnosticStage !== "ready-mode-2"
+            && !diagnosticStage.startsWith("windows-")
+            && !diagnosticStage.startsWith("posix-")) {
+            diagnosticStage = "error-termination";
+          }
         } else if (rss === undefined) {
           diagnosticStage = "error-rss-receipt";
         } else if (!completeTelemetry) {
@@ -790,6 +795,7 @@ async function terminateCaseProcessTree(
     ? { gone: true, proof: "registered-groups-empty" }
     : unverifiedTermination("registration");
   let registrationDrained = process.platform === "win32";
+  let telemetryFlushed = process.platform === "win32";
   let processTreeRss;
   try {
     try {
@@ -813,6 +819,12 @@ async function terminateCaseProcessTree(
       } catch {
         registrationDrained = false;
       }
+      if (registrationDrained) {
+        telemetryFlushed = await exactTelemetryReady(
+          supervisor.flushProcessTreeTelemetry?.(),
+          POSIX_TELEMETRY_FLUSH_MS,
+        );
+      }
       try {
         nestedReceipt = normalizeProcessTreeTerminationReceipt(
           await coordinator.terminateRegisteredGroups(),
@@ -825,7 +837,7 @@ async function terminateCaseProcessTree(
   } finally {
     try {
       supervisor.finishProcessTreeTelemetry?.();
-      processTreeRss = supervisor.processTreeRss?.();
+      processTreeRss = telemetryFlushed ? supervisor.processTreeRss?.() : undefined;
     } catch {
       processTreeRss = undefined;
     }

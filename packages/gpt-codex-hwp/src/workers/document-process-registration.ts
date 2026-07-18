@@ -3,10 +3,9 @@ import {
   close,
   closeSync,
   createReadStream,
+  createWriteStream,
   fstatSync,
-  read,
   readSync,
-  write,
   writeSync,
 } from "node:fs";
 import { performance } from "node:perf_hooks";
@@ -695,10 +694,38 @@ function readDescriptor(
   offset: number,
   length: number,
 ): Promise<number> {
-  return retryNonBlocking((settle) => {
-    read(descriptor, buffer, offset, length, null, (error, bytesRead) => {
-      settle(error, bytesRead);
-    });
+  return new Promise<number>((resolvePromise, rejectPromise) => {
+    const attempt = (): void => {
+      const input = createReadStream("", {
+        fd: descriptor,
+        autoClose: false,
+        highWaterMark: length,
+      });
+      let settled = false;
+      const settle = (error: Error | undefined, bytes?: Buffer): void => {
+        if (settled) return;
+        settled = true;
+        input.removeAllListeners();
+        input.destroy();
+        if (error !== undefined && isRetryableNonBlockingError(error)) {
+          setTimeout(attempt, 1);
+        } else if (error !== undefined) {
+          rejectPromise(error);
+        } else if (bytes === undefined) {
+          resolvePromise(0);
+        } else {
+          buffer.set(bytes, offset);
+          resolvePromise(bytes.byteLength);
+        }
+      };
+      input.once("data", (chunk: Buffer | string) => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        settle(undefined, bytes);
+      });
+      input.once("end", () => settle(undefined));
+      input.once("error", (error) => settle(error));
+    };
+    attempt();
   });
 }
 
@@ -708,29 +735,38 @@ function writeDescriptor(
   offset: number,
   length: number,
 ): Promise<number> {
-  return retryNonBlocking((settle) => {
-    write(descriptor, buffer, offset, length, null, (error, bytesWritten) => {
-      settle(error, bytesWritten);
-    });
-  });
-}
-
-function retryNonBlocking(
-  operation: (settle: (error: NodeJS.ErrnoException | null, count: number) => void) => void,
-): Promise<number> {
   return new Promise<number>((resolvePromise, rejectPromise) => {
     const attempt = (): void => {
-      operation((error, count) => {
-        if (error !== null && ["EAGAIN", "EWOULDBLOCK"].includes(String(error.code))) {
-          setTimeout(attempt, 1);
-          return;
-        }
-        if (error !== null) rejectPromise(error);
-        else resolvePromise(count);
+      const output = createWriteStream("", {
+        fd: descriptor,
+        autoClose: false,
       });
+      let settled = false;
+      const settle = (error?: Error | null): void => {
+        if (settled) return;
+        settled = true;
+        output.removeAllListeners();
+        output.destroy();
+        if (error !== undefined && error !== null && isRetryableNonBlockingError(error)) {
+          setTimeout(attempt, 1);
+        } else if (error !== undefined && error !== null) {
+          rejectPromise(error);
+        } else {
+          resolvePromise(length);
+        }
+      };
+      output.once("error", settle);
+      output.write(
+        Buffer.from(buffer.buffer, buffer.byteOffset + offset, length),
+        settle,
+      );
     };
     attempt();
   });
+}
+
+function isRetryableNonBlockingError(error: Error): boolean {
+  return isNodeError(error) && ["EAGAIN", "EWOULDBLOCK"].includes(String(error.code));
 }
 
 function closeDescriptor(descriptor: number): Promise<void> {

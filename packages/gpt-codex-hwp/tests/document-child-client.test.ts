@@ -2624,8 +2624,16 @@ test("POSIX benchmark telemetry roots preserve baseline and require a covering p
   firstSample.resolve();
   await sampleStarted[1]!.promise;
   assert.equal(supervisor.processTreeRss?.(), undefined);
+  let telemetryFlushed = false;
+  const flush = supervisor.flushProcessTreeTelemetry!().then((available) => {
+    telemetryFlushed = true;
+    return available;
+  });
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  assert.equal(telemetryFlushed, false);
   peakBytes = 96;
   secondSample.resolve();
+  assert.equal(await flush, true);
   await waitFor(() => supervisor.processTreeRss?.()?.peakBytes === 96);
   assert.deepEqual(supervisor.processTreeRss?.(), { baselineBytes: 31, peakBytes: 96 });
 

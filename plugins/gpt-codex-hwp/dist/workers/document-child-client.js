@@ -1018,6 +1018,7 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
     let requiredTelemetryGeneration = 0;
     let coveredTelemetryGeneration = 0;
     const telemetryRootKeys = new Set();
+    const coverageWaiters = new Set();
     let settleTelemetryReady;
     let telemetryReadySettled = false;
     const processTreeTelemetryReady = new Promise((resolve) => {
@@ -1053,6 +1054,17 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
         sampleRequested = false;
         clearSampler();
         disableTracker();
+        for (const settle of coverageWaiters)
+            settle(false);
+        coverageWaiters.clear();
+    };
+    const settleCoverageWaiters = () => {
+        if (telemetryState !== "active" || sampleRunning ||
+            coveredTelemetryGeneration < requiredTelemetryGeneration)
+            return;
+        for (const settle of coverageWaiters)
+            settle(true);
+        coverageWaiters.clear();
     };
     const readCompleteProcessTreeRss = () => {
         if (telemetryState !== "active" || sampleRunning ||
@@ -1091,8 +1103,11 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
                 return;
             coveredTelemetryGeneration = Math.max(coveredTelemetryGeneration, sampleGeneration);
             if (sampleRequested ||
-                coveredTelemetryGeneration < requiredTelemetryGeneration)
+                coveredTelemetryGeneration < requiredTelemetryGeneration) {
                 queueSample();
+                return;
+            }
+            settleCoverageWaiters();
         }, () => {
             sampleRunning = false;
             if (telemetryState === "active")
@@ -1157,6 +1172,19 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
         },
         finishProcessTreeTelemetry() {
             stopTelemetry();
+        },
+        flushProcessTreeTelemetry() {
+            if (telemetryState !== "active")
+                return Promise.resolve(false);
+            if (!sampleRunning && coveredTelemetryGeneration >= requiredTelemetryGeneration) {
+                return Promise.resolve(true);
+            }
+            return new Promise((resolvePromise) => {
+                coverageWaiters.add(resolvePromise);
+                if (!sampleRunning)
+                    queueSample();
+                settleCoverageWaiters();
+            });
         },
         processTreeRss: () => telemetryState === "stopped"
             ? stoppedProcessTreeRss

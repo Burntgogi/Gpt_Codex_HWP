@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { close, closeSync, createReadStream, fstatSync, read, readSync, write, writeSync, } from "node:fs";
+import { close, closeSync, createReadStream, createWriteStream, fstatSync, readSync, writeSync, } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 export const DOCUMENT_START_DESCRIPTOR = 7;
@@ -607,35 +607,76 @@ async function monitorLifelineDescriptor() {
     }
 }
 function readDescriptor(descriptor, buffer, offset, length) {
-    return retryNonBlocking((settle) => {
-        read(descriptor, buffer, offset, length, null, (error, bytesRead) => {
-            settle(error, bytesRead);
-        });
-    });
-}
-function writeDescriptor(descriptor, buffer, offset, length) {
-    return retryNonBlocking((settle) => {
-        write(descriptor, buffer, offset, length, null, (error, bytesWritten) => {
-            settle(error, bytesWritten);
-        });
-    });
-}
-function retryNonBlocking(operation) {
     return new Promise((resolvePromise, rejectPromise) => {
         const attempt = () => {
-            operation((error, count) => {
-                if (error !== null && ["EAGAIN", "EWOULDBLOCK"].includes(String(error.code))) {
-                    setTimeout(attempt, 1);
-                    return;
-                }
-                if (error !== null)
-                    rejectPromise(error);
-                else
-                    resolvePromise(count);
+            const input = createReadStream("", {
+                fd: descriptor,
+                autoClose: false,
+                highWaterMark: length,
             });
+            let settled = false;
+            const settle = (error, bytes) => {
+                if (settled)
+                    return;
+                settled = true;
+                input.removeAllListeners();
+                input.destroy();
+                if (error !== undefined && isRetryableNonBlockingError(error)) {
+                    setTimeout(attempt, 1);
+                }
+                else if (error !== undefined) {
+                    rejectPromise(error);
+                }
+                else if (bytes === undefined) {
+                    resolvePromise(0);
+                }
+                else {
+                    buffer.set(bytes, offset);
+                    resolvePromise(bytes.byteLength);
+                }
+            };
+            input.once("data", (chunk) => {
+                const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                settle(undefined, bytes);
+            });
+            input.once("end", () => settle(undefined));
+            input.once("error", (error) => settle(error));
         };
         attempt();
     });
+}
+function writeDescriptor(descriptor, buffer, offset, length) {
+    return new Promise((resolvePromise, rejectPromise) => {
+        const attempt = () => {
+            const output = createWriteStream("", {
+                fd: descriptor,
+                autoClose: false,
+            });
+            let settled = false;
+            const settle = (error) => {
+                if (settled)
+                    return;
+                settled = true;
+                output.removeAllListeners();
+                output.destroy();
+                if (error !== undefined && error !== null && isRetryableNonBlockingError(error)) {
+                    setTimeout(attempt, 1);
+                }
+                else if (error !== undefined && error !== null) {
+                    rejectPromise(error);
+                }
+                else {
+                    resolvePromise(length);
+                }
+            };
+            output.once("error", settle);
+            output.write(Buffer.from(buffer.buffer, buffer.byteOffset + offset, length), settle);
+        };
+        attempt();
+    });
+}
+function isRetryableNonBlockingError(error) {
+    return isNodeError(error) && ["EAGAIN", "EWOULDBLOCK"].includes(String(error.code));
 }
 function closeDescriptor(descriptor) {
     return new Promise((resolvePromise, rejectPromise) => {
