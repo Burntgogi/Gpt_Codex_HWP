@@ -377,14 +377,14 @@ export function createDocumentChildClient(
           ? options.imageInput.fd
           : undefined;
         const stdio: StdioOptions = [
-          process.platform === "win32" ? "pipe" : "ipc",
+          "pipe",
           "pipe",
           "pipe",
           input?.fd ?? "ignore",
           imageInputFd ?? "ignore",
           outputOwner.handle.fd,
           "pipe",
-          "pipe",
+          process.platform === "win32" ? "pipe" : "ipc",
           ...(dependencies.benchmarkRegistrationDescriptors === undefined
             ? []
             : [

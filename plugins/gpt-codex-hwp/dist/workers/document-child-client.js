@@ -167,14 +167,14 @@ export function createDocumentChildClient(dependencies = {}) {
                     ? options.imageInput.fd
                     : undefined;
                 const stdio = [
-                    process.platform === "win32" ? "pipe" : "ipc",
+                    "pipe",
                     "pipe",
                     "pipe",
                     input?.fd ?? "ignore",
                     imageInputFd ?? "ignore",
                     outputOwner.handle.fd,
                     "pipe",
-                    "pipe",
+                    process.platform === "win32" ? "pipe" : "ipc",
                     ...(dependencies.benchmarkRegistrationDescriptors === undefined
                         ? []
                         : [
