@@ -88,6 +88,10 @@ test("governance docs distinguish descriptor namespaces and nominal sampling cad
   );
   assert.match(
     development,
+    /fd 7 is a pipe on every platform.{0,160}buffers one exact START frame.{0,160}remains open.{0,160}parent lifeline/isu,
+  );
+  assert.match(
+    development,
     /(?:configured nominal|nominal configured) cadence.{0,120}20 ms.{0,160}25 ms.{0,160}100 ms/isu,
   );
   assert.match(

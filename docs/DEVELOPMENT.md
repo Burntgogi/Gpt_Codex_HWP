@@ -92,7 +92,8 @@ numbers are local to each spawned process and must not be conflated. For an
 ordinary document child, the document and optional image inputs are inherited
 on fd 3 and fd 4; fd 5 is a parent-owned result spool created before spawn that
 the child may write; fd 6 carries bounded child-to-parent control frames; and
-fd 7 is the parent-owned start gate and then the parent-lifeline.
+fd 7 is a pipe on every platform. It buffers one exact START frame and then
+remains open as the parent lifeline.
 
 The outer benchmark case has a separate descriptor namespace. Its fd 3 reads
 the one-shot ownership/control frame and fd 4 writes case telemetry. On POSIX,

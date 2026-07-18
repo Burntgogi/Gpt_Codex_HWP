@@ -9,7 +9,7 @@ import { BoundedFrameDecoder, encodeBoundedJsonFrame, parseBoundedJsonFrame, } f
 import { DocumentEngineRunError, createDocumentEngineRunError, normalizeDocumentEngineError, } from "./document-errors.js";
 import { defaultDocumentDeadlineMs, HeavyChildGate, } from "./document-execution-policy.js";
 import { createChildDocumentEventValidator, createWireDocumentRequest, MAX_CHILD_INLINE_RESULT_BYTES, MAX_CHILD_REQUEST_FRAME_BYTES, validateLogicalDocumentRequest, } from "./document-protocol.js";
-import { DOCUMENT_START_FRAME, DOCUMENT_START_GATE_READY_FRAME, DOCUMENT_REGISTRATION_ENV, } from "./document-process-registration.js";
+import { DOCUMENT_START_FRAME, DOCUMENT_REGISTRATION_ENV, } from "./document-process-registration.js";
 import { createRegisteredPosixProcessGroupSupervisor, normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 const execFileAsync = promisify(execFile);
 const MAX_DRAIN_ACCOUNTED_BYTES = 64 * 1024;
@@ -166,21 +166,20 @@ export function createDocumentChildClient(dependencies = {}) {
                 const imageInputFd = options.imageInput?.transport === "spool"
                     ? options.imageInput.fd
                     : undefined;
+                const registrationDescriptors = dependencies.benchmarkRegistrationDescriptors === undefined
+                    ? []
+                    : [
+                        dependencies.benchmarkRegistrationDescriptors.writeFd,
+                        dependencies.benchmarkRegistrationDescriptors.ackFd,
+                    ];
                 const stdio = [
-                    "pipe",
-                    "pipe",
-                    "pipe",
+                    "pipe", "pipe", "pipe",
                     input?.fd ?? "ignore",
                     imageInputFd ?? "ignore",
                     outputOwner.handle.fd,
                     "pipe",
-                    process.platform === "win32" ? "pipe" : "ipc",
-                    ...(dependencies.benchmarkRegistrationDescriptors === undefined
-                        ? []
-                        : [
-                            dependencies.benchmarkRegistrationDescriptors.writeFd,
-                            dependencies.benchmarkRegistrationDescriptors.ackFd,
-                        ]),
+                    "pipe",
+                    ...registrationDescriptors,
                 ];
                 const specification = {
                     command: process.execPath,
@@ -295,10 +294,9 @@ export function createDocumentChildClient(dependencies = {}) {
     };
 }
 function requireStartGateOwner(child) {
-    if (process.platform !== "win32")
-        return requireIpcStartGateOwner(child);
     const stream = child.stdio[7];
-    if (stream === null || stream === undefined || typeof stream.write !== "function") {
+    if (stream === null || stream === undefined ||
+        typeof stream.write !== "function" || typeof stream.destroy !== "function") {
         throw new Error("document child start gate pipe unavailable");
     }
     let owner;
@@ -314,76 +312,12 @@ function requireStartGateOwner(child) {
     };
     owner = {
         sendStart: (callback) => stream.write(DOCUMENT_START_FRAME, callback),
-        close: () => {
-            if ("destroy" in stream && typeof stream.destroy === "function")
-                stream.destroy();
-            else
-                stream.end();
-        },
+        close: () => stream.destroy(),
         started: false,
         closed: false,
     };
     stream.on("error", onError);
     stream.once("close", onClose);
-    return owner;
-}
-function requireIpcStartGateOwner(child) {
-    if (!child.connected || typeof child.send !== "function") {
-        throw new Error("document child start gate IPC unavailable");
-    }
-    let owner;
-    let ready = false;
-    let settleReady;
-    const readyReceipt = new Promise((resolvePromise, rejectPromise) => {
-        settleReady = (error) => {
-            if (error === undefined)
-                resolvePromise();
-            else
-                rejectPromise(error);
-        };
-    });
-    void readyReceipt.catch(() => { });
-    const onMessage = (message) => {
-        if (ready || message !== DOCUMENT_START_GATE_READY_FRAME) {
-            const error = new Error("document child start gate readiness invalid");
-            owner.failure ??= error;
-            settleReady(error);
-            owner.settleStart?.(error);
-            return;
-        }
-        ready = true;
-        child.removeListener("message", onMessage);
-        settleReady();
-    };
-    const onError = (error) => {
-        owner.failure ??= error;
-        settleReady(error);
-        owner.settleStart?.(error);
-    };
-    const onDisconnect = () => {
-        owner.closed = true;
-        owner.failure ??= new Error("document child start gate disconnected");
-        settleReady(owner.failure);
-        owner.settleStart?.(owner.failure);
-        child.removeListener("error", onError);
-        child.removeListener("message", onMessage);
-    };
-    owner = {
-        sendStart: (callback) => {
-            void readyReceipt.then(() => {
-                child.send(DOCUMENT_START_FRAME, (error) => callback(error));
-            }, callback);
-        },
-        close: () => {
-            if (child.connected)
-                child.disconnect();
-        },
-        started: false,
-        closed: false,
-    };
-    child.on("error", onError);
-    child.on("message", onMessage);
-    child.once("disconnect", onDisconnect);
     return owner;
 }
 async function writeStartFrame(owner) {
