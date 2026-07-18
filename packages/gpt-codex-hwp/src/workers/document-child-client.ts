@@ -392,12 +392,14 @@ export function createDocumentChildClient(
         ];
         const specification: DocumentChildSpawnSpecification = {
           command: process.execPath,
-          args: [
-            "--import",
-            pathToFileURL(startGateEntry).href,
-            childEntry,
-            ...childArguments,
-          ],
+          args: process.platform === "win32"
+            ? [
+                "--import",
+                pathToFileURL(startGateEntry).href,
+                childEntry,
+                ...childArguments,
+              ]
+            : [startGateEntry, childEntry, ...childArguments],
           options: {
             shell: false,
             windowsHide: true,

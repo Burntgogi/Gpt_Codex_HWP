@@ -230,13 +230,15 @@ test("document child start gate spawn order and descriptor isolation", async () 
 
     assert.equal(specifications.length, 2);
     for (const specification of specifications) {
-      assert.deepEqual(specification.args, [
-        "--import",
-        pathToFileURL(startGatePath).href,
-        fixturePath,
-        "success",
-        "250",
-      ]);
+      assert.deepEqual(specification.args, process.platform === "win32"
+        ? [
+            "--import",
+            pathToFileURL(startGatePath).href,
+            fixturePath,
+            "success",
+            "250",
+          ]
+        : [startGatePath, fixturePath, "success", "250"]);
       const stdio = specification.stdio as unknown[];
       assert.equal(stdio[7], "pipe");
     }

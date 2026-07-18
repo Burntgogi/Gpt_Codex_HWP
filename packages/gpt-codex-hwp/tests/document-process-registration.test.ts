@@ -1377,6 +1377,41 @@ test("document child registration accepts a matching ACK and closes channels bef
   assert.equal(result.stderr, "");
 });
 
+test("document child registration remains gated across delayed ACK and START delivery", async (t) => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-delayed-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const markerPath = join(temporaryRoot, "marker.json");
+  const payloadArgument = `delayed-${randomUUID()}`;
+  const child = spawnGatedFixture(markerPath, payloadArgument, "both");
+  t.after(() => terminate(child));
+
+  const registration = await receiveRegisterFrame(child);
+  await assertFileMissing(markerPath, 250);
+  sendAck(child, {
+    schemaVersion: 1,
+    type: "ack",
+    nonce: registration.nonce,
+    status: "accepted",
+  });
+  await assertFileMissing(markerPath, 250);
+
+  const startWriter = child.stdio[7] as Writable | null;
+  assert.notEqual(startWriter, null);
+  startWriter!.write(DOCUMENT_START_FRAME);
+  await waitForFile(markerPath);
+  assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), [
+    FIXTURE_ENTRY,
+    markerPath,
+    payloadArgument,
+  ]);
+
+  startWriter!.end();
+  const result = await waitForClose(child);
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
 test("document child registration rejects rejected and wrong-nonce ACKs before payload", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-rejected-"));
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
@@ -1804,10 +1839,6 @@ function spawnGatedFixture(
   payloadArgument: string,
   registrationMode: RegistrationMode = "absent",
 ): ChildProcess {
-  // Windows Node 22 requires an ESM URL for an absolute --import specifier.
-  const startGateSpecifier = process.platform === "win32"
-    ? pathToFileURL(START_GATE).href
-    : START_GATE;
   const stdio: Array<"ignore" | "pipe"> = [
     "ignore",
     "pipe",
@@ -1823,9 +1854,9 @@ function spawnGatedFixture(
   return spawn(process.execPath, [
     "--import",
     "tsx",
-    "--import",
-    startGateSpecifier,
-    FIXTURE_ENTRY,
+    ...(process.platform === "win32"
+      ? ["--import", pathToFileURL(START_GATE).href, FIXTURE_ENTRY]
+      : [START_GATE, FIXTURE_ENTRY]),
     markerPath,
     payloadArgument,
   ], {
