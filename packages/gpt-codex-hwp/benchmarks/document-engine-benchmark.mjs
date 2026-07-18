@@ -599,7 +599,7 @@ export async function executeBounded(
           },
         }))
       : Promise.resolve().then(() => supervisorFactory(child))).catch((error) => {
-        diagnosticStage = "error-startup";
+        if (diagnosticStage === "channel") diagnosticStage = "error-startup";
         throw error;
       });
     const ensureRegistrationCoordinator = (caseSupervisor) => {

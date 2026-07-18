@@ -139,6 +139,15 @@ test("benchmark shutdown preserves an earlier bounded startup diagnostic", async
   assert.equal(result.diagnosticStage, "error-startup");
 });
 
+test("benchmark source does not overwrite a classified supervisor startup frame", async () => {
+  const source = await readFile(BENCHMARK_ENTRY, "utf8");
+  assert.match(
+    source,
+    /if \(diagnosticStage === "channel"\) diagnosticStage = "error-startup";/u,
+  );
+  assert.doesNotMatch(source, /\.catch\(\(error\) => \{\s*diagnosticStage = "error-startup";/u);
+});
+
 test("benchmark policy records a real nonempty detect dispatch before its one defensive copy", { timeout: 120_000 }, async (t) => {
   const outputPath = join(
     REPOSITORY_ROOT,
