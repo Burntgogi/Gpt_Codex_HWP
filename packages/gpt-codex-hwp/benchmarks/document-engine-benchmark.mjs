@@ -52,6 +52,7 @@ const SAFE_ERROR_CODES = new Set([
   "BENCHMARK_PROBE_FAILED",
   "BENCHMARK_SOURCE_CHANGED",
 ]);
+const SAFE_PROBE_ERROR_CODES = new Set([...SAFE_ERROR_CODES, "ENGINE_INIT_FAILED"]);
 const SAFE_BENCHMARK_DIAGNOSTIC_STAGES = new Set([
   "ready-mode-1",
   "ready-mode-2",
@@ -505,6 +506,7 @@ async function runFreshCase(sizeMiB, outputParent) {
       env: process.env,
       controlFrame: owner.control,
     });
+    forwardSafeProbeDiagnostic(result.stderr);
     assertCaseProcessGone(result);
     let receipt;
     if (result.status === "passed") {
@@ -534,6 +536,20 @@ async function runFreshCase(sizeMiB, outputParent) {
   } finally {
     if (result?.processGone === true) await cleanupOwnedBenchmarkCase(owner);
   }
+}
+
+export function formatBenchmarkProbeFailure(error) {
+  const code = typeof error?.code === "string" && SAFE_PROBE_ERROR_CODES.has(error.code)
+    ? error.code
+    : "ENGINE_CRASH";
+  return `BENCHMARK_PROBE_FAILURE engineCode=${code}`;
+}
+
+function forwardSafeProbeDiagnostic(stderr) {
+  if (typeof stderr !== "string") return;
+  const match = /^BENCHMARK_PROBE_FAILURE engineCode=([A-Z_]+)\n?$/u.exec(stderr);
+  if (match === null || !SAFE_PROBE_ERROR_CODES.has(match[1])) return;
+  process.stderr.write(`${match[0].trim()}\n`);
 }
 
 export function assertCaseProcessGone(result) {
@@ -976,7 +992,8 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
   try {
     if (facade === undefined) throw benchmarkError("BENCHMARK_PROBE_FAILED");
     await runNormalProbe(ownedCase, facade);
-  } catch {
+  } catch (error) {
+    process.stderr.write(`${formatBenchmarkProbeFailure(error)}\n`);
     outcome = {
       responseBytes: 0,
       status: "failed",

@@ -24,6 +24,7 @@ import {
   executeBounded,
   classifyBenchmarkSupervisorFrame,
   formatBenchmarkFailure,
+  formatBenchmarkProbeFailure,
   formatBenchmarkProgress,
   parseBenchmarkArguments,
   runBenchmark,
@@ -828,5 +829,16 @@ test("benchmark policy emits path-free per-case progress", () => {
   assert.throws(
     () => formatBenchmarkProgress({ requestedMiB: 42, status: "passed" }),
     { code: "BENCHMARK_RECEIPT_INVALID" },
+  );
+});
+
+test("benchmark probe diagnostics expose only an allowlisted engine code", () => {
+  assert.equal(
+    formatBenchmarkProbeFailure({ code: "ENGINE_TERMINATION_FAILED" }),
+    "BENCHMARK_PROBE_FAILURE engineCode=ENGINE_TERMINATION_FAILED",
+  );
+  assert.equal(
+    formatBenchmarkProbeFailure({ code: "C:\\private\\document.hwpx" }),
+    "BENCHMARK_PROBE_FAILURE engineCode=ENGINE_CRASH",
   );
 });
