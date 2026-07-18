@@ -17,7 +17,6 @@ import {
   BENCHMARK_REGISTRATION_DESCRIPTOR,
   DOCUMENT_START_DESCRIPTOR,
   DOCUMENT_START_FRAME,
-  DOCUMENT_START_GATE_READY_FRAME,
   DOCUMENT_REGISTRATION_ENV,
   MAX_REGISTRATION_CHANNEL_BYTES,
   MAX_REGISTRATION_FRAME_BYTES,
@@ -1828,7 +1827,6 @@ function without(
 }
 
 type RegistrationMode = "absent" | "both" | "registration-only";
-const startGateReadyReceipts = new WeakMap<ChildProcess, Promise<void>>();
 const fixtureCloseReceipts = new WeakMap<ChildProcess, Promise<Readonly<{
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -1859,7 +1857,7 @@ function spawnGatedFixture(
     "ignore",
     "ignore",
     "ignore",
-    process.platform === "win32" ? "pipe" : "ipc",
+    "pipe",
   ];
   if (registrationMode !== "absent") stdio.push("pipe");
   if (registrationMode === "both") stdio.push("pipe");
@@ -1882,42 +1880,6 @@ function spawnGatedFixture(
     stdio,
   });
   observeFixtureClose(child);
-  if (process.platform !== "win32") {
-    const readyReceipt = new Promise<void>((resolvePromise, rejectPromise) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        rejectPromise(new Error("timed out waiting for start gate readiness"));
-      }, 5_000);
-      const cleanup = (): void => {
-      clearTimeout(timeout);
-      child.removeListener("message", onMessage);
-      child.removeListener("error", onError);
-      child.removeListener("close", onClose);
-      };
-      const onMessage = (message: unknown): void => {
-        if (message !== DOCUMENT_START_GATE_READY_FRAME) {
-          cleanup();
-          rejectPromise(new Error("invalid start gate readiness receipt"));
-          return;
-        }
-        cleanup();
-        resolvePromise();
-      };
-    const onError = (error: Error): void => {
-      cleanup();
-      rejectPromise(error);
-    };
-    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
-      cleanup();
-      rejectPromise(new Error(`start gate exited code=${String(code)} signal=${String(signal)}`));
-    };
-    child.on("message", onMessage);
-    child.once("error", onError);
-    child.once("close", onClose);
-    });
-    void readyReceipt.catch(() => {});
-    startGateReadyReceipts.set(child, readyReceipt);
-  }
   return child;
 }
 
@@ -1981,36 +1943,20 @@ async function receiveRegisterFrame(child: ChildProcess): Promise<RegisterFrame>
 }
 
 async function sendStart(child: ChildProcess, frame: string | Buffer): Promise<void> {
-  if (process.platform === "win32") {
-    const writer = child.stdio[7] as Writable | null;
-    assert.notEqual(writer, null);
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      writer!.write(frame, (error?: Error | null) => {
-        if (error === undefined || error === null) resolvePromise();
-        else rejectPromise(error);
-      });
-    });
-    return;
-  }
-  await startGateReadyReceipts.get(child);
-  assert.equal(child.connected, true);
+  const writer = child.stdio[7] as Writable | null;
+  assert.notEqual(writer, null);
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    child.send!(frame, (error) => {
-      if (error === null) resolvePromise();
+    writer!.write(frame, (error?: Error | null) => {
+      if (error === undefined || error === null) resolvePromise();
       else rejectPromise(error);
     });
   });
 }
 
 async function closeStartChannel(child: ChildProcess, frame?: Buffer): Promise<void> {
-  if (process.platform === "win32") {
-    const writer = child.stdio[7] as Writable | null;
-    assert.notEqual(writer, null);
-    writer!.end(frame);
-    return;
-  }
-  if (frame !== undefined && frame.byteLength > 0) await sendStart(child, frame);
-  if (child.connected) child.disconnect();
+  const writer = child.stdio[7] as Writable | null;
+  assert.notEqual(writer, null);
+  writer!.end(frame);
 }
 
 function sendAck(child: ChildProcess, frame: AckFrame): void {
