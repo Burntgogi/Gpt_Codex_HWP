@@ -1832,15 +1832,15 @@ function spawnGatedFixture(
   payloadArgument: string,
   registrationMode: RegistrationMode = "absent",
 ): ChildProcess {
-  const stdio: Array<"ignore" | "pipe"> = [
+  const stdio: Array<"ignore" | "pipe" | "ipc"> = [
+    "ignore",
+    "pipe",
+    "pipe",
+    "ignore",
+    "ignore",
+    "ignore",
     "ignore",
     process.platform === "win32" ? "pipe" : "ipc",
-    "pipe",
-    "ignore",
-    "ignore",
-    "ignore",
-    "ignore",
-    "pipe",
   ];
   if (registrationMode !== "absent") stdio.push("pipe");
   if (registrationMode === "both") stdio.push("pipe");
