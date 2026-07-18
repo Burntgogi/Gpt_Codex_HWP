@@ -51,6 +51,17 @@ const SAFE_ERROR_CODES = new Set([
   "BENCHMARK_PROBE_FAILED",
   "BENCHMARK_SOURCE_CHANGED",
 ]);
+const SAFE_BENCHMARK_DIAGNOSTIC_STAGES = new Set([
+  "ready-mode-1",
+  "ready-mode-2",
+  "error-startup",
+  "error-baseline-rss",
+  "error-sampling",
+  "error-termination",
+  "error-rss-receipt",
+  "finalizer",
+  "channel",
+]);
 const RECEIPT_KEYS = [
   "actualBytes",
   "arch",
@@ -71,6 +82,27 @@ const RECEIPT_KEYS = [
   "status",
 ];
 const CASE_OUTCOME_KEYS = ["errorCode", "responseBytes", "status"];
+
+export function classifyBenchmarkSupervisorFrame(frame) {
+  if (typeof frame !== "string") return "channel";
+  const ready = /^GPT_CODEX_HWP_JOB READY [1-9][0-9]* ([12]) [0-9]+$/u.exec(frame);
+  if (ready !== null) return ready[1] === "1" ? "ready-mode-1" : "ready-mode-2";
+  if (/^GPT_CODEX_HWP_JOB (?:RSS [0-9]+ [0-9]+|GONE 0 [12])$/u.test(frame)) {
+    return "finalizer";
+  }
+  return "channel";
+}
+
+export function formatBenchmarkFailure(error) {
+  const code = typeof error?.code === "string"
+    && /^BENCHMARK_[A-Z_]+$/u.test(error.code)
+    ? error.code
+    : "BENCHMARK_FAILED";
+  const stage = SAFE_BENCHMARK_DIAGNOSTIC_STAGES.has(error?.diagnosticStage)
+    ? error.diagnosticStage
+    : undefined;
+  return stage === undefined ? code : `${code} stage=${stage}`;
+}
 
 export function parseBenchmarkArguments(args, options = {}) {
   if (!Array.isArray(args) || args.length !== 4
@@ -484,7 +516,7 @@ async function runFreshCase(sizeMiB, outputParent) {
 
 export function assertCaseProcessGone(result) {
   if (result?.processGone !== true) {
-    throw benchmarkError("BENCHMARK_TERMINATION_FAILED");
+    throw benchmarkError("BENCHMARK_TERMINATION_FAILED", result?.diagnosticStage);
   }
 }
 
@@ -517,6 +549,7 @@ export async function executeBounded(
     let telemetryEnded = false;
     let registrationCoordinator;
     let coordinatorSetup;
+    let diagnosticStage = "channel";
     let resolveTelemetryEnd;
     const telemetryEnd = new Promise((resolveEnd) => {
       resolveTelemetryEnd = resolveEnd;
@@ -530,16 +563,23 @@ export async function executeBounded(
         stdout,
         stderr,
         processGone,
+        diagnosticStage,
         elapsedMs: Math.max(1, Math.round(performance.now() - started)),
         caseMetrics: mergedMetrics,
       });
     };
-    const supervisor = supervisorFactory === undefined
+    const supervisor = (supervisorFactory === undefined
       ? import("../src/workers/document-child-client.ts")
         .then(({ superviseDocumentProcessTree }) => superviseDocumentProcessTree(child, {
           deferProcessTreeTelemetryStop: process.platform !== "win32",
+          frameObserver: (frame) => {
+            diagnosticStage = classifyBenchmarkSupervisorFrame(frame);
+          },
         }))
-      : Promise.resolve().then(() => supervisorFactory(child));
+      : Promise.resolve().then(() => supervisorFactory(child))).catch((error) => {
+        diagnosticStage = "error-startup";
+        throw error;
+      });
     const ensureRegistrationCoordinator = (caseSupervisor) => {
       if (process.platform === "win32") return Promise.resolve(undefined);
       coordinatorSetup ??= (async () => {
@@ -601,6 +641,15 @@ export async function executeBounded(
               peakRssDeltaBytes: Math.max(0, rss.peakBytes - rss.baselineBytes),
             })
           : null;
+        if (!termination.gone) {
+          if (diagnosticStage !== "ready-mode-2") diagnosticStage = "error-termination";
+        } else if (rss === undefined) {
+          diagnosticStage = "error-rss-receipt";
+        } else if (!completeTelemetry) {
+          diagnosticStage = "error-sampling";
+        } else {
+          diagnosticStage = "finalizer";
+        }
         finish(
           termination.gone && completeTelemetry ? status : "termination-failed",
           termination.gone,
@@ -652,6 +701,7 @@ export async function executeBounded(
           }
           caseMetrics = Object.freeze(metric);
         } catch {
+          diagnosticStage = "error-sampling";
           overflow = true;
           void stop("failed");
           return;
@@ -666,6 +716,7 @@ export async function executeBounded(
     telemetry.once("end", onTelemetryEnd);
     telemetry.once("close", onTelemetryEnd);
     telemetry.once("error", () => {
+      diagnosticStage = "error-sampling";
       overflow = true;
       onTelemetryEnd();
       void stop("failed");
@@ -684,6 +735,7 @@ export async function executeBounded(
       const control = child.stdio[3];
       if (ready !== true || stopping !== undefined || control === null ||
         typeof control.end !== "function") {
+        if (ready !== true) diagnosticStage = "error-baseline-rss";
         closeCaseControl(control);
         void stop("failed");
         return;
@@ -1195,8 +1247,13 @@ function safeEngineErrorCode(error) {
   return SAFE_ERROR_CODES.has(error?.code) ? error.code : "ENGINE_CRASH";
 }
 
-function benchmarkError(code) {
-  return Object.assign(new Error(code), { code });
+function benchmarkError(code, diagnosticStage) {
+  return Object.assign(new Error(code), {
+    code,
+    ...(SAFE_BENCHMARK_DIAGNOSTIC_STAGES.has(diagnosticStage)
+      ? { diagnosticStage }
+      : {}),
+  });
 }
 
 async function main() {
@@ -1244,7 +1301,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    process.stderr.write(`${error?.code ?? "BENCHMARK_FAILED"}\n`);
+    process.stderr.write(`${formatBenchmarkFailure(error)}\n`);
     process.exitCode = 1;
   });
 }

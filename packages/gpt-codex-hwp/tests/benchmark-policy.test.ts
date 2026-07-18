@@ -22,6 +22,8 @@ import {
   cleanupOwnedBenchmarkCase,
   createOwnedBenchmarkCase,
   executeBounded,
+  classifyBenchmarkSupervisorFrame,
+  formatBenchmarkFailure,
   formatBenchmarkProgress,
   parseBenchmarkArguments,
   runBenchmark,
@@ -66,6 +68,37 @@ test("benchmark policy accepts only bounded approved sizes with fixed sequential
   });
   assert.equal(validateCaseSizeMiB(10), 10);
   assert.throws(() => validateCaseSizeMiB(11), { code: "BENCHMARK_ARGUMENTS_INVALID" });
+});
+
+test("benchmark diagnostics expose only bounded stage labels", () => {
+  assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_JOB READY 123 1 456"),
+    "ready-mode-1",
+  );
+  assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_JOB READY 123 2 456"),
+    "ready-mode-2",
+  );
+  assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_JOB RSS 100 200"),
+    "finalizer",
+  );
+  assert.equal(
+    classifyBenchmarkSupervisorFrame("PRIVATE_DOCUMENT_CONTENT"),
+    "channel",
+  );
+  assert.equal(
+    formatBenchmarkFailure({
+      code: "BENCHMARK_TERMINATION_FAILED",
+      diagnosticStage: "ready-mode-2",
+      privateValue: "PRIVATE_DOCUMENT_CONTENT",
+    }),
+    "BENCHMARK_TERMINATION_FAILED stage=ready-mode-2",
+  );
+  assert.equal(
+    formatBenchmarkFailure({ code: "secret-value", diagnosticStage: "PRIVATE_STAGE_VALUE" }),
+    "BENCHMARK_FAILED",
+  );
 });
 
 test("benchmark policy records a real nonempty detect dispatch before its one defensive copy", { timeout: 120_000 }, async (t) => {
@@ -290,8 +323,12 @@ test("benchmark registration measures accepted-group RSS outside the case and te
 });
 
 test("benchmark policy aborts evidence when verified termination fails", () => {
-  assert.throws(() => assertCaseProcessGone({ processGone: false }), {
+  assert.throws(() => assertCaseProcessGone({
+    processGone: false,
+    diagnosticStage: "error-termination",
+  }), {
     code: "BENCHMARK_TERMINATION_FAILED",
+    diagnosticStage: "error-termination",
   });
 });
 
