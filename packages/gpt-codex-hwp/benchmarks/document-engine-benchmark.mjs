@@ -61,6 +61,16 @@ const SAFE_BENCHMARK_DIAGNOSTIC_STAGES = new Set([
   "error-rss-receipt",
   "finalizer",
   "channel",
+  "windows-startup",
+  "windows-baseline-rss",
+  "windows-sampling",
+  "windows-termination",
+  "windows-termination-discovery-or-rss-unavailable",
+  "windows-termination-retained-handle-unavailable",
+  "windows-termination-scan-exhausted",
+  "windows-rss-receipt",
+  "posix-root-authority",
+  "posix-telemetry-initialize",
 ]);
 const RECEIPT_KEYS = [
   "actualBytes",
@@ -85,6 +95,10 @@ const CASE_OUTCOME_KEYS = ["errorCode", "responseBytes", "status"];
 
 export function classifyBenchmarkSupervisorFrame(frame) {
   if (typeof frame !== "string") return "channel";
+  const windowsError = /^GPT_CODEX_HWP_JOB ERROR (startup|baseline-rss|sampling|termination|termination-(?:discovery-or-rss-unavailable|retained-handle-unavailable|scan-exhausted)|rss-receipt) [A-Za-z0-9_-]+$/u.exec(frame);
+  if (windowsError !== null) return `windows-${windowsError[1]}`;
+  const posixError = /^GPT_CODEX_HWP_POSIX ERROR (root-authority|telemetry-initialize)$/u.exec(frame);
+  if (posixError !== null) return `posix-${posixError[1]}`;
   const ready = /^GPT_CODEX_HWP_JOB READY [1-9][0-9]* ([12]) [0-9]+$/u.exec(frame);
   if (ready !== null) return ready[1] === "1" ? "ready-mode-1" : "ready-mode-2";
   if (/^GPT_CODEX_HWP_JOB (?:RSS [0-9]+ [0-9]+|GONE 0 [12])$/u.test(frame)) {
@@ -735,7 +749,9 @@ export async function executeBounded(
       const control = child.stdio[3];
       if (ready !== true || stopping !== undefined || control === null ||
         typeof control.end !== "function") {
-        if (ready !== true) diagnosticStage = "error-baseline-rss";
+        if (ready !== true && !diagnosticStage.startsWith("posix-")) {
+          diagnosticStage = "error-baseline-rss";
+        }
         closeCaseControl(control);
         void stop("failed");
         return;
@@ -1037,11 +1053,18 @@ async function writeCaseMetadata(root, source) {
 }
 
 async function parentFailureReceipt(sizeMiB, root, errorCode, metrics) {
-  return parentCaseReceipt(sizeMiB, root, {
-    status: "failed",
-    responseBytes: 0,
-    errorCode,
-  }, metrics?.caseMetrics);
+  try {
+    return await parentCaseReceipt(sizeMiB, root, {
+      status: "failed",
+      responseBytes: 0,
+      errorCode,
+    }, metrics?.caseMetrics);
+  } catch (error) {
+    if (error?.code === "BENCHMARK_TELEMETRY_UNAVAILABLE") {
+      throw benchmarkError(error.code, metrics?.diagnosticStage);
+    }
+    throw error;
+  }
 }
 
 async function parentCaseReceipt(sizeMiB, root, outcome, metrics) {

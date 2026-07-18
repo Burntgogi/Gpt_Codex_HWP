@@ -88,6 +88,14 @@ test("benchmark diagnostics expose only bounded stage labels", () => {
     "channel",
   );
   assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_JOB ERROR termination-scan-exhausted tracked_tree_did_not_reach_zero"),
+    "windows-termination-scan-exhausted",
+  );
+  assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_POSIX ERROR root-authority"),
+    "posix-root-authority",
+  );
+  assert.equal(
     formatBenchmarkFailure({
       code: "BENCHMARK_TERMINATION_FAILED",
       diagnosticStage: "ready-mode-2",

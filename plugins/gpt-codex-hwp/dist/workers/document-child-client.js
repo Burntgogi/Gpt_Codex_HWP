@@ -27,6 +27,7 @@ const MAX_LINUX_PROC_STAT_BYTES = 64 * 1024;
 const MAX_LINUX_PROC_STATUS_BYTES = 256 * 1024;
 const MAX_LINUX_TASK_CHILDREN_BYTES = 64 * 1024;
 const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
+const WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 5_000;
 const gatedRootGoneErrors = new WeakSet();
 const supervisorHelperUnclosedErrors = new WeakMap();
 const supervisorHelperRetentionsByProcess = new WeakMap();
@@ -873,14 +874,14 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
                         commandSent = true;
                         helper.stdin.end("TERMINATE\n");
                     }
-                    let frame = await lines.next(3_000);
+                    let frame = await lines.next(WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS);
                     if (forceTracker && /^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u.test(frame)) {
                         frameObserver?.(frame);
-                        frame = await lines.next(3_000);
+                        frame = await lines.next(WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS);
                     }
                     frameObserver?.(frame);
                     processTreeRss = parseProcessTreeRssFrame(frame);
-                    const gone = await lines.next(3_000);
+                    const gone = await lines.next(WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS);
                     frameObserver?.(gone);
                     const matchingGone = gone === `GPT_CODEX_HWP_JOB GONE 0 ${readyMode}`;
                     const authorityGone = readyMode === 1 && matchingGone;
@@ -973,6 +974,7 @@ export async function superviseDocumentProcessTree(child, options = {}) {
     }
     return createPosixProcessTreeSupervisor(child, process.platform, {
         deferProcessTreeTelemetryStop: options.deferProcessTreeTelemetryStop,
+        frameObserver: options.frameObserver,
     });
 }
 /** Test-only authority-failure entrypoint; production callers cannot disable Job assignment. */
@@ -997,7 +999,13 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
         ?? createRegisteredPosixProcessGroupSupervisor({
             inspectIdentity: (pid) => snapshotRegisteredPosixProcessGroupIdentity(pid, platform),
         });
-    await registeredSupervisor.registerRoot(child.pid, process.pid);
+    try {
+        await registeredSupervisor.registerRoot(child.pid, process.pid);
+    }
+    catch (error) {
+        dependencies.frameObserver?.("GPT_CODEX_HWP_POSIX ERROR root-authority");
+        throw error;
+    }
     const tracker = dependencies.tracker ?? new PosixProcessTreeTracker(child.pid, platform);
     const scheduleInterval = dependencies.scheduleInterval ?? ((callback, milliseconds) => setInterval(callback, milliseconds));
     const clearScheduledInterval = dependencies.clearScheduledInterval ?? ((handle) => {
@@ -1100,6 +1108,7 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
         initialization = tracker.initialize();
     }
     catch {
+        dependencies.frameObserver?.("GPT_CODEX_HWP_POSIX ERROR telemetry-initialize");
         deactivateTelemetry("disabled");
     }
     if (initialization !== undefined) {
@@ -1116,8 +1125,10 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
                 deactivateTelemetry("disabled");
             }
         }, () => {
-            if (telemetryState === "initializing")
+            if (telemetryState === "initializing") {
+                dependencies.frameObserver?.("GPT_CODEX_HWP_POSIX ERROR telemetry-initialize");
                 deactivateTelemetry("disabled");
+            }
         }).catch(() => {
             if (telemetryState !== "stopped")
                 deactivateTelemetry("disabled");

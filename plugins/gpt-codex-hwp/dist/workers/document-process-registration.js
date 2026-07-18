@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, fstatSync, readSync, writeSync, } from "node:fs";
-import { Socket } from "node:net";
+import { close, closeSync, createReadStream, fstatSync, read, readSync, write, writeSync, } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 export const DOCUMENT_START_DESCRIPTOR = 7;
@@ -526,17 +525,8 @@ async function registerDocumentProcess() {
         pid: process.pid,
         parentPid: process.ppid,
     });
-    const registration = new Socket({
-        fd: BENCHMARK_REGISTRATION_DESCRIPTOR,
-        readable: false,
-        writable: true,
-    });
-    const onRegistrationError = () => {
-        privateExit(72 /* PrivateExitCode.RegistrationWrite */);
-    };
-    registration.on("error", onRegistrationError);
     try {
-        await writeRegistrationFrame(registration, frame);
+        await writeDescriptorAll(BENCHMARK_REGISTRATION_DESCRIPTOR, frame);
     }
     catch {
         privateExit(72 /* PrivateExitCode.RegistrationWrite */);
@@ -551,152 +541,110 @@ async function registerDocumentProcess() {
     if (acknowledgement.nonce !== nonce || acknowledgement.status !== "accepted") {
         privateExit(73 /* PrivateExitCode.RegistrationAck */);
     }
-    registration.removeListener("error", onRegistrationError);
     try {
-        await closeRegistrationOutput(registration);
+        await closeDescriptor(BENCHMARK_REGISTRATION_DESCRIPTOR);
+        await closeDescriptor(BENCHMARK_ACK_DESCRIPTOR);
     }
     catch {
         privateExit(74 /* PrivateExitCode.RegistrationClose */);
     }
 }
-function writeRegistrationFrame(output, bytes) {
+async function writeDescriptorAll(descriptor, bytes) {
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+        const written = await writeDescriptor(descriptor, bytes, offset, bytes.byteLength - offset);
+        if (written <= 0)
+            throw new Error("registration write failed");
+        offset += written;
+    }
+}
+async function readOneRegistrationFrame(descriptor) {
+    const frame = Buffer.allocUnsafeSlow(MAX_REGISTRATION_FRAME_BYTES);
+    const readBuffer = Buffer.allocUnsafeSlow(MAX_REGISTRATION_CHANNEL_BYTES);
+    let frameBytes = 0;
+    while (true) {
+        const count = await readDescriptor(descriptor, readBuffer, 0, readBuffer.byteLength);
+        if (count === 0)
+            throw new Error("registration channel ended");
+        const newline = readBuffer.subarray(0, count).indexOf(0x0a);
+        if (newline !== -1 && newline !== count - 1) {
+            throw new Error("trailing registration data");
+        }
+        if (frameBytes + count > MAX_REGISTRATION_FRAME_BYTES) {
+            throw new Error("registration frame exceeds limit");
+        }
+        frame.set(readBuffer.subarray(0, count), frameBytes);
+        frameBytes += count;
+        if (newline !== -1)
+            return frame.subarray(0, frameBytes);
+    }
+}
+async function waitForStartAndInstallLifelineWatcher() {
+    const received = Buffer.allocUnsafeSlow(START_BYTES.byteLength + 1);
+    let offset = 0;
+    while (offset < START_BYTES.byteLength) {
+        const count = await readDescriptor(DOCUMENT_START_DESCRIPTOR, received, offset, received.byteLength - offset);
+        if (count === 0)
+            privateExit(75 /* PrivateExitCode.StartFrame */);
+        offset += count;
+        if (offset > START_BYTES.byteLength ||
+            !received.subarray(0, offset).equals(START_BYTES.subarray(0, offset))) {
+            privateExit(75 /* PrivateExitCode.StartFrame */);
+        }
+    }
+    void monitorLifelineDescriptor();
+}
+async function monitorLifelineDescriptor() {
+    const byte = Buffer.allocUnsafeSlow(1);
+    try {
+        const count = await readDescriptor(DOCUMENT_START_DESCRIPTOR, byte, 0, 1);
+        if (count === 0)
+            return handleLifelineEnd();
+        return privateExit(76 /* PrivateExitCode.LifelineData */);
+    }
+    catch {
+        return privateExit(77 /* PrivateExitCode.LifelineError */);
+    }
+}
+function readDescriptor(descriptor, buffer, offset, length) {
+    return retryNonBlocking((settle) => {
+        read(descriptor, buffer, offset, length, null, (error, bytesRead) => {
+            settle(error, bytesRead);
+        });
+    });
+}
+function writeDescriptor(descriptor, buffer, offset, length) {
+    return retryNonBlocking((settle) => {
+        write(descriptor, buffer, offset, length, null, (error, bytesWritten) => {
+            settle(error, bytesWritten);
+        });
+    });
+}
+function retryNonBlocking(operation) {
     return new Promise((resolvePromise, rejectPromise) => {
-        output.write(Buffer.from(bytes), (error) => {
-            if (error === undefined || error === null)
+        const attempt = () => {
+            operation((error, count) => {
+                if (error !== null && ["EAGAIN", "EWOULDBLOCK"].includes(String(error.code))) {
+                    setTimeout(attempt, 1);
+                    return;
+                }
+                if (error !== null)
+                    rejectPromise(error);
+                else
+                    resolvePromise(count);
+            });
+        };
+        attempt();
+    });
+}
+function closeDescriptor(descriptor) {
+    return new Promise((resolvePromise, rejectPromise) => {
+        close(descriptor, (error) => {
+            if (error === null)
                 resolvePromise();
             else
                 rejectPromise(error);
         });
-    });
-}
-function closeRegistrationOutput(output) {
-    return new Promise((resolvePromise, rejectPromise) => {
-        let settled = false;
-        const settle = (error) => {
-            if (settled)
-                return;
-            settled = true;
-            output.removeListener("error", onError);
-            output.removeListener("close", onClose);
-            if (error === undefined)
-                resolvePromise();
-            else
-                rejectPromise(error);
-        };
-        const onError = (error) => settle(error);
-        const onClose = () => settle();
-        output.once("error", onError);
-        output.once("close", onClose);
-        output.end();
-    });
-}
-function readOneRegistrationFrame(descriptor) {
-    const input = new Socket({
-        fd: descriptor,
-        readable: true,
-        writable: false,
-    });
-    return new Promise((resolvePromise, rejectPromise) => {
-        let frame = Buffer.alloc(0);
-        let acceptedFrame;
-        let settled = false;
-        const settle = (error) => {
-            if (settled)
-                return;
-            settled = true;
-            input.removeListener("data", onData);
-            input.removeListener("end", onEnd);
-            input.removeListener("error", onError);
-            input.removeListener("close", onClose);
-            if (error !== undefined)
-                rejectPromise(error);
-            else if (acceptedFrame !== undefined)
-                resolvePromise(acceptedFrame);
-            else
-                rejectPromise(new Error("registration channel closed before one frame"));
-        };
-        const fail = (message) => {
-            input.destroy();
-            settle(new Error(message));
-        };
-        const onData = (chunk) => {
-            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            if (frame.byteLength + bytes.byteLength > MAX_REGISTRATION_FRAME_BYTES) {
-                fail("registration frame exceeds limit");
-                return;
-            }
-            frame = Buffer.concat([frame, bytes]);
-            const newline = frame.indexOf(0x0a);
-            if (newline === -1)
-                return;
-            if (newline !== frame.byteLength - 1) {
-                fail("trailing registration data");
-                return;
-            }
-            acceptedFrame = frame;
-            input.destroy();
-        };
-        const onEnd = () => {
-            if (acceptedFrame === undefined)
-                fail("registration channel ended");
-        };
-        const onError = (error) => settle(error);
-        const onClose = () => settle();
-        input.on("data", onData);
-        input.once("end", onEnd);
-        input.once("error", onError);
-        input.once("close", onClose);
-    });
-}
-function waitForStartAndInstallLifelineWatcher() {
-    const lifeline = new Socket({
-        fd: DOCUMENT_START_DESCRIPTOR,
-        readable: true,
-        writable: false,
-    });
-    return new Promise((resolvePromise) => {
-        let phase = "start";
-        let received = Buffer.alloc(0);
-        let terminal = false;
-        lifeline.on("data", (chunk) => {
-            if (terminal)
-                return;
-            if (phase === "lifeline") {
-                terminal = true;
-                privateExit(76 /* PrivateExitCode.LifelineData */);
-            }
-            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            if (received.byteLength + bytes.byteLength > START_BYTES.byteLength) {
-                terminal = true;
-                privateExit(75 /* PrivateExitCode.StartFrame */);
-            }
-            received = Buffer.concat([received, bytes]);
-            if (!received.equals(START_BYTES.subarray(0, received.byteLength))) {
-                terminal = true;
-                privateExit(75 /* PrivateExitCode.StartFrame */);
-            }
-            if (received.byteLength === START_BYTES.byteLength) {
-                phase = "lifeline";
-                resolvePromise();
-            }
-        });
-        lifeline.on("error", () => {
-            if (terminal)
-                return;
-            terminal = true;
-            privateExit(phase === "start"
-                ? 75 /* PrivateExitCode.StartFrame */
-                : 77 /* PrivateExitCode.LifelineError */);
-        });
-        lifeline.on("end", () => {
-            if (terminal)
-                return;
-            terminal = true;
-            if (phase === "start")
-                privateExit(75 /* PrivateExitCode.StartFrame */);
-            handleLifelineEnd();
-        });
-        lifeline.resume();
     });
 }
 function registerDocumentProcessSync() {
@@ -783,10 +731,9 @@ function readStartFrameSync() {
     }
 }
 function installLifelineWatcher() {
-    const lifeline = new Socket({
+    const lifeline = createReadStream("", {
         fd: DOCUMENT_START_DESCRIPTOR,
-        readable: true,
-        writable: false,
+        autoClose: false,
     });
     let terminal = false;
     lifeline.on("data", () => {
