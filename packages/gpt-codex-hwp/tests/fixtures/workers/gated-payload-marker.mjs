@@ -1,11 +1,14 @@
 import { fstatSync, writeFileSync } from "node:fs";
 
-for (const descriptor of [8, 9]) {
-  try {
-    fstatSync(descriptor);
-    process.exit(91);
-  } catch (error) {
-    if (error?.code !== "EBADF") process.exit(92);
+if (process.env.GPT_CODEX_HWP_REGISTRATION !== undefined) process.exit(90);
+if (process.platform === "win32") {
+  for (const descriptor of [8, 9]) {
+    try {
+      fstatSync(descriptor);
+      process.exit(91);
+    } catch (error) {
+      if (error?.code !== "EBADF") process.exit(92);
+    }
   }
 }
 
