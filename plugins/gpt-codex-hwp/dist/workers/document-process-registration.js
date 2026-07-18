@@ -687,7 +687,8 @@ function isRetryableNonBlockingError(error) {
 function closeDescriptor(descriptor) {
     return new Promise((resolvePromise, rejectPromise) => {
         close(descriptor, (error) => {
-            if (error === null || error === undefined)
+            if (error === null || error === undefined
+                || (isNodeError(error) && error.code === "EBADF"))
                 resolvePromise();
             else
                 rejectPromise(error);
