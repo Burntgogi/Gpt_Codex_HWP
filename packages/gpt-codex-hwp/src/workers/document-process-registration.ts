@@ -682,7 +682,7 @@ async function waitForStartAndInstallLifelineWatcher(): Promise<void> {
       handleLifelineEnd();
     });
     process.send!(DOCUMENT_START_GATE_READY_FRAME, (error) => {
-      if (error !== null) privateExit(PrivateExitCode.StartFrame);
+      if (error !== null && error !== undefined) privateExit(PrivateExitCode.StartFrame);
     });
   });
 }

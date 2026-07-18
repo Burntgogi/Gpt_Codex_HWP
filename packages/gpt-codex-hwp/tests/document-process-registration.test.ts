@@ -1865,32 +1865,36 @@ function spawnGatedFixture(
     },
     stdio,
   });
-  if (process.platform !== "win32") startGateReadyReceipts.set(child, new Promise<void>((resolvePromise, rejectPromise) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      rejectPromise(new Error("timed out waiting for start gate readiness"));
-    }, 5_000);
-    const cleanup = (): void => {
-      clearTimeout(timeout);
-      child.removeListener("message", onMessage);
-      child.removeListener("error", onError);
-    };
-    const onMessage = (message: unknown): void => {
-      if (message !== DOCUMENT_START_GATE_READY_FRAME) {
+  if (process.platform !== "win32") {
+    const readyReceipt = new Promise<void>((resolvePromise, rejectPromise) => {
+      const timeout = setTimeout(() => {
         cleanup();
-        rejectPromise(new Error("invalid start gate readiness receipt"));
-        return;
-      }
-      cleanup();
-      resolvePromise();
-    };
-    const onError = (error: Error): void => {
-      cleanup();
-      rejectPromise(error);
-    };
-    child.on("message", onMessage);
-    child.once("error", onError);
-  }));
+        rejectPromise(new Error("timed out waiting for start gate readiness"));
+      }, 5_000);
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        child.removeListener("message", onMessage);
+        child.removeListener("error", onError);
+      };
+      const onMessage = (message: unknown): void => {
+        if (message !== DOCUMENT_START_GATE_READY_FRAME) {
+          cleanup();
+          rejectPromise(new Error("invalid start gate readiness receipt"));
+          return;
+        }
+        cleanup();
+        resolvePromise();
+      };
+      const onError = (error: Error): void => {
+        cleanup();
+        rejectPromise(error);
+      };
+      child.on("message", onMessage);
+      child.once("error", onError);
+    });
+    void readyReceipt.catch(() => {});
+    startGateReadyReceipts.set(child, readyReceipt);
+  }
   return child;
 }
 

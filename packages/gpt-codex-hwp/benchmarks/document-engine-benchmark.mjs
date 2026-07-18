@@ -366,7 +366,11 @@ export function formatBenchmarkProgress(receipt) {
     || !["passed", "resource-refused", "failed"].includes(receipt?.status)) {
     throw benchmarkError("BENCHMARK_RECEIPT_INVALID");
   }
-  return `BENCHMARK_CASE requestedMiB=${receipt.requestedMiB} status=${receipt.status}`;
+  const errorCode = typeof receipt.errorCode === "string"
+    && SAFE_ERROR_CODES.has(receipt.errorCode)
+    ? ` errorCode=${receipt.errorCode}`
+    : "";
+  return `BENCHMARK_CASE requestedMiB=${receipt.requestedMiB} status=${receipt.status}${errorCode}`;
 }
 
 export async function createOwnedBenchmarkCase(outputParent) {

@@ -968,6 +968,7 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
                         return unverifiedTermination("identity");
                     }
                     if (!matchingGone || !authorityGone) {
+                        frameObserver?.("GPT_CODEX_HWP_JOB ERROR termination invalid");
                         return unverifiedTermination("identity");
                     }
                     verifiedReceipt = Object.freeze({

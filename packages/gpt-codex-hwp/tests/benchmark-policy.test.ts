@@ -92,6 +92,10 @@ test("benchmark diagnostics expose only bounded stage labels", () => {
     "windows-termination-scan-exhausted",
   );
   assert.equal(
+    classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_JOB ERROR termination invalid"),
+    "windows-termination",
+  );
+  assert.equal(
     classifyBenchmarkSupervisorFrame("GPT_CODEX_HWP_POSIX ERROR root-authority"),
     "posix-root-authority",
   );
@@ -783,8 +787,20 @@ test("benchmark policy makes bounded document evidence a default release stage",
 
 test("benchmark policy emits path-free per-case progress", () => {
   assert.equal(
-    formatBenchmarkProgress({ requestedMiB: 512, status: "resource-refused" }),
-    "BENCHMARK_CASE requestedMiB=512 status=resource-refused",
+    formatBenchmarkProgress({
+      requestedMiB: 512,
+      status: "resource-refused",
+      errorCode: "ENGINE_RESOURCE_LIMIT",
+    }),
+    "BENCHMARK_CASE requestedMiB=512 status=resource-refused errorCode=ENGINE_RESOURCE_LIMIT",
+  );
+  assert.equal(
+    formatBenchmarkProgress({
+      requestedMiB: 512,
+      status: "failed",
+      errorCode: "C:\\private\\document.hwpx",
+    }),
+    "BENCHMARK_CASE requestedMiB=512 status=failed",
   );
   assert.throws(
     () => formatBenchmarkProgress({ requestedMiB: 42, status: "passed" }),

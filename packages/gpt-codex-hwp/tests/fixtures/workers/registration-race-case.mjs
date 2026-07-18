@@ -202,6 +202,7 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
     child.on("message", onMessage);
     child.once("error", onError);
   });
+  if (child.startGateReady !== undefined) void child.startGateReady.catch(() => {});
   return child;
 }
 
