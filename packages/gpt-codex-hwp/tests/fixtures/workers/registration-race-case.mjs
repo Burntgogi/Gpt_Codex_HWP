@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { appendFileSync, fstatSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, writeFileSync, writeSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -94,9 +94,8 @@ if (mode === "--descriptor-case") {
 } else if (mode === "--descriptor-payload") {
   const markerPath = process.argv[3];
   const helperMarkerPath = `${markerPath}.helper`;
-  const registrationAbsent = descriptorAbsent(8);
-  const acknowledgementAbsent = descriptorAbsent(9);
-  if (!registrationAbsent || !acknowledgementAbsent) process.exit(91);
+  const registrationDeclared = process.env.GPT_CODEX_HWP_REGISTRATION !== undefined;
+  if (registrationDeclared) process.exit(91);
   const helper = spawn(process.execPath, [process.argv[1], "--descriptor-helper", helperMarkerPath], {
     shell: false,
     windowsHide: true,
@@ -105,16 +104,15 @@ if (mode === "--descriptor-case") {
   writeFileSync(markerPath, JSON.stringify({
     payloadPid: process.pid,
     helperPid: helper.pid,
-    registrationAbsent,
-    acknowledgementAbsent,
-    ipcConnected: process.platform === "win32" ? false : process.connected,
+    registrationDeclared,
+    ipcConnected: process.connected === true,
   }));
   setInterval(() => {}, 1_000);
 } else if (mode === "--descriptor-helper") {
   const markerPath = process.argv[3];
   writeFileSync(markerPath, JSON.stringify({
     pid: process.pid,
-    descriptorsAbsent: [8, 9].map(descriptorAbsent),
+    registrationDeclared: process.env.GPT_CODEX_HWP_REGISTRATION !== undefined,
   }));
 } else if (mode === "--leak-case") {
   const holder = spawn(process.execPath, [process.argv[1], "--holder"], {
@@ -175,66 +173,26 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
       "ignore",
       "ignore",
       "ignore",
-      process.platform === "win32" ? "pipe" : "ipc",
+      "pipe",
       5,
       6,
     ],
   });
-  if (process.platform !== "win32") child.startGateReady = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("start gate readiness timeout"));
-    }, 5_000);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.removeListener("message", onMessage);
-      child.removeListener("error", onError);
-      child.removeListener("close", onClose);
-    };
-    const onMessage = (message) => {
-      cleanup();
-      if (message === "GPT_CODEX_HWP_START_GATE_READY_V1") resolve();
-      else reject(new Error("invalid start gate readiness"));
-    };
-    const onError = (error) => {
-      cleanup();
-      reject(error);
-    };
-    const onClose = (code, signal) => {
-      cleanup();
-      reject(new Error(`start gate exited code=${String(code)} signal=${String(signal)}`));
-    };
-    child.on("message", onMessage);
-    child.once("error", onError);
-    child.once("close", onClose);
-  });
-  if (child.startGateReady !== undefined) void child.startGateReady.catch(() => {});
+  child.stdio[7].on("error", () => {});
   return child;
 }
 
 async function sendStart(child) {
-  if (process.platform === "win32") {
-    child.stdio[7].on("error", () => {});
-    child.stdio[7].write("GPT_CODEX_HWP_START_V1\n");
-  } else {
-    await child.startGateReady;
-    child.send("GPT_CODEX_HWP_START_V1\n");
-  }
+  await new Promise((resolvePromise, rejectPromise) => {
+    child.stdio[7].write("GPT_CODEX_HWP_START_V1\n", (error) => {
+      if (error === null || error === undefined) resolvePromise();
+      else rejectPromise(error);
+    });
+  });
 }
 
 function closeStart(child) {
-  if (process.platform === "win32") child.stdio[7].end();
-  else if (child.connected) child.disconnect();
-}
-
-function descriptorAbsent(descriptor) {
-  try {
-    fstatSync(descriptor);
-    return false;
-  } catch (error) {
-    if (error?.code === "EBADF") return true;
-    throw error;
-  }
+  child.stdio[7].end();
 }
 
 async function waitForPath(path) {

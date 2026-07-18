@@ -1516,13 +1516,12 @@ test("registration descriptor ownership produces clean EOF after case and bootst
   const payload = JSON.parse(await readFile(markerPath, "utf8")) as {
     payloadPid: number;
     helperPid: number;
-    registrationAbsent: boolean;
-    acknowledgementAbsent: boolean;
+    registrationDeclared: boolean;
     ipcConnected: boolean;
   };
   const helper = JSON.parse(await readFile(`${markerPath}.helper`, "utf8")) as {
     pid: number;
-    descriptorsAbsent: boolean[];
+    registrationDeclared: boolean;
   };
   const closing = coordinator.beginClosing();
   await caseExit;
@@ -1534,10 +1533,9 @@ test("registration descriptor ownership produces clean EOF after case and bootst
   const caseMessage = JSON.parse(caseResult.stdout.trim()) as { bootstrapPid: number };
   assert.deepEqual(retained, [caseMessage.bootstrapPid]);
   assert.equal(payload.payloadPid, caseMessage.bootstrapPid);
-  assert.equal(payload.registrationAbsent, true);
-  assert.equal(payload.acknowledgementAbsent, true);
-  assert.equal(payload.ipcConnected, process.platform !== "win32");
-  assert.deepEqual(helper.descriptorsAbsent, [true, true]);
+  assert.equal(payload.registrationDeclared, false);
+  assert.equal(payload.ipcConnected, false);
+  assert.equal(helper.registrationDeclared, false);
   await waitForPidAbsent(payload.payloadPid);
   await waitForPidAbsent(payload.helperPid);
   await waitForPidAbsent(helper.pid);
@@ -1849,7 +1847,7 @@ function spawnGatedFixture(
   payloadArgument: string,
   registrationMode: RegistrationMode = "absent",
 ): ChildProcess {
-  const stdio: Array<"ignore" | "pipe" | "ipc"> = [
+  const stdio: Array<"ignore" | "pipe"> = [
     "ignore",
     "pipe",
     "pipe",
