@@ -1872,9 +1872,10 @@ function spawnGatedFixture(
         rejectPromise(new Error("timed out waiting for start gate readiness"));
       }, 5_000);
       const cleanup = (): void => {
-        clearTimeout(timeout);
-        child.removeListener("message", onMessage);
-        child.removeListener("error", onError);
+      clearTimeout(timeout);
+      child.removeListener("message", onMessage);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
       };
       const onMessage = (message: unknown): void => {
         if (message !== DOCUMENT_START_GATE_READY_FRAME) {
@@ -1885,12 +1886,17 @@ function spawnGatedFixture(
         cleanup();
         resolvePromise();
       };
-      const onError = (error: Error): void => {
-        cleanup();
-        rejectPromise(error);
-      };
-      child.on("message", onMessage);
-      child.once("error", onError);
+    const onError = (error: Error): void => {
+      cleanup();
+      rejectPromise(error);
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      cleanup();
+      rejectPromise(new Error(`start gate exited code=${String(code)} signal=${String(signal)}`));
+    };
+    child.on("message", onMessage);
+    child.once("error", onError);
+    child.once("close", onClose);
     });
     void readyReceipt.catch(() => {});
     startGateReadyReceipts.set(child, readyReceipt);
@@ -2099,6 +2105,14 @@ async function waitForClose(child: ChildProcess): Promise<Readonly<{
   let stderr = "";
   child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
   child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return {
+      code: child.exitCode,
+      signal: child.signalCode,
+      stdout,
+      stderr,
+    };
+  }
   return await new Promise((resolvePromise, rejectPromise) => {
     const timeout = setTimeout(() => {
       terminate(child);
@@ -2116,6 +2130,7 @@ async function waitForClose(child: ChildProcess): Promise<Readonly<{
 }
 
 function childExitPromise(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolvePromise, rejectPromise) => {
     child.once("error", rejectPromise);
     child.once("close", () => resolvePromise());

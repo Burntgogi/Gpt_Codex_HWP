@@ -189,6 +189,7 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
       clearTimeout(timeout);
       child.removeListener("message", onMessage);
       child.removeListener("error", onError);
+      child.removeListener("close", onClose);
     };
     const onMessage = (message) => {
       cleanup();
@@ -199,8 +200,13 @@ function spawnGatedBootstrap(startGatePath, fixturePath, fixtureArguments) {
       cleanup();
       reject(error);
     };
+    const onClose = (code, signal) => {
+      cleanup();
+      reject(new Error(`start gate exited code=${String(code)} signal=${String(signal)}`));
+    };
     child.on("message", onMessage);
     child.once("error", onError);
+    child.once("close", onClose);
   });
   if (child.startGateReady !== undefined) void child.startGateReady.catch(() => {});
   return child;
