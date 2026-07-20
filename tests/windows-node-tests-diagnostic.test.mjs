@@ -176,6 +176,28 @@ test("Windows Node diagnostic emits a bounded binary-path stage for pc11", async
   );
 });
 
+test("Windows Node diagnostic emits a bounded frozen-tag stage for pc24", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "public-content-policy.test.mjs",
+    runPublicContentDiagnostic: async () => ({
+      passed: false,
+      caseId: "pc24",
+      completionKind: "test-failure",
+      stage: "retarget-tag",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_PUBLIC_CONTENT_FROZEN_TAG stage=retarget-tag\n"
+      + "WINDOWS_PUBLIC_CONTENT_COMPLETION kind=test-failure\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=pc24 status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic maps runtime-projection failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({

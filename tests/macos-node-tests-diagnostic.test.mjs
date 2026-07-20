@@ -8,6 +8,7 @@ import {
   executeBoundedNodeTestFile,
   failedTopLevelFailureKind,
   failedTopLevelOrdinal,
+  failedTopLevelTestCodeReason,
   runMacNodeTestsDiagnostic,
 } from "../scripts/macos-node-tests-diagnostic.mjs";
 
@@ -251,6 +252,7 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
     runDocumentProcessDiagnostic: async () => ({
       caseId: "dp45",
       failureKind: "test-timeout",
+      testCodeReason: "async-activity",
       stage: "cleanup-complete",
     }),
     runDocumentSequentialDiagnostic: async () => {
@@ -266,6 +268,7 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
     output,
     "MAC_DOCUMENT_SEQUENTIAL stage=cleanup-complete\n"
       + "MAC_DOCUMENT_SEQUENTIAL_FAILURE kind=test-timeout\n"
+      + "MAC_DOCUMENT_SEQUENTIAL_TEST_CODE reason=async-activity\n"
       + "MAC_NODE_TEST_CASE case=dp45 status=failed\n",
   );
 });
@@ -354,6 +357,21 @@ test("Node TAP completion classifier exposes only fixed bounded outcomes", () =>
   ), "test-failure");
   assert.equal(classifyNodeTestCompletion("PRIVATE/path", 1, null), "invalid-summary");
   assert.equal(classifyNodeTestCompletion(clean, null, "SIGKILL"), "child-signal");
+});
+
+test("Node test-code parser exposes only fixed non-content reasons", () => {
+  assert.equal(failedTopLevelTestCodeReason(
+    "not ok 45 - private\n  failureType: 'testCodeFailure'\n  code: 'ERR_ASSERTION'\n# fail 1\n",
+  ), "assertion");
+  assert.equal(failedTopLevelTestCodeReason(
+    "not ok 45 - private\n  failureType: 'testCodeFailure'\n# Warning: generated asynchronous activity after the test ended\n# fail 1\n",
+  ), "async-activity");
+  assert.equal(failedTopLevelTestCodeReason(
+    "not ok 45 - private\n  failureType: 'testCodeFailure'\n  code: 'ERR_TEST_FAILURE'\n# fail 1\n",
+  ), "test-failure");
+  assert.equal(failedTopLevelTestCodeReason(
+    "not ok 45 - private\n  failureType: 'testTimeoutFailure'\n  code: 'ERR_TEST_FAILURE'\n# fail 1\n",
+  ), undefined);
 });
 
 test("macOS Node diagnostic reports the fixed aggregate id when every compact-runtime case passes alone", async () => {

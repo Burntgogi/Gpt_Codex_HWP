@@ -617,55 +617,71 @@ test("Git history requires exact names and scans every header plus ref label", a
 });
 
 test("Git history pins frozen releases to annotated tag objects and peeled commits", async (t) => {
-  const root = await temporaryGitRepository(t, "public-history-frozen-tags-");
-  const pinnedCommit = await commitFile(root, "safe.txt", "safe\n", "safe", OWNER_EMAIL);
-  git(root, ["tag", "-a", "v-inner", "-m", "inner frozen release"]);
-  git(root, ["tag", "-a", "v-test", "-m", "outer frozen release", "v-inner"]);
-  const pinnedTagObject = git(root, ["rev-parse", "refs/tags/v-test"]).trim();
-  const expected = new Map([["v-test", Object.freeze({
-    tagObject: pinnedTagObject,
-    commit: pinnedCommit,
-  })]]);
+  let stage = "SETUP";
+  const enterStage = (value) => {
+    stage = value;
+    t.diagnostic(`PUBLIC_CONTENT_FROZEN_TAG_STAGE_${value}`);
+  };
+  try {
+    enterStage("SETUP");
+    const root = await temporaryGitRepository(t, "public-history-frozen-tags-");
+    const pinnedCommit = await commitFile(root, "safe.txt", "safe\n", "safe", OWNER_EMAIL);
+    git(root, ["tag", "-a", "v-inner", "-m", "inner frozen release"]);
+    git(root, ["tag", "-a", "v-test", "-m", "outer frozen release", "v-inner"]);
+    const pinnedTagObject = git(root, ["rev-parse", "refs/tags/v-test"]).trim();
+    const expected = new Map([["v-test", Object.freeze({
+      tagObject: pinnedTagObject,
+      commit: pinnedCommit,
+    })]]);
 
-  const passed = await scanPublicHistory({ root, frozenReleaseTags: expected });
-  assert.equal(passed.findings.length, 0);
+    enterStage("INITIAL_PASS");
+    const passed = await scanPublicHistory({ root, frozenReleaseTags: expected });
+    assert.equal(passed.findings.length, 0);
 
-  const otherCommit = await commitFile(root, "retargeted.txt", "safe\n", "retarget", OWNER_EMAIL);
-  await assert.rejects(
-    scanPublicHistory({
-      root,
-      frozenReleaseTags: new Map([["v-test", Object.freeze({
-        tagObject: pinnedTagObject,
-        commit: otherCommit,
-      })]]),
-    }),
-    /history scan failed/iu,
-  );
+    enterStage("RETARGET_COMMIT");
+    const otherCommit = await commitFile(root, "retargeted.txt", "safe\n", "retarget", OWNER_EMAIL);
+    await assert.rejects(
+      scanPublicHistory({
+        root,
+        frozenReleaseTags: new Map([["v-test", Object.freeze({
+          tagObject: pinnedTagObject,
+          commit: otherCommit,
+        })]]),
+      }),
+      /history scan failed/iu,
+    );
 
-  git(root, ["tag", "-d", "v-test"]);
-  git(root, ["tag", "-a", "v-test", "-m", "retargeted release"]);
-  await assert.rejects(
-    scanPublicHistory({ root, frozenReleaseTags: expected }),
-    /history scan failed/iu,
-  );
+    enterStage("RETARGET_TAG");
+    git(root, ["tag", "-d", "v-test"]);
+    git(root, ["tag", "-a", "v-test", "-m", "retargeted release"]);
+    await assert.rejects(
+      scanPublicHistory({ root, frozenReleaseTags: expected }),
+      /history scan failed/iu,
+    );
 
-  git(root, ["tag", "-d", "v-test"]);
-  git(root, ["tag", "v-test", pinnedCommit]);
-  await assert.rejects(
-    scanPublicHistory({ root, frozenReleaseTags: expected }),
-    /history scan failed/iu,
-  );
+    enterStage("LIGHTWEIGHT");
+    git(root, ["tag", "-d", "v-test"]);
+    git(root, ["tag", "v-test", pinnedCommit]);
+    await assert.rejects(
+      scanPublicHistory({ root, frozenReleaseTags: expected }),
+      /history scan failed/iu,
+    );
 
-  await assert.rejects(
-    scanPublicHistory({
-      root,
-      frozenReleaseTags: new Map([["v-missing", Object.freeze({
-        tagObject: pinnedTagObject,
-        commit: pinnedCommit,
-      })]]),
-    }),
-    /history scan failed/iu,
-  );
+    enterStage("MISSING");
+    await assert.rejects(
+      scanPublicHistory({
+        root,
+        frozenReleaseTags: new Map([["v-missing", Object.freeze({
+          tagObject: pinnedTagObject,
+          commit: pinnedCommit,
+        })]]),
+      }),
+      /history scan failed/iu,
+    );
+    enterStage("BODY_COMPLETE");
+  } catch {
+    throw new Error(`PUBLIC_CONTENT_FROZEN_TAG_${stage}`);
+  }
 });
 
 test("Git history production pins contain the exact published identities with no CLI bypass", async () => {

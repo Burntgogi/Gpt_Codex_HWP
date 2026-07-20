@@ -98,6 +98,18 @@ const PUBLIC_CONTENT_BINARY_PATH_PROGRESS_CODES = Object.freeze([
   "PUBLIC_CONTENT_BINARY_PATH_STAGE_FINDING",
   "PUBLIC_CONTENT_BINARY_PATH_STAGE_BODY_COMPLETE",
 ]);
+const PUBLIC_CONTENT_FROZEN_TAG_STAGES = new Set([
+  "setup", "initial-pass", "retarget-commit", "retarget-tag", "lightweight", "missing",
+  "body-complete",
+]);
+const PUBLIC_CONTENT_FROZEN_TAG_CODES = Object.freeze(
+  [...PUBLIC_CONTENT_FROZEN_TAG_STAGES].map((stage) =>
+    `PUBLIC_CONTENT_FROZEN_TAG_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
+const PUBLIC_CONTENT_FROZEN_TAG_PROGRESS_CODES = Object.freeze(
+  [...PUBLIC_CONTENT_FROZEN_TAG_STAGES].map((stage) =>
+    `PUBLIC_CONTENT_FROZEN_TAG_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
 
 export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -204,7 +216,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
               caseId = candidate.caseId;
             }
             if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate.stage)
-              || PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate.stage)) {
+              || PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate.stage)
+              || PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate.stage)) {
               stage = candidate.stage;
             }
             if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
@@ -217,6 +230,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
           stdout.write(`WINDOWS_PUBLIC_CONTENT_METADATA stage=${stage ?? "diagnostic-failed"}\n`);
         } else if (caseId === "pc11") {
           stdout.write(`WINDOWS_PUBLIC_CONTENT_BINARY_PATH stage=${stage ?? "diagnostic-failed"}\n`);
+        } else if (caseId === "pc24") {
+          stdout.write(`WINDOWS_PUBLIC_CONTENT_FROZEN_TAG stage=${stage ?? "diagnostic-failed"}\n`);
         }
         if (completionKind !== undefined) {
           stdout.write(`WINDOWS_PUBLIC_CONTENT_COMPLETION kind=${completionKind}\n`);
@@ -298,6 +313,7 @@ async function executePublicContentDiagnostic() {
     fixedDiagnostics: [
       ...PUBLIC_CONTENT_METADATA_CODES,
       ...PUBLIC_CONTENT_BINARY_PATH_CODES,
+      ...PUBLIC_CONTENT_FROZEN_TAG_CODES,
     ],
     onFixedDiagnostic: (code) => {
       if (code.startsWith("PUBLIC_CONTENT_METADATA_")) {
@@ -306,13 +322,26 @@ async function executePublicContentDiagnostic() {
         if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate)) stage = candidate;
       } else if (code === "PUBLIC_CONTENT_BINARY_PATH_FINDING") {
         stage = "binary-path-finding";
+      } else if (code.startsWith("PUBLIC_CONTENT_FROZEN_TAG_")) {
+        const candidate = code.slice("PUBLIC_CONTENT_FROZEN_TAG_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate)) stage = candidate;
       }
     },
-    fixedProgressDiagnostics: PUBLIC_CONTENT_BINARY_PATH_PROGRESS_CODES,
+    fixedProgressDiagnostics: [
+      ...PUBLIC_CONTENT_BINARY_PATH_PROGRESS_CODES,
+      ...PUBLIC_CONTENT_FROZEN_TAG_PROGRESS_CODES,
+    ],
     onFixedProgressDiagnostic: (code) => {
-      const candidate = `binary-path-${code.slice("PUBLIC_CONTENT_BINARY_PATH_STAGE_".length)
-        .toLowerCase().replaceAll("_", "-")}`;
-      if (PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate)) stage = candidate;
+      if (code.startsWith("PUBLIC_CONTENT_BINARY_PATH_STAGE_")) {
+        const candidate = `binary-path-${code.slice("PUBLIC_CONTENT_BINARY_PATH_STAGE_".length)
+          .toLowerCase().replaceAll("_", "-")}`;
+        if (PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate)) stage = candidate;
+      } else if (code.startsWith("PUBLIC_CONTENT_FROZEN_TAG_STAGE_")) {
+        const candidate = code.slice("PUBLIC_CONTENT_FROZEN_TAG_STAGE_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate)) stage = candidate;
+      }
     },
   });
   return {

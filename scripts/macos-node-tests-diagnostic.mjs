@@ -366,6 +366,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let caseId = "aggregate";
         let completionKind;
         let failureKind;
+        let testCodeReason;
         let firstFailureStage;
         try {
           const candidate = documentReceipt ?? await runDocumentProcessDiagnostic();
@@ -388,6 +389,10 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
               .includes(candidate.completionKind)) {
               completionKind = candidate.completionKind;
             }
+            if (["assertion", "async-activity", "test-failure", "unknown"]
+              .includes(candidate.testCodeReason)) {
+              testCodeReason = candidate.testCodeReason;
+            }
           }
         } catch {}
         if (caseId === "dp45") {
@@ -404,6 +409,9 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           }
           if (completionKind !== undefined) {
             stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_COMPLETION kind=${completionKind}\n`);
+          }
+          if (testCodeReason !== undefined) {
+            stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_TEST_CODE reason=${testCodeReason}\n`);
           }
         }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
@@ -468,6 +476,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
   let ordinal;
   let failureKind;
   let stage;
+  let testCodeReason;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
@@ -477,6 +486,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     onCompletionKind: (value) => { completionKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     onFailedTopLevelFailureKind: (value) => { failureKind = value; },
+    onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
     onFixedDiagnostic: (code) => {
       const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
@@ -497,6 +507,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     completionKind,
     failureKind,
     stage,
+    testCodeReason,
   };
 }
 
@@ -679,6 +690,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         forwardFixedDiagnostic(chunks, capturedBytes, options);
         forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
         forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
+        forwardFailedTopLevelTestCodeReason(chunks, capturedBytes, options);
         forwardCompletionKind(chunks, capturedBytes, code, signal, options);
         finish(code === 0 && signal === null && validTapReceipt(
           chunks, capturedBytes, options.allowAllSkipped === true,
@@ -749,6 +761,28 @@ export function failedTopLevelFailureKind(text) {
   if (raw === "testCodeFailure" || raw === "subtestsFailed") return "test-code";
   if (raw === "uncaughtException" || raw === "unhandledRejection") return "async-failure";
   if (raw === "cancelledByParent") return "cancelled";
+  return "unknown";
+}
+
+function forwardFailedTopLevelTestCodeReason(chunks, capturedBytes, options) {
+  if (typeof options.onFailedTopLevelTestCodeReason !== "function") return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
+  catch { return; }
+  const reason = failedTopLevelTestCodeReason(text);
+  if (reason === undefined) return;
+  try { options.onFailedTopLevelTestCodeReason(reason); } catch {}
+}
+
+export function failedTopLevelTestCodeReason(text) {
+  if (typeof text !== "string" || !/^not ok [1-9][0-9]* - /mu.test(text)
+    || !/^# fail [1-9][0-9]*$/mu.test(text)
+    || !/^  failureType: 'testCodeFailure'$/mu.test(text)) return undefined;
+  if (/^  code: 'ERR_ASSERTION'$/mu.test(text)) return "assertion";
+  if (/generated asynchronous activity after (?:the )?test ended/iu.test(text)) {
+    return "async-activity";
+  }
+  if (/^  code: 'ERR_TEST_FAILURE'$/mu.test(text)) return "test-failure";
   return "unknown";
 }
 
