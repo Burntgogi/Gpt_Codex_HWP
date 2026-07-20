@@ -47,12 +47,18 @@ const SAFE_ERROR_CODES = new Set([
   "ENGINE_RESOURCE_LIMIT",
   "ENGINE_TIMEOUT",
   "ENGINE_CRASH",
+  "ENGINE_INIT_FAILED",
   "ENGINE_PROTOCOL_ERROR",
   "ENGINE_TERMINATION_FAILED",
   "BENCHMARK_PROBE_FAILED",
   "BENCHMARK_SOURCE_CHANGED",
 ]);
 const SAFE_PROBE_ERROR_CODES = new Set([...SAFE_ERROR_CODES, "ENGINE_INIT_FAILED"]);
+const SAFE_CASE_PHASES = new Set(["facade", "snapshot", "detect", "probe"]);
+const SAFE_ENGINE_STAGES = new Set([
+  "startup", "detect", "parse", "render", "generateHwpx", "patchHwpx",
+  "fillHwpx", "validateHwpx", "insertImage", "shutdown",
+]);
 const SAFE_BENCHMARK_DIAGNOSTIC_STAGES = new Set([
   "ready-mode-1",
   "ready-mode-2",
@@ -506,7 +512,7 @@ async function runFreshCase(sizeMiB, outputParent) {
       env: process.env,
       controlFrame: owner.control,
     });
-    forwardSafeProbeDiagnostic(result.stderr);
+    forwardSafeCaseDiagnostics(result.stderr);
     assertCaseProcessGone(result);
     let receipt;
     if (result.status === "passed") {
@@ -545,11 +551,34 @@ export function formatBenchmarkProbeFailure(error) {
   return `BENCHMARK_PROBE_FAILURE engineCode=${code}`;
 }
 
-function forwardSafeProbeDiagnostic(stderr) {
+export function formatBenchmarkCaseFailure(error, phase) {
+  let code = "ENGINE_CRASH";
+  let stage = "unknown";
+  try {
+    if (typeof error?.code === "string" && SAFE_PROBE_ERROR_CODES.has(error.code)) {
+      code = error.code;
+    }
+    if (typeof error?.details?.stage === "string" && SAFE_ENGINE_STAGES.has(error.details.stage)) {
+      stage = error.details.stage;
+    }
+  } catch {}
+  const safePhase = SAFE_CASE_PHASES.has(phase) ? phase : "unknown";
+  return `BENCHMARK_CASE_FAILURE phase=${safePhase} engineCode=${code} stage=${stage}`;
+}
+
+function forwardSafeCaseDiagnostics(stderr) {
   if (typeof stderr !== "string") return;
-  const match = /^BENCHMARK_PROBE_FAILURE engineCode=([A-Z_]+)\n?$/u.exec(stderr);
-  if (match === null || !SAFE_PROBE_ERROR_CODES.has(match[1])) return;
-  process.stderr.write(`${match[0].trim()}\n`);
+  for (const line of stderr.split(/\r?\n/u)) {
+    const probe = /^BENCHMARK_PROBE_FAILURE engineCode=([A-Z_]+)$/u.exec(line);
+    if (probe !== null && SAFE_PROBE_ERROR_CODES.has(probe[1])) {
+      process.stderr.write(`${line}\n`);
+      continue;
+    }
+    const failure = /^BENCHMARK_CASE_FAILURE phase=(facade|snapshot|detect|probe|unknown) engineCode=([A-Z_]+) stage=(startup|detect|parse|render|generateHwpx|patchHwpx|fillHwpx|validateHwpx|insertImage|shutdown|unknown)$/u.exec(line);
+    if (failure !== null && SAFE_PROBE_ERROR_CODES.has(failure[2])) {
+      process.stderr.write(`${line}\n`);
+    }
+  }
 }
 
 export function assertCaseProcessGone(result) {
@@ -955,16 +984,19 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
   const sourcePath = join(ownedCase, "source.hwpx");
   const started = telemetry.started;
   let outcome;
+  let phase = "facade";
   const source = await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes });
   await writeCaseMetadata(ownedCase, source);
   let facade;
   try {
     facade = await createCaseFacade();
+    phase = "snapshot";
     const { openDocumentSnapshot } = await import("../src/shared/document-snapshot.ts");
     const snapshot = await openDocumentSnapshot(sourcePath, {
       testHooks: { spoolRoot: ownedCase },
     });
     let responseBytes = 0;
+    phase = "detect";
     try {
       const result = await facade.detect(snapshot, {
         deadlineMs: Math.max(1, CASE_DEADLINE_MS - Math.ceil(performance.now() - started) - 30_000),
@@ -975,6 +1007,7 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
       }
       responseBytes = Buffer.byteLength(JSON.stringify(result.payload));
     } catch (error) {
+      process.stderr.write(`${formatBenchmarkCaseFailure(error, phase)}\n`);
       const errorCode = safeEngineErrorCode(error);
       outcome = {
         responseBytes: 0,
@@ -992,6 +1025,7 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
       };
     }
   } catch (error) {
+    process.stderr.write(`${formatBenchmarkCaseFailure(error, phase)}\n`);
     const errorCode = safeEngineErrorCode(error);
     outcome = {
       responseBytes: 0,
@@ -1002,6 +1036,7 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
     };
   }
   try {
+    phase = "probe";
     if (facade === undefined) throw benchmarkError("BENCHMARK_PROBE_FAILED");
     await runNormalProbe(ownedCase, facade);
   } catch (error) {

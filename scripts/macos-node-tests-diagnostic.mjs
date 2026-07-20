@@ -72,6 +72,11 @@ const ASSETS_CASES = Object.freeze([
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
   allowAllSkipped: index === 5,
 })));
+const SVG_ASSET_BOUNDARIES = new Set([
+  "root", "handler-import", "sharp-import", "handler", "handler-error",
+  "handler-warning", "svg-read", "svg-content", "png-read", "png-magic",
+  "metadata", "dimensions", "passed", "diagnostic-failed",
+]);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -104,6 +109,13 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       allowAllSkipped: record.allowAllSkipped,
     },
   ));
+  const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
+    ?? (() => executeSvgAssetDiagnostic({
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+    }));
 
   for (const file of TEST_FILES) {
     let passed = false;
@@ -128,6 +140,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           let casePassed = false;
           try { casePassed = await runAssetsCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
+            if (record.id === "as03") {
+              let boundary = "diagnostic-failed";
+              try {
+                const candidate = await runAssetsRenderDiagnostic();
+                if (SVG_ASSET_BOUNDARIES.has(candidate)) boundary = candidate;
+              } catch {}
+              stdout.write(`MAC_SVG_ASSET boundary=${boundary}\n`);
+            }
             stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;
@@ -145,6 +165,75 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   stdout.write(`MAC_NODE_TEST_FILES status=passed files=${TEST_FILES.length}\n`);
   setExitCode(0);
   return true;
+}
+
+function executeSvgAssetDiagnostic(options) {
+  return new Promise((resolveDiagnostic) => {
+    let child;
+    let settled = false;
+    let stopping = false;
+    let capturedBytes = 0;
+    const chunks = [];
+    let testTimer;
+    let closeTimer;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(testTimer);
+      clearTimeout(closeTimer);
+      child?.stdout?.destroy();
+      resolveDiagnostic(value);
+    };
+    const stopUnverified = () => {
+      if (settled || stopping) return;
+      stopping = true;
+      clearTimeout(testTimer);
+      try { void options.terminateTree(child); } catch {}
+      closeTimer = setTimeout(() => finish("diagnostic-failed"), options.closeTimeoutMs);
+    };
+    try {
+      child = options.spawnProcess(process.execPath, [
+        "--import", "tsx", "benchmarks/macos-svg-asset-diagnostic.mjs",
+      ], {
+        cwd: PACKAGE_ROOT,
+        stdio: ["ignore", "pipe", "ignore"],
+        detached: true,
+        shell: false,
+        windowsHide: true,
+      });
+    } catch {
+      finish("diagnostic-failed");
+      return;
+    }
+    if (child.stdout === null || child.stdout === undefined || !("on" in child.stdout)) {
+      stopUnverified();
+      return;
+    }
+    child.stdout.once("error", stopUnverified);
+    child.stdout.on("data", (chunk) => {
+      if (!Buffer.isBuffer(chunk) || capturedBytes + chunk.byteLength > 1024) {
+        stopUnverified();
+        return;
+      }
+      capturedBytes += chunk.byteLength;
+      chunks.push(chunk);
+    });
+    child.once("error", stopUnverified);
+    child.once("close", (code, signal) => {
+      if (stopping || code !== 0 || signal !== null) {
+        finish("diagnostic-failed");
+        return;
+      }
+      let text = "";
+      try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
+      catch { finish("diagnostic-failed"); return; }
+      const match = /^MAC_SVG_ASSET boundary=([a-z-]+)\n?$/u.exec(text);
+      finish(match !== null && SVG_ASSET_BOUNDARIES.has(match[1])
+        ? match[1]
+        : "diagnostic-failed");
+    });
+    testTimer = setTimeout(stopUnverified, options.testTimeoutMs);
+  });
 }
 
 function executeTestFile(file, options) {

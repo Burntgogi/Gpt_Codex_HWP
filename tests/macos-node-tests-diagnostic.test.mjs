@@ -121,12 +121,33 @@ test("macOS Node diagnostic narrows an assets aggregate failure to one fixed cas
       cases.push(record.id);
       return record.id !== "as03";
     },
+    runAssetsRenderDiagnostic: async () => "handler-warning",
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
   });
   assert.equal(passed, false);
   assert.deepEqual(cases, ["as01", "as02", "as03"]);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=as03 status=failed\n");
+  assert.equal(
+    output,
+    "MAC_SVG_ASSET boundary=handler-warning\nMAC_NODE_TEST_CASE case=as03 status=failed\n",
+  );
+});
+
+test("macOS SVG diagnostic output is fixed and redacts invalid diagnostic values", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "assets.test.ts",
+    runAssetsCase: async (record) => record.id !== "as03",
+    runAssetsRenderDiagnostic: async () =>
+      `C:\\private ${["AWS", "_SECRET_ACCESS_KEY=value"].join("")}`,
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_SVG_ASSET boundary=diagnostic-failed\nMAC_NODE_TEST_CASE case=as03 status=failed\n",
+  );
 });
 
 test("macOS Node diagnostic reports the fixed aggregate id when every assets case passes alone", async () => {

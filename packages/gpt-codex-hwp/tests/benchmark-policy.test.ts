@@ -27,6 +27,7 @@ import {
   executeBounded,
   classifyBenchmarkSupervisorFrame,
   formatBenchmarkFailure,
+  formatBenchmarkCaseFailure,
   formatBenchmarkProbeFailure,
   formatBenchmarkProgress,
   parseBenchmarkArguments,
@@ -1255,5 +1256,25 @@ test("benchmark probe diagnostics expose only an allowlisted engine code", () =>
   assert.equal(
     formatBenchmarkProbeFailure({ code: "C:\\private\\document.hwpx" }),
     "BENCHMARK_PROBE_FAILURE engineCode=ENGINE_CRASH",
+  );
+});
+
+test("benchmark case diagnostics expose only allowlisted phases, codes, and stages", () => {
+  assert.equal(
+    formatBenchmarkCaseFailure(
+      { code: "ENGINE_INIT_FAILED", details: { stage: "startup" } },
+      "detect",
+    ),
+    "BENCHMARK_CASE_FAILURE phase=detect engineCode=ENGINE_INIT_FAILED stage=startup",
+  );
+  assert.equal(
+    formatBenchmarkCaseFailure(
+      {
+        code: "C:\\private\\document.hwpx",
+        details: { stage: `${["AWS", "_SECRET_ACCESS_KEY"].join("")}=value` },
+      },
+      "C:\\private",
+    ),
+    "BENCHMARK_CASE_FAILURE phase=unknown engineCode=ENGINE_CRASH stage=unknown",
   );
 });
