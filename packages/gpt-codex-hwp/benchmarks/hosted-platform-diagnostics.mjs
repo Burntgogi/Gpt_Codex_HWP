@@ -10,6 +10,13 @@ const WINDOWS_BOUNDARIES = new Set([
   "helper-close",
   "target-close",
 ]);
+const WINDOWS_LATE_BOUNDARIES = new Set([
+  "ready-late",
+  "late-preframe-error",
+  "observer-timeout",
+  "helper-close",
+  "target-close",
+]);
 const MAC_BACKEND_BOUNDARIES = new Set([
   "worker-error",
   "worker-exit",
@@ -64,40 +71,73 @@ export async function runHostedWindowsSupervisorDiagnostic(dependencies = {}) {
   ));
   const observeTargetClose = dependencies.observeTargetClose
     ?? childClient.observeChildProcessClose;
-  const superviseTarget = dependencies.superviseTarget ?? ((target, observe) =>
+  const superviseTarget = dependencies.superviseTarget ?? ((target, observe, observeLate) =>
     childClient.superviseDocumentProcessTree(target, {
       hostedDiagnosticObserver: observe,
+      hostedDiagnosticLateObserver: observeLate,
     }));
   let target;
   let boundary = "helper-spawn";
+  let lateBoundary;
+  let targetClose;
   try {
     target = spawnTarget();
-    const targetClose = observeTargetClose(target);
+    targetClose = observeTargetClose(target);
     const supervisor = await superviseTarget(target, (value) => {
       boundary = WINDOWS_BOUNDARIES.has(value) ? value : "frame-invalid";
+    }, (value) => {
+      lateBoundary = WINDOWS_LATE_BOUNDARIES.has(value) ? value : "late-preframe-error";
     });
-    if (boundary !== "ready-mode-1") return Object.freeze({ boundary });
-    const receipt = await supervisor.terminate();
-    if (receipt?.gone !== true || receipt?.proof !== "windows-job-empty"
-      || Object.keys(receipt).sort().join(",") !== "gone,proof") {
-      return Object.freeze({
-        boundary: boundary === "helper-close" ? boundary : "termination-receipt",
-      });
+    if (boundary === "ready-mode-1") {
+      const receipt = await supervisor.terminate();
+      if (receipt?.gone !== true || receipt?.proof !== "windows-job-empty"
+        || Object.keys(receipt).sort().join(",") !== "gone,proof") {
+        boundary = boundary === "helper-close" ? boundary : "termination-receipt";
+      } else {
+        boundary = "helper-close";
+        const close = await waitForBoundedReceipt(targetClose, targetCloseTimeoutMs);
+        if (!isExactWindowsTargetCloseReceipt(close)) {
+          boundary = "target-close";
+        } else {
+          boundary = "target-close";
+        }
+      }
     }
-    boundary = "helper-close";
-    const close = await waitForBoundedReceipt(targetClose, targetCloseTimeoutMs);
-    if (close === undefined) return Object.freeze({ boundary: "target-close" });
-    if (close?.error !== null || (close?.code !== null && !Number.isInteger(close.code))) {
-      return Object.freeze({ boundary: "target-close" });
-    }
-    return Object.freeze({ boundary: "target-close" });
   } catch {
-    return Object.freeze({ boundary });
+    // The fixed production/late boundaries are returned after typed target cleanup.
   } finally {
-    if (target !== undefined && target.exitCode === null && target.signalCode === null) {
-      try { target.kill("SIGKILL"); } catch {}
+    if (target !== undefined && targetClose !== undefined) {
+      let close = await waitForBoundedReceipt(targetClose, 1);
+      if (!isExactWindowsTargetCloseReceipt(close)) {
+        try { target.kill("SIGKILL"); } catch {}
+        close = await waitForBoundedReceipt(targetClose, targetCloseTimeoutMs);
+      }
+      if (!isExactWindowsTargetCloseReceipt(close)) {
+        if (lateBoundary === undefined) boundary = "target-close";
+        else lateBoundary = "target-close";
+      }
     }
   }
+  return Object.freeze({
+    production: Object.freeze({ boundary }),
+    ...(lateBoundary === undefined
+      ? {}
+      : { late: Object.freeze({ boundary: lateBoundary }) }),
+  });
+}
+
+function isExactWindowsTargetCloseReceipt(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "code,error,signal"
+    || value.error !== null) {
+    return false;
+  }
+  const codePresent = value.code !== null;
+  const signalPresent = value.signal !== null;
+  if (codePresent === signalPresent) return false;
+  if (codePresent) return Number.isSafeInteger(value.code);
+  return value.signal === "SIGBREAK" || value.signal === "SIGINT"
+    || value.signal === "SIGKILL" || value.signal === "SIGTERM";
 }
 
 async function waitForBoundedReceipt(receipt, timeoutMs) {
@@ -142,6 +182,11 @@ async function safeMacProbe(probe) {
 export function formatHostedWindowsSupervisorDiagnostic(value) {
   assertExactBoundary(value, WINDOWS_BOUNDARIES);
   return `HOSTED_WINDOWS_SUPERVISOR boundary=${value.boundary}`;
+}
+
+export function formatHostedWindowsSupervisorLateDiagnostic(value) {
+  assertExactBoundary(value, WINDOWS_LATE_BOUNDARIES);
+  return `HOSTED_WINDOWS_SUPERVISOR_LATE boundary=${value.boundary}`;
 }
 
 export function formatHostedMacBackendDiagnostic(value) {
@@ -306,9 +351,11 @@ async function probeMacWorker() {
 async function main() {
   if (process.argv.length !== 3) throw diagnosticError();
   if (process.argv[2] === "--windows-supervisor") {
-    process.stdout.write(`${formatHostedWindowsSupervisorDiagnostic(
-      await runHostedWindowsSupervisorDiagnostic(),
-    )}\n`);
+    const result = await runHostedWindowsSupervisorDiagnostic();
+    process.stdout.write(`${formatHostedWindowsSupervisorDiagnostic(result.production)}\n`);
+    if (result.late !== undefined) {
+      process.stdout.write(`${formatHostedWindowsSupervisorLateDiagnostic(result.late)}\n`);
+    }
     return;
   }
   if (process.argv[2] === "--mac-worker") {

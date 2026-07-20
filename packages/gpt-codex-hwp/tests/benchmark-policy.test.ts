@@ -59,6 +59,7 @@ test("hosted diagnostic formatters accept only exact bounded tuples", async () =
   const {
     formatHostedMacBackendDiagnostic,
     formatHostedMacWorkerDiagnostic,
+    formatHostedWindowsSupervisorLateDiagnostic,
     formatHostedWindowsSupervisorDiagnostic,
     formatLinuxRealDetectDiagnostic,
   } = await import("../benchmarks/hosted-platform-diagnostics.mjs");
@@ -66,6 +67,10 @@ test("hosted diagnostic formatters accept only exact bounded tuples", async () =
   assert.equal(
     formatHostedWindowsSupervisorDiagnostic({ boundary: "ready-mode-1" }),
     "HOSTED_WINDOWS_SUPERVISOR boundary=ready-mode-1",
+  );
+  assert.equal(
+    formatHostedWindowsSupervisorLateDiagnostic({ boundary: "ready-late" }),
+    "HOSTED_WINDOWS_SUPERVISOR_LATE boundary=ready-late",
   );
   assert.equal(
     formatHostedMacBackendDiagnostic({ boundary: "backend-ready" }),
@@ -92,6 +97,7 @@ test("hosted diagnostic formatters reject raw, unknown, extra-key, and oversized
   const {
     formatHostedMacBackendDiagnostic,
     formatHostedMacWorkerDiagnostic,
+    formatHostedWindowsSupervisorLateDiagnostic,
     formatHostedWindowsSupervisorDiagnostic,
     formatLinuxRealDetectDiagnostic,
   } = await import("../benchmarks/hosted-platform-diagnostics.mjs");
@@ -104,6 +110,18 @@ test("hosted diagnostic formatters reject raw, unknown, extra-key, and oversized
   ];
   for (const value of invalidWindows) {
     assert.throws(() => formatHostedWindowsSupervisorDiagnostic(value), {
+      code: "HOSTED_DIAGNOSTIC_INVALID",
+    });
+    assert.throws(() => formatHostedWindowsSupervisorLateDiagnostic(value), {
+      code: "HOSTED_DIAGNOSTIC_INVALID",
+    });
+  }
+  for (const value of [
+    { boundary: "ready-mode-1" },
+    { boundary: "ready-late\nPRIVATE" },
+    { boundary: "ready-late", extra: "C:\\private\\file" },
+  ]) {
+    assert.throws(() => formatHostedWindowsSupervisorLateDiagnostic(value), {
       code: "HOSTED_DIAGNOSTIC_INVALID",
     });
   }
@@ -165,7 +183,7 @@ test("hosted platform wrappers return only bounded classifier tuples", async () 
         terminate: async () => ({ gone: true, proof: "windows-job-empty" }),
       };
     },
-  }), { boundary: "target-close" });
+  }), { production: { boundary: "target-close" } });
   assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
     platform: "win32",
     arch: "x64",
@@ -175,7 +193,21 @@ test("hosted platform wrappers return only bounded classifier tuples", async () 
       observe("preframe-stderr");
       throw new Error("PRIVATE RAW ERROR");
     },
-  }), { boundary: "preframe-stderr" });
+  }), { production: { boundary: "preframe-stderr" } });
+  assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
+    platform: "win32",
+    arch: "x64",
+    spawnTarget: () => target,
+    observeTargetClose: async () => ({
+      code: "PRIVATE",
+      signal: 17,
+      error: null,
+    }),
+    superviseTarget: async (_target: unknown, observe: (boundary: string) => void) => {
+      observe("preframe-stderr");
+      throw new Error("PRIVATE RAW ERROR");
+    },
+  }), { production: { boundary: "target-close" } });
   assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
     platform: "win32",
     arch: "x64",
@@ -190,7 +222,7 @@ test("hosted platform wrappers return only bounded classifier tuples", async () 
         },
       };
     },
-  }), { boundary: "helper-close" });
+  }), { production: { boundary: "helper-close" } });
   const boundedTargetClose = await Promise.race([
     runHostedWindowsSupervisorDiagnostic({
       platform: "win32",
@@ -209,7 +241,49 @@ test("hosted platform wrappers return only bounded classifier tuples", async () 
       setTimeout(() => resolveTimeout("unbounded"), 100);
     }),
   ]);
-  assert.deepEqual(boundedTargetClose, { boundary: "target-close" });
+  assert.deepEqual(boundedTargetClose, { production: { boundary: "target-close" } });
+
+  assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
+    platform: "win32",
+    arch: "x64",
+    spawnTarget: () => target,
+    observeTargetClose: async () => ({ code: 0, signal: null, error: null }),
+    superviseTarget: async (
+      _target: unknown,
+      observeProduction: (boundary: string) => void,
+      observeLate: (boundary: string) => void,
+    ) => {
+      observeProduction("frame-timeout");
+      observeLate("ready-late");
+      throw new Error("PRIVATE RAW ERROR");
+    },
+  }), {
+    production: { boundary: "frame-timeout" },
+    late: { boundary: "ready-late" },
+  });
+  assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
+    platform: "win32",
+    arch: "x64",
+    spawnTarget: () => target,
+    observeTargetClose: async () => ({
+      code: 0,
+      signal: null,
+      error: null,
+      extra: "C:\\private\\file",
+    }),
+    superviseTarget: async (
+      _target: unknown,
+      observeProduction: (boundary: string) => void,
+      observeLate: (boundary: string) => void,
+    ) => {
+      observeProduction("frame-timeout");
+      observeLate("ready-late");
+      throw new Error("PRIVATE RAW ERROR");
+    },
+  }), {
+    production: { boundary: "frame-timeout" },
+    late: { boundary: "target-close" },
+  });
   assert.deepEqual(await runHostedMacDiagnostics({
     platform: "darwin",
     arch: "arm64",

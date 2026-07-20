@@ -28,6 +28,7 @@ const MAX_LINUX_PROC_STATUS_BYTES = 256 * 1024;
 const MAX_LINUX_TASK_CHILDREN_BYTES = 64 * 1024;
 const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
 const WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 15_000;
+const WINDOWS_HOSTED_LATE_OBSERVER_MS = 10_000;
 const gatedRootGoneErrors = new WeakSet();
 const supervisorHelperUnclosedErrors = new WeakMap();
 const supervisorHelperRetentionsByProcess = new WeakMap();
@@ -119,7 +120,7 @@ export function createDocumentChildClient(dependencies = {}) {
                 await cleanupSnapshot(snapshot);
                 throw createDocumentEngineRunError("ENGINE_TIMEOUT");
             }
-            const startupLifecycle = createStartupLifecycleState(options.signal, requestStartedAt + deadlineMs);
+            const startupLifecycle = createStartupLifecycleState(options.signal, requestStartedAt + deadlineMs, dependencies.startupDeadlineSignalForTest);
             const initialTerminationReason = startupLifecycle.terminationReason();
             if (initialTerminationReason !== undefined) {
                 startupLifecycle.dispose();
@@ -289,7 +290,7 @@ export function createDocumentChildClient(dependencies = {}) {
                 closeStartGate(childStartGate);
                 return terminateExpiredStartup(spawnedChild, snapshot, outputOwner, release, supervisedTerminator, childStartupCapture, startupLifecycle, childStartGate);
             }
-            return runChild(request, snapshot, options, remainingDeadlineMs, spawnedChild, release, outputOwner, supervisedTerminator, dependencies.controlFrameAllocationObserver, childStartupCapture, startupLifecycle, childStartGate);
+            return runChild(request, snapshot, options, remainingDeadlineMs, spawnedChild, release, outputOwner, supervisedTerminator, dependencies.controlFrameAllocationObserver, childStartupCapture, startupLifecycle, childStartGate, dependencies.startupDeadlineSignalForTest);
         },
     };
 }
@@ -527,7 +528,7 @@ async function terminateExpiredStartup(child, snapshot, outputOwner, release, tr
     }
     throw createDocumentEngineRunError("ENGINE_TIMEOUT");
 }
-async function runChild(request, snapshot, options, deadlineMs, child, release, outputOwner, treeTerminator, controlFrameAllocationObserver, startupCapture, startupLifecycle, startGate) {
+async function runChild(request, snapshot, options, deadlineMs, child, release, outputOwner, treeTerminator, controlFrameAllocationObserver, startupCapture, startupLifecycle, startGate, testDeadlineSignal) {
     const startedAt = Date.now();
     const validator = createChildDocumentEventValidator(request.requestId, request.operation, request.operation === "generateHwpx"
         ? 0
@@ -744,11 +745,16 @@ async function runChild(request, snapshot, options, deadlineMs, child, release, 
                 return;
             }
         }
-        deadlineTimer = setTimeout(() => settle({
-            error: new Error("deadline"),
-            terminationReason: "deadline",
-        }), deadlineMs);
-        deadlineTimer.unref();
+        if (testDeadlineSignal === undefined) {
+            deadlineTimer = setTimeout(() => settle({
+                error: new Error("deadline"),
+                terminationReason: "deadline",
+            }), deadlineMs);
+            deadlineTimer.unref();
+        }
+        else {
+            void testDeadlineSignal.wait().then(() => settle({ error: new Error("deadline"), terminationReason: "deadline" }), () => settle({ error: new Error("deadline"), terminationReason: "deadline" }));
+        }
         if (capture.terminal.error !== undefined || capture.terminal.exit !== undefined) {
             settle({
                 error: capture.terminal.error ?? new Error("child exited during startup"),
@@ -799,7 +805,7 @@ async function runChild(request, snapshot, options, deadlineMs, child, release, 
         }
     });
 }
-async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver, forceTracker = false, hostedDiagnosticObserver) {
+async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver, forceTracker = false, hostedDiagnosticObserver, hostedDiagnosticLateObserver) {
     if (child.pid === undefined)
         throw new Error("child pid unavailable");
     const targetCloseReceipt = observeChildProcessClose(child);
@@ -852,17 +858,45 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
     catch (error) {
         const preCleanupTranscript = lines.transcriptReceipt();
         const preCleanupStderrPresent = stderrBytes > 0;
-        if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
-            emitHostedWindowsBoundary(hostedDiagnosticObserver, "helper-close");
-            throw supervisorHelperUnclosedError(helper, closeReceipt);
-        }
-        const helperClose = await closeReceipt;
-        emitHostedWindowsBoundary(hostedDiagnosticObserver, classifyWindowsSupervisorPreframeDiagnostic({
-            helperSpawnFailed: helperClose.error !== null,
+        const productionBoundary = classifyWindowsSupervisorPreframeDiagnostic({
+            helperSpawnFailed: false,
             stderrPresent: preCleanupStderrPresent,
             ...preCleanupTranscript,
             invalidFrame,
-        }));
+        });
+        let lateBoundary;
+        if (productionBoundary === "frame-timeout" &&
+            hostedDiagnosticLateObserver !== undefined) {
+            emitHostedWindowsBoundary(hostedDiagnosticObserver, productionBoundary);
+            lateBoundary = await observeWindowsSupervisorLateReady({
+                targetPid: child.pid,
+                timeoutMs: WINDOWS_HOSTED_LATE_OBSERVER_MS,
+                next: (timeoutMs) => lines.next(timeoutMs),
+                transcriptReceipt: () => lines.transcriptReceipt(),
+                stderrPresent: () => stderrBytes > 0,
+            });
+        }
+        if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
+            if (lateBoundary === undefined) {
+                emitHostedWindowsBoundary(hostedDiagnosticObserver, "helper-close");
+            }
+            else {
+                emitHostedWindowsLateBoundary(hostedDiagnosticLateObserver, "helper-close");
+            }
+            throw supervisorHelperUnclosedError(helper, closeReceipt);
+        }
+        const helperClose = await closeReceipt;
+        if (lateBoundary === undefined) {
+            emitHostedWindowsBoundary(hostedDiagnosticObserver, classifyWindowsSupervisorPreframeDiagnostic({
+                helperSpawnFailed: helperClose.error !== null,
+                stderrPresent: preCleanupStderrPresent,
+                ...preCleanupTranscript,
+                invalidFrame,
+            }));
+        }
+        else {
+            emitHostedWindowsLateBoundary(hostedDiagnosticLateObserver, lateBoundary);
+        }
         throw error;
     }
     let commandSent = false;
@@ -971,6 +1005,47 @@ function emitHostedWindowsBoundary(observer, boundary) {
     }
     catch { }
 }
+function emitHostedWindowsLateBoundary(observer, boundary) {
+    try {
+        observer?.(boundary);
+    }
+    catch { }
+}
+export function observeWindowsSupervisorLateReadyForTest(options) {
+    return observeWindowsSupervisorLateReady(options);
+}
+async function observeWindowsSupervisorLateReady(options) {
+    if (!Number.isSafeInteger(options.targetPid) || options.targetPid <= 0 ||
+        !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0 ||
+        options.timeoutMs > WINDOWS_HOSTED_LATE_OBSERVER_MS) {
+        return "late-preframe-error";
+    }
+    let timer;
+    const outcome = await Promise.race([
+        Promise.resolve().then(() => options.next(options.timeoutMs)).then((frame) => Object.freeze({ kind: "frame", frame }), () => Object.freeze({ kind: "error" })),
+        new Promise((resolve) => {
+            timer = setTimeout(() => resolve(Object.freeze({ kind: "timeout" })), options.timeoutMs);
+        }),
+    ]);
+    if (timer !== undefined)
+        clearTimeout(timer);
+    if (outcome.kind === "timeout")
+        return "observer-timeout";
+    if (outcome.kind === "error")
+        return "late-preframe-error";
+    let transcript;
+    try {
+        transcript = options.transcriptReceipt();
+    }
+    catch {
+        return "late-preframe-error";
+    }
+    const clean = !options.stderrPresent() && !transcript.stdoutEnded &&
+        !transcript.stdoutFailed && !transcript.protocolFailed &&
+        transcript.queuedFrames === 0 && transcript.partialBytes === 0;
+    const ready = new RegExp(`^GPT_CODEX_HWP_JOB READY ${options.targetPid} [12] [0-9]+$`, "u").test(outcome.frame);
+    return clean && ready ? "ready-late" : "late-preframe-error";
+}
 export async function finalizeVerifiedWindowsSupervisor({ closeReceipt, forceClose, allowForceClose, transcriptReceipt, gracefulExitMs = 1_000, forcedExitMs = 4_000, }) {
     const gracefulClose = await waitWithTimeout(closeReceipt, gracefulExitMs);
     if (gracefulClose !== undefined) {
@@ -1004,7 +1079,7 @@ export async function superviseDocumentProcessTree(child, options = {}) {
     if (child.pid === undefined)
         throw new Error("child pid unavailable");
     if (process.platform === "win32") {
-        return createWindowsJobSupervisor(child, 5_000, options.frameObserver, false, options.hostedDiagnosticObserver);
+        return createWindowsJobSupervisor(child, 5_000, options.frameObserver, false, options.hostedDiagnosticObserver, options.hostedDiagnosticLateObserver);
     }
     return createPosixProcessTreeSupervisor(child, process.platform, {
         deferProcessTreeTelemetryStop: options.deferProcessTreeTelemetryStop,
@@ -1046,6 +1121,7 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
         clearInterval(handle);
     });
     let telemetryState = "initializing";
+    let telemetryQuiescing = false;
     let sampler;
     let sampleRunning = false;
     let sampleRequested = false;
@@ -1084,6 +1160,7 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
     };
     const deactivateTelemetry = (state) => {
         telemetryState = state;
+        telemetryQuiescing = false;
         settleTelemetryReady(false);
         sampleRequested = false;
         clearSampler();
@@ -1096,6 +1173,16 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
         if (telemetryState !== "active" || sampleRunning ||
             coveredTelemetryGeneration < requiredTelemetryGeneration)
             return;
+        if (telemetryQuiescing) {
+            stoppedProcessTreeRss = readCompleteProcessTreeRss();
+            const available = stoppedProcessTreeRss !== undefined;
+            const waiters = [...coverageWaiters];
+            coverageWaiters.clear();
+            deactivateTelemetry("stopped");
+            for (const settle of waiters)
+                settle(available);
+            return;
+        }
         for (const settle of coverageWaiters)
             settle(true);
         coverageWaiters.clear();
@@ -1112,8 +1199,8 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
             return undefined;
         }
     };
-    const queueSample = () => {
-        if (telemetryState !== "active")
+    const queueSample = (requiredForFlush = false) => {
+        if (telemetryState !== "active" || (telemetryQuiescing && !requiredForFlush))
             return;
         if (sampleRunning) {
             sampleRequested = true;
@@ -1136,9 +1223,9 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
             if (telemetryState !== "active")
                 return;
             coveredTelemetryGeneration = Math.max(coveredTelemetryGeneration, sampleGeneration);
-            if (sampleRequested ||
-                coveredTelemetryGeneration < requiredTelemetryGeneration) {
-                queueSample();
+            if (coveredTelemetryGeneration < requiredTelemetryGeneration ||
+                (!telemetryQuiescing && sampleRequested)) {
+                queueSample(telemetryQuiescing);
                 return;
             }
             settleCoverageWaiters();
@@ -1170,7 +1257,7 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
                 return;
             telemetryState = "active";
             try {
-                sampler = scheduleInterval(queueSample, platform === "linux" ? LINUX_PROCESS_SAMPLE_MS : MACOS_PROCESS_SAMPLE_MS);
+                sampler = scheduleInterval(() => queueSample(), platform === "linux" ? LINUX_PROCESS_SAMPLE_MS : MACOS_PROCESS_SAMPLE_MS);
                 sampler.unref();
                 settleTelemetryReady(true);
             }
@@ -1196,7 +1283,7 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
     return {
         processTreeTelemetryReady,
         registerProcessTreeTelemetryRoot(identity) {
-            if (telemetryState !== "active") {
+            if (telemetryState !== "active" || telemetryQuiescing) {
                 throw new Error("process-tree telemetry is not active");
             }
             const key = `${identity.pid}:${identity.processGroupId}:${identity.identity}:${identity.startOrder}`;
@@ -1212,15 +1299,18 @@ async function createPosixProcessTreeSupervisor(child, platform, dependencies = 
             stopTelemetry();
         },
         flushProcessTreeTelemetry() {
+            if (telemetryState === "stopped") {
+                return Promise.resolve(stoppedProcessTreeRss !== undefined);
+            }
             if (telemetryState !== "active")
                 return Promise.resolve(false);
-            if (!sampleRunning && coveredTelemetryGeneration >= requiredTelemetryGeneration) {
-                return Promise.resolve(true);
-            }
+            telemetryQuiescing = true;
+            clearSampler();
             return new Promise((resolvePromise) => {
                 coverageWaiters.add(resolvePromise);
-                if (!sampleRunning)
-                    queueSample();
+                if (!sampleRunning && coveredTelemetryGeneration < requiredTelemetryGeneration) {
+                    queueSample(true);
+                }
                 settleCoverageWaiters();
             });
         },
@@ -1728,26 +1818,36 @@ export async function snapshotRegisteredPosixProcessGroupIdentity(pid, platform 
         startOrder: record.startOrder,
     });
 }
-async function snapshotLinuxProcess(pid, requireRss = true) {
+export function snapshotLinuxProcessForTest(pid, requireRss, readProcText) {
+    return snapshotLinuxProcess(pid, requireRss, readProcText);
+}
+async function snapshotLinuxProcess(pid, requireRss = true, readProcText = readBoundedProcText) {
     try {
-        const statBefore = await readBoundedProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
+        const statBefore = await readProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
         const status = requireRss
-            ? await readBoundedProcText(`/proc/${pid}/status`, MAX_LINUX_PROC_STATUS_BYTES)
+            ? await readProcText(`/proc/${pid}/status`, MAX_LINUX_PROC_STATUS_BYTES)
             : undefined;
-        const statAfter = await readBoundedProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
+        const statAfter = await readProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
         const before = parseLinuxStat(pid, statBefore);
         const after = parseLinuxStat(pid, statAfter);
         if (before.identity !== after.identity || before.parentPid !== after.parentPid)
             return undefined;
+        const record = linuxPosixProcessRecord(after);
         if (status === undefined)
-            return Object.freeze({ ...after, rssBytes: 0 });
+            return Object.freeze({ ...record, rssBytes: 0 });
         const rssMatch = /^VmRSS:\s+([0-9]+)\s+kB$/mu.exec(status);
-        if (rssMatch === null)
+        if (rssMatch === null) {
+            const statusState = /^State:\s+([A-Za-z])(?:\s|\()/mu.exec(status)?.[1];
+            if (before.state === after.state && statusState === after.state &&
+                (after.state === "Z" || after.state === "X")) {
+                return Object.freeze({ ...record, rssBytes: 0 });
+            }
             throw new Error("Linux VmRSS unavailable");
+        }
         const rssBytes = Number(rssMatch[1]) * 1024;
         if (!Number.isSafeInteger(rssBytes) || rssBytes < 0)
             throw new Error("invalid Linux VmRSS");
-        return Object.freeze({ ...after, rssBytes });
+        return Object.freeze({ ...record, rssBytes });
     }
     catch (error) {
         if (isMissingProcessError(error))
@@ -1774,6 +1874,15 @@ async function readBoundedProcText(path, maxBytes) {
         await handle.close();
     }
 }
+function linuxPosixProcessRecord(stat) {
+    return Object.freeze({
+        pid: stat.pid,
+        parentPid: stat.parentPid,
+        processGroupId: stat.processGroupId,
+        identity: stat.identity,
+        startOrder: stat.startOrder,
+    });
+}
 function parseLinuxStat(pid, stat) {
     if (stat.length > 64 * 1024)
         throw new Error("Linux process stat is oversized");
@@ -1783,6 +1892,7 @@ function parseLinuxStat(pid, stat) {
     const fields = stat.slice(close + 1).trim().split(/\s+/u);
     if (fields.length < 20 || fields.length > 64)
         throw new Error("invalid Linux process stat fields");
+    const state = fields[0];
     const parentPid = Number(fields[1]);
     const processGroupId = Number(fields[2]);
     const startOrder = Number(fields[19]);
@@ -1792,6 +1902,7 @@ function parseLinuxStat(pid, stat) {
     }
     return Object.freeze({
         pid,
+        state,
         parentPid,
         processGroupId,
         identity: String(startOrder),
@@ -2629,7 +2740,7 @@ function hasExactKeys(value, expected) {
 function systemExecutable(name) {
     return resolveWindowsSystemExecutable(name, process.platform, process.env.SystemRoot);
 }
-function createStartupLifecycleState(signal, deadlineAt) {
+function createStartupLifecycleState(signal, deadlineAt, testDeadlineSignal) {
     let abortObservedAt = signal?.aborted === true
         ? performance.now()
         : undefined;
@@ -2638,12 +2749,14 @@ function createStartupLifecycleState(signal, deadlineAt) {
     let terminationPromise;
     let resolveTermination;
     let disposed = false;
+    let testDeadlineWaitArmed = false;
     const terminationReason = () => {
         const now = performance.now();
         if (abortObservedAt !== undefined && abortObservedAt < deadlineAt) {
             return "abort";
         }
-        if (now >= deadlineAt)
+        if (testDeadlineSignal?.observed() === true ||
+            (testDeadlineSignal === undefined && now >= deadlineAt))
             return "deadline";
         return abortObservedAt === undefined ? undefined : "abort";
     };
@@ -2659,7 +2772,18 @@ function createStartupLifecycleState(signal, deadlineAt) {
         resolveTermination = undefined;
     };
     const armDeadline = () => {
-        if (disposed || deadlineTimer !== undefined || resolveTermination === undefined)
+        if (disposed || resolveTermination === undefined)
+            return;
+        if (testDeadlineSignal !== undefined) {
+            if (testDeadlineWaitArmed)
+                return;
+            testDeadlineWaitArmed = true;
+            void testDeadlineSignal.wait().then(() => { if (!disposed)
+                publishTermination(); }, () => { if (!disposed)
+                publishTermination(); });
+            return;
+        }
+        if (deadlineTimer !== undefined)
             return;
         const remainingMs = deadlineAt - performance.now();
         if (remainingMs <= 0) {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, readSync, writeFileSync, writeSync } from "node:fs";
 
 const mode = process.argv[2] ?? "success";
 const delayMs = Number.parseInt(process.argv[3] ?? "250", 10);
@@ -40,6 +40,12 @@ if (mode === "orphan-intermediate") {
 }
 
 if (mode === "crash-before-ready") process.exit(17);
+if (mode === "crash-armed-before-ready") {
+  writeSync(8, Buffer.from([0x41]));
+  const release = Buffer.alloc(1);
+  if (readSync(9, release, 0, 1, null) !== 1 || release[0] !== 0x52) process.exit(79);
+  process.exit(17);
+}
 if (mode === "delayed-crash-before-ready") {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
   process.exit(17);

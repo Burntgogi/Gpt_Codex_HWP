@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type StdioOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
   closeSync,
@@ -103,6 +103,23 @@ const observeChildProcessClose = (
     }>>;
   }>
 ).observeChildProcessClose;
+const observeWindowsSupervisorLateReadyForTest = (
+  childClientModule as unknown as Readonly<{
+    observeWindowsSupervisorLateReadyForTest(options: Readonly<{
+      targetPid: number;
+      timeoutMs: number;
+      next: (timeoutMs: number) => Promise<string>;
+      transcriptReceipt: () => Readonly<{
+        stdoutEnded: boolean;
+        stdoutFailed: boolean;
+        protocolFailed: boolean;
+        queuedFrames: number;
+        partialBytes: number;
+      }>;
+      stderrPresent: () => boolean;
+    }>): Promise<string>;
+  }>
+).observeWindowsSupervisorLateReadyForTest;
 const isIntegrityVerifiedResultSpool = (
   childClientModule as unknown as {
     isIntegrityVerifiedResultSpool(value: unknown): boolean;
@@ -179,11 +196,11 @@ test("Windows hosted pre-frame classifier uses only causal booleans", () => {
   assert.equal(classifyWindowsSupervisorPreframeDiagnostic(baseline), "frame-timeout");
 });
 
-test("Windows hosted classifier reports an unverified pre-frame helper close", () => {
+test("Windows hosted classifiers report unverified pre-frame helper close in the active phase", () => {
   const source = readFileSync(sourceClientPath, "utf8");
   assert.match(
     source,
-    /if \(!await cleanupWindowsSupervisorHelper\(helper, closeReceipt\)\) \{\s*emitHostedWindowsBoundary\(hostedDiagnosticObserver, "helper-close"\);\s*throw supervisorHelperUnclosedError/u,
+    /if \(!await cleanupWindowsSupervisorHelper\(helper, closeReceipt\)\) \{[\s\S]*?emitHostedWindowsBoundary\(hostedDiagnosticObserver, "helper-close"\);[\s\S]*?emitHostedWindowsLateBoundary\(hostedDiagnosticLateObserver, "helper-close"\);[\s\S]*?throw supervisorHelperUnclosedError/u,
   );
 });
 
@@ -1294,52 +1311,53 @@ test("document child client removes its sole abort listener on success", async (
   }
 });
 
-test("document child crash before READY preserves terminal-first and deadline-first causality", async (t) => {
+test("document child crash before READY preserves explicit terminal-first and deadline-first causality", async (t) => {
   for (const scenario of [
-    {
-      name: "terminal-first",
-      mode: "crash-before-ready",
-      childDelayMs: 250,
-      deadlineMs: 5_000,
-      expectedCode: "ENGINE_INIT_FAILED",
-      terminalBeforeTermination: true,
-      realSupervisor: true,
-    },
-    {
-      name: "deadline-first",
-      mode: "delayed-crash-before-ready",
-      childDelayMs: 5_000,
-      deadlineMs: 1_500,
-      expectedCode: "ENGINE_TIMEOUT",
-      terminalBeforeTermination: false,
-      realSupervisor: false,
-    },
+    { name: "terminal-first", expectedCode: "ENGINE_INIT_FAILED" },
+    { name: "deadline-first", expectedCode: "ENGINE_TIMEOUT" },
   ] as const) {
     await t.test(scenario.name, async () => {
       const owned = createOwnedFiles();
+      const deadline = telemetryDeferred<void>();
+      const terminationStarted = telemetryDeferred<void>();
+      const armedSignal = telemetryDeferred<number>();
+      let deadlineObserved = false;
       let terminalObserved = false;
       let terminalObservedBeforeTermination = false;
-      let terminationStarted = false;
       let startWriteSettled = false;
       let supervisorBound = false;
       let closeObserved = false;
+      let releaseCrash: (() => void) | undefined;
       let terminationReason: ProcessTreeTerminationReceipt["proof"] |
         "identity" | "deadline" | "termination" | "registration" | "channel" | undefined;
       let captured: unknown;
       try {
-        try {
-          const client = createProductionDocumentChildClient({
+        const client = createProductionDocumentChildClient({
             childEntry: fixturePath,
-            childArguments: [scenario.mode, String(scenario.childDelayMs)],
+            childArguments: ["crash-armed-before-ready"],
             startGateEntry: startGatePath,
             spawnFactory: (specification) => {
+              const stdio = [...specification.options.stdio as StdioOptions[], "pipe", "pipe"];
               const child = spawn(
                 specification.command,
                 [...specification.args],
-                specification.options,
+                { ...specification.options, stdio },
               );
               child.once("exit", () => { terminalObserved = true; });
               child.once("close", () => { closeObserved = true; });
+              const armed = child.stdio[8];
+              const release = child.stdio[9];
+              if (armed === null || release === null || !("once" in armed) || !("end" in release)) {
+                throw new Error("private crash handshake unavailable");
+              }
+              void new Promise<number>((resolveArmed, rejectArmed) => {
+                armed.once("data", (chunk: Buffer) => {
+                  if (chunk.byteLength !== 1) rejectArmed(new Error("invalid armed receipt"));
+                  else resolveArmed(chunk[0]!);
+                });
+                armed.once("error", rejectArmed);
+              }).then(armedSignal.resolve, armedSignal.reject);
+              releaseCrash = () => release.end(Buffer.from([0x52]));
               const writer = child.stdio[7];
               if (writer !== null && writer !== undefined && "write" in writer) {
                 const write = writer.write.bind(writer);
@@ -1352,44 +1370,45 @@ test("document child crash before READY preserves terminal-first and deadline-fi
               return child;
             },
             jobSupervisorFactory: async (child) => {
-              const supervisor = scenario.realSupervisor
-                ? await superviseDocumentProcessTree(
-                    child as ReturnType<typeof spawn>,
-                  ) as { terminate(): Promise<ProcessTreeTerminationReceipt> }
-                : {
-                    async terminate(): Promise<ProcessTreeTerminationReceipt> {
-                      const close = new Promise<void>((resolveClose) => {
-                        child.once("close", () => resolveClose());
-                      });
-                      child.kill("SIGKILL");
-                      await close;
-                      return process.platform === "win32"
-                        ? { gone: true, proof: "windows-job-empty" }
-                        : { gone: true, proof: "registered-groups-empty" };
-                    },
-                  };
               supervisorBound = true;
               return {
-                async terminate() {
-                  if (!terminationStarted) {
-                    terminationStarted = true;
-                    terminalObservedBeforeTermination = terminalObserved;
+                async terminate(): Promise<ProcessTreeTerminationReceipt> {
+                  terminalObservedBeforeTermination = terminalObserved;
+                  terminationStarted.resolve();
+                  if (!closeObserved) {
+                    await new Promise<void>((resolveClose) => child.once("close", resolveClose));
                   }
-                  const receipt = await supervisor.terminate();
+                  const receipt = process.platform === "win32"
+                    ? { gone: true as const, proof: "windows-job-empty" as const }
+                    : { gone: true as const, proof: "registered-groups-empty" as const };
                   terminationReason = receipt.gone ? receipt.proof : receipt.reason;
                   return receipt;
                 },
               } as never;
             },
-          });
-          await client.run(
-            detectRequest(`child-crash-before-ready-${scenario.name}`),
-            spoolSnapshot(owned.inputFd, 3),
-            { deadlineMs: scenario.deadlineMs },
-          );
-        } catch (error: unknown) {
-          captured = error;
+            startupDeadlineSignalForTest: {
+              observed: () => deadlineObserved,
+              wait: () => deadline.promise,
+            },
+          } as never);
+        const run = client.run(
+          detectRequest(`child-crash-before-ready-${scenario.name}`),
+          spoolSnapshot(owned.inputFd, 3),
+          { deadlineMs: 5_000 },
+        ).catch((error: unknown) => { captured = error; });
+        assert.equal(await telemetryBounded(armedSignal.promise, 2_000), 0x41);
+        if (scenario.name === "terminal-first") {
+          releaseCrash?.();
+          await waitFor(() => terminalObserved);
+          deadlineObserved = true;
+          deadline.resolve();
+        } else {
+          deadlineObserved = true;
+          deadline.resolve();
+          assert.notEqual(await telemetryBounded(terminationStarted.promise, 250), TELEMETRY_STALLED);
+          releaseCrash?.();
         }
+        await run;
         const diagnosticDeadline = Date.now() + 3_000;
         while ((!closeObserved || terminationReason === undefined)
           && Date.now() < diagnosticDeadline) {
@@ -1415,9 +1434,12 @@ test("document child crash before READY preserves terminal-first and deadline-fi
           startWriteSettled: true,
           supervisorBound: true,
           closeObserved: true,
-          terminalObservedBeforeTermination: scenario.terminalBeforeTermination,
+          terminalObservedBeforeTermination: scenario.name === "terminal-first",
         });
       } finally {
+        releaseCrash?.();
+        deadlineObserved = true;
+        deadline.resolve();
         owned.cleanup();
       }
     });
@@ -2192,7 +2214,11 @@ test("Linux retained traversal validates actual parentage and bounds work before
     source,
     /if \(queued\.size >= MAX_TRACKED_PROCESS_IDENTITIES\)[\s\S]*queued\.add\(key\)/u,
   );
-  assert.match(source, /readBoundedProcText\(`/u);
+  assert.match(
+    source,
+    /readProcText: LinuxProcTextReader = readBoundedProcText/u,
+  );
+  assert.match(source, /await readProcText\(/u);
   assert.doesNotMatch(source, /readFile\(`\/proc\/\$\{pid\}\/(?:stat|status)`/u);
   assert.match(source, /await opendir\(`\/proc\/\$\{pid\}\/task`\)/u);
   assert.doesNotMatch(source, /readdir\(`\/proc\/\$\{pid\}\/task`/u);
@@ -2579,6 +2605,80 @@ const createPosixProcessTelemetryTrackerForTest = (
     ): TestPosixTelemetryTracker;
   }
 ).createPosixProcessTelemetryTrackerForTest;
+
+const snapshotLinuxProcessForTest = (
+  childClientModule as unknown as {
+    snapshotLinuxProcessForTest(
+      pid: number,
+      requireRss: boolean,
+      readProcText: (path: string, maxBytes: number) => Promise<string>,
+    ): Promise<TestPosixTelemetryRecord | undefined>;
+  }
+).snapshotLinuxProcessForTest;
+
+function linuxProcStat(
+  pid: number,
+  state: string,
+  parentPid: number,
+  processGroupId: number,
+  startOrder: number,
+): string {
+  const fields = [
+    state,
+    String(parentPid),
+    String(processGroupId),
+    ...Array.from({ length: 16 }, () => "0"),
+    String(startOrder),
+  ];
+  return `${pid} (fixture) ${fields.join(" ")}\n`;
+}
+
+test("Linux RSS skips only a stable exited identity while retaining a live root", async () => {
+  const exitedPid = 8_090;
+  const livePid = 8_091;
+  const records = new Map<string, string>([
+    [`/proc/${exitedPid}/stat`, linuxProcStat(exitedPid, "Z", 1, exitedPid, 80_900)],
+    [`/proc/${exitedPid}/status`, "Name:\tfixture\nState:\tZ (zombie)\n"],
+    [`/proc/${livePid}/stat`, linuxProcStat(livePid, "S", 1, livePid, 80_910)],
+    [`/proc/${livePid}/status`, "Name:\tfixture\nState:\tS (sleeping)\nVmRSS:\t47 kB\n"],
+  ]);
+  const readProcText = async (path: string): Promise<string> => {
+    const value = records.get(path);
+    if (value === undefined) throw new Error("unexpected proc record");
+    return value;
+  };
+
+  const exited = await snapshotLinuxProcessForTest(exitedPid, true, readProcText);
+  const live = await snapshotLinuxProcessForTest(livePid, true, readProcText);
+  assert.deepEqual(exited, {
+    pid: exitedPid,
+    parentPid: 1,
+    processGroupId: exitedPid,
+    identity: "80900",
+    startOrder: 80_900,
+    rssBytes: 0,
+  });
+  assert.equal(live?.rssBytes, 47 * 1024);
+  assert.equal((exited?.rssBytes ?? 0) + (live?.rssBytes ?? 0), 47 * 1024);
+});
+
+for (const state of ["R", "S", "D", "T", "I", "?"] as const) {
+  test(`Linux RSS rejects missing VmRSS for stable non-exited state ${state}`, async () => {
+    const pid = 8_092;
+    const records = new Map<string, string>([
+      [`/proc/${pid}/stat`, linuxProcStat(pid, state, 1, pid, 80_920)],
+      [`/proc/${pid}/status`, `Name:\tfixture\nState:\t${state}\n`],
+    ]);
+    await assert.rejects(
+      snapshotLinuxProcessForTest(pid, true, async (path: string) => {
+        const value = records.get(path);
+        if (value === undefined) throw new Error("unexpected proc record");
+        return value;
+      }),
+      /Linux VmRSS unavailable/u,
+    );
+  });
+}
 
 test("production POSIX telemetry tracker promotes an exactly sampled nested root", async () => {
   const rootPid = 8_100;
@@ -2992,6 +3092,64 @@ test("POSIX benchmark telemetry roots preserve baseline and require a covering p
   assert.deepEqual(supervisor.processTreeRss?.(), { baselineBytes: 31, peakBytes: 96 });
 });
 
+test("POSIX telemetry flush atomically captures RSS before a stale interval callback", async () => {
+  const rootPid = 8_117;
+  const expected = Object.freeze({ baselineBytes: 53, peakBytes: 101 });
+  const requiredSample = telemetryDeferred<void>();
+  const requiredSampleStarted = telemetryDeferred<void>();
+  const staleIntervalSampleStarted = telemetryDeferred<void>();
+  const staleIntervalSample = telemetryDeferred<void>();
+  let scheduledCallback: (() => void) | undefined;
+  let sampleCalls = 0;
+  const supervisor = await createPosixProcessTreeSupervisorForTest(
+    { pid: rootPid } as ReturnType<typeof spawn>,
+    "darwin",
+    {
+      registeredSupervisor: telemetryRegisteredSupervisor(rootPid, []),
+      tracker: telemetryTracker({
+        initialize: async () => {},
+        registerRoot: () => {},
+        sample: () => {
+          sampleCalls += 1;
+          if (sampleCalls === 1) {
+            requiredSampleStarted.resolve();
+            return requiredSample.promise;
+          }
+          staleIntervalSampleStarted.resolve();
+          return staleIntervalSample.promise;
+        },
+        processTreeRss: () => expected,
+      }),
+      scheduleInterval: (callback) => {
+        scheduledCallback = callback;
+        return { unref() {} };
+      },
+      clearScheduledInterval: () => {},
+      deferProcessTreeTelemetryStop: true,
+    },
+  );
+  assert.equal(await supervisor.processTreeTelemetryReady, true);
+  supervisor.registerProcessTreeTelemetryRoot!(Object.freeze({
+    pid: 8_217,
+    parentPid: rootPid,
+    processGroupId: 8_217,
+    identity: "nested:8217",
+    startOrder: 8_217,
+  }));
+  await requiredSampleStarted.promise;
+  const flush = supervisor.flushProcessTreeTelemetry!();
+  requiredSample.resolve();
+  assert.equal(await flush, true);
+  assert.ok(scheduledCallback !== undefined);
+
+  scheduledCallback();
+  const staleOutcome = await telemetryBounded(staleIntervalSampleStarted.promise, 25);
+  supervisor.finishProcessTreeTelemetry!();
+  assert.equal(staleOutcome, TELEMETRY_STALLED);
+  assert.deepEqual(supervisor.processTreeRss?.(), expected);
+  staleIntervalSample.resolve();
+});
+
 test("POSIX benchmark telemetry finalizer never freezes an uncovered registered-root generation", async () => {
   const rootPid = 8_116;
   const sample = telemetryDeferred<void>();
@@ -3342,6 +3500,40 @@ test("Windows supervisor early invalid frame performs bounded helper cleanup", a
   assert.equal(stdin.destroyed, true);
   assert.equal(stdout.destroyed, true);
   assert.equal(stderr.destroyed, true);
+});
+
+test("Windows diagnostic late observer is bounded and never promotes late READY", async () => {
+  const cleanTranscript = () => ({
+    stdoutEnded: false,
+    stdoutFailed: false,
+    protocolFailed: false,
+    queuedFrames: 0,
+    partialBytes: 0,
+  });
+  const targetPid = 8_300;
+  assert.equal(await observeWindowsSupervisorLateReadyForTest({
+    targetPid,
+    timeoutMs: 25,
+    next: async () => `GPT_CODEX_HWP_JOB READY ${targetPid} 1 47`,
+    transcriptReceipt: cleanTranscript,
+    stderrPresent: () => false,
+  }), "ready-late");
+  assert.equal(await observeWindowsSupervisorLateReadyForTest({
+    targetPid,
+    timeoutMs: 25,
+    next: async () => "PRIVATE RAW FRAME",
+    transcriptReceipt: cleanTranscript,
+    stderrPresent: () => false,
+  }), "late-preframe-error");
+  const startedAt = Date.now();
+  assert.equal(await observeWindowsSupervisorLateReadyForTest({
+    targetPid,
+    timeoutMs: 10,
+    next: async () => await new Promise(() => {}),
+    transcriptReceipt: cleanTranscript,
+    stderrPresent: () => false,
+  }), "observer-timeout");
+  assert.ok(Date.now() - startedAt < 250);
 });
 
 test("Windows supervisor retains an unclosed helper owner until its exact late close", async () => {
