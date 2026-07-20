@@ -226,6 +226,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   ));
   const runDoctorOrphanDiagnostic = options.runDoctorOrphanDiagnostic
     ?? executeDoctorOrphanDiagnostic;
+  const runDocumentProcessDiagnostic = options.runDocumentProcessDiagnostic
+    ?? executeDocumentProcessDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
     ?? (() => executeSvgAssetDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
@@ -320,6 +322,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         setExitCode(1);
         return false;
       }
+      if (file === "document-process-registration.test.ts") {
+        let caseId = "aggregate";
+        try {
+          const candidate = await runDocumentProcessDiagnostic();
+          if (/^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
       stdout.write(`${receiptPrefix}_NODE_TEST_FILE file=${file} status=failed\n`);
       setExitCode(1);
       return false;
@@ -360,6 +372,15 @@ async function executeDoctorOrphanDiagnostic() {
     },
   });
   return stage;
+}
+
+async function executeDocumentProcessDiagnostic() {
+  let ordinal;
+  await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    maximumTopLevelTests: 51,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+  });
+  return ordinal === undefined ? "aggregate" : `dp${String(ordinal).padStart(2, "0")}`;
 }
 
 function executeSvgAssetDiagnostic(options) {
@@ -507,6 +528,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         finish(false);
       } else {
         forwardFixedDiagnostic(chunks, capturedBytes, options);
+        forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
         finish(code === 0 && signal === null && validTapReceipt(
           chunks, capturedBytes, options.allowAllSkipped === true,
         ));
@@ -517,6 +539,28 @@ export function executeBoundedNodeTestFile(file, options = {}) {
 }
 
 const executeTestFile = executeBoundedNodeTestFile;
+
+function forwardFailedTopLevelOrdinal(chunks, capturedBytes, options) {
+  if (typeof options.onFailedTopLevelOrdinal !== "function"
+    || !Number.isSafeInteger(options.maximumTopLevelTests)
+    || options.maximumTopLevelTests < 1 || options.maximumTopLevelTests > 999) return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
+  catch { return; }
+  const ordinal = failedTopLevelOrdinal(text, options.maximumTopLevelTests);
+  if (ordinal === undefined) return;
+  try { options.onFailedTopLevelOrdinal(ordinal); } catch {}
+}
+
+export function failedTopLevelOrdinal(text, maximumTopLevelTests) {
+  if (typeof text !== "string" || !Number.isSafeInteger(maximumTopLevelTests)
+    || maximumTopLevelTests < 1 || maximumTopLevelTests > 999
+    || !/^# fail [1-9][0-9]*$/mu.test(text)) return undefined;
+  const match = /^not ok ([1-9][0-9]*) - /mu.exec(text);
+  if (match === null) return undefined;
+  const ordinal = Number(match[1]);
+  return Number.isSafeInteger(ordinal) && ordinal <= maximumTopLevelTests ? ordinal : undefined;
+}
 
 function forwardFixedDiagnostic(chunks, capturedBytes, options) {
   if (!Array.isArray(options.fixedDiagnostics)
