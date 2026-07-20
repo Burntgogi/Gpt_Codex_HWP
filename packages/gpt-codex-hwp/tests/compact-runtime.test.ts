@@ -1366,7 +1366,11 @@ test("installed runtime verifies provenance, npm ls, and all nine tools", { time
   }
 
   const sampleBefore = createHash("sha256").update(await readFile(fixture.path)).digest("hex");
-  const report = await verifyCompactRuntime({ sourceRoot: REPOSITORY_ROOT });
+  const diagnosticStages: string[] = [];
+  const report = await verifyCompactRuntime({
+    sourceRoot: REPOSITORY_ROOT,
+    onDiagnosticStage: (stage: string) => diagnosticStages.push(stage),
+  });
   const sourcePackage = JSON.parse(await readFile(join(SOURCE_ROOT, "package.json"), "utf8"));
   assert.equal(report.serverVersion, sourcePackage.version);
   assert.deepEqual(report.toolNames, TOOL_NAMES);
@@ -1386,6 +1390,7 @@ test("installed runtime verifies provenance, npm ls, and all nine tools", { time
     sampleBefore,
   );
   assert.equal(report.cleanup, true);
+  assert.equal(diagnosticStages.at(-1), "passed");
 });
 
 test("compact runtime staging canonicalizes an injected temporary parent", async (t) => {

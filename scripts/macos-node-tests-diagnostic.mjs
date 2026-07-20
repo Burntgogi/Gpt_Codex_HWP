@@ -120,10 +120,17 @@ const SVG_ASSET_BOUNDARIES = new Set([
   "metadata", "dimensions", "validation", "render", "path-or-build",
   "passed", "diagnostic-failed",
 ]);
+const COMPACT_RUNTIME_STAGES = new Set([
+  "startup", "fixture", "source-hash", "temporary-root", "fixture-copy",
+  "runtime-build", "provenance", "lockfile", "npm-ci", "npm-ls", "npm-audit",
+  "measure", "budgets", "mcp", "tool-smoke", "source-verify", "cleanup",
+  "passed", "diagnostic-failed",
+]);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
+  const receiptPrefix = options.receiptPrefix === "WINDOWS" ? "WINDOWS" : "MAC";
   const runFile = options.runFile ?? ((file) => executeTestFile(file, {
     spawnProcess: options.spawnProcess ?? spawn,
     terminateTree: options.terminateTree ?? terminateTree,
@@ -169,6 +176,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
     }));
+  const runCompactRuntimeDiagnostic = options.runCompactRuntimeDiagnostic
+    ?? executeCompactRuntimeDiagnostic;
 
   for (const file of TEST_FILES) {
     let passed = false;
@@ -179,12 +188,12 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           let casePassed = false;
           try { casePassed = await runAllowedRootsCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
-            stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
+            stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;
           }
         }
-        stdout.write("MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=aggregate status=failed\n`);
         setExitCode(1);
         return false;
       }
@@ -199,14 +208,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
                 const candidate = await runAssetsRenderDiagnostic();
                 if (SVG_ASSET_BOUNDARIES.has(candidate)) boundary = candidate;
               } catch {}
-              stdout.write(`MAC_SVG_ASSET boundary=${boundary}\n`);
+              stdout.write(`${receiptPrefix}_SVG_ASSET boundary=${boundary}\n`);
             }
-            stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
+            stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;
           }
         }
-        stdout.write("MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=aggregate status=failed\n`);
         setExitCode(1);
         return false;
       }
@@ -215,23 +224,50 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           let casePassed = false;
           try { casePassed = await runCompactRuntimeCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
-            stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
+            if (record.id === "cr36") {
+              let stage = "diagnostic-failed";
+              try {
+                const candidate = await runCompactRuntimeDiagnostic();
+                if (COMPACT_RUNTIME_STAGES.has(candidate)) stage = candidate;
+              } catch {}
+              stdout.write(`${receiptPrefix}_COMPACT_RUNTIME stage=${stage}\n`);
+            }
+            stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;
           }
         }
-        stdout.write("MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=aggregate status=failed\n`);
         setExitCode(1);
         return false;
       }
-      stdout.write(`MAC_NODE_TEST_FILE file=${file} status=failed\n`);
+      stdout.write(`${receiptPrefix}_NODE_TEST_FILE file=${file} status=failed\n`);
       setExitCode(1);
       return false;
     }
   }
-  stdout.write(`MAC_NODE_TEST_FILES status=passed files=${TEST_FILES.length}\n`);
+  stdout.write(`${receiptPrefix}_NODE_TEST_FILES status=passed files=${TEST_FILES.length}\n`);
   setExitCode(0);
   return true;
+}
+
+async function executeCompactRuntimeDiagnostic() {
+  let stage = "startup";
+  try {
+    const { verifyCompactRuntime } = await import(pathToFileURL(resolve(
+      PACKAGE_ROOT,
+      "release-scripts/verify-compact-runtime.mjs",
+    )).href);
+    await verifyCompactRuntime({
+      sourceRoot: PROJECT_ROOT,
+      onDiagnosticStage: (candidate) => {
+        stage = COMPACT_RUNTIME_STAGES.has(candidate) ? candidate : "diagnostic-failed";
+      },
+    });
+    return "passed";
+  } catch {
+    return stage;
+  }
 }
 
 function executeSvgAssetDiagnostic(options) {
@@ -303,8 +339,12 @@ function executeSvgAssetDiagnostic(options) {
   });
 }
 
-function executeTestFile(file, options) {
+export function executeBoundedNodeTestFile(file, options = {}) {
   return new Promise((resolveTest) => {
+    const spawnProcess = options.spawnProcess ?? spawn;
+    const terminateProcessTree = options.terminateTree ?? terminateTree;
+    const testTimeoutMs = boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS);
+    const closeTimeoutMs = boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS);
     let child;
     let settled = false;
     let stopping = false;
@@ -324,22 +364,25 @@ function executeTestFile(file, options) {
       if (settled || stopping) return;
       stopping = true;
       clearTimeout(testTimer);
-      try { void options.terminateTree(child); } catch {}
+      try { void terminateProcessTree(child); } catch {}
       if (settled) return;
       closeTimer = setTimeout(() => {
         child?.stdout?.destroy();
         child?.unref?.();
         finish(false);
-      }, options.closeTimeoutMs);
+      }, closeTimeoutMs);
     };
     try {
-      const args = ["--import", "tsx", "--test", "--test-concurrency=1"];
-      if (options.testNamePattern !== undefined) {
+      const repository = options.repository === true;
+      const args = repository
+        ? ["--test"]
+        : ["--import", "tsx", "--test", "--test-concurrency=1"];
+      if (!repository && options.testNamePattern !== undefined) {
         args.push(`--test-name-pattern=${options.testNamePattern}`);
       }
       args.push(`tests/${file}`);
-      child = options.spawnProcess(process.execPath, args, {
-        cwd: PACKAGE_ROOT,
+      child = spawnProcess(process.execPath, args, {
+        cwd: repository ? PROJECT_ROOT : PACKAGE_ROOT,
         stdio: ["ignore", "pipe", "ignore"],
         detached: true,
         shell: false,
@@ -373,9 +416,11 @@ function executeTestFile(file, options) {
         chunks, capturedBytes, options.allowAllSkipped === true,
       ));
     });
-    testTimer = setTimeout(stopUnverified, options.testTimeoutMs);
+    testTimer = setTimeout(stopUnverified, testTimeoutMs);
   });
 }
+
+const executeTestFile = executeBoundedNodeTestFile;
 
 function validTapReceipt(chunks, capturedBytes, allowAllSkipped = false) {
   if (capturedBytes < 1 || capturedBytes > MAX_CAPTURE_BYTES) return false;

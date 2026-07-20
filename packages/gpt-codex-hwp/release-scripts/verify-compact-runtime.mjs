@@ -781,48 +781,64 @@ export async function createCompactRuntimeTemp(parent) {
   });
 }
 
-export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath, temporaryParent }) {
+export async function verifyCompactRuntime({
+  sourceRoot,
+  sampleHwpPath,
+  temporaryParent,
+  onDiagnosticStage = () => {},
+}) {
   const source = resolve(sourceRoot);
+  onDiagnosticStage("fixture");
   const fixture = sampleHwpPath === undefined
     ? await resolveHwpFixture({ requireTracked: true })
     : await resolveHwpFixture({ overridePath: sampleHwpPath });
   const sample = fixture.path;
+  onDiagnosticStage("source-hash");
   const sampleBefore = await sha256File(sample);
   if (sampleBefore !== fixture.sha256) {
     throw new Error("The HWP sample changed before verification.");
   }
+  onDiagnosticStage("temporary-root");
   const temporaryRoot = await createCompactRuntimeTemp(temporaryParent);
   let report;
   let ownedSample;
   try {
     ownedSample = join(temporaryRoot, "verified-source-copy.hwp");
+    onDiagnosticStage("fixture-copy");
     await copyVerifiedHwpFixture({
       sourcePath: sample,
       targetRoot: temporaryRoot,
       expectedSha256: fixture.sha256,
     });
     const runtimeRoot = join(temporaryRoot, "runtime");
+    onDiagnosticStage("runtime-build");
     await buildRuntime({
       root: source,
       outputRoot: runtimeRoot,
       subprocessEnvironment: releaseSubprocessEnvironment(),
     });
+    onDiagnosticStage("provenance");
     const provenanceRecord = await verifyKordocCoreRuntime(join(runtimeRoot, "vendor", "kordoc-core"));
     const provenance = {
       status: "passed",
       archiveSha512: provenanceRecord.archive.sha512,
       fileCount: provenanceRecord.files.length,
     };
+    onDiagnosticStage("measure");
     const publicRuntimeBytes = await measureTree(runtimeRoot);
+    onDiagnosticStage("lockfile");
     const lock = JSON.parse(await readFile(join(runtimeRoot, "package-lock.json"), "utf8"));
     assertCompactLockfile(lock);
+    onDiagnosticStage("npm-ci");
     await runNpm(["ci", "--omit=dev", "--ignore-scripts"], runtimeRoot);
+    onDiagnosticStage("npm-ls");
     const npmLsRun = await runNpm(
       ["ls", "--omit=dev", "--all", "--json"],
       runtimeRoot,
       { allowFailure: true },
     );
     const npmLs = parseNpmLsResult(npmLsRun);
+    onDiagnosticStage("npm-audit");
     const auditRun = await runNpm(
       ["audit", "--omit=dev", "--json"],
       runtimeRoot,
@@ -830,22 +846,26 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath, temporar
     );
     const audit = parseNpmAuditResult(auditRun);
     const installedEntries = { filePaths: [], linkPaths: [] };
+    onDiagnosticStage("measure");
     const nodeModulesBytes = await measureTree(join(runtimeRoot, "node_modules"), installedEntries, runtimeRoot);
     const installedBytes = await measureTree(runtimeRoot);
     const installedSummary = summarizeInstalledEntries(installedEntries);
     if (installedSummary.excludedPaths.length > 0) {
       throw new Error(`Excluded dependencies installed: ${installedSummary.excludedPaths.join(", ")}`);
     }
+    onDiagnosticStage("budgets");
     assertCompactBudgets({ nodeModulesBytes, installedBytes, publicRuntimeBytes });
     const semanticMode = fixture.provenance?.tracked === false
       ? "diagnostic"
       : "tracked";
+    onDiagnosticStage("mcp");
     const mcp = await verifyMcp(runtimeRoot, {
       sampleHwpPath: ownedSample,
       expectedSha256: fixture.sha256,
       expectedBytes: fixture.bytes,
       semanticMode,
     });
+    onDiagnosticStage("tool-smoke");
     const smokeRun = await runCommand(process.execPath, [
       fileURLToPath(import.meta.url),
       "--tool-smoke",
@@ -857,6 +877,7 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath, temporar
       semanticMode,
     ], source, { timeoutMs: TOOL_SMOKE_TIMEOUT_MS });
     const tools = JSON.parse(smokeRun.stdout);
+    onDiagnosticStage("source-verify");
     await assertSampleHash(
       ownedSample,
       fixture.sha256,
@@ -890,14 +911,20 @@ export async function verifyCompactRuntime({ sourceRoot, sampleHwpPath, temporar
       cleanup: false,
     };
   } finally {
-    await finalizeFixtureWorkspace({
-      ownedSample,
-      sourcePath: sample,
-      expectedSha256: fixture.sha256,
-      temporaryRoot,
-    });
+    try {
+      await finalizeFixtureWorkspace({
+        ownedSample,
+        sourcePath: sample,
+        expectedSha256: fixture.sha256,
+        temporaryRoot,
+      });
+    } catch (error) {
+      onDiagnosticStage("cleanup");
+      throw error;
+    }
   }
   report.cleanup = true;
+  onDiagnosticStage("passed");
   return report;
 }
 

@@ -195,6 +195,51 @@ test("macOS Node diagnostic reports the fixed aggregate id when every compact-ru
   assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
 });
 
+test("macOS Node diagnostic emits one bounded compact-runtime stage for cr36", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "compact-runtime.test.ts",
+    runCompactRuntimeCase: async (record) => record.id !== "cr36",
+    runCompactRuntimeDiagnostic: async () => "npm-ls",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_COMPACT_RUNTIME stage=npm-ls\nMAC_NODE_TEST_CASE case=cr36 status=failed\n",
+  );
+});
+
+test("macOS compact-runtime diagnostic redacts invalid stage values", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "compact-runtime.test.ts",
+    runCompactRuntimeCase: async (record) => record.id !== "cr36",
+    runCompactRuntimeDiagnostic: async () =>
+      `C:\\private ${["AWS", "_SECRET_ACCESS_KEY=value"].join("")}`,
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_COMPACT_RUNTIME stage=diagnostic-failed\nMAC_NODE_TEST_CASE case=cr36 status=failed\n",
+  );
+});
+
+test("source Node diagnostic uses the fixed Windows receipt prefix only when requested", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async () => true,
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, true);
+  assert.equal(output, "WINDOWS_NODE_TEST_FILES status=passed files=41\n");
+});
+
 test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-only assets case", async () => {
   let output = "";
   let call = 0;

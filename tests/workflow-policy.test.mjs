@@ -226,6 +226,22 @@ test("macOS CI runs the safe POSIX controls only once immediately before the rel
   );
 });
 
+test("Windows CI isolates repository and source Node tests before the authoritative release gate", async () => {
+  const workflow = await readFile(WORKFLOW_PATH, "utf8");
+  const windows = jobSection(workflow, "windows", "macos");
+  const command = "node scripts/windows-node-tests-diagnostic.mjs";
+  assert.match(
+    windows,
+    /^      - name: Isolate Windows Node test compatibility\r?\n        timeout-minutes: 15\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
+  );
+  assert.equal(countMatches(workflow, /node scripts\/windows-node-tests-diagnostic\.mjs/gu), 1);
+  assert.doesNotMatch(windows, /continue-on-error|if:\s*\$\{\{\s*always\(\)/u);
+  assert.equal(
+    windows.indexOf(command) < windows.indexOf("node scripts/platform-receipts.mjs create"),
+    true,
+  );
+});
+
 test("workflow policy: security is the least-privilege stable Security policy gate", async () => {
   const workflow = await readFile(SECURITY_WORKFLOW_PATH, "utf8");
   assert.match(workflow, /^on:\n  pull_request:\n  push:\n    branches: \[main\]$/mu);
