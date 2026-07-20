@@ -200,14 +200,14 @@ test("macOS Node diagnostic emits one bounded compact-runtime stage for cr36", a
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file) => file !== "compact-runtime.test.ts",
     runCompactRuntimeCase: async (record) => record.id !== "cr36",
-    runCompactRuntimeDiagnostic: async () => "npm-ls",
+    runCompactRuntimeDiagnostic: async () => "installed-measure",
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
   });
   assert.equal(passed, false);
   assert.equal(
     output,
-    "MAC_COMPACT_RUNTIME stage=npm-ls\nMAC_NODE_TEST_CASE case=cr36 status=failed\n",
+    "MAC_COMPACT_RUNTIME stage=installed-measure\nMAC_NODE_TEST_CASE case=cr36 status=failed\n",
   );
 });
 

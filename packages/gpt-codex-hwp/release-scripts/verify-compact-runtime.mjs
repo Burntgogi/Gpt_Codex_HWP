@@ -824,7 +824,7 @@ export async function verifyCompactRuntime({
       archiveSha512: provenanceRecord.archive.sha512,
       fileCount: provenanceRecord.files.length,
     };
-    onDiagnosticStage("measure");
+    onDiagnosticStage("public-measure");
     const publicRuntimeBytes = await measureTree(runtimeRoot);
     onDiagnosticStage("lockfile");
     const lock = JSON.parse(await readFile(join(runtimeRoot, "package-lock.json"), "utf8"));
@@ -846,7 +846,7 @@ export async function verifyCompactRuntime({
     );
     const audit = parseNpmAuditResult(auditRun);
     const installedEntries = { filePaths: [], linkPaths: [] };
-    onDiagnosticStage("measure");
+    onDiagnosticStage("installed-measure");
     const nodeModulesBytes = await measureTree(join(runtimeRoot, "node_modules"), installedEntries, runtimeRoot);
     const installedBytes = await measureTree(runtimeRoot);
     const installedSummary = summarizeInstalledEntries(installedEntries);

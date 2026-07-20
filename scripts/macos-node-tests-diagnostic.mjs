@@ -123,7 +123,8 @@ const SVG_ASSET_BOUNDARIES = new Set([
 const COMPACT_RUNTIME_STAGES = new Set([
   "startup", "fixture", "source-hash", "temporary-root", "fixture-copy",
   "runtime-build", "provenance", "lockfile", "npm-ci", "npm-ls", "npm-audit",
-  "measure", "budgets", "mcp", "tool-smoke", "source-verify", "cleanup",
+  "public-measure", "installed-measure", "budgets", "mcp", "tool-smoke",
+  "source-verify", "cleanup",
   "passed", "diagnostic-failed",
 ]);
 
@@ -377,7 +378,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       const args = repository
         ? ["--test"]
         : ["--import", "tsx", "--test", "--test-concurrency=1"];
-      if (!repository && options.testNamePattern !== undefined) {
+      if (options.testNamePattern !== undefined) {
         args.push(`--test-name-pattern=${options.testNamePattern}`);
       }
       args.push(`tests/${file}`);

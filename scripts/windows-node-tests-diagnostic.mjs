@@ -16,18 +16,46 @@ const REPOSITORY_TEST_FILES = Object.freeze([
   "runtime-projection.test.mjs", "security-boundary-docs.test.mjs",
   "windows-node-tests-diagnostic.test.mjs", "workflow-policy.test.mjs",
 ]);
+const KORDOC_OWNERSHIP_CASES = Object.freeze([
+  "Kordoc output creation race never deletes an unowned sentinel",
+  "Kordoc builder remains compatible without a file-system hook",
+  "Kordoc verifier bounds files and empty directories in one streamed entry budget",
+  "shared Kordoc verifier rejects every pinned provenance and tree-record deviation",
+].map((pattern, index) => Object.freeze({
+  id: `ko${String(index + 1).padStart(2, "0")}`,
+  pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+})));
 
 export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const runRepositoryFile = options.runRepositoryFile
     ?? ((file) => executeBoundedNodeTestFile(file, { repository: true }));
+  const runKordocCase = options.runKordocCase
+    ?? ((record) => executeBoundedNodeTestFile("kordoc-runtime-ownership.test.mjs", {
+      repository: true,
+      testNamePattern: record.pattern,
+    }));
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
 
   for (const file of REPOSITORY_TEST_FILES) {
     let passed = false;
     try { passed = await runRepositoryFile(file) === true; } catch { passed = false; }
     if (!passed) {
+      if (file === "kordoc-runtime-ownership.test.mjs") {
+        for (const record of KORDOC_OWNERSHIP_CASES) {
+          let casePassed = false;
+          try { casePassed = await runKordocCase(record) === true; } catch { casePassed = false; }
+          if (!casePassed) {
+            stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
+            setExitCode(1);
+            return false;
+          }
+        }
+        stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=aggregate status=failed\n");
+        setExitCode(1);
+        return false;
+      }
       stdout.write(`WINDOWS_REPOSITORY_TEST_FILE file=${file} status=failed\n`);
       setExitCode(1);
       return false;

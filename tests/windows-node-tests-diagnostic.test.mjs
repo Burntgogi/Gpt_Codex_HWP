@@ -20,6 +20,30 @@ test("Windows Node diagnostic reports only the fixed failed repository filename"
   );
 });
 
+test("Windows Node diagnostic narrows the Kordoc repository failure to one fixed case id", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "kordoc-runtime-ownership.test.mjs",
+    runKordocCase: async (record) => record.id !== "ko03",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=ko03 status=failed\n");
+});
+
+test("Windows Node diagnostic reports a fixed aggregate when isolated Kordoc cases pass", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "kordoc-runtime-ownership.test.mjs",
+    runKordocCase: async () => true,
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=aggregate status=failed\n");
+});
+
 test("Windows Node diagnostic delegates to the bounded source diagnostic after repository success", async () => {
   let output = "";
   let sourceOptions;
