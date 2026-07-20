@@ -97,7 +97,21 @@ function Get-LiveTracked {
   foreach ($entry in @($retained.Values)) {
     if ([GptCodexHwpJob]::HandleState($entry.Handle) -eq 1) { $live += $entry }
   }
-  return @($live | Sort-Object Depth, CreationTime)
+  return @($live)
+}
+
+function Get-TerminationOrder {
+  $entries = [System.Collections.Generic.List[object]]::new()
+  foreach ($entry in @($retained.Values)) { $entries.Add($entry) }
+  $entries.Sort([System.Comparison[object]]{
+    param($left, $right)
+    if ([int]$left.Depth -gt [int]$right.Depth) { return -1 }
+    if ([int]$left.Depth -lt [int]$right.Depth) { return 1 }
+    if ([long]$left.CreationTime -gt [long]$right.CreationTime) { return -1 }
+    if ([long]$left.CreationTime -lt [long]$right.CreationTime) { return 1 }
+    return 0
+  })
+  return @($entries)
 }
 
 function Measure-TrackedWorkingSet($records) {
@@ -146,11 +160,11 @@ function Stop-TrackedTree {
     if ($terminationPass.AllGone) {
       $quiescentScans += 1
       if ($quiescentScans -ge 2) { return $true }
-      Start-Sleep -Milliseconds 20
+      [System.Threading.Thread]::Sleep(20)
       continue
     }
     $quiescentScans = 0
-    Start-Sleep -Milliseconds 20
+    [System.Threading.Thread]::Sleep(20)
   }
   $script:stopFailure = 'scan-exhausted'
   return $false
@@ -159,9 +173,7 @@ function Stop-TrackedTree {
 function Invoke-RetainedTerminationPass {
   $complete = $true
   $allGone = $true
-  $entries = @($retained.Values | Sort-Object `
-    @{ Expression = 'Depth'; Descending = $true }, `
-    @{ Expression = 'CreationTime'; Descending = $true })
+  $entries = @(Get-TerminationOrder)
   foreach ($entry in $entries) {
     try {
       if ([GptCodexHwpJob]::HandleState($entry.Handle) -eq 0) { continue }
@@ -179,7 +191,7 @@ function Stop-RetainedHandles {
   for ($attempt = 0; $attempt -lt 150; $attempt++) {
     $terminationPass = Invoke-RetainedTerminationPass
     if ($terminationPass.Complete -and $terminationPass.AllGone) { return $true }
-    Start-Sleep -Milliseconds 20
+    [System.Threading.Thread]::Sleep(20)
   }
   return $false
 }
@@ -248,7 +260,7 @@ try {
     $watch.Stop()
     $elapsed = [int][Math]::Ceiling($watch.Elapsed.TotalMilliseconds)
     if ($elapsed -gt $maxDiscoveryPollMs) { $maxDiscoveryPollMs = $elapsed }
-    Start-Sleep -Milliseconds 20
+    [System.Threading.Thread]::Sleep(20)
   }
   $command = $commandTask.GetAwaiter().GetResult()
   if ($command -ne 'TERMINATE') { throw 'invalid supervisor command' }

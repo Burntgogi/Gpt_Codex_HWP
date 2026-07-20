@@ -64,6 +64,13 @@ test("Windows supervisor loads only the pinned first-party interop assembly", as
     script,
     /New-Object\s+GptCodexHwpJob\+/iu,
   );
+  assert.doesNotMatch(script, /\bSort-Object\b/iu);
+  assert.doesNotMatch(script, /\bStart-Sleep\b/iu);
+  assert.match(script, /\[System\.Threading\.Thread\]::Sleep\(20\)/u);
+  assert.match(script, /if \(\[int\]\$left\.Depth -gt \[int\]\$right\.Depth\) \{ return -1 \}/u);
+  assert.match(script, /if \(\[int\]\$left\.Depth -lt \[int\]\$right\.Depth\) \{ return 1 \}/u);
+  assert.match(script, /if \(\[long\]\$left\.CreationTime -gt \[long\]\$right\.CreationTime\) \{ return -1 \}/u);
+  assert.match(script, /if \(\[long\]\$left\.CreationTime -lt \[long\]\$right\.CreationTime\) \{ return 1 \}/u);
   assert.match(
     script,
     /\[GptCodexHwpJob\+JOBOBJECT_EXTENDED_LIMIT_INFORMATION\]::new\(\)/u,

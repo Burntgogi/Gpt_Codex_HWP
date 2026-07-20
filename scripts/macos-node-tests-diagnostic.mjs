@@ -49,6 +49,29 @@ const ALLOWED_ROOTS_CASES = Object.freeze([
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
   allowAllSkipped: index === 9 || index === 10,
 })));
+const ASSETS_CASES = Object.freeze([
+  "image snapshot acquisition cleans a document snapshot when the image open fails",
+  "Python XML policy rejects encoded DTDs and protection manifests",
+  "hwp_create_svg_asset escapes a structured spec and renders a real PNG",
+  "hwp_create_svg_asset accepts safe inline SVG and rejects active content without artifacts",
+  "hwp_create_svg_asset reserves both outputs atomically and preserves SVG on renderer failure",
+  "hwp_create_svg_asset treats an unsafe PNG output parent as a hard failure",
+  "after-paragraph inserts a normalized PNG after a body anchor and passes structural gates",
+  "after-paragraph inserts inside the same table-cell subList",
+  "after-paragraph ignores a hidden-comment anchor before the eligible body anchor",
+  "image insertion rejects a source path swapped and restored after snapshot capture",
+  "seal-anchor calls the real Kordoc placement path and preserves placement metadata",
+  "image insertion rejects missing and ambiguous anchors before creating output",
+  "image insertion rejects non-HWPX, bad images, existing output, and source/image aliases",
+  "image insertion rejects encrypted and signed HWPX packages",
+  "image insertion rejects case-equivalent duplicate protection manifests",
+  "image insertion sanitizes SVG inputs even when XML comments precede the root",
+  "image insertion rejects a dangling manifest href before editing",
+].map((pattern, index) => Object.freeze({
+  id: `as${String(index + 1).padStart(2, "0")}`,
+  pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+  allowAllSkipped: index === 5,
+})));
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -70,6 +93,17 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       allowAllSkipped: record.allowAllSkipped,
     },
   ));
+  const runAssetsCase = options.runAssetsCase ?? ((record) => executeTestFile(
+    "assets.test.ts",
+    {
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      testNamePattern: record.pattern,
+      allowAllSkipped: record.allowAllSkipped,
+    },
+  ));
 
   for (const file of TEST_FILES) {
     let passed = false;
@@ -79,6 +113,20 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         for (const record of ALLOWED_ROOTS_CASES) {
           let casePassed = false;
           try { casePassed = await runAllowedRootsCase(record) === true; } catch { casePassed = false; }
+          if (!casePassed) {
+            stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
+            setExitCode(1);
+            return false;
+          }
+        }
+        stdout.write("MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+        setExitCode(1);
+        return false;
+      }
+      if (file === "assets.test.ts") {
+        for (const record of ASSETS_CASES) {
+          let casePassed = false;
+          try { casePassed = await runAssetsCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
             stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);

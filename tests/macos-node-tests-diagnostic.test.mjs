@@ -112,6 +112,90 @@ test("macOS Node diagnostic reports fixed aggregate id when every allowed-roots 
   assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
 });
 
+test("macOS Node diagnostic narrows an assets aggregate failure to one fixed case id", async () => {
+  const cases = [];
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "assets.test.ts",
+    runAssetsCase: async (record) => {
+      cases.push(record.id);
+      return record.id !== "as03";
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.deepEqual(cases, ["as01", "as02", "as03"]);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=as03 status=failed\n");
+});
+
+test("macOS Node diagnostic reports the fixed aggregate id when every assets case passes alone", async () => {
+  let output = "";
+  let cases = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "assets.test.ts",
+    runAssetsCase: async () => { cases += 1; return true; },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(cases, 17);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+});
+
+test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-only assets case", async () => {
+  let output = "";
+  let call = 0;
+  const argsSeen = [];
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "assets.test.ts",
+    spawnProcess(_command, args) {
+      call += 1;
+      argsSeen.push(args);
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end(call === 6
+          ? "TAP version 13\n1..17\n# tests 17\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 17\n"
+          : "TAP version 13\n1..17\n# tests 17\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 16\n");
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(call, 17);
+  assert.equal(argsSeen.every((args) => args.some(
+    (value) => value.startsWith("--test-name-pattern=^"),
+  )), true);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+});
+
+test("macOS Node diagnostic rejects all-skipped TAP for a non-capability assets case", async () => {
+  let output = "";
+  let call = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "assets.test.ts",
+    spawnProcess() {
+      call += 1;
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end("TAP version 13\n1..17\n# tests 17\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 17\n");
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(call, 1);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=as01 status=failed\n");
+});
+
 test("macOS Node diagnostic accepts all-skipped TAP only for the two fixed UNC capability cases", async () => {
   let output = "";
   const argsSeen = [];
