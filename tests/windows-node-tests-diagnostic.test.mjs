@@ -49,6 +49,18 @@ test("Windows Node diagnostic emits a bounded real-document release stage", asyn
   );
 });
 
+test("Windows Node diagnostic maps public-content failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "public-content-policy.test.mjs",
+    runPublicContentDiagnostic: async () => "pc61",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=pc61 status=failed\n");
+});
+
 test("Windows Node diagnostic narrows the Kordoc repository failure to one fixed case id", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({

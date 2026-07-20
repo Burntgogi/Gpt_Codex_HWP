@@ -97,6 +97,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     }));
   const runReleaseOracleDiagnostic = options.runReleaseOracleDiagnostic
     ?? executeReleaseOracleDiagnostic;
+  const runPublicContentDiagnostic = options.runPublicContentDiagnostic
+    ?? executePublicContentDiagnostic;
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
 
   for (const file of REPOSITORY_TEST_FILES) {
@@ -144,6 +146,16 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
           }
         }
         stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=release-aggregate status=failed\n");
+        setExitCode(1);
+        return false;
+      }
+      if (file === "public-content-policy.test.mjs") {
+        let caseId = "aggregate";
+        try {
+          const candidate = await runPublicContentDiagnostic();
+          if (/^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
         return false;
       }
@@ -195,6 +207,16 @@ async function executeReleaseOracleDiagnostic() {
     },
   });
   return stage;
+}
+
+async function executePublicContentDiagnostic() {
+  let ordinal;
+  await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
+    repository: true,
+    maximumTopLevelTests: 61,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+  });
+  return ordinal === undefined ? "aggregate" : `pc${String(ordinal).padStart(2, "0")}`;
 }
 
 const entryPoint = process.argv[1];

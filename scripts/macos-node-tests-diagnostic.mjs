@@ -228,6 +228,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? executeDoctorOrphanDiagnostic;
   const runDocumentProcessDiagnostic = options.runDocumentProcessDiagnostic
     ?? executeDocumentProcessDiagnostic;
+  const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
+    ?? executeBenchmarkPolicyDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
     ?? (() => executeSvgAssetDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
@@ -332,6 +334,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         setExitCode(1);
         return false;
       }
+      if (file === "benchmark-policy.test.ts") {
+        let caseId = "aggregate";
+        try {
+          const candidate = await runBenchmarkPolicyDiagnostic();
+          if (/^bp(?:0[1-9]|[12][0-9]|3[0-8])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
       stdout.write(`${receiptPrefix}_NODE_TEST_FILE file=${file} status=failed\n`);
       setExitCode(1);
       return false;
@@ -375,12 +387,20 @@ async function executeDoctorOrphanDiagnostic() {
 }
 
 async function executeDocumentProcessDiagnostic() {
+  return executeSourceOrdinalDiagnostic("document-process-registration.test.ts", 51, "dp");
+}
+
+async function executeBenchmarkPolicyDiagnostic() {
+  return executeSourceOrdinalDiagnostic("benchmark-policy.test.ts", 38, "bp");
+}
+
+async function executeSourceOrdinalDiagnostic(file, maximum, prefix) {
   let ordinal;
-  await executeBoundedNodeTestFile("document-process-registration.test.ts", {
-    maximumTopLevelTests: 51,
+  await executeBoundedNodeTestFile(file, {
+    maximumTopLevelTests: maximum,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
   });
-  return ordinal === undefined ? "aggregate" : `dp${String(ordinal).padStart(2, "0")}`;
+  return ordinal === undefined ? "aggregate" : `${prefix}${String(ordinal).padStart(2, "0")}`;
 }
 
 function executeSvgAssetDiagnostic(options) {

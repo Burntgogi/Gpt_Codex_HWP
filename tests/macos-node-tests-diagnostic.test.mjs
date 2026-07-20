@@ -225,6 +225,18 @@ test("macOS Node diagnostic maps document registration failure to one bounded or
   assert.equal(output, "MAC_NODE_TEST_CASE case=dp51 status=failed\n");
 });
 
+test("macOS Node diagnostic maps benchmark failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    runBenchmarkPolicyDiagnostic: async () => "bp17",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=bp17 status=failed\n");
+});
+
 test("top-level TAP ordinal parser rejects nested, passing, and out-of-range lines", () => {
   assert.equal(failedTopLevelOrdinal("TAP version 13\nnot ok 19 - private\n# fail 1\n", 51), 19);
   assert.equal(failedTopLevelOrdinal("    not ok 3 - nested\n# fail 1\n", 51), undefined);
