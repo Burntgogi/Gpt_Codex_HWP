@@ -124,6 +124,7 @@ const COMPACT_RUNTIME_CASES = Object.freeze([
 ].map((pattern, index) => Object.freeze({
   id: `cr${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+  allowAllSkipped: index === 12,
 })));
 const DOCTOR_CASES = Object.freeze([
   "doctor contract reports safe required and optional capability results",
@@ -240,6 +241,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testNamePattern: record.pattern,
+      allowAllSkipped: record.allowAllSkipped,
     },
   ));
   const runDoctorCase = options.runDoctorCase ?? ((record) => executeTestFile(

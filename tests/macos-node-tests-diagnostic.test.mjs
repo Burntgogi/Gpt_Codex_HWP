@@ -443,6 +443,24 @@ test("macOS Node diagnostic reports the fixed aggregate id when every compact-ru
   assert.equal(output, "MAC_NODE_TEST_CASE case=compact-runtime-aggregate status=failed\n");
 });
 
+test("Windows source diagnostic accepts only the POSIX compact-runtime capability skip", async () => {
+  let cr13AllowAllSkipped;
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "compact-runtime.test.ts",
+    runCompactRuntimeCase: async (record) => {
+      if (record.id === "cr13") cr13AllowAllSkipped = record.allowAllSkipped;
+      return record.id !== "cr14";
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(cr13AllowAllSkipped, true);
+  assert.equal(output, "WINDOWS_NODE_TEST_CASE case=cr14 status=failed\n");
+});
+
 test("macOS Node diagnostic emits one bounded compact-runtime stage for cr36", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
