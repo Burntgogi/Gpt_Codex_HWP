@@ -805,7 +805,7 @@ async function runChild(request, snapshot, options, deadlineMs, child, release, 
         }
     });
 }
-async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver, forceTracker = false, hostedDiagnosticObserver, hostedDiagnosticLateObserver) {
+async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver, forceTracker = false, hostedDiagnosticObserver, hostedDiagnosticLateObserver, hostedDiagnosticPhaseObserver) {
     if (child.pid === undefined)
         throw new Error("child pid unavailable");
     const targetCloseReceipt = observeChildProcessClose(child);
@@ -821,6 +821,7 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
         "-TargetPid",
         String(child.pid),
         ...(forceTracker ? ["-ForceTracker"] : []),
+        ...(hostedDiagnosticPhaseObserver === undefined ? [] : ["-HostedDiagnostic"]),
     ], {
         shell: false,
         windowsHide: true,
@@ -845,7 +846,11 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
     let readyMode;
     let invalidFrame = false;
     try {
-        const ready = await lines.next(readyDeadlineMs);
+        const ready = await readWindowsSupervisorReadyFrame({
+            timeoutMs: readyDeadlineMs,
+            next: (timeoutMs) => lines.next(timeoutMs),
+            phaseObserver: hostedDiagnosticPhaseObserver,
+        });
         frameObserver?.(ready);
         const readyMatch = new RegExp(`^GPT_CODEX_HWP_JOB READY ${child.pid} ([12]) [0-9]+$`, "u").exec(ready);
         if (readyMatch === null) {
@@ -874,6 +879,7 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
                 next: (timeoutMs) => lines.next(timeoutMs),
                 transcriptReceipt: () => lines.transcriptReceipt(),
                 stderrPresent: () => stderrBytes > 0,
+                phaseObserver: hostedDiagnosticPhaseObserver,
             });
         }
         if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
@@ -988,6 +994,7 @@ async function createWindowsJobSupervisor(child, readyDeadlineMs, frameObserver,
     }
     return supervisor;
 }
+const WINDOWS_SUPERVISOR_PHASE_PATTERN = /^GPT_CODEX_HWP_JOB PHASE (script-entry|add-type|job-create|target-open|target-identity|job-bind|snapshot|baseline-rss|ready-write)$/u;
 export function classifyWindowsSupervisorPreframeDiagnostic(receipt) {
     if (receipt.helperSpawnFailed)
         return "helper-spawn";
@@ -1014,37 +1021,82 @@ function emitHostedWindowsLateBoundary(observer, boundary) {
 export function observeWindowsSupervisorLateReadyForTest(options) {
     return observeWindowsSupervisorLateReady(options);
 }
+export function readWindowsSupervisorReadyFrameForTest(options) {
+    return readWindowsSupervisorReadyFrame(options);
+}
+async function readWindowsSupervisorReadyFrame(options) {
+    const deadlineAt = performance.now() + options.timeoutMs;
+    while (true) {
+        const remainingMs = Math.ceil(deadlineAt - performance.now());
+        if (remainingMs <= 0)
+            throw new Error("job supervisor frame timeout");
+        const frame = await options.next(remainingMs);
+        const phase = parseWindowsSupervisorPhase(frame);
+        if (phase === undefined || options.phaseObserver === undefined)
+            return frame;
+        emitHostedWindowsPhaseBoundary(options.phaseObserver, phase);
+    }
+}
 async function observeWindowsSupervisorLateReady(options) {
     if (!Number.isSafeInteger(options.targetPid) || options.targetPid <= 0 ||
         !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0 ||
         options.timeoutMs > WINDOWS_HOSTED_LATE_OBSERVER_MS) {
         return "late-preframe-error";
     }
-    let timer;
-    const outcome = await Promise.race([
-        Promise.resolve().then(() => options.next(options.timeoutMs)).then((frame) => Object.freeze({ kind: "frame", frame }), () => Object.freeze({ kind: "error" })),
-        new Promise((resolve) => {
-            timer = setTimeout(() => resolve(Object.freeze({ kind: "timeout" })), options.timeoutMs);
-        }),
-    ]);
-    if (timer !== undefined)
-        clearTimeout(timer);
-    if (outcome.kind === "timeout")
-        return "observer-timeout";
-    if (outcome.kind === "error")
-        return "late-preframe-error";
-    let transcript;
+    const deadlineAt = performance.now() + options.timeoutMs;
+    while (true) {
+        const remainingMs = Math.ceil(deadlineAt - performance.now());
+        if (remainingMs <= 0)
+            return classifyWindowsSupervisorLateTimeout(options);
+        let timer;
+        const outcome = await Promise.race([
+            Promise.resolve().then(() => options.next(remainingMs)).then((frame) => Object.freeze({ kind: "frame", frame }), () => Object.freeze({ kind: "error" })),
+            new Promise((resolve) => {
+                timer = setTimeout(() => resolve(Object.freeze({ kind: "timeout" })), remainingMs);
+            }),
+        ]);
+        if (timer !== undefined)
+            clearTimeout(timer);
+        if (outcome.kind === "timeout")
+            return classifyWindowsSupervisorLateTimeout(options);
+        if (outcome.kind === "error")
+            return "late-preframe-error";
+        const phase = parseWindowsSupervisorPhase(outcome.frame);
+        if (phase !== undefined && options.phaseObserver !== undefined) {
+            emitHostedWindowsPhaseBoundary(options.phaseObserver, phase);
+            continue;
+        }
+        if (!windowsSupervisorTranscriptIsClean(options))
+            return "late-preframe-error";
+        const ready = new RegExp(`^GPT_CODEX_HWP_JOB READY ${options.targetPid} [12] [0-9]+$`, "u").test(outcome.frame);
+        return ready ? "ready-late" : "late-preframe-error";
+    }
+}
+function classifyWindowsSupervisorLateTimeout(options) {
+    return windowsSupervisorTranscriptIsClean(options)
+        ? "observer-timeout"
+        : "late-preframe-error";
+}
+function windowsSupervisorTranscriptIsClean(options) {
     try {
-        transcript = options.transcriptReceipt();
+        const transcript = options.transcriptReceipt();
+        return !options.stderrPresent() && !transcript.stdoutEnded &&
+            !transcript.stdoutFailed && !transcript.protocolFailed &&
+            transcript.queuedFrames === 0 && transcript.partialBytes === 0;
     }
     catch {
-        return "late-preframe-error";
+        return false;
     }
-    const clean = !options.stderrPresent() && !transcript.stdoutEnded &&
-        !transcript.stdoutFailed && !transcript.protocolFailed &&
-        transcript.queuedFrames === 0 && transcript.partialBytes === 0;
-    const ready = new RegExp(`^GPT_CODEX_HWP_JOB READY ${options.targetPid} [12] [0-9]+$`, "u").test(outcome.frame);
-    return clean && ready ? "ready-late" : "late-preframe-error";
+}
+function parseWindowsSupervisorPhase(frame) {
+    const match = WINDOWS_SUPERVISOR_PHASE_PATTERN.exec(frame);
+    return match?.[1];
+}
+function emitHostedWindowsPhaseBoundary(observer, boundary) {
+    try {
+        observer?.(boundary);
+    }
+    catch { }
 }
 export async function finalizeVerifiedWindowsSupervisor({ closeReceipt, forceClose, allowForceClose, transcriptReceipt, gracefulExitMs = 1_000, forcedExitMs = 4_000, }) {
     const gracefulClose = await waitWithTimeout(closeReceipt, gracefulExitMs);
@@ -1079,7 +1131,7 @@ export async function superviseDocumentProcessTree(child, options = {}) {
     if (child.pid === undefined)
         throw new Error("child pid unavailable");
     if (process.platform === "win32") {
-        return createWindowsJobSupervisor(child, 5_000, options.frameObserver, false, options.hostedDiagnosticObserver, options.hostedDiagnosticLateObserver);
+        return createWindowsJobSupervisor(child, 5_000, options.frameObserver, false, options.hostedDiagnosticObserver, options.hostedDiagnosticLateObserver, options.hostedDiagnosticPhaseObserver);
     }
     return createPosixProcessTreeSupervisor(child, process.platform, {
         deferProcessTreeTelemetryStop: options.deferProcessTreeTelemetryStop,

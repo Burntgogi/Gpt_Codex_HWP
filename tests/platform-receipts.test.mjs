@@ -92,6 +92,18 @@ function validReleaseReceipt(
   };
 }
 
+function failedReleaseReceipt(stageName) {
+  const stageIndex = REQUIRED_PLATFORM_STAGES.indexOf(stageName);
+  assert.notEqual(stageIndex, -1);
+  const receipt = validReleaseReceipt();
+  receipt.status = "failed";
+  receipt.commit = null;
+  receipt.tree = null;
+  receipt.stages = receipt.stages.slice(0, stageIndex + 1);
+  receipt.stages[stageIndex].status = "failed";
+  return receipt;
+}
+
 test("platform receipt accepts exact current-head redacted evidence", () => {
   const validated = validatePlatformReceipt(validReceipt(), EXPECTED);
 
@@ -548,6 +560,61 @@ test("platform receipt rejects a mismatched release identity before writing", as
   );
 });
 
+test("platform receipt creation keeps failed stage provenance private", async () => {
+  await assert.rejects(
+    createPlatformReceipt({
+      root: process.cwd(),
+      expectedCommit: EXPECTED.commit,
+      platform: EXPECTED.platform,
+      arch: EXPECTED.arch,
+      collectExpectation: async () => EXPECTED,
+      runVerification: async () => failedReleaseReceipt("node-tests"),
+    }),
+    (error) => {
+      assert.equal(error?.code, "PLATFORM_RECEIPT_RELEASE_INVALID");
+      assert.equal(error?.message, "PLATFORM_RECEIPT_RELEASE_INVALID");
+      assert.equal(Object.hasOwn(error, "stage"), false);
+      return true;
+    },
+  );
+});
+
+test("platform receipt creation refuses stage provenance from invalid failed receipt fields", async () => {
+  const marker = "PRIVATE/path/document.hwpx AWS_SECRET_ACCESS_KEY=marker";
+  const mutations = [
+    (receipt) => { receipt.platform = "win32"; },
+    (receipt) => { receipt.arch = "x64"; },
+    (receipt) => { receipt.node = "v22.22.1"; },
+    (receipt) => { receipt.npm = "10.9.6"; },
+    (receipt) => { receipt.python = "3.11.9"; },
+    (receipt) => { receipt.toolCount = 8; },
+    (receipt) => { receipt.fixtureSha256 = "0".repeat(64); },
+    (receipt) => { receipt.logs = marker; },
+  ];
+
+  for (const mutate of mutations) {
+    const failed = failedReleaseReceipt("node-tests");
+    mutate(failed);
+    await assert.rejects(
+      createPlatformReceipt({
+        root: process.cwd(),
+        expectedCommit: EXPECTED.commit,
+        platform: EXPECTED.platform,
+        arch: EXPECTED.arch,
+        collectExpectation: async () => EXPECTED,
+        runVerification: async () => failed,
+      }),
+      (error) => {
+        assert.equal(error?.code, "PLATFORM_RECEIPT_RELEASE_INVALID");
+        assert.equal(error?.stage, undefined);
+        assert.equal(error?.message, "PLATFORM_RECEIPT_RELEASE_INVALID");
+        assert.doesNotMatch(error?.message, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+        return true;
+      },
+    );
+  }
+});
+
 test("platform receipt creation rejects a pre-existing Windows junction output directory", async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows directory junctions are unavailable on this platform");
@@ -625,6 +692,109 @@ test("platform receipt CLI fails with stable redacted diagnostics", async () => 
   assert.equal(stderr, "PLATFORM_RECEIPT_EXPECTED_HEAD_INVALID\n");
   assert.doesNotMatch(stderr, new RegExp(marker, "u"));
   assert.equal(exitCode, 1);
+});
+
+test("platform receipt CLI reports only the allowlisted failed release stage", async () => {
+  for (const stage of REQUIRED_PLATFORM_STAGES) {
+    let stdout = "";
+    let stderr = "";
+    let exitCode;
+
+    const result = await runPlatformReceiptCli({
+      args: ["create"],
+      env: { EXPECTED_HEAD_SHA: EXPECTED.commit },
+      root: process.cwd(),
+      stdout: { write: (value) => { stdout += value; } },
+      stderr: { write: (value) => { stderr += value; } },
+      setExitCode: (value) => { exitCode = value; },
+      collectExpectation: async () => EXPECTED,
+      runVerification: async () => failedReleaseReceipt(stage),
+    });
+
+    assert.equal(result, undefined, stage);
+    assert.equal(stdout, "", stage);
+    assert.equal(
+      stderr,
+      `PLATFORM_RECEIPT_RELEASE_INVALID stage=${stage}\n`,
+      stage,
+    );
+    assert.equal(exitCode, 1, stage);
+  }
+});
+
+test("platform receipt CLI rejects an authentic failed-stage error replayed from an earlier call", async () => {
+  let captured;
+  try {
+    await createPlatformReceipt({
+      root: process.cwd(),
+      expectedCommit: EXPECTED.commit,
+      platform: EXPECTED.platform,
+      arch: EXPECTED.arch,
+      collectExpectation: async () => EXPECTED,
+      runVerification: async () => failedReleaseReceipt("node-tests"),
+    });
+  } catch (error) {
+    captured = error;
+  }
+  assert.equal(captured?.code, "PLATFORM_RECEIPT_RELEASE_INVALID");
+
+  let stdout = "";
+  let stderr = "";
+  let exitCode;
+  const result = await runPlatformReceiptCli({
+    args: ["create"],
+    env: { EXPECTED_HEAD_SHA: EXPECTED.commit },
+    root: process.cwd(),
+    stdout: { write: (value) => { stdout += value; } },
+    stderr: { write: (value) => { stderr += value; } },
+    setExitCode: (value) => { exitCode = value; },
+    collectExpectation: async () => EXPECTED,
+    runVerification: async () => { throw captured; },
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(stdout, "");
+  assert.equal(stderr, "PLATFORM_RECEIPT_RELEASE_INVALID\n");
+  assert.equal(exitCode, 1);
+});
+
+test("platform receipt CLI never echoes malformed stage evidence or arbitrary errors", async () => {
+  const marker = "PRIVATE/path/document.hwpx AWS_SECRET_ACCESS_KEY=marker";
+  for (const runVerification of [
+    async () => {
+      const receipt = failedReleaseReceipt("node-tests");
+      receipt.stages.at(-1).stdout = marker;
+      return receipt;
+    },
+    async () => {
+      const error = new Error(marker);
+      error.stage = `node-tests\n${marker}`;
+      throw error;
+    },
+    async () => {
+      const error = new Error(marker);
+      error.code = "PLATFORM_RECEIPT_RELEASE_INVALID";
+      error.stage = "node-tests";
+      throw error;
+    },
+  ]) {
+    let stderr = "";
+    const result = await runPlatformReceiptCli({
+      args: ["create"],
+      env: { EXPECTED_HEAD_SHA: EXPECTED.commit },
+      root: process.cwd(),
+      stdout: { write() {} },
+      stderr: { write: (value) => { stderr += value; } },
+      setExitCode() {},
+      collectExpectation: async () => EXPECTED,
+      runVerification,
+    });
+
+    assert.equal(result, undefined);
+    assert.match(stderr, /^PLATFORM_RECEIPT_[A-Z_]+\n$/u);
+    assert.doesNotMatch(stderr, /stage=/u);
+    assert.doesNotMatch(stderr, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+  }
 });
 
 async function createRepository(t) {

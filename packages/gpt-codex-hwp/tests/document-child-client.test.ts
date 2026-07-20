@@ -1328,6 +1328,9 @@ test("document child crash before READY preserves explicit terminal-first and de
       let supervisorBound = false;
       let closeObserved = false;
       let releaseCrash: (() => void) | undefined;
+      let spawnedChild: ReturnType<typeof spawn> | undefined;
+      let childCloseReceipt: Promise<void> | undefined;
+      let run: Promise<void> | undefined;
       let terminationReason: ProcessTreeTerminationReceipt["proof"] |
         "identity" | "deadline" | "termination" | "registration" | "channel" | undefined;
       let captured: unknown;
@@ -1337,17 +1340,20 @@ test("document child crash before READY preserves explicit terminal-first and de
             childArguments: ["crash-armed-before-ready"],
             startGateEntry: startGatePath,
             spawnFactory: (specification) => {
-              const stdio = [...specification.options.stdio as StdioOptions[], "pipe", "pipe"];
+              const stdio = [...specification.options.stdio as StdioOptions[], "pipe"];
               const child = spawn(
                 specification.command,
                 [...specification.args],
                 { ...specification.options, stdio },
               );
+              spawnedChild = child;
+              childCloseReceipt = new Promise<void>((resolveClose) => {
+                child.once("close", () => resolveClose());
+              });
               child.once("exit", () => { terminalObserved = true; });
               child.once("close", () => { closeObserved = true; });
               const armed = child.stdio[8];
-              const release = child.stdio[9];
-              if (armed === null || release === null || !("once" in armed) || !("end" in release)) {
+              if (armed === null || !("once" in armed)) {
                 throw new Error("private crash handshake unavailable");
               }
               void new Promise<number>((resolveArmed, rejectArmed) => {
@@ -1357,7 +1363,7 @@ test("document child crash before READY preserves explicit terminal-first and de
                 });
                 armed.once("error", rejectArmed);
               }).then(armedSignal.resolve, armedSignal.reject);
-              releaseCrash = () => release.end(Buffer.from([0x52]));
+              releaseCrash = () => forceTerminateFixtureProcess(child);
               const writer = child.stdio[7];
               if (writer !== null && writer !== undefined && "write" in writer) {
                 const write = writer.write.bind(writer);
@@ -1391,7 +1397,7 @@ test("document child crash before READY preserves explicit terminal-first and de
               wait: () => deadline.promise,
             },
           } as never);
-        const run = client.run(
+        run = client.run(
           detectRequest(`child-crash-before-ready-${scenario.name}`),
           spoolSnapshot(owned.inputFd, 3),
           { deadlineMs: 5_000 },
@@ -1408,7 +1414,11 @@ test("document child crash before READY preserves explicit terminal-first and de
           assert.notEqual(await telemetryBounded(terminationStarted.promise, 250), TELEMETRY_STALLED);
           releaseCrash?.();
         }
-        await run;
+        assert.notEqual(
+          await telemetryBounded(run, 3_000),
+          TELEMETRY_STALLED,
+          "client run did not settle after the ordered terminal/deadline events",
+        );
         const diagnosticDeadline = Date.now() + 3_000;
         while ((!closeObserved || terminationReason === undefined)
           && Date.now() < diagnosticDeadline) {
@@ -1437,10 +1447,33 @@ test("document child crash before READY preserves explicit terminal-first and de
           terminalObservedBeforeTermination: scenario.name === "terminal-first",
         });
       } finally {
-        releaseCrash?.();
         deadlineObserved = true;
         deadline.resolve();
+        releaseCrash?.();
+        let closeOutcome = childCloseReceipt === undefined
+          ? undefined
+          : await telemetryBounded(childCloseReceipt, 1_000);
+        if (closeOutcome === TELEMETRY_STALLED && spawnedChild !== undefined) {
+          forceTerminateFixtureProcess(spawnedChild);
+          closeOutcome = await telemetryBounded(childCloseReceipt!, 1_000);
+        }
+        if (closeOutcome === TELEMETRY_STALLED && spawnedChild !== undefined) {
+          detachFixtureProcess(spawnedChild);
+        }
+        const runOutcome = run === undefined
+          ? undefined
+          : await telemetryBounded(run, 1_000);
         owned.cleanup();
+        assert.notEqual(
+          closeOutcome,
+          TELEMETRY_STALLED,
+          "crash-causality fixture did not close during bounded cleanup",
+        );
+        assert.notEqual(
+          runOutcome,
+          TELEMETRY_STALLED,
+          "crash-causality client run did not settle during bounded cleanup",
+        );
       }
     });
   }
@@ -4640,6 +4673,26 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.fail("condition was not met before deadline");
+}
+
+function forceTerminateFixtureProcess(child: ReturnType<typeof spawn>): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+      return;
+    } catch (error: unknown) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
+    }
+  }
+  child.kill("SIGKILL");
+}
+
+function detachFixtureProcess(child: ReturnType<typeof spawn>): void {
+  for (const stream of child.stdio) {
+    if (stream !== null && "destroy" in stream) stream.destroy();
+  }
+  child.unref();
 }
 
 async function terminateChildWithProof(

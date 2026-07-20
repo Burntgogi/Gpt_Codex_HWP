@@ -17,6 +17,18 @@ const WINDOWS_LATE_BOUNDARIES = new Set([
   "helper-close",
   "target-close",
 ]);
+const WINDOWS_PHASE_BOUNDARIES = new Set([
+  "no-phase",
+  "script-entry",
+  "add-type",
+  "job-create",
+  "target-open",
+  "target-identity",
+  "job-bind",
+  "snapshot",
+  "baseline-rss",
+  "ready-write",
+]);
 const MAC_BACKEND_BOUNDARIES = new Set([
   "worker-error",
   "worker-exit",
@@ -71,14 +83,21 @@ export async function runHostedWindowsSupervisorDiagnostic(dependencies = {}) {
   ));
   const observeTargetClose = dependencies.observeTargetClose
     ?? childClient.observeChildProcessClose;
-  const superviseTarget = dependencies.superviseTarget ?? ((target, observe, observeLate) =>
+  const superviseTarget = dependencies.superviseTarget ?? ((
+    target,
+    observe,
+    observeLate,
+    observePhase,
+  ) =>
     childClient.superviseDocumentProcessTree(target, {
       hostedDiagnosticObserver: observe,
       hostedDiagnosticLateObserver: observeLate,
+      hostedDiagnosticPhaseObserver: observePhase,
     }));
   let target;
   let boundary = "helper-spawn";
   let lateBoundary;
+  let phaseBoundary;
   let targetClose;
   try {
     target = spawnTarget();
@@ -87,6 +106,10 @@ export async function runHostedWindowsSupervisorDiagnostic(dependencies = {}) {
       boundary = WINDOWS_BOUNDARIES.has(value) ? value : "frame-invalid";
     }, (value) => {
       lateBoundary = WINDOWS_LATE_BOUNDARIES.has(value) ? value : "late-preframe-error";
+    }, (value) => {
+      phaseBoundary = WINDOWS_PHASE_BOUNDARIES.has(value) && value !== "no-phase"
+        ? value
+        : undefined;
     });
     if (boundary === "ready-mode-1") {
       const receipt = await supervisor.terminate();
@@ -123,6 +146,9 @@ export async function runHostedWindowsSupervisorDiagnostic(dependencies = {}) {
     ...(lateBoundary === undefined
       ? {}
       : { late: Object.freeze({ boundary: lateBoundary }) }),
+    ...(phaseBoundary === undefined
+      ? {}
+      : { phase: Object.freeze({ boundary: phaseBoundary }) }),
   });
 }
 
@@ -187,6 +213,11 @@ export function formatHostedWindowsSupervisorDiagnostic(value) {
 export function formatHostedWindowsSupervisorLateDiagnostic(value) {
   assertExactBoundary(value, WINDOWS_LATE_BOUNDARIES);
   return `HOSTED_WINDOWS_SUPERVISOR_LATE boundary=${value.boundary}`;
+}
+
+export function formatHostedWindowsSupervisorPhaseDiagnostic(value) {
+  assertExactBoundary(value, WINDOWS_PHASE_BOUNDARIES);
+  return `HOSTED_WINDOWS_SUPERVISOR_PHASE boundary=${value.boundary}`;
 }
 
 export function formatHostedMacBackendDiagnostic(value) {
@@ -356,6 +387,9 @@ async function main() {
     if (result.late !== undefined) {
       process.stdout.write(`${formatHostedWindowsSupervisorLateDiagnostic(result.late)}\n`);
     }
+    process.stdout.write(`${formatHostedWindowsSupervisorPhaseDiagnostic(
+      result.phase ?? Object.freeze({ boundary: "no-phase" }),
+    )}\n`);
     return;
   }
   if (process.argv[2] === "--mac-worker") {

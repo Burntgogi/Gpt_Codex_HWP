@@ -1,10 +1,18 @@
 param(
   [Parameter(Mandatory = $true)]
   [int]$TargetPid,
-  [switch]$ForceTracker
+  [switch]$ForceTracker,
+  [switch]$HostedDiagnostic
 )
 
 $ErrorActionPreference = 'Stop'
+function Write-HostedDiagnosticPhase([string]$Phase) {
+  if (-not $HostedDiagnostic) { return }
+  [Console]::Out.WriteLine("GPT_CODEX_HWP_JOB PHASE $Phase")
+  [Console]::Out.Flush()
+}
+
+Write-HostedDiagnosticPhase 'script-entry'
 $source = @'
 using System;
 using System.Runtime.InteropServices;
@@ -204,6 +212,7 @@ public static class GptCodexHwpJob {
 }
 '@
 
+Write-HostedDiagnosticPhase 'add-type'
 Add-Type -TypeDefinition $source -Language CSharp
 $retained = @{}
 $retainedByPid = @{}
@@ -364,6 +373,7 @@ $verifiedGone = $false
 $failure = $null
 $failureStage = 'startup'
 try {
+  Write-HostedDiagnosticPhase 'job-create'
   $job = [GptCodexHwpJob]::CreateJobObject([IntPtr]::Zero, $null)
   if ($job -eq [IntPtr]::Zero) { throw 'CreateJobObject failed' }
   $limits = New-Object GptCodexHwpJob+JOBOBJECT_EXTENDED_LIMIT_INFORMATION
@@ -372,9 +382,11 @@ try {
   if (-not [GptCodexHwpJob]::SetInformationJobObject($job, 9, [ref]$limits, $limitSize)) {
     throw 'SetInformationJobObject failed'
   }
+  Write-HostedDiagnosticPhase 'target-open'
   $process = [GptCodexHwpJob]::OpenProcess(0x00101101, $false, $TargetPid)
   if ($process -eq [IntPtr]::Zero) { throw 'OpenProcess failed' }
   try {
+    Write-HostedDiagnosticPhase 'target-identity'
     $rootRecord = [GptCodexHwpJob]::RecordFromHandle($process, $TargetPid)
     [long]$rootCreation = $rootRecord.CreationTime
     $rootKey = "$TargetPid`:$rootCreation"
@@ -392,12 +404,16 @@ try {
     $process = [IntPtr]::Zero
     throw
   }
+  Write-HostedDiagnosticPhase 'job-bind'
   if (-not $ForceTracker -and [GptCodexHwpJob]::AssignProcessToJobObject($job, $process)) { $mode = 1 }
+  Write-HostedDiagnosticPhase 'snapshot'
   $baselineRecords = @(Invoke-TrackedPoll)
   $failureStage = 'baseline-rss'
+  Write-HostedDiagnosticPhase 'baseline-rss'
   [long]$baselineRss = Measure-TrackedWorkingSet $baselineRecords
   if ($baselineRss -le 0) { throw 'baseline working set unavailable' }
   [long]$script:peakRss = $baselineRss
+  Write-HostedDiagnosticPhase 'ready-write'
   [Console]::Out.WriteLine("GPT_CODEX_HWP_JOB READY $TargetPid $mode $rootCreation")
   [Console]::Out.Flush()
   $commandTask = [GptCodexHwpJob]::ReadCommandAsync()

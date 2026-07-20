@@ -1277,6 +1277,7 @@ async function createWindowsJobSupervisor(
   forceTracker = false,
   hostedDiagnosticObserver?: (boundary: WindowsSupervisorHostedBoundary) => void,
   hostedDiagnosticLateObserver?: (boundary: WindowsSupervisorHostedLateBoundary) => void,
+  hostedDiagnosticPhaseObserver?: (boundary: WindowsSupervisorHostedPhaseBoundary) => void,
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
   const targetCloseReceipt = observeChildProcessClose(child);
@@ -1296,6 +1297,7 @@ async function createWindowsJobSupervisor(
     "-TargetPid",
     String(child.pid),
     ...(forceTracker ? ["-ForceTracker"] : []),
+    ...(hostedDiagnosticPhaseObserver === undefined ? [] : ["-HostedDiagnostic"]),
   ], {
     shell: false,
     windowsHide: true,
@@ -1320,7 +1322,11 @@ async function createWindowsJobSupervisor(
   let readyMode: 1 | 2;
   let invalidFrame = false;
   try {
-    const ready = await lines.next(readyDeadlineMs);
+    const ready = await readWindowsSupervisorReadyFrame({
+      timeoutMs: readyDeadlineMs,
+      next: (timeoutMs) => lines.next(timeoutMs),
+      phaseObserver: hostedDiagnosticPhaseObserver,
+    });
     frameObserver?.(ready);
     const readyMatch = new RegExp(
       `^GPT_CODEX_HWP_JOB READY ${child.pid} ([12]) [0-9]+$`,
@@ -1354,6 +1360,7 @@ async function createWindowsJobSupervisor(
         next: (timeoutMs) => lines.next(timeoutMs),
         transcriptReceipt: () => lines.transcriptReceipt(),
         stderrPresent: () => stderrBytes > 0,
+        phaseObserver: hostedDiagnosticPhaseObserver,
       });
     }
     if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
@@ -1487,6 +1494,19 @@ export type WindowsSupervisorHostedLateBoundary =
   | "helper-close"
   | "target-close";
 
+export type WindowsSupervisorHostedPhaseBoundary =
+  | "script-entry"
+  | "add-type"
+  | "job-create"
+  | "target-open"
+  | "target-identity"
+  | "job-bind"
+  | "snapshot"
+  | "baseline-rss"
+  | "ready-write";
+
+const WINDOWS_SUPERVISOR_PHASE_PATTERN = /^GPT_CODEX_HWP_JOB PHASE (script-entry|add-type|job-create|target-open|target-identity|job-bind|snapshot|baseline-rss|ready-write)$/u;
+
 export function classifyWindowsSupervisorPreframeDiagnostic(receipt: Readonly<{
   helperSpawnFailed: boolean;
   stderrPresent: boolean;
@@ -1529,8 +1549,33 @@ export function observeWindowsSupervisorLateReadyForTest(options: Readonly<{
     partialBytes: number;
   }>;
   stderrPresent: () => boolean;
+  phaseObserver?: (boundary: WindowsSupervisorHostedPhaseBoundary) => void;
 }>): Promise<WindowsSupervisorHostedLateBoundary> {
   return observeWindowsSupervisorLateReady(options);
+}
+
+export function readWindowsSupervisorReadyFrameForTest(options: Readonly<{
+  timeoutMs: number;
+  next: (timeoutMs: number) => Promise<string>;
+  phaseObserver?: (boundary: WindowsSupervisorHostedPhaseBoundary) => void;
+}>): Promise<string> {
+  return readWindowsSupervisorReadyFrame(options);
+}
+
+async function readWindowsSupervisorReadyFrame(options: Readonly<{
+  timeoutMs: number;
+  next: (timeoutMs: number) => Promise<string>;
+  phaseObserver?: (boundary: WindowsSupervisorHostedPhaseBoundary) => void;
+}>): Promise<string> {
+  const deadlineAt = performance.now() + options.timeoutMs;
+  while (true) {
+    const remainingMs = Math.ceil(deadlineAt - performance.now());
+    if (remainingMs <= 0) throw new Error("job supervisor frame timeout");
+    const frame = await options.next(remainingMs);
+    const phase = parseWindowsSupervisorPhase(frame);
+    if (phase === undefined || options.phaseObserver === undefined) return frame;
+    emitHostedWindowsPhaseBoundary(options.phaseObserver, phase);
+  }
 }
 
 async function observeWindowsSupervisorLateReady(options: Readonly<{
@@ -1545,39 +1590,89 @@ async function observeWindowsSupervisorLateReady(options: Readonly<{
     partialBytes: number;
   }>;
   stderrPresent: () => boolean;
+  phaseObserver?: (boundary: WindowsSupervisorHostedPhaseBoundary) => void;
 }>): Promise<WindowsSupervisorHostedLateBoundary> {
   if (!Number.isSafeInteger(options.targetPid) || options.targetPid <= 0 ||
     !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0 ||
     options.timeoutMs > WINDOWS_HOSTED_LATE_OBSERVER_MS) {
     return "late-preframe-error";
   }
-  let timer: NodeJS.Timeout | undefined;
-  const outcome = await Promise.race([
-    Promise.resolve().then(() => options.next(options.timeoutMs)).then(
-      (frame) => Object.freeze({ kind: "frame" as const, frame }),
-      () => Object.freeze({ kind: "error" as const }),
-    ),
-    new Promise<Readonly<{ kind: "timeout" }>>((resolve) => {
-      timer = setTimeout(() => resolve(Object.freeze({ kind: "timeout" })), options.timeoutMs);
-    }),
-  ]);
-  if (timer !== undefined) clearTimeout(timer);
-  if (outcome.kind === "timeout") return "observer-timeout";
-  if (outcome.kind === "error") return "late-preframe-error";
-  let transcript: ReturnType<typeof options.transcriptReceipt>;
-  try {
-    transcript = options.transcriptReceipt();
-  } catch {
-    return "late-preframe-error";
+  const deadlineAt = performance.now() + options.timeoutMs;
+  while (true) {
+    const remainingMs = Math.ceil(deadlineAt - performance.now());
+    if (remainingMs <= 0) return classifyWindowsSupervisorLateTimeout(options);
+    let timer: NodeJS.Timeout | undefined;
+    const outcome = await Promise.race([
+      Promise.resolve().then(() => options.next(remainingMs)).then(
+        (frame) => Object.freeze({ kind: "frame" as const, frame }),
+        () => Object.freeze({ kind: "error" as const }),
+      ),
+      new Promise<Readonly<{ kind: "timeout" }>>((resolve) => {
+        timer = setTimeout(() => resolve(Object.freeze({ kind: "timeout" })), remainingMs);
+      }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (outcome.kind === "timeout") return classifyWindowsSupervisorLateTimeout(options);
+    if (outcome.kind === "error") return "late-preframe-error";
+    const phase = parseWindowsSupervisorPhase(outcome.frame);
+    if (phase !== undefined && options.phaseObserver !== undefined) {
+      emitHostedWindowsPhaseBoundary(options.phaseObserver, phase);
+      continue;
+    }
+    if (!windowsSupervisorTranscriptIsClean(options)) return "late-preframe-error";
+    const ready = new RegExp(
+      `^GPT_CODEX_HWP_JOB READY ${options.targetPid} [12] [0-9]+$`,
+      "u",
+    ).test(outcome.frame);
+    return ready ? "ready-late" : "late-preframe-error";
   }
-  const clean = !options.stderrPresent() && !transcript.stdoutEnded &&
-    !transcript.stdoutFailed && !transcript.protocolFailed &&
-    transcript.queuedFrames === 0 && transcript.partialBytes === 0;
-  const ready = new RegExp(
-    `^GPT_CODEX_HWP_JOB READY ${options.targetPid} [12] [0-9]+$`,
-    "u",
-  ).test(outcome.frame);
-  return clean && ready ? "ready-late" : "late-preframe-error";
+}
+
+function classifyWindowsSupervisorLateTimeout(options: Readonly<{
+  transcriptReceipt: () => Readonly<{
+    stdoutEnded: boolean;
+    stdoutFailed: boolean;
+    protocolFailed: boolean;
+    queuedFrames: number;
+    partialBytes: number;
+  }>;
+  stderrPresent: () => boolean;
+}>): WindowsSupervisorHostedLateBoundary {
+  return windowsSupervisorTranscriptIsClean(options)
+    ? "observer-timeout"
+    : "late-preframe-error";
+}
+
+function windowsSupervisorTranscriptIsClean(options: Readonly<{
+  transcriptReceipt: () => Readonly<{
+    stdoutEnded: boolean;
+    stdoutFailed: boolean;
+    protocolFailed: boolean;
+    queuedFrames: number;
+    partialBytes: number;
+  }>;
+  stderrPresent: () => boolean;
+}>): boolean {
+  try {
+    const transcript = options.transcriptReceipt();
+    return !options.stderrPresent() && !transcript.stdoutEnded &&
+      !transcript.stdoutFailed && !transcript.protocolFailed &&
+      transcript.queuedFrames === 0 && transcript.partialBytes === 0;
+  } catch {
+    return false;
+  }
+}
+
+function parseWindowsSupervisorPhase(frame: string): WindowsSupervisorHostedPhaseBoundary | undefined {
+  const match = WINDOWS_SUPERVISOR_PHASE_PATTERN.exec(frame);
+  return match?.[1] as WindowsSupervisorHostedPhaseBoundary | undefined;
+}
+
+function emitHostedWindowsPhaseBoundary(
+  observer: ((boundary: WindowsSupervisorHostedPhaseBoundary) => void) | undefined,
+  boundary: WindowsSupervisorHostedPhaseBoundary,
+): void {
+  try { observer?.(boundary); } catch {}
 }
 
 export async function finalizeVerifiedWindowsSupervisor({
@@ -1652,6 +1747,7 @@ export async function superviseDocumentProcessTree(
     deferProcessTreeTelemetryStop?: boolean;
     hostedDiagnosticObserver?: (boundary: WindowsSupervisorHostedBoundary) => void;
     hostedDiagnosticLateObserver?: (boundary: WindowsSupervisorHostedLateBoundary) => void;
+    hostedDiagnosticPhaseObserver?: (boundary: WindowsSupervisorHostedPhaseBoundary) => void;
   }> = {},
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
@@ -1663,6 +1759,7 @@ export async function superviseDocumentProcessTree(
       false,
       options.hostedDiagnosticObserver,
       options.hostedDiagnosticLateObserver,
+      options.hostedDiagnosticPhaseObserver,
     );
   }
   return createPosixProcessTreeSupervisor(child, process.platform, {

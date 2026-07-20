@@ -30,6 +30,8 @@ const MAX_RUNTIME_FILES = 4_096;
 const MAX_TRACKED_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_TRACKED_TOTAL_BYTES = 64 * 1024 * 1024;
 const MAX_TRACKED_FILES = 100_000;
+const AUTHENTIC_RELEASE_STAGE_ERRORS = new WeakMap();
+const RELEASE_STAGE_INVOCATION_WITNESS = Symbol("release-stage-invocation-witness");
 
 const RECEIPT_KEYS = Object.freeze([
   "arch",
@@ -236,7 +238,16 @@ export async function createPlatformReceipt(options = {}) {
   const releaseReceipt = await runVerification({ root, platform, arch });
   const after = await collectExpectation({ root, expectedCommit, platform, arch });
   if (!sameExpectation(before, after)) throw receiptError("PLATFORM_RECEIPT_SOURCE_CHANGED");
-  const receipt = buildPlatformReceipt(releaseReceipt, after);
+  let receipt;
+  try {
+    receipt = buildPlatformReceipt(releaseReceipt, after);
+  } catch (error) {
+    const stage = failedReleaseVerificationStage(releaseReceipt, after);
+    if (error?.code === "PLATFORM_RECEIPT_RELEASE_INVALID" && stage !== undefined) {
+      throw releaseStageError(stage, options[RELEASE_STAGE_INVOCATION_WITNESS]);
+    }
+    throw error;
+  }
   await writeExclusive(
     root,
     DEFAULT_PLATFORM_RECEIPT_PATH,
@@ -920,6 +931,52 @@ function assertExactObject(value, expectedKeys, code) {
   }
 }
 
+function failedReleaseVerificationStage(value, expected) {
+  try {
+    assertExactObject(value, RELEASE_RECEIPT_KEYS, "PLATFORM_RECEIPT_RELEASE_INVALID");
+    assertExactObject(expected, EXPECTATION_KEYS, "PLATFORM_RECEIPT_RELEASE_INVALID");
+    assertIdentity(expected, "PLATFORM_RECEIPT_RELEASE_INVALID");
+    if (
+      value.schemaVersion !== 2
+      || value.status !== "failed"
+      || value.commit !== null
+      || value.tree !== null
+      || value.platform !== expected.platform
+      || value.arch !== expected.arch
+      || value.toolCount !== 9
+      || value.fixtureSha256 !== PINNED_HWP_FIXTURE_SHA256
+      || !Array.isArray(value.stages)
+      || value.stages.length < 1
+      || value.stages.length > REQUIRED_RELEASE_STAGES.length
+    ) {
+      return undefined;
+    }
+    for (const key of TOOLCHAIN_KEYS) {
+      if (
+        typeof value[key] !== "string"
+        || !TOOLCHAIN_VERSION_PATTERNS[key].test(value[key])
+      ) {
+        return undefined;
+      }
+    }
+    for (let index = 0; index < value.stages.length; index += 1) {
+      const stage = value.stages[index];
+      assertExactObject(stage, STAGE_KEYS, "PLATFORM_RECEIPT_RELEASE_INVALID");
+      if (
+        stage.name !== REQUIRED_RELEASE_STAGES[index]
+        || !Number.isSafeInteger(stage.elapsedMs)
+        || stage.elapsedMs < 0
+        || stage.status !== (index === value.stages.length - 1 ? "failed" : "passed")
+      ) {
+        return undefined;
+      }
+    }
+    return value.stages.at(-1).name;
+  } catch {
+    return undefined;
+  }
+}
+
 function requiredRoot(value) {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw receiptError("PLATFORM_RECEIPT_ROOT_INVALID");
@@ -940,6 +997,21 @@ function receiptError(code) {
   return error;
 }
 
+function releaseStageError(stage, invocationWitness) {
+  const error = receiptError("PLATFORM_RECEIPT_RELEASE_INVALID");
+  if (
+    REQUIRED_RELEASE_STAGES.includes(stage)
+    && invocationWitness !== null
+    && typeof invocationWitness === "object"
+  ) {
+    AUTHENTIC_RELEASE_STAGE_ERRORS.set(error, Object.freeze({
+      invocationWitness,
+      stage,
+    }));
+  }
+  return error;
+}
+
 export async function runPlatformReceiptCli(options = {}) {
   const args = options.args ?? process.argv.slice(2);
   const env = options.env ?? process.env;
@@ -947,6 +1019,7 @@ export async function runPlatformReceiptCli(options = {}) {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
+  const invocationWitness = Object.freeze({});
   if (!Array.isArray(args) || args.length !== 1) {
     stderr.write("PLATFORM_RECEIPT_USAGE\n");
     setExitCode(1);
@@ -956,7 +1029,16 @@ export async function runPlatformReceiptCli(options = {}) {
   try {
     let result;
     if (args[0] === "create") {
-      result = await createPlatformReceipt(common);
+      result = await createPlatformReceipt({
+        ...common,
+        ...(options.runVerification === undefined
+          ? {}
+          : { runVerification: options.runVerification }),
+        ...(options.collectExpectation === undefined
+          ? {}
+          : { collectExpectation: options.collectExpectation }),
+        [RELEASE_STAGE_INVOCATION_WITNESS]: invocationWitness,
+      });
       stdout.write("PLATFORM_RECEIPT_CREATED\n");
     } else if (args[0] === "verify") {
       result = await verifyPlatformReceiptFile(common);
@@ -973,7 +1055,17 @@ export async function runPlatformReceiptCli(options = {}) {
     const code = typeof error?.code === "string" && /^PLATFORM_RECEIPT_[A-Z_]+$/u.test(error.code)
       ? error.code
       : "PLATFORM_RECEIPT_FAILED";
-    stderr.write(`${code}\n`);
+    const provenance = error !== null && typeof error === "object"
+      ? AUTHENTIC_RELEASE_STAGE_ERRORS.get(error)
+      : undefined;
+    const authenticStage = provenance?.invocationWitness === invocationWitness
+      ? provenance.stage
+      : undefined;
+    const stage = code === "PLATFORM_RECEIPT_RELEASE_INVALID"
+      && REQUIRED_RELEASE_STAGES.includes(authenticStage)
+      ? ` stage=${authenticStage}`
+      : "";
+    stderr.write(`${code}${stage}\n`);
     setExitCode(1);
     return undefined;
   }
