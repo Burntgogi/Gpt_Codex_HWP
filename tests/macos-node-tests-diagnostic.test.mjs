@@ -19,12 +19,12 @@ test("macOS Node diagnostic classifies assertion origins without exposing stack 
     "  failureType: 'testCodeFailure'",
     "  code: 'ERR_ASSERTION'",
     "  stack: |-",
-    "    at Object.registerRoot (/private/runner/document-process-registration.test.ts:2399:16)",
+    "      Object.registerRoot (/private/runner/document-process-registration.test.ts:2399:16)",
     "# fail 1",
   ].join("\n");
   const testBody = registrationCallback.replace(
-    "at Object.registerRoot",
-    "at TestContext.<anonymous>",
+    "Object.registerRoot",
+    "TestContext.<anonymous>",
   );
 
   assert.equal(failedTopLevelAssertionOrigin(registrationCallback), "register-root");

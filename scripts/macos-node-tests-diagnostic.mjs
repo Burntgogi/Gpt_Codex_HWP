@@ -831,8 +831,8 @@ export function failedTopLevelAssertionOrigin(text) {
     || !/^# fail [1-9][0-9]*$/mu.test(text)
     || !/^  failureType: 'testCodeFailure'$/mu.test(text)
     || !/^  code: 'ERR_ASSERTION'$/mu.test(text)) return undefined;
-  if (/^ {4}at Object\.registerRoot \(/mu.test(text)) return "register-root";
-  if (/^ {4}at TestContext\.<anonymous> \(/mu.test(text)) return "test-body";
+  if (/^ {4,8}(?:at )?Object\.registerRoot \(/mu.test(text)) return "register-root";
+  if (/^ {4,8}(?:at )?TestContext\.<anonymous> \(/mu.test(text)) return "test-body";
   return "unknown";
 }
 
