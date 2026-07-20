@@ -10,6 +10,7 @@ import { Worker } from "node:worker_threads";
 import JSZip from "jszip";
 
 import { REQUIRED_RELEASE_STAGES } from "../../../scripts/release-verify.mjs";
+import { rethrowWithLinuxRealDetectDiagnostic } from "../benchmarks/hosted-platform-diagnostics.mjs";
 import { finalizeVerifiedWindowsSupervisor } from "../src/workers/document-child-client.js";
 import { createDocumentWorkerClient } from "../src/workers/document-worker-client.js";
 import {
@@ -43,10 +44,215 @@ import {
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, "..", "..");
 const BENCHMARK_ENTRY = join(PACKAGE_ROOT, "benchmarks", "document-engine-benchmark.mjs");
+const HOSTED_DIAGNOSTIC_ENTRY = join(
+  PACKAGE_ROOT,
+  "benchmarks",
+  "hosted-platform-diagnostics.mjs",
+);
+const CI_WORKFLOW = join(REPOSITORY_ROOT, ".github", "workflows", "ci.yml");
 const MACOS_BACKEND_PROBE = new URL(
   "./fixtures/workers/backend-init-probe.mjs",
   import.meta.url,
 );
+
+test("hosted diagnostic formatters accept only exact bounded tuples", async () => {
+  const {
+    formatHostedMacBackendDiagnostic,
+    formatHostedMacWorkerDiagnostic,
+    formatHostedWindowsSupervisorDiagnostic,
+    formatLinuxRealDetectDiagnostic,
+  } = await import("../benchmarks/hosted-platform-diagnostics.mjs");
+
+  assert.equal(
+    formatHostedWindowsSupervisorDiagnostic({ boundary: "ready-mode-1" }),
+    "HOSTED_WINDOWS_SUPERVISOR boundary=ready-mode-1",
+  );
+  assert.equal(
+    formatHostedMacBackendDiagnostic({ boundary: "backend-ready" }),
+    "HOSTED_MAC_BACKEND boundary=backend-ready",
+  );
+  assert.equal(
+    formatHostedMacWorkerDiagnostic({ boundary: "result" }),
+    "HOSTED_MAC_WORKER boundary=result",
+  );
+  assert.equal(
+    formatLinuxRealDetectDiagnostic({
+      status: "failed",
+      processGone: true,
+      telemetryEnded: true,
+      framePresent: true,
+      rssPresent: false,
+      stage: "error-rss-receipt",
+    }),
+    "LINUX_REAL_DETECT status=failed processGone=true telemetryEnded=true framePresent=true rssPresent=false stage=error-rss-receipt",
+  );
+});
+
+test("hosted diagnostic formatters reject raw, unknown, extra-key, and oversized input", async () => {
+  const {
+    formatHostedMacBackendDiagnostic,
+    formatHostedMacWorkerDiagnostic,
+    formatHostedWindowsSupervisorDiagnostic,
+    formatLinuxRealDetectDiagnostic,
+  } = await import("../benchmarks/hosted-platform-diagnostics.mjs");
+  const invalidWindows = [
+    { boundary: "unknown" },
+    { boundary: "C:\\private\\document.hwpx" },
+    { boundary: "ready-mode-1\nPRIVATE" },
+    { boundary: "x".repeat(1_024) },
+    { boundary: "ready-mode-1", extra: true },
+  ];
+  for (const value of invalidWindows) {
+    assert.throws(() => formatHostedWindowsSupervisorDiagnostic(value), {
+      code: "HOSTED_DIAGNOSTIC_INVALID",
+    });
+  }
+  assert.throws(() => formatHostedMacBackendDiagnostic({
+    boundary: "backend-ready",
+    path: "/private/document.hwpx",
+  }), { code: "HOSTED_DIAGNOSTIC_INVALID" });
+  assert.throws(() => formatHostedMacWorkerDiagnostic({ boundary: "worker-error\nraw" }), {
+    code: "HOSTED_DIAGNOSTIC_INVALID",
+  });
+  assert.throws(() => formatLinuxRealDetectDiagnostic({
+    status: "failed",
+    processGone: true,
+    telemetryEnded: true,
+    framePresent: true,
+    rssPresent: false,
+    stage: "PRIVATE_STAGE",
+  }), { code: "HOSTED_DIAGNOSTIC_INVALID" });
+});
+
+test("Linux real-detect diagnostic emits the safe tuple and rethrows the original failure", async () => {
+  const { rethrowWithLinuxRealDetectDiagnostic } = await import(
+    "../benchmarks/hosted-platform-diagnostics.mjs"
+  );
+  const failure = Object.assign(new Error("PRIVATE RAW ERROR"), {
+    telemetryDiagnostic: {
+      status: "failed",
+      processGone: true,
+      telemetryEnded: true,
+      framePresent: false,
+      rssPresent: true,
+      stage: "error-sampling",
+    },
+  });
+  const lines: string[] = [];
+  assert.throws(
+    () => rethrowWithLinuxRealDetectDiagnostic(failure, (line: string) => lines.push(line)),
+    (error: unknown) => error === failure,
+  );
+  assert.deepEqual(lines, [
+    "LINUX_REAL_DETECT status=failed processGone=true telemetryEnded=true framePresent=false rssPresent=true stage=error-sampling",
+  ]);
+});
+
+test("hosted platform wrappers return only bounded classifier tuples", async () => {
+  const {
+    runHostedMacDiagnostics,
+    runHostedWindowsSupervisorDiagnostic,
+  } = await import("../benchmarks/hosted-platform-diagnostics.mjs");
+  const target = { kill() {} };
+  assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
+    platform: "win32",
+    arch: "x64",
+    spawnTarget: () => target,
+    observeTargetClose: async () => ({ code: 0, signal: null, error: null }),
+    superviseTarget: async (_target: unknown, observe: (boundary: string) => void) => {
+      observe("ready-mode-1");
+      return {
+        terminate: async () => ({ gone: true, proof: "windows-job-empty" }),
+      };
+    },
+  }), { boundary: "target-close" });
+  assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
+    platform: "win32",
+    arch: "x64",
+    spawnTarget: () => target,
+    observeTargetClose: async () => ({ code: 1, signal: null, error: null }),
+    superviseTarget: async (_target: unknown, observe: (boundary: string) => void) => {
+      observe("preframe-stderr");
+      throw new Error("PRIVATE RAW ERROR");
+    },
+  }), { boundary: "preframe-stderr" });
+  assert.deepEqual(await runHostedWindowsSupervisorDiagnostic({
+    platform: "win32",
+    arch: "x64",
+    spawnTarget: () => target,
+    observeTargetClose: async () => ({ code: 1, signal: null, error: null }),
+    superviseTarget: async (_target: unknown, observe: (boundary: string) => void) => {
+      observe("ready-mode-1");
+      return {
+        terminate: async () => {
+          observe("helper-close");
+          return { gone: false, proof: "unverified", reason: "termination" };
+        },
+      };
+    },
+  }), { boundary: "helper-close" });
+  const boundedTargetClose = await Promise.race([
+    runHostedWindowsSupervisorDiagnostic({
+      platform: "win32",
+      arch: "x64",
+      targetCloseTimeoutMs: 5,
+      spawnTarget: () => target,
+      observeTargetClose: async () => await new Promise(() => {}),
+      superviseTarget: async (_target: unknown, observe: (boundary: string) => void) => {
+        observe("ready-mode-1");
+        return {
+          terminate: async () => ({ gone: true, proof: "windows-job-empty" }),
+        };
+      },
+    }),
+    new Promise<"unbounded">((resolveTimeout) => {
+      setTimeout(() => resolveTimeout("unbounded"), 100);
+    }),
+  ]);
+  assert.deepEqual(boundedTargetClose, { boundary: "target-close" });
+  assert.deepEqual(await runHostedMacDiagnostics({
+    platform: "darwin",
+    arch: "arm64",
+    probeBackend: async () => "backend-ready",
+    probeWorker: async () => "result",
+  }), {
+    backend: { boundary: "backend-ready" },
+    worker: { boundary: "result" },
+  });
+  assert.deepEqual(await runHostedMacDiagnostics({
+    platform: "darwin",
+    arch: "arm64",
+    probeBackend: async () => { throw new Error("/private/backend/path"); },
+    probeWorker: async () => { throw new Error("PRIVATE WORKER STDERR"); },
+  }), {
+    backend: { boundary: "worker-error" },
+    worker: { boundary: "worker-error" },
+  });
+});
+
+test("hosted platform classifiers run after build and before the hard benchmark gate", async () => {
+  const workflow = await readFile(CI_WORKFLOW, "utf8");
+  const windowsBuild = workflow.indexOf("name: Build Windows diagnostic prerequisite");
+  const windowsDiagnostic = workflow.indexOf("name: Classify hosted Windows supervisor boundary");
+  const windowsBenchmark = workflow.indexOf("name: Generate fresh large-document evidence");
+  const macBuild = workflow.indexOf("name: Build macOS diagnostic prerequisite", windowsBenchmark);
+  const macDiagnostic = workflow.indexOf("name: Classify hosted macOS worker boundaries", windowsBenchmark);
+  const macBenchmark = workflow.indexOf(
+    "name: Generate fresh large-document evidence",
+    windowsBenchmark + 1,
+  );
+  assert.ok(windowsBuild >= 0 && windowsBuild < windowsDiagnostic);
+  assert.ok(windowsDiagnostic < windowsBenchmark);
+  assert.ok(macBuild >= 0 && macBuild < macDiagnostic);
+  assert.ok(macDiagnostic < macBenchmark);
+  assert.match(workflow, /run: npm --prefix packages\/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor/u);
+  assert.match(workflow, /run: npm --prefix packages\/gpt-codex-hwp run diagnose:hosted -- --mac-worker/u);
+});
+
+test("hosted macOS worker classifier never coerces a missing result observation to success", async () => {
+  const source = await readFile(HOSTED_DIAGNOSTIC_ENTRY, "utf8");
+  assert.doesNotMatch(source, /return boundary === "result" \? boundary : "result";/u);
+});
 
 test("benchmark policy accepts only bounded approved sizes with fixed sequential execution", () => {
   assert.deepEqual(APPROVED_BENCHMARK_SIZES_MIB, [10, 100, 256, 512]);
@@ -144,6 +350,14 @@ test("benchmark shutdown preserves an earlier bounded startup diagnostic", async
   });
   assert.equal(result.status, "termination-failed");
   assert.equal(result.diagnosticStage, "error-startup");
+  assert.deepEqual(result.telemetryDiagnostic, {
+    status: "failed",
+    processGone: false,
+    telemetryEnded: true,
+    framePresent: false,
+    rssPresent: false,
+    stage: "error-startup",
+  });
 });
 
 test("benchmark source does not overwrite a classified supervisor startup frame", async () => {
@@ -164,10 +378,15 @@ test("benchmark policy records a real nonempty detect dispatch before its one de
   );
   t.after(() => rm(outputPath, { force: true }));
 
-  const evidence = await runBenchmark({
-    sizesMiB: [10],
-    outputPath,
-  });
+  let evidence;
+  try {
+    evidence = await runBenchmark({
+      sizesMiB: [10],
+      outputPath,
+    });
+  } catch (error: unknown) {
+    rethrowWithLinuxRealDetectDiagnostic(error, (line: string) => t.diagnostic(line));
+  }
   const receipt = evidence.receipts[0];
 
   assert.ok(receipt);

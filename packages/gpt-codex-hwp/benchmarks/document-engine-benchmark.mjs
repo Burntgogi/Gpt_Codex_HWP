@@ -592,7 +592,7 @@ export async function executeBounded(
     const telemetryEnd = new Promise((resolveEnd) => {
       resolveTelemetryEnd = resolveEnd;
     });
-    const finish = (status, processGone = true, mergedMetrics = null) => {
+    const finish = (status, processGone = true, mergedMetrics = null, telemetryDiagnostic) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -604,6 +604,7 @@ export async function executeBounded(
         diagnosticStage,
         elapsedMs: Math.max(1, Math.round(performance.now() - started)),
         caseMetrics: mergedMetrics,
+        ...(telemetryDiagnostic === undefined ? {} : { telemetryDiagnostic }),
       });
     };
     const supervisor = (supervisorFactory === undefined
@@ -696,10 +697,21 @@ export async function executeBounded(
         } else {
           diagnosticStage = "finalizer";
         }
+        const finalStatus = termination.gone && completeTelemetry ? status : "termination-failed";
         finish(
-          termination.gone && completeTelemetry ? status : "termination-failed",
+          finalStatus,
           termination.gone,
           mergedMetrics,
+          finalStatus === "termination-failed"
+            ? Object.freeze({
+                status: "failed",
+                processGone: termination.gone,
+                telemetryEnded,
+                framePresent: caseMetrics !== null,
+                rssPresent: rss !== undefined,
+                stage: diagnosticStage,
+              })
+            : undefined,
         );
       })();
       return stopping;
@@ -1101,7 +1113,11 @@ async function parentFailureReceipt(sizeMiB, root, errorCode, metrics) {
     }, metrics?.caseMetrics);
   } catch (error) {
     if (error?.code === "BENCHMARK_TELEMETRY_UNAVAILABLE") {
-      throw benchmarkError(error.code, metrics?.diagnosticStage);
+      const failure = benchmarkError(error.code, metrics?.diagnosticStage);
+      if (metrics?.telemetryDiagnostic !== undefined) {
+        failure.telemetryDiagnostic = metrics.telemetryDiagnostic;
+      }
+      throw failure;
     }
     throw error;
   }

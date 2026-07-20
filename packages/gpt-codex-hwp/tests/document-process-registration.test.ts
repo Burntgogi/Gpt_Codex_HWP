@@ -1749,19 +1749,57 @@ test("registration stale prior ACK never dispatches the next bootstrap payload",
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-stale-ack-"));
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const payloadMarkerPath = join(temporaryRoot, "payload.txt");
+  const firstAckBarrierPath = join(temporaryRoot, "first-ack-enqueued");
   const caseChild = spawnRegistrationCase([
     "--stale-ack-case",
     payloadMarkerPath,
+    firstAckBarrierPath,
     START_GATE,
     REGISTRATION_RACE_FIXTURE,
   ]);
   const caseExit = childExitPromise(caseChild);
   t.after(() => terminate(caseChild));
   const retained: number[] = [];
+  const acknowledgementChannel = caseChild.stdio[6]!;
+  acknowledgementChannel.on("error", () => {});
+  let firstAckEnqueued = false;
+  const acknowledgementOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      acknowledgementChannel.write(chunk, (error) => {
+        if (error !== null && error !== undefined) {
+          callback(error);
+          return;
+        }
+        if (firstAckEnqueued) {
+          callback();
+          return;
+        }
+        firstAckEnqueued = true;
+        callback();
+        // The coordinator's writeAcknowledgement continuation and finally run as
+        // microtasks before this check-phase barrier becomes visible to the fixture.
+        setImmediate(() => {
+          void writeFile(firstAckBarrierPath, "enqueued", "utf8").catch(
+            (writeError: unknown) => acknowledgementOutput.destroy(
+              writeError instanceof Error ? writeError : new Error("ACK barrier write failed"),
+            ),
+          );
+        });
+      });
+    },
+    final(callback) {
+      if (acknowledgementChannel.destroyed || acknowledgementChannel.writableEnded) {
+        callback();
+      } else {
+        acknowledgementChannel.end(callback);
+      }
+    },
+  });
+  acknowledgementOutput.on("error", () => {});
   const coordinator = createProcessRegistrationCoordinator({
     casePid: caseChild.pid!,
     registrationInput: caseChild.stdio[5]!,
-    acknowledgementOutput: caseChild.stdio[6]!,
+    acknowledgementOutput,
     supervisor: {
       async registerRoot(pid) {
         retained.push(pid);

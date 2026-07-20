@@ -133,6 +133,59 @@ const validateWindowsAclReceipt = (
     ): boolean;
   }
 ).validateWindowsAclReceipt;
+const classifyWindowsSupervisorPreframeDiagnostic = (
+  childClientModule as unknown as Readonly<{
+    classifyWindowsSupervisorPreframeDiagnostic(receipt: Readonly<{
+      helperSpawnFailed: boolean;
+      stderrPresent: boolean;
+      stdoutEnded: boolean;
+      stdoutFailed: boolean;
+      protocolFailed: boolean;
+      invalidFrame: boolean;
+    }>): "helper-spawn" | "preframe-stderr" | "preframe-exit" |
+      "frame-timeout" | "frame-invalid";
+  }>
+).classifyWindowsSupervisorPreframeDiagnostic;
+
+test("Windows hosted pre-frame classifier uses only causal booleans", () => {
+  const baseline = {
+    helperSpawnFailed: false,
+    stderrPresent: false,
+    stdoutEnded: false,
+    stdoutFailed: false,
+    protocolFailed: false,
+    invalidFrame: false,
+  };
+  assert.equal(classifyWindowsSupervisorPreframeDiagnostic({
+    ...baseline,
+    helperSpawnFailed: true,
+  }), "helper-spawn");
+  assert.equal(classifyWindowsSupervisorPreframeDiagnostic({
+    ...baseline,
+    stderrPresent: true,
+  }), "preframe-stderr");
+  assert.equal(classifyWindowsSupervisorPreframeDiagnostic({
+    ...baseline,
+    stdoutEnded: true,
+  }), "preframe-exit");
+  assert.equal(classifyWindowsSupervisorPreframeDiagnostic({
+    ...baseline,
+    protocolFailed: true,
+  }), "frame-invalid");
+  assert.equal(classifyWindowsSupervisorPreframeDiagnostic({
+    ...baseline,
+    invalidFrame: true,
+  }), "frame-invalid");
+  assert.equal(classifyWindowsSupervisorPreframeDiagnostic(baseline), "frame-timeout");
+});
+
+test("Windows hosted classifier reports an unverified pre-frame helper close", () => {
+  const source = readFileSync(sourceClientPath, "utf8");
+  assert.match(
+    source,
+    /if \(!await cleanupWindowsSupervisorHelper\(helper, closeReceipt\)\) \{\s*emitHostedWindowsBoundary\(hostedDiagnosticObserver, "helper-close"\);\s*throw supervisorHelperUnclosedError/u,
+  );
+});
 
 test("Windows real supervisor accepts READY and closes its exact target and helper", {
   skip: process.platform !== "win32" ? "Windows Job supervisor diagnostic" : false,
@@ -1241,82 +1294,133 @@ test("document child client removes its sole abort listener on success", async (
   }
 });
 
-test("document child crash before READY is classified only after typed termination proof", async () => {
-  const owned = createOwnedFiles();
-  let startWriteSettled = false;
-  let supervisorBound = false;
-  let closeObserved = false;
-  let terminationReason: ProcessTreeTerminationReceipt["proof"] |
-    "identity" | "deadline" | "termination" | "registration" | "channel" | undefined;
-  let captured: unknown;
-  try {
-    try {
-      const client = createProductionDocumentChildClient({
-        childEntry: fixturePath,
-        childArguments: ["crash-before-ready", "250"],
-        startGateEntry: startGatePath,
-        spawnFactory: (specification) => {
-          const child = spawn(specification.command, [...specification.args], specification.options);
-          child.once("close", () => { closeObserved = true; });
-          const writer = child.stdio[7];
-          if (writer !== null && writer !== undefined && "write" in writer) {
-            const write = writer.write.bind(writer);
-            writer.write = ((chunk: unknown, callback?: (error?: Error | null) => void) =>
-              write(chunk, (error?: Error | null) => {
-                startWriteSettled = true;
-                callback?.(error);
-              })) as typeof writer.write;
-          }
-          return child;
-        },
-        jobSupervisorFactory: async (child) => {
-          const supervisor = await superviseDocumentProcessTree(child as ReturnType<typeof spawn>) as {
-            terminate(): Promise<ProcessTreeTerminationReceipt>;
-          };
-          supervisorBound = true;
-          return {
-            async terminate() {
-              const receipt = await supervisor.terminate();
-              terminationReason = receipt.gone ? receipt.proof : receipt.reason;
-              return receipt;
+test("document child crash before READY preserves terminal-first and deadline-first causality", async (t) => {
+  for (const scenario of [
+    {
+      name: "terminal-first",
+      mode: "crash-before-ready",
+      childDelayMs: 250,
+      deadlineMs: 5_000,
+      expectedCode: "ENGINE_INIT_FAILED",
+      terminalBeforeTermination: true,
+      realSupervisor: true,
+    },
+    {
+      name: "deadline-first",
+      mode: "delayed-crash-before-ready",
+      childDelayMs: 5_000,
+      deadlineMs: 1_500,
+      expectedCode: "ENGINE_TIMEOUT",
+      terminalBeforeTermination: false,
+      realSupervisor: false,
+    },
+  ] as const) {
+    await t.test(scenario.name, async () => {
+      const owned = createOwnedFiles();
+      let terminalObserved = false;
+      let terminalObservedBeforeTermination = false;
+      let terminationStarted = false;
+      let startWriteSettled = false;
+      let supervisorBound = false;
+      let closeObserved = false;
+      let terminationReason: ProcessTreeTerminationReceipt["proof"] |
+        "identity" | "deadline" | "termination" | "registration" | "channel" | undefined;
+      let captured: unknown;
+      try {
+        try {
+          const client = createProductionDocumentChildClient({
+            childEntry: fixturePath,
+            childArguments: [scenario.mode, String(scenario.childDelayMs)],
+            startGateEntry: startGatePath,
+            spawnFactory: (specification) => {
+              const child = spawn(
+                specification.command,
+                [...specification.args],
+                specification.options,
+              );
+              child.once("exit", () => { terminalObserved = true; });
+              child.once("close", () => { closeObserved = true; });
+              const writer = child.stdio[7];
+              if (writer !== null && writer !== undefined && "write" in writer) {
+                const write = writer.write.bind(writer);
+                writer.write = ((chunk: unknown, callback?: (error?: Error | null) => void) =>
+                  write(chunk, (error?: Error | null) => {
+                    startWriteSettled = true;
+                    callback?.(error);
+                  })) as typeof writer.write;
+              }
+              return child;
             },
-          } as never;
-        },
-      });
-      await client.run(
-        detectRequest("child-crash-before-ready"),
-        spoolSnapshot(owned.inputFd, 3),
-        { deadlineMs: 5_000 },
-      );
-    } catch (error: unknown) {
-      captured = error;
-    }
-    const diagnosticDeadline = Date.now() + 3_000;
-    while ((!closeObserved || terminationReason === undefined) && Date.now() < diagnosticDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    const details = typeof captured === "object" && captured !== null && "details" in captured
-      ? (captured as { details?: { stage?: unknown } }).details
-      : undefined;
-    assert.deepEqual({
-      code: safeCode(captured),
-      stage: details?.stage === "startup" ? "startup" : "unknown",
-      terminationReason,
-      startWriteSettled,
-      supervisorBound,
-      closeObserved,
-    }, {
-      code: "ENGINE_INIT_FAILED",
-      stage: "startup",
-      terminationReason: process.platform === "win32"
-        ? "windows-job-empty"
-        : "registered-groups-empty",
-      startWriteSettled: true,
-      supervisorBound: true,
-      closeObserved: true,
+            jobSupervisorFactory: async (child) => {
+              const supervisor = scenario.realSupervisor
+                ? await superviseDocumentProcessTree(
+                    child as ReturnType<typeof spawn>,
+                  ) as { terminate(): Promise<ProcessTreeTerminationReceipt> }
+                : {
+                    async terminate(): Promise<ProcessTreeTerminationReceipt> {
+                      const close = new Promise<void>((resolveClose) => {
+                        child.once("close", () => resolveClose());
+                      });
+                      child.kill("SIGKILL");
+                      await close;
+                      return process.platform === "win32"
+                        ? { gone: true, proof: "windows-job-empty" }
+                        : { gone: true, proof: "registered-groups-empty" };
+                    },
+                  };
+              supervisorBound = true;
+              return {
+                async terminate() {
+                  if (!terminationStarted) {
+                    terminationStarted = true;
+                    terminalObservedBeforeTermination = terminalObserved;
+                  }
+                  const receipt = await supervisor.terminate();
+                  terminationReason = receipt.gone ? receipt.proof : receipt.reason;
+                  return receipt;
+                },
+              } as never;
+            },
+          });
+          await client.run(
+            detectRequest(`child-crash-before-ready-${scenario.name}`),
+            spoolSnapshot(owned.inputFd, 3),
+            { deadlineMs: scenario.deadlineMs },
+          );
+        } catch (error: unknown) {
+          captured = error;
+        }
+        const diagnosticDeadline = Date.now() + 3_000;
+        while ((!closeObserved || terminationReason === undefined)
+          && Date.now() < diagnosticDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        const details = typeof captured === "object" && captured !== null && "details" in captured
+          ? (captured as { details?: { stage?: unknown } }).details
+          : undefined;
+        assert.deepEqual({
+          code: safeCode(captured),
+          stage: details?.stage === "startup" ? "startup" : "unknown",
+          terminationReason,
+          startWriteSettled,
+          supervisorBound,
+          closeObserved,
+          terminalObservedBeforeTermination,
+        }, {
+          code: scenario.expectedCode,
+          stage: "startup",
+          terminationReason: process.platform === "win32"
+            ? "windows-job-empty"
+            : "registered-groups-empty",
+          startWriteSettled: true,
+          supervisorBound: true,
+          closeObserved: true,
+          terminalObservedBeforeTermination: scenario.terminalBeforeTermination,
+        });
+      } finally {
+        owned.cleanup();
+      }
     });
-  } finally {
-    owned.cleanup();
   }
 });
 
@@ -1824,10 +1928,51 @@ test("document child start gate keeps supervisor rejection unverified after an e
   }
 });
 
-test("supervisor readiness failure preserves a deadline before a later abort", async () => {
+test("supervisor readiness pre-spawn deadline returns timeout without creating a child", async () => {
   const root = mkdtempSync(join(tmpdir(), "hwp-supervisor-deadline-first-"));
   const owned = createOwnedFiles();
+  let spawnCalls = 0;
+  try {
+    const client = createProductionDocumentChildClient({
+      childEntry: fixturePath,
+      childArguments: ["success", "250"],
+      spoolRoot: root,
+      outputSpoolReadyHook: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      },
+      spawnFactory: (specification) => {
+        spawnCalls += 1;
+        return spawn(specification.command, [...specification.args], specification.options);
+      },
+    });
+    await assert.rejects(
+      client.run(
+        detectRequest("supervisor-pre-spawn-deadline"),
+        spoolSnapshot(owned.inputFd, 3),
+        { deadlineMs: 1 },
+      ),
+      (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
+    );
+    assert.equal(spawnCalls, 0);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    owned.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("supervisor readiness post-spawn abort retains ownership until typed authority", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hwp-supervisor-post-spawn-deadline-"));
+  const owned = createOwnedFiles();
+  const snapshot = spoolSnapshot(owned.inputFd, 3);
   const abort = new AbortController();
+  let resolveLateSupervisor!: (supervisor: {
+    terminate(): Promise<ProcessTreeTerminationReceipt>;
+  }) => void;
+  const lateSupervisor = new Promise<{
+    terminate(): Promise<ProcessTreeTerminationReceipt>;
+  }>((resolveSupervisor) => { resolveLateSupervisor = resolveSupervisor; });
+  let spawned: ReturnType<typeof spawn> | undefined;
   let dispatches = 0;
   try {
     const client = createProductionDocumentChildClient({
@@ -1835,31 +1980,47 @@ test("supervisor readiness failure preserves a deadline before a later abort", a
       childArguments: ["success", "250"],
       spoolRoot: root,
       spawnFactory: (specification) => {
-        const child = spawn(specification.command, [...specification.args], specification.options);
-        const end = child.stdin!.end.bind(child.stdin);
-        child.stdin!.end = ((...args: Parameters<typeof child.stdin.end>) => {
+        spawned = spawn(specification.command, [...specification.args], specification.options);
+        const end = spawned.stdin!.end.bind(spawned.stdin);
+        spawned.stdin!.end = ((...args: Parameters<typeof spawned.stdin.end>) => {
           dispatches += 1;
           return end(...args);
-        }) as typeof child.stdin.end;
-        return child;
+        }) as typeof spawned.stdin.end;
+        return spawned;
       },
-      jobSupervisorFactory: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 15));
+      jobSupervisorFactory: () => {
         abort.abort();
-        throw new Error("supervisor failed after deadline");
+        return lateSupervisor as never;
       },
     });
     await assert.rejects(
       client.run(
-        detectRequest("supervisor-deadline-first"),
-        spoolSnapshot(owned.inputFd, 3),
-        { signal: abort.signal, deadlineMs: 1 },
+        detectRequest("supervisor-post-spawn-abort"),
+        snapshot,
+        { signal: abort.signal, deadlineMs: 5_000 },
       ),
-      (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.equal(dispatches, 0);
-    assert.deepEqual(readdirSync(root), []);
+    assert.equal(snapshot.cleanupCalls, 0);
+    assert.equal(readdirSync(root).length, 1);
+
+    resolveLateSupervisor({
+      async terminate() {
+        const close = spawned === undefined
+          ? Promise.resolve()
+          : new Promise<void>((resolveClose) => spawned!.once("close", () => resolveClose()));
+        spawned?.kill("SIGKILL");
+        await close;
+        return process.platform === "win32"
+          ? { gone: true, proof: "windows-job-empty" }
+          : { gone: true, proof: "registered-groups-empty" };
+      },
+    });
+    await waitFor(() => snapshot.cleanupCalls === 1);
+    await waitFor(() => readdirSync(root).length === 0);
   } finally {
+    spawned?.kill("SIGKILL");
     owned.cleanup();
     rmSync(root, { recursive: true, force: true });
   }

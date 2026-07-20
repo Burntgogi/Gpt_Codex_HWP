@@ -40,6 +40,10 @@ if (mode === "orphan-intermediate") {
 }
 
 if (mode === "crash-before-ready") process.exit(17);
+if (mode === "delayed-crash-before-ready") {
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+  process.exit(17);
+}
 
 if (mode === "startup-large-oom") {
   process.stdout.write(Buffer.alloc(4 * 1024 * 1024, 0x53));

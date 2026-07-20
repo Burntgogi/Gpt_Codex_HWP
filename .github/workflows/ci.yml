@@ -46,6 +46,10 @@ jobs:
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Fresh runtime dependency install
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Build Windows diagnostic prerequisite
+        run: npm --prefix packages/gpt-codex-hwp run build
+      - name: Classify hosted Windows supervisor boundary
+        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor
       - name: Generate fresh large-document evidence
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
       - name: Run full release gate and create platform receipt
@@ -103,6 +107,10 @@ jobs:
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Fresh runtime dependency install
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Build macOS diagnostic prerequisite
+        run: npm --prefix packages/gpt-codex-hwp run build
+      - name: Classify hosted macOS worker boundaries
+        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker
       - name: Generate fresh large-document evidence
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
       - name: Run full release gate and create platform receipt

@@ -13,6 +13,7 @@
     "test:python": "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit",
     "prebenchmark:documents": "npm run build",
     "benchmark:documents": "node --import tsx benchmarks/document-engine-benchmark.mjs",
+    "diagnose:hosted": "node --import tsx benchmarks/hosted-platform-diagnostics.mjs",
     "release:artifacts": "node release-scripts/build-release-artifacts.mjs",
     "verify:compact-runtime": "node release-scripts/verify-compact-runtime.mjs"
   },

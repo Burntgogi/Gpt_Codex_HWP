@@ -61,7 +61,7 @@ if (mode === "--descriptor-case") {
   await Promise.all(bootstraps.map((bootstrap) => once(bootstrap, "close")));
   process.exit(0);
 } else if (mode === "--stale-ack-case") {
-  const [payloadMarkerPath, startGatePath, fixturePath] = process.argv.slice(3);
+  const [payloadMarkerPath, firstAckBarrierPath, startGatePath, fixturePath] = process.argv.slice(3);
   const first = spawn(process.execPath, [fixturePath, "--register-no-read"], {
     detached: true,
     shell: false,
@@ -72,7 +72,7 @@ if (mode === "--descriptor-case") {
     ],
   });
   await once(first, "close");
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  await waitForPath(firstAckBarrierPath);
   const second = spawnGatedBootstrap(
     startGatePath,
     fixturePath,

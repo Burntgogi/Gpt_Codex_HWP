@@ -1256,6 +1256,7 @@ async function createWindowsJobSupervisor(
   readyDeadlineMs: number,
   frameObserver?: (frame: string) => void,
   forceTracker = false,
+  hostedDiagnosticObserver?: (boundary: WindowsSupervisorHostedBoundary) => void,
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
   const targetCloseReceipt = observeChildProcessClose(child);
@@ -1297,6 +1298,7 @@ async function createWindowsJobSupervisor(
   }
   const lines = new BoundedSupervisorLineReader(helper.stdout, 128);
   let readyMode: 1 | 2;
+  let invalidFrame = false;
   try {
     const ready = await lines.next(readyDeadlineMs);
     frameObserver?.(ready);
@@ -1305,13 +1307,31 @@ async function createWindowsJobSupervisor(
       "u",
     ).exec(ready);
     if (readyMatch === null) {
+      invalidFrame = true;
       throw new Error("invalid job supervisor READY frame");
     }
     readyMode = Number(readyMatch[1]) as 1 | 2;
+    emitHostedWindowsBoundary(
+      hostedDiagnosticObserver,
+      readyMode === 1 ? "ready-mode-1" : "ready-mode-2",
+    );
   } catch (error: unknown) {
+    const preCleanupTranscript = lines.transcriptReceipt();
+    const preCleanupStderrPresent = stderrBytes > 0;
     if (!await cleanupWindowsSupervisorHelper(helper, closeReceipt)) {
+      emitHostedWindowsBoundary(hostedDiagnosticObserver, "helper-close");
       throw supervisorHelperUnclosedError(helper, closeReceipt);
     }
+    const helperClose = await closeReceipt;
+    emitHostedWindowsBoundary(
+      hostedDiagnosticObserver,
+      classifyWindowsSupervisorPreframeDiagnostic({
+        helperSpawnFailed: helperClose.error !== null,
+        stderrPresent: preCleanupStderrPresent,
+        ...preCleanupTranscript,
+        invalidFrame,
+      }),
+    );
     throw error;
   }
 
@@ -1359,6 +1379,7 @@ async function createWindowsJobSupervisor(
           });
           if (!finalized) {
             frameObserver?.("GPT_CODEX_HWP_JOB ERROR finalizer invalid");
+            emitHostedWindowsBoundary(hostedDiagnosticObserver, "helper-close");
             return unverifiedTermination("termination");
           }
           if (readyMode === 2 && matchingGone) {
@@ -1368,6 +1389,7 @@ async function createWindowsJobSupervisor(
           }
           if (!matchingGone || !authorityGone) {
             frameObserver?.("GPT_CODEX_HWP_JOB ERROR termination invalid");
+            emitHostedWindowsBoundary(hostedDiagnosticObserver, "termination-receipt");
             return unverifiedTermination("identity");
           }
           verifiedReceipt = Object.freeze({
@@ -1378,6 +1400,7 @@ async function createWindowsJobSupervisor(
           return verifiedReceipt;
         } catch {
           frameObserver?.("GPT_CODEX_HWP_JOB ERROR channel invalid");
+          emitHostedWindowsBoundary(hostedDiagnosticObserver, "termination-receipt");
           return unverifiedTermination("channel");
         } finally {
           if (!proved) {
@@ -1398,6 +1421,40 @@ async function createWindowsJobSupervisor(
     throw new Error("Windows Job authority unavailable");
   }
   return supervisor;
+}
+
+export type WindowsSupervisorHostedBoundary =
+  | "helper-spawn"
+  | "preframe-stderr"
+  | "preframe-exit"
+  | "frame-timeout"
+  | "frame-invalid"
+  | "ready-mode-2"
+  | "ready-mode-1"
+  | "termination-receipt"
+  | "helper-close";
+
+export function classifyWindowsSupervisorPreframeDiagnostic(receipt: Readonly<{
+  helperSpawnFailed: boolean;
+  stderrPresent: boolean;
+  stdoutEnded: boolean;
+  stdoutFailed: boolean;
+  protocolFailed: boolean;
+  invalidFrame: boolean;
+}>): Exclude<WindowsSupervisorHostedBoundary,
+  "ready-mode-1" | "ready-mode-2" | "termination-receipt" | "helper-close"> {
+  if (receipt.helperSpawnFailed) return "helper-spawn";
+  if (receipt.stderrPresent) return "preframe-stderr";
+  if (receipt.protocolFailed || receipt.invalidFrame) return "frame-invalid";
+  if (receipt.stdoutEnded || receipt.stdoutFailed) return "preframe-exit";
+  return "frame-timeout";
+}
+
+function emitHostedWindowsBoundary(
+  observer: ((boundary: WindowsSupervisorHostedBoundary) => void) | undefined,
+  boundary: WindowsSupervisorHostedBoundary,
+): void {
+  try { observer?.(boundary); } catch {}
 }
 
 export async function finalizeVerifiedWindowsSupervisor({
@@ -1470,6 +1527,7 @@ export async function superviseDocumentProcessTree(
   options: Readonly<{
     frameObserver?: (frame: string) => void;
     deferProcessTreeTelemetryStop?: boolean;
+    hostedDiagnosticObserver?: (boundary: WindowsSupervisorHostedBoundary) => void;
   }> = {},
 ): Promise<ChildLifecycleSupervisor> {
   if (child.pid === undefined) throw new Error("child pid unavailable");
@@ -1478,6 +1536,8 @@ export async function superviseDocumentProcessTree(
       child,
       5_000,
       options.frameObserver,
+      false,
+      options.hostedDiagnosticObserver,
     );
   }
   return createPosixProcessTreeSupervisor(child, process.platform, {
