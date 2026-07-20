@@ -64,12 +64,21 @@ test("Kordoc builder remains compatible without a file-system hook", async () =>
     integrity: `sha512-${createHash("sha512").update(archive).digest("base64")}`,
   });
   await writeFile(tarballPath, archive);
+  let stage = "BUILD";
   try {
     const built = await buildKordocCoreRuntime({ tarballPath, outputRoot, expectedSource });
+    stage = "VERIFY";
     const verified = await verifyKordocCoreRuntime(outputRoot, expectedSource);
+    stage = "COMPARE";
     assert.deepEqual(verified, built);
+  } catch {
+    throw new Error(`KORDOC_DEFAULT_${stage}`);
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
+    try {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    } catch {
+      throw new Error("KORDOC_DEFAULT_CLEANUP");
+    }
   }
 });
 

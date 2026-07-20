@@ -25,6 +25,11 @@ const KORDOC_OWNERSHIP_CASES = Object.freeze([
   id: `ko${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
 })));
+const KORDOC_DEFAULT_STAGES = new Set(["build", "verify", "compare", "cleanup"]);
+const KORDOC_DEFAULT_CODES = Object.freeze([
+  "KORDOC_DEFAULT_BUILD", "KORDOC_DEFAULT_VERIFY",
+  "KORDOC_DEFAULT_COMPARE", "KORDOC_DEFAULT_CLEANUP",
+]);
 
 export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -36,6 +41,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
       repository: true,
       testNamePattern: record.pattern,
     }));
+  const runKordocDefaultDiagnostic = options.runKordocDefaultDiagnostic
+    ?? executeKordocDefaultDiagnostic;
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
 
   for (const file of REPOSITORY_TEST_FILES) {
@@ -47,6 +54,14 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
           let casePassed = false;
           try { casePassed = await runKordocCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
+            if (record.id === "ko02") {
+              let stage = "diagnostic-failed";
+              try {
+                const candidate = await runKordocDefaultDiagnostic();
+                if (KORDOC_DEFAULT_STAGES.has(candidate)) stage = candidate;
+              } catch {}
+              stdout.write(`WINDOWS_KORDOC_DEFAULT stage=${stage}\n`);
+            }
             stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;
@@ -76,6 +91,20 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     setExitCode(1);
     return false;
   }
+}
+
+async function executeKordocDefaultDiagnostic() {
+  let stage = "diagnostic-failed";
+  await executeBoundedNodeTestFile("kordoc-runtime-ownership.test.mjs", {
+    repository: true,
+    testNamePattern: KORDOC_OWNERSHIP_CASES[1].pattern,
+    fixedDiagnostics: KORDOC_DEFAULT_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("KORDOC_DEFAULT_".length).toLowerCase();
+      stage = KORDOC_DEFAULT_STAGES.has(candidate) ? candidate : "diagnostic-failed";
+    },
+  });
+  return stage;
 }
 
 const entryPoint = process.argv[1];

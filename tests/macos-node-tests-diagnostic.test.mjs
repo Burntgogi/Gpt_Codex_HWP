@@ -3,7 +3,10 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { runMacNodeTestsDiagnostic } from "../scripts/macos-node-tests-diagnostic.mjs";
+import {
+  executeBoundedNodeTestFile,
+  runMacNodeTestsDiagnostic,
+} from "../scripts/macos-node-tests-diagnostic.mjs";
 
 test("macOS Node diagnostic emits one fixed success receipt after every allowlisted file", async () => {
   const files = [];
@@ -200,14 +203,14 @@ test("macOS Node diagnostic emits one bounded compact-runtime stage for cr36", a
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file) => file !== "compact-runtime.test.ts",
     runCompactRuntimeCase: async (record) => record.id !== "cr36",
-    runCompactRuntimeDiagnostic: async () => "installed-measure",
+    runCompactRuntimeDiagnostic: async () => "node-modules-measure",
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
   });
   assert.equal(passed, false);
   assert.equal(
     output,
-    "MAC_COMPACT_RUNTIME stage=installed-measure\nMAC_NODE_TEST_CASE case=cr36 status=failed\n",
+    "MAC_COMPACT_RUNTIME stage=node-modules-measure\nMAC_NODE_TEST_CASE case=cr36 status=failed\n",
   );
 });
 
@@ -238,6 +241,24 @@ test("source Node diagnostic uses the fixed Windows receipt prefix only when req
   });
   assert.equal(passed, true);
   assert.equal(output, "WINDOWS_NODE_TEST_FILES status=passed files=41\n");
+});
+
+test("bounded Node runner returns only an allowlisted fixed failure diagnostic", async () => {
+  let observed;
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  queueMicrotask(() => {
+    child.stdout.end("TAP version 13\n  error: 'KORDOC_DEFAULT_BUILD'\n# fail 1\n");
+    child.emit("close", 1, null);
+  });
+  const passed = await executeBoundedNodeTestFile("fixture.test.mjs", {
+    repository: true,
+    spawnProcess: () => child,
+    fixedDiagnostics: ["KORDOC_DEFAULT_BUILD", "KORDOC_DEFAULT_CLEANUP"],
+    onFixedDiagnostic: (value) => { observed = value; },
+  });
+  assert.equal(passed, false);
+  assert.equal(observed, "KORDOC_DEFAULT_BUILD");
 });
 
 test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-only assets case", async () => {

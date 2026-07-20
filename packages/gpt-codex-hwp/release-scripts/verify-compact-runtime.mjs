@@ -824,7 +824,7 @@ export async function verifyCompactRuntime({
       archiveSha512: provenanceRecord.archive.sha512,
       fileCount: provenanceRecord.files.length,
     };
-    onDiagnosticStage("public-measure");
+    onDiagnosticStage("public-runtime-measure");
     const publicRuntimeBytes = await measureTree(runtimeRoot);
     onDiagnosticStage("lockfile");
     const lock = JSON.parse(await readFile(join(runtimeRoot, "package-lock.json"), "utf8"));
@@ -846,9 +846,11 @@ export async function verifyCompactRuntime({
     );
     const audit = parseNpmAuditResult(auditRun);
     const installedEntries = { filePaths: [], linkPaths: [] };
-    onDiagnosticStage("installed-measure");
+    onDiagnosticStage("node-modules-measure");
     const nodeModulesBytes = await measureTree(join(runtimeRoot, "node_modules"), installedEntries, runtimeRoot);
+    onDiagnosticStage("installed-tree-measure");
     const installedBytes = await measureTree(runtimeRoot);
+    onDiagnosticStage("installed-summary");
     const installedSummary = summarizeInstalledEntries(installedEntries);
     if (installedSummary.excludedPaths.length > 0) {
       throw new Error(`Excluded dependencies installed: ${installedSummary.excludedPaths.join(", ")}`);

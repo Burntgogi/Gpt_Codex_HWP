@@ -32,6 +32,23 @@ test("Windows Node diagnostic narrows the Kordoc repository failure to one fixed
   assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=ko03 status=failed\n");
 });
 
+test("Windows Node diagnostic emits a bounded stage for the default Kordoc builder case", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "kordoc-runtime-ownership.test.mjs",
+    runKordocCase: async (record) => record.id !== "ko02",
+    runKordocDefaultDiagnostic: async () => "cleanup",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_KORDOC_DEFAULT stage=cleanup\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=ko02 status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic reports a fixed aggregate when isolated Kordoc cases pass", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({

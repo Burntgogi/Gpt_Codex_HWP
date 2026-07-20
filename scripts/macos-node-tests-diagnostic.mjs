@@ -123,8 +123,8 @@ const SVG_ASSET_BOUNDARIES = new Set([
 const COMPACT_RUNTIME_STAGES = new Set([
   "startup", "fixture", "source-hash", "temporary-root", "fixture-copy",
   "runtime-build", "provenance", "lockfile", "npm-ci", "npm-ls", "npm-audit",
-  "public-measure", "installed-measure", "budgets", "mcp", "tool-smoke",
-  "source-verify", "cleanup",
+  "public-runtime-measure", "node-modules-measure", "installed-tree-measure",
+  "installed-summary", "budgets", "mcp", "tool-smoke", "source-verify", "cleanup",
   "passed", "diagnostic-failed",
 ]);
 
@@ -412,16 +412,36 @@ export function executeBoundedNodeTestFile(file, options = {}) {
     });
     child.once("error", stopUnverified);
     child.once("close", (code, signal) => {
-      if (stopping) finish(false);
-      else finish(code === 0 && signal === null && validTapReceipt(
-        chunks, capturedBytes, options.allowAllSkipped === true,
-      ));
+      if (stopping) {
+        finish(false);
+      } else {
+        forwardFixedDiagnostic(chunks, capturedBytes, options);
+        finish(code === 0 && signal === null && validTapReceipt(
+          chunks, capturedBytes, options.allowAllSkipped === true,
+        ));
+      }
     });
     testTimer = setTimeout(stopUnverified, testTimeoutMs);
   });
 }
 
 const executeTestFile = executeBoundedNodeTestFile;
+
+function forwardFixedDiagnostic(chunks, capturedBytes, options) {
+  if (!Array.isArray(options.fixedDiagnostics)
+    || typeof options.onFixedDiagnostic !== "function") return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
+  catch { return; }
+  for (const code of options.fixedDiagnostics) {
+    if (typeof code !== "string" || !/^[A-Z][A-Z0-9_]{0,63}$/u.test(code)) continue;
+    const escaped = code.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    if (new RegExp(`^  error: '${escaped}'$`, "mu").test(text)) {
+      try { options.onFixedDiagnostic(code); } catch {}
+      return;
+    }
+  }
+}
 
 function validTapReceipt(chunks, capturedBytes, allowAllSkipped = false) {
   if (capturedBytes < 1 || capturedBytes > MAX_CAPTURE_BYTES) return false;
