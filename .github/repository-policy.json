@@ -41,12 +41,16 @@
     "allowDeletions": false,
     "requiredStatusChecks": [
       "Windows x64",
+      "Linux lifecycle",
       "macOS arm64",
       "Security policy"
     ]
   },
   "tagRuleset": {
     "name": "immutable-version-tags",
+    "legacyNames": [
+      "Protect version release tags"
+    ],
     "enforcement": "active",
     "include": [
       "refs/tags/v*"

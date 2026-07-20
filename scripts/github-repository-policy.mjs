@@ -25,13 +25,17 @@ export async function runRepositoryPolicy(options) {
   const request = options.request ?? createGitHubRequest(token);
   if (typeof request !== "function") throw policyError("GITHUB_POLICY_REQUEST_INVALID");
   const base = `/repos/${policy.repository.owner}/${policy.repository.name}`;
+  const actions = await request({ method: "GET", path: `${base}/actions/permissions` });
+  const selectedActions = actions?.allowed_actions === "selected"
+    ? await request({ method: "GET", path: `${base}/actions/permissions/selected-actions` })
+    : undefined;
   const rulesetSummaries = await request({ method: "GET", path: `${base}/rulesets` });
 
   const state = {
     repository: await request({ method: "GET", path: base }),
-    actions: await request({ method: "GET", path: `${base}/actions/permissions` }),
+    actions,
     workflowPermissions: await request({ method: "GET", path: `${base}/actions/permissions/workflow` }),
-    selectedActions: await request({ method: "GET", path: `${base}/actions/permissions/selected-actions` }),
+    selectedActions,
     mainProtection: await request({ method: "GET", path: `${base}/branches/main/protection` }),
     rulesets: await listDetailedTagRulesets(
       request,
@@ -76,8 +80,9 @@ export async function runRepositoryPolicy(options) {
     return Object.freeze({ status: "drift", mode: options.mode, changes: drift.map(publicChange) });
   }
 
+  const tagRulesetMigration = tagRulesetMigrationCandidate(state.rulesets, policy.tagRuleset);
   const ownerOnly = drift.filter(({ category }) => category === "tag-ruleset");
-  if (ownerOnly.length > 0) {
+  if (ownerOnly.length > 0 && tagRulesetMigration === undefined) {
     return Object.freeze({
       status: "blocked",
       mode: "apply",
@@ -86,7 +91,7 @@ export async function runRepositoryPolicy(options) {
     });
   }
 
-  await applyAllowedPolicy({ request, base, policy, drift });
+  await applyAllowedPolicy({ request, base, policy, drift, tagRulesetMigration });
   return Object.freeze({ status: "applied", mode: "apply", changes: drift.map(publicChange) });
 }
 
@@ -129,7 +134,8 @@ async function listDetailedTagRulesets(request, base, summaries, desired) {
   }
   const projected = [];
   for (const summary of summaries) {
-    if (summary?.name !== desired.name || summary?.target !== "tag") continue;
+    if ((summary?.name !== desired.name && !desired.legacyNames.includes(summary?.name))
+      || summary?.target !== "tag") continue;
     const summaryId = summary?.id;
     if (!Number.isSafeInteger(summaryId) || summaryId <= 0) {
       projected.push(Object.freeze({ summaryIdMatches: false }));
@@ -150,6 +156,7 @@ function projectTagRulesetDetail(detail, summaryId) {
   const rules = detail.rules;
   return Object.freeze({
     summaryIdMatches: Number.isSafeInteger(detail.id) && detail.id === summaryId,
+    id: Number.isSafeInteger(detail.id) && detail.id === summaryId ? detail.id : undefined,
     name: typeof detail.name === "string" ? detail.name : undefined,
     target: typeof detail.target === "string" ? detail.target : undefined,
     enforcement: typeof detail.enforcement === "string" ? detail.enforcement : undefined,
@@ -255,7 +262,7 @@ function buildPolicyEvidence(policy, state, drift, unexpected) {
   });
 }
 
-async function applyAllowedPolicy({ request, base, policy, drift }) {
+async function applyAllowedPolicy({ request, base, policy, drift, tagRulesetMigration }) {
   const categories = new Set(drift.map(({ category }) => category));
   if (categories.has("repository")) {
     await request({ method: "PATCH", path: base, body: {
@@ -284,6 +291,9 @@ async function applyAllowedPolicy({ request, base, policy, drift }) {
   }
   if (categories.has("main-protection")) {
     await request({ method: "PUT", path: `${base}/branches/main/protection`, body: branchPayload(policy) });
+  }
+  if (categories.has("tag-ruleset")) {
+    await request({ method: "PUT", path: `${base}/rulesets/${tagRulesetMigration.id}`, body: tagRulesetPayload(policy.tagRuleset) });
   }
   if (categories.has("private-vulnerability-reporting")) {
     await request({ method: "PUT", path: `${base}/private-vulnerability-reporting` });
@@ -369,6 +379,32 @@ function tagRulesetMatches(rulesets, desired) {
       && (!desired.blockDeletion || types.has("deletion"))
       && (!desired.blockNonFastForward || types.has("non_fast_forward"));
   });
+}
+
+function tagRulesetMigrationCandidate(rulesets, desired) {
+  if (!Array.isArray(rulesets)) return undefined;
+  const candidates = rulesets.filter((ruleset) => ruleset?.summaryIdMatches === true
+    && Number.isSafeInteger(ruleset?.id) && ruleset.id > 0
+    && desired.legacyNames.includes(ruleset?.name)
+    && ruleset?.target === "tag"
+    && ruleset?.enforcement === "active"
+    && sameSet(ruleset?.include, desired.include)
+    && sameSet(ruleset?.exclude, desired.exclude)
+    && ruleset?.bypassPresent === true
+    && ruleset?.bypassCount === 0
+    && sameSet(ruleset?.ruleTypes, ["deletion", "update"]));
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function tagRulesetPayload(desired) {
+  return {
+    name: desired.name,
+    target: "tag",
+    enforcement: desired.enforcement,
+    bypass_actors: [],
+    conditions: { ref_name: { include: desired.include, exclude: desired.exclude } },
+    rules: [{ type: "deletion" }, { type: "update" }, { type: "non_fast_forward" }],
+  };
 }
 
 function branchPayload(policy) {
@@ -457,9 +493,10 @@ function assertAllowedRequest(method, path) {
   const collaboratorPage = /^\/collaborators\?affiliation=direct&per_page=100&page=(?:[1-9]|10)$/u.test(route);
   const deployKeyPage = /^\/keys\?per_page=100&page=(?:[1-9]|10)$/u.test(route);
   const rulesetDetail = /^\/rulesets\/[1-9][0-9]*$/u.test(route);
+  const rulesetUpdate = method === "PUT" && rulesetDetail;
   if (method === "GET"
     ? get.has(route) || collaboratorPage || deployKeyPage || rulesetDetail
-    : mutate.has(`${method} ${route}`)) return;
+    : mutate.has(`${method} ${route}`) || rulesetUpdate) return;
   throw policyError("GITHUB_POLICY_ENDPOINT_BLOCKED");
 }
 
@@ -483,6 +520,7 @@ function validatePolicy(policy) {
   const statuses = new Set(["enabled", "disabled"]);
   const patterns = actions.patternsAllowed;
   const checks = mainProtection.requiredStatusChecks;
+  const legacyNames = tagRuleset.legacyNames;
   const valid = slug.test(repository.owner)
     && slug.test(repository.name)
     && repository.defaultBranch === "main"
@@ -509,6 +547,8 @@ function validatePolicy(policy) {
     ])
     && nonEmptyUniqueStrings(checks, /^[A-Za-z0-9 ._()+\/-]{1,100}$/u)
     && tagRuleset.name === "immutable-version-tags"
+    && nonEmptyUniqueStrings(legacyNames, /^[^\u0000-\u001f\u007f]{1,100}$/u)
+    && !legacyNames.includes(tagRuleset.name)
     && tagRuleset.enforcement === "active"
     && Array.isArray(tagRuleset.include)
     && tagRuleset.include.length === 1

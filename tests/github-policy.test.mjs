@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const POLICY_PATH = join(ROOT, ".github", "repository-policy.json");
 const SCRIPT_PATH = join(ROOT, "scripts", "github-repository-policy.mjs");
-const REQUIRED_CHECKS = ["Windows x64", "macOS arm64", "Security policy"];
+const REQUIRED_CHECKS = [
+  "Windows x64",
+  "Linux lifecycle",
+  "macOS arm64",
+  "Security policy",
+];
 const ACTION_PATTERNS = [
   "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
   "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -70,6 +75,7 @@ test("GitHub repository policy declares protected main, immutable tags, and owne
 
   assert.deepEqual(policy.tagRuleset, {
     name: "immutable-version-tags",
+    legacyNames: ["Protect version release tags"],
     enforcement: "active",
     include: ["refs/tags/v*"],
     exclude: [],
@@ -98,6 +104,9 @@ test("GitHub repository policy rejects malformed or internally inconsistent poli
     (policy) => { policy.actions.requireFullSha = false; },
     (policy) => { policy.mainProtection.requiredStatusChecks = []; },
     (policy) => { policy.tagRuleset.enforcement = "sometimes"; },
+    (policy) => { policy.tagRuleset.legacyNames = []; },
+    (policy) => { policy.tagRuleset.legacyNames = ["immutable-version-tags"]; },
+    (policy) => { policy.tagRuleset.legacyNames = ["Protect version release tags", "Protect version release tags"]; },
     (policy) => { delete policy.tagRuleset.exclude; },
     (policy) => { policy.tagRuleset.bypassActors = [{ actorId: 1 }]; },
     (policy) => { policy.collaborators.owner = "different-owner"; },
@@ -123,6 +132,115 @@ test("GitHub repository policy rejects malformed or internally inconsistent poli
       { code: "GITHUB_POLICY_INVALID" },
     );
     assert.equal(requests, 0);
+  }
+});
+
+test("GitHub repository policy treats an unavailable selected-actions view as Actions drift outside selected mode", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?actions-nonselected=${Date.now()}`
+  );
+  const requests = [];
+  const result = await runRepositoryPolicy({
+    mode: "plan",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      requests.push(request);
+      if (request.path.endsWith("/actions/permissions")) return { enabled: true, allowed_actions: "all" };
+      if (request.path.endsWith("/actions/permissions/selected-actions")) {
+        throw new Error("selected-actions must not be requested outside selected mode");
+      }
+      return compliantResponse(request);
+    },
+  });
+  assert.equal(result.status, "drift");
+  assert.equal(result.changes.some(({ category }) => category === "actions"), true);
+  assert.equal(requests.some(({ path }) => path.endsWith("/actions/permissions/selected-actions")), false);
+});
+
+test("GitHub repository policy plans and applies the one validated legacy immutable-tag ruleset", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?legacy-ruleset=${Date.now()}`
+  );
+  const planRequests = [];
+  const planned = await runRepositoryPolicy({
+    mode: "plan",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      planRequests.push(request);
+      return legacyRulesetResponse(request);
+    },
+  });
+  assert.equal(planned.status, "drift");
+  assert.equal(planned.changes.some(({ category }) => category === "tag-ruleset"), true);
+  assert.equal(planRequests.some(({ path }) => path.endsWith("/rulesets/73")), true);
+
+  const applyRequests = [];
+  const applied = await runRepositoryPolicy({
+    mode: "apply",
+    policyPath: POLICY_PATH,
+    [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+    request: async (request) => {
+      applyRequests.push(request);
+      return request.method === "GET" ? legacyRulesetResponse(request) : {};
+    },
+  });
+  assert.equal(applied.status, "applied");
+  assert.deepEqual(
+    applyRequests.filter(({ method }) => method !== "GET"),
+    [{
+      method: "PUT",
+      path: "/repos/Burntgogi/Gpt_Codex_HWP/rulesets/73",
+      body: {
+        name: "immutable-version-tags",
+        target: "tag",
+        enforcement: "active",
+        bypass_actors: [],
+        conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+        rules: [{ type: "deletion" }, { type: "update" }, { type: "non_fast_forward" }],
+      },
+    }],
+  );
+});
+
+test("GitHub repository policy fails closed when a legacy tag-ruleset migration is not exact", async () => {
+  const { runRepositoryPolicy } = await import(
+    `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?legacy-ruleset-blocked=${Date.now()}`
+  );
+  const scenarios = [
+    ["zero candidates", (request, response) => request.path.endsWith("/rulesets") ? [] : response],
+    ["multiple candidates", (request, response) => request.path.endsWith("/rulesets")
+      ? [legacyRulesetSummary(73), legacyRulesetSummary(74)] : response],
+    ["malformed ID", (request, response) => request.path.endsWith("/rulesets")
+      ? [{ ...legacyRulesetSummary(73), id: "73" }] : response],
+    ["changed conditions", (request, response) => request.path.endsWith("/rulesets/73")
+      ? { ...response, conditions: { ref_name: { include: ["refs/tags/v*"], exclude: ["refs/tags/v1.0.0"] } } }
+      : response],
+    ["bypass actors", (request, response) => request.path.endsWith("/rulesets/73")
+      ? { ...response, bypass_actors: [{ actor_id: 7, actor_type: "RepositoryRole", bypass_mode: "always" }] }
+      : response],
+    ["extra rules", (request, response) => request.path.endsWith("/rulesets/73")
+      ? { ...response, rules: [...response.rules, { type: "non_fast_forward" }] }
+      : response],
+    ["unexpected name", (request, response) => request.path.endsWith("/rulesets")
+      ? [{ ...legacyRulesetSummary(73), name: "Unexpected tag ruleset" }] : response],
+  ];
+  for (const [name, alter] of scenarios) {
+    const requests = [];
+    const result = await runRepositoryPolicy({
+      mode: "apply",
+      policyPath: POLICY_PATH,
+      [SENSITIVE_FIELD_ONE]: TEST_CREDENTIAL,
+      request: async (request) => {
+        requests.push(request);
+        const response = legacyRulesetResponse(request);
+        return request.method === "GET" ? alter(request, response) : {};
+      },
+    });
+    assert.equal(result.status, "blocked", name);
+    assert.equal(result.code, "OWNER_ACTION_REQUIRED", name);
+    assert.equal(requests.every(({ method }) => method === "GET"), true, name);
   }
 });
 
@@ -642,6 +760,27 @@ test("GitHub repository policy evidence is a strict safe DTO, never a raw API pr
     assert.equal(serialized.includes(forbidden), false, `evidence leaked ${forbidden}`);
   }
 });
+
+function legacyRulesetSummary(id) {
+  return { id, name: "Protect version release tags", enforcement: "active", target: "tag" };
+}
+
+function legacyRulesetResponse({ path }) {
+  if (path.endsWith("/rulesets")) return [legacyRulesetSummary(73)];
+  const legacyId = /\/rulesets\/([1-9][0-9]*)$/u.exec(path)?.[1];
+  if (legacyId !== undefined) {
+    return {
+      id: Number(legacyId),
+      name: "Protect version release tags",
+      enforcement: "active",
+      target: "tag",
+      bypass_actors: [],
+      conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+      rules: [{ type: "deletion" }, { type: "update" }],
+    };
+  }
+  return compliantResponse({ path });
+}
 
 function compliantResponse({ path }) {
   if (path.endsWith("/actions/permissions/workflow")) {
