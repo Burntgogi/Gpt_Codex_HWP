@@ -22,6 +22,11 @@ import * as childClientModule from "../src/workers/document-child-client.js";
 import { HeavyChildGate } from "../src/workers/document-execution-policy.js";
 import type { SpoolDocumentSnapshot } from "../src/shared/document-snapshot.js";
 import {
+  applyWindowsOwnerOnlyAcl,
+  createWindowsAclHelperEnvironment,
+  resolveWindowsAclPowerShell,
+} from "../src/shared/windows-owner-only-acl.js";
+import {
   createRegisteredPosixProcessGroupSupervisor,
   type ProcessTreeTerminationReceipt,
   type RegisteredProcessGroupIdentity,
@@ -142,14 +147,6 @@ const resolveWindowsSystemExecutable = (
     ): string;
   }
 ).resolveWindowsSystemExecutable;
-const validateWindowsAclReceipt = (
-  childClientModule as unknown as {
-    validateWindowsAclReceipt(
-      value: unknown,
-      currentSid: string,
-    ): boolean;
-  }
-).validateWindowsAclReceipt;
 const classifyWindowsSupervisorPreframeDiagnostic = (
   childClientModule as unknown as Readonly<{
     classifyWindowsSupervisorPreframeDiagnostic(receipt: Readonly<{
@@ -253,16 +250,6 @@ test("Windows real supervisor accepts READY and closes its exact target and help
     }
   }
 });
-const createAclHelperEnvironment = (
-  childClientModule as unknown as {
-    createAclHelperEnvironment(
-      path: string,
-      sid: string,
-      kind: "directory" | "file",
-      source: NodeJS.ProcessEnv,
-    ): NodeJS.ProcessEnv;
-  }
-).createAclHelperEnvironment;
 const createJobHelperEnvironment = (
   childClientModule as unknown as {
     createJobHelperEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
@@ -3720,31 +3707,9 @@ test("Windows system executables fail closed without an absolute SystemRoot", ()
   );
 });
 
-test("Windows ACL receipt permits only current user and SYSTEM with protected full control", () => {
-  const currentSid = "S-1-5-21-1000";
-  const valid = {
-    protected: true,
-    rules: [
-      { sid: currentSid, allow: true, full: true },
-      { sid: "S-1-5-18", allow: true, full: true },
-    ],
-  };
-  assert.equal(validateWindowsAclReceipt(valid, currentSid), true);
-  assert.equal(validateWindowsAclReceipt({ ...valid, protected: false }, currentSid), false);
-  assert.equal(validateWindowsAclReceipt({
-    ...valid,
-    rules: [...valid.rules, { sid: "S-1-1-0", allow: true, full: true }],
-  }, currentSid), false);
-  assert.equal(validateWindowsAclReceipt({
-    ...valid,
-    rules: [{ sid: currentSid, allow: true, full: false }],
-  }, currentSid), false);
-});
-
 test("Windows ACL helper environment does not propagate ambient secrets", () => {
-  const environment = createAclHelperEnvironment(
+  const environment = createWindowsAclHelperEnvironment(
     "C:\\safe\\spool.bin",
-    "S-1-5-21-1000",
     "file",
     {
       SystemRoot: "C:\\Windows",
@@ -3760,9 +3725,58 @@ test("Windows ACL helper environment does not propagate ambient secrets", () => 
     WINDIR: "C:\\Windows",
     LANG: "ko_KR.UTF-8",
     GPT_CODEX_HWP_ACL_PATH: "C:\\safe\\spool.bin",
-    GPT_CODEX_HWP_ACL_SID: "S-1-5-21-1000",
     GPT_CODEX_HWP_ACL_KIND: "file",
   });
+});
+
+test("Windows ACL helper replaces the DACL and accepts only one fixed clean receipt", async () => {
+  const calls: Array<Readonly<{
+    command: string;
+    args: readonly string[];
+    environment: NodeJS.ProcessEnv;
+  }>> = [];
+  const result = await applyWindowsOwnerOnlyAcl("C:\\safe\\spool.bin", "file", {
+    platform: "win32",
+    sourceEnvironment: {
+      SystemRoot: "C:\\Windows",
+      WINDIR: "C:\\Windows",
+      AWS_SECRET_ACCESS_KEY: "must-not-propagate",
+    },
+    run: async (command, args, options) => {
+      calls.push({ command, args, environment: options.env });
+      return { stdout: "OK", stderr: "" };
+    },
+  });
+  assert.equal(result, "OK");
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0]?.command,
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  );
+  assert.doesNotMatch(calls[0]?.args.join(" ") ?? "", /icacls|ConvertTo-Json|ForEach-Object/u);
+  assert.match(calls[0]?.args.join(" ") ?? "", /DirectorySecurity.*FileSecurity.*SetAccessRuleProtection.*SetAccessControl/u);
+  assert.equal(calls[0]?.environment.AWS_SECRET_ACCESS_KEY, undefined);
+  for (const [stdout, stderr, expected] of [
+    ["extra-rule", "", "extra-rule"],
+    ["OK\n", "", "invalid-output"],
+    ["OK", "warning", "invalid-output"],
+    ["PRIVATE", "", "invalid-output"],
+  ] as const) {
+    assert.equal(await applyWindowsOwnerOnlyAcl("C:\\safe\\spool.bin", "file", {
+      platform: "win32",
+      sourceEnvironment: { SystemRoot: "C:\\Windows" },
+      run: async () => ({ stdout, stderr }),
+    }), expected);
+  }
+  assert.equal(await applyWindowsOwnerOnlyAcl("C:\\safe\\spool.bin", "file", {
+    platform: "win32",
+    sourceEnvironment: { SystemRoot: "C:\\Windows" },
+    run: async () => { throw new Error("private"); },
+  }), "process");
+  assert.equal(
+    resolveWindowsAclPowerShell("win32", "C:\\Windows"),
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  );
 });
 
 test("Windows Job helper environment contains only required runtime variables", () => {

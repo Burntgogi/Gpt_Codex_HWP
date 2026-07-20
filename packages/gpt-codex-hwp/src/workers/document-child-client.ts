@@ -25,6 +25,7 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { SpoolDocumentSnapshot } from "../shared/document-snapshot.js";
+import { applyWindowsOwnerOnlyAcl } from "../shared/windows-owner-only-acl.js";
 import {
   BoundedFrameDecoder,
   encodeBoundedJsonFrame,
@@ -74,7 +75,6 @@ const TREE_KILL_GRACE_MS = 100;
 const OUTPUT_SPOOL_PREFIX = "gpt-codex-hwp-result-";
 const OUTPUT_SPOOL_FILENAME = "output.bin";
 const OUTPUT_READ_CHUNK_BYTES = 1024 * 1024;
-const WINDOWS_SYSTEM_SID = "S-1-5-18";
 const LINUX_PROCESS_SAMPLE_MS = 25;
 const MACOS_PROCESS_SAMPLE_MS = 100;
 const MAX_TRACKED_PROCESS_IDENTITIES = 4_096;
@@ -3579,86 +3579,9 @@ async function setOwnerOnlyAccess(
     await chmod(path, mode);
     return;
   }
-  const sidResult = await execFileAsync(systemExecutable("whoami.exe"), [
-    "/user",
-    "/fo",
-    "csv",
-    "/nh",
-  ], {
-    encoding: "utf8",
-    timeout: 5_000,
-    windowsHide: true,
-    env: minimalWindowsHelperEnvironment(process.env),
-  });
-  const sid = /"(S-\d+(?:-\d+)+)"/u.exec(sidResult.stdout)?.[1];
-  if (sid === undefined) throw new Error("could not determine spool owner");
-  const ownerGrant = kind === "directory" ? `*${sid}:(OI)(CI)F` : `*${sid}:F`;
-  const systemGrant = kind === "directory"
-    ? `*${WINDOWS_SYSTEM_SID}:(OI)(CI)F`
-    : `*${WINDOWS_SYSTEM_SID}:F`;
-  await execFileAsync(systemExecutable("icacls.exe"), [
-    path,
-    "/inheritance:r",
-    "/grant:r",
-    ownerGrant,
-    systemGrant,
-    "/q",
-  ], {
-    encoding: "utf8",
-    timeout: 5_000,
-    windowsHide: true,
-    env: minimalWindowsHelperEnvironment(process.env),
-  });
-  await verifyWindowsAcl(path, sid, kind);
-}
-
-async function verifyWindowsAcl(
-  path: string,
-  sid: string,
-  kind: "directory" | "file",
-): Promise<void> {
-  const script = [
-    "$item=if($env:GPT_CODEX_HWP_ACL_KIND -eq 'directory'){[System.IO.DirectoryInfo]::new($env:GPT_CODEX_HWP_ACL_PATH)}else{[System.IO.FileInfo]::new($env:GPT_CODEX_HWP_ACL_PATH)}",
-    "$acl=$item.GetAccessControl()",
-    "$rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object {[PSCustomObject]@{sid=$_.IdentityReference.Value;allow=($_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow);full=(($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl)}})",
-    "$receipt=[PSCustomObject]@{protected=$acl.AreAccessRulesProtected;rules=$rules}",
-    "[Console]::Out.Write(($receipt | ConvertTo-Json -Compress -Depth 4))",
-  ].join(";");
-  const result = await execFileAsync(systemExecutable("powershell.exe"), [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    script,
-  ], {
-    encoding: "utf8",
-    timeout: 5_000,
-    windowsHide: true,
-    maxBuffer: 64 * 1024,
-    env: createAclHelperEnvironment(path, sid, kind, process.env),
-  });
-  let receipt: unknown;
-  try {
-    receipt = JSON.parse(result.stdout);
-  } catch {
-    throw new Error("invalid Windows ACL receipt");
+  if (await applyWindowsOwnerOnlyAcl(path, kind) !== "OK") {
+    throw new Error("could not apply owner-only spool access");
   }
-  if (!validateWindowsAclReceipt(receipt, sid)) {
-    throw new Error("unsafe Windows ACL receipt");
-  }
-}
-
-export function createAclHelperEnvironment(
-  path: string,
-  sid: string,
-  kind: "directory" | "file",
-  source: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  return {
-    ...minimalWindowsHelperEnvironment(source),
-    GPT_CODEX_HWP_ACL_PATH: path,
-    GPT_CODEX_HWP_ACL_SID: sid,
-    GPT_CODEX_HWP_ACL_KIND: kind,
-  };
 }
 
 function minimalWindowsHelperEnvironment(
@@ -3679,54 +3602,6 @@ export function createJobHelperEnvironment(source: NodeJS.ProcessEnv): NodeJS.Pr
     if (value !== undefined) result[key] = value;
   }
   return result;
-}
-
-export function validateWindowsAclReceipt(
-  value: unknown,
-  currentSid: string,
-): boolean {
-  if (!isPlainDataRecord(value)) return false;
-  const root = value as Record<string, unknown>;
-  if (
-    !hasExactKeys(root, ["protected", "rules"]) ||
-    root.protected !== true ||
-    !Array.isArray(root.rules) ||
-    root.rules.length !== 2
-  ) {
-    return false;
-  }
-  const seen = new Set<string>();
-  for (const rawRule of root.rules) {
-    if (!isPlainDataRecord(rawRule)) return false;
-    const rule = rawRule as Record<string, unknown>;
-    if (
-      !hasExactKeys(rule, ["sid", "allow", "full"]) ||
-      typeof rule.sid !== "string" ||
-      (rule.sid !== currentSid && rule.sid !== WINDOWS_SYSTEM_SID) ||
-      rule.allow !== true ||
-      rule.full !== true ||
-      seen.has(rule.sid)
-    ) {
-      return false;
-    }
-    seen.add(rule.sid);
-  }
-  return seen.has(currentSid) && seen.has(WINDOWS_SYSTEM_SID);
-}
-
-function isPlainDataRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-): boolean {
-  const keys = Object.keys(value).sort();
-  return keys.length === expected.length &&
-    keys.every((key, index) => key === [...expected].sort()[index]);
 }
 
 function systemExecutable(name: string): string {

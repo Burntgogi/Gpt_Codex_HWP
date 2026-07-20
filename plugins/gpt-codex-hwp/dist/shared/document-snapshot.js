@@ -1,12 +1,11 @@
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdtemp, open, readdir, rename, rmdir, stat, unlink, } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { promisify } from "node:util";
 import { FileLimitError, MAX_DOCUMENT_BYTES, openFileForBoundedRead, } from "./files.js";
 import { AllowedRootsPathError, authorizeExistingPath, } from "./allowed-roots.js";
 import { toOwnedExactBytes, } from "./owned-bytes.js";
+import { applyWindowsOwnerOnlyAcl } from "./windows-owner-only-acl.js";
 import { MAX_WORKER_INPUT_BYTES } from "../workers/document-protocol.js";
 export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
 const READ_CHUNK_BYTES = 1024 * 1024;
@@ -14,8 +13,6 @@ const PREFLIGHT_BYTES = 8;
 const SPOOL_PREFIX = "gpt-codex-hwp-snapshot-";
 const SPOOL_FILENAME = "input.bin";
 const QUARANTINE_PREFIX = "gpt-codex-hwp-quarantine-";
-const WINDOWS_SYSTEM_SID = "S-1-5-18";
-const execFileAsync = promisify(execFile);
 const OLE2_MAGIC = Uint8Array.from([
     0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,
 ]);
@@ -452,30 +449,8 @@ async function setOwnerOnlyAccess(path, kind, mode, stagePrefix, observe) {
         return;
     }
     try {
-        observe?.(`${stagePrefix}-sid`);
-        const sid = await currentWindowsSid();
-        const currentGrant = kind === "directory" ? `*${sid}:(OI)(CI)F` : `*${sid}:F`;
-        const systemGrant = kind === "directory"
-            ? `*${WINDOWS_SYSTEM_SID}:(OI)(CI)F`
-            : `*${WINDOWS_SYSTEM_SID}:F`;
-        observe?.(`${stagePrefix}-icacls`);
-        await runAclCommand("icacls.exe", [
-            path,
-            "/inheritance:r",
-            "/grant:r",
-            currentGrant,
-            systemGrant,
-            "/q",
-        ]);
         observe?.(`${stagePrefix}-verify`);
-        let verification;
-        try {
-            verification = await verifyWindowsAcl(path, sid, kind);
-        }
-        catch {
-            observe?.(`${stagePrefix}-verify-process`);
-            throw openFailedError();
-        }
+        const verification = await applyWindowsOwnerOnlyAcl(path, kind);
         if (verification !== "OK") {
             observe?.(`${stagePrefix}-verify-${verification}`);
             throw openFailedError();
@@ -484,47 +459,6 @@ async function setOwnerOnlyAccess(path, kind, mode, stagePrefix, observe) {
     catch {
         throw openFailedError();
     }
-}
-async function currentWindowsSid() {
-    const result = await runAclCommand("whoami.exe", ["/user", "/fo", "csv", "/nh"]);
-    const match = /"(S-\d+(?:-\d+)+)"/u.exec(result.stdout);
-    if (match?.[1] === undefined)
-        throw openFailedError();
-    return match[1];
-}
-async function verifyWindowsAcl(path, sid, kind) {
-    const script = [
-        "try{",
-        "$item=if($env:GPT_CODEX_HWP_ACL_KIND -eq 'directory'){[System.IO.DirectoryInfo]::new($env:GPT_CODEX_HWP_ACL_PATH)}else{[System.IO.FileInfo]::new($env:GPT_CODEX_HWP_ACL_PATH)}",
-        "$acl=$item.GetAccessControl()",
-        "$sid=$env:GPT_CODEX_HWP_ACL_SID",
-        `$system='${WINDOWS_SYSTEM_SID}'`,
-        "if(-not $acl.AreAccessRulesProtected){[Console]::Out.Write('unprotected');exit 0}",
-        "$valid=$true",
-        "$hasCurrent=$false",
-        "foreach($rule in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){$ruleSid=$rule.IdentityReference.Value;if($ruleSid -ne $sid -and $ruleSid -ne $system){$valid=$false};if($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $ruleSid -eq $sid -and (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl)){$hasCurrent=$true}}",
-        "if(-not $valid){[Console]::Out.Write('extra-rule');exit 0}",
-        "if(-not $hasCurrent){[Console]::Out.Write('missing-current');exit 0}",
-        "[Console]::Out.Write('OK')",
-        "}catch{[Console]::Out.Write('exception')}",
-    ].join(";");
-    const result = await runAclCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-        ...process.env,
-        GPT_CODEX_HWP_ACL_PATH: path,
-        GPT_CODEX_HWP_ACL_SID: sid,
-        GPT_CODEX_HWP_ACL_KIND: kind,
-    });
-    return ["OK", "exception", "unprotected", "extra-rule", "missing-current"].includes(result.stdout) ? result.stdout : "invalid-output";
-}
-async function runAclCommand(command, args, env = process.env) {
-    const result = await execFileAsync(command, [...args], {
-        encoding: "utf8",
-        env,
-        maxBuffer: 64 * 1024,
-        timeout: 5_000,
-        windowsHide: true,
-    });
-    return { stdout: result.stdout, stderr: result.stderr };
 }
 function validateOptions(rawOptions) {
     if (typeof rawOptions !== "object" || rawOptions === null) {

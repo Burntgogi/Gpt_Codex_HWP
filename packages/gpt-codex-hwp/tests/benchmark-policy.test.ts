@@ -1290,7 +1290,8 @@ test("benchmark snapshot diagnostics expose only a fixed internal stage", () => 
     "exception",
     "unprotected",
     "extra-rule",
-    "missing-current",
+    "missing-required",
+    "invalid-rule",
     "invalid-output",
   ]) {
     assert.equal(
@@ -1312,15 +1313,19 @@ test("benchmark snapshot diagnostics expose only a fixed internal stage", () => 
   );
 });
 
-test("Windows ACL verification reports bounded reasons without nonzero policy exits", async () => {
-  const source = await readFile(
+test("Windows owner-only ACL application is shared and replaces rather than amends DACLs", async () => {
+  const snapshotSource = await readFile(
     join(PACKAGE_ROOT, "src", "shared", "document-snapshot.ts"),
     "utf8",
   );
-  for (const reason of ["exception", "unprotected", "extra-rule", "missing-current"]) {
-    assert.match(source, new RegExp(`Write\\('${reason}'\\)`, "u"));
+  const childSource = await readFile(
+    join(PACKAGE_ROOT, "src", "workers", "document-child-client.ts"),
+    "utf8",
+  );
+  for (const source of [snapshotSource, childSource]) {
+    assert.match(source, /applyWindowsOwnerOnlyAcl/u);
+    assert.doesNotMatch(source, /icacls\.exe/u);
   }
-  assert.match(source, /verify-process/u);
-  assert.match(source, /verify-invalid-output/u);
-  assert.doesNotMatch(source, /exit (17|18|19)/u);
+  assert.match(snapshotSource, /verify-process/u);
+  assert.match(snapshotSource, /verify-invalid-output/u);
 });

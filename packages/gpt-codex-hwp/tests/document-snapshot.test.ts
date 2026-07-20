@@ -25,6 +25,7 @@ import {
   WORKER_INPUT_MAX_BYTES,
   openDocumentSnapshot,
 } from "../src/shared/document-snapshot.js";
+import { applyWindowsOwnerOnlyAcl } from "../src/shared/windows-owner-only-acl.js";
 import { MAX_DOCUMENT_BYTES } from "../src/shared/files.js";
 import {
   copyToOwnedExactBytes,
@@ -407,15 +408,15 @@ test("document snapshot reports only fixed spool stages to a diagnostic test hoo
     "source-authorize", "source-open", "spool-directory-create",
     "spool-directory-acl",
     ...(process.platform === "win32"
-      ? ["spool-directory-sid", "spool-directory-icacls", "spool-directory-verify"]
+      ? ["spool-directory-verify"]
       : []),
     "spool-file-create", "spool-file-acl",
     ...(process.platform === "win32"
-      ? ["spool-file-sid", "spool-file-icacls", "spool-file-verify"]
+      ? ["spool-file-verify"]
       : []),
     "spool-copy", "spool-sync", "spool-file-reacl",
     ...(process.platform === "win32"
-      ? ["spool-file-reacl-sid", "spool-file-reacl-icacls", "spool-file-reacl-verify"]
+      ? ["spool-file-reacl-verify"]
       : []),
     "spool-verify",
     "source-reauthorize", "source-verify",
@@ -713,10 +714,37 @@ test("document snapshot creates a protected Windows spool ACL", { skip: process.
   await snapshot.cleanup();
 });
 
+test("Windows owner-only ACL replacement removes a pre-existing explicit third-party ACE", {
+  skip: process.platform !== "win32",
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hwp-acl-replace-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await execFileAsync("icacls.exe", [
+    root,
+    "/inheritance:r",
+    "/grant:r",
+    "*S-1-5-32-545:(OI)(CI)F",
+    "/q",
+  ], { timeout: 5_000, maxBuffer: 64 * 1024, windowsHide: true });
+
+  assert.equal(await applyWindowsOwnerOnlyAcl(root, "directory"), "OK");
+  const acl = await readWindowsAcl(root);
+  assert.equal(acl.protected, true);
+  assert.equal(acl.rules.length, 2);
+  assert.deepEqual(
+    new Set(acl.rules.map((rule) => rule.sid)),
+    new Set([acl.currentSid, "S-1-5-18"]),
+  );
+  assert.ok(acl.rules.every((rule) => rule.type === "Allow" && hasFullControl(rule.rights)));
+});
+
 test("document snapshot Windows ACL verification avoids hosted-incompatible cmdlets", async () => {
-  const source = await readFile(new URL("../src/shared/document-snapshot.ts", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("../src/shared/windows-owner-only-acl.ts", import.meta.url),
+    "utf8",
+  );
   assert.doesNotMatch(source, /Where-Object|ForEach-Object|ConvertTo-Json/u);
-  assert.match(source, /foreach\(\$rule in \$acl\.GetAccessRules/u);
+  assert.match(source, /foreach\(\$rule in \$rules/u);
 });
 
 function sha256(bytes: Uint8Array): string {

@@ -229,17 +229,35 @@ test("installed runtime npm invocation resolver is injectable without environmen
   });
   assert.deepEqual(resolveNpmInvocation(["ls", "--json"], {
     npmExecPath: undefined,
+    nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
     platform: "win32",
   }), {
-    command: "cmd.exe",
-    args: ["/d", "/s", "/c", "npm.cmd", "ls", "--json"],
+    command: "C:\\Program Files\\nodejs\\node.exe",
+    args: [
+      "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+      "ls",
+      "--json",
+    ],
   });
   assert.deepEqual(resolveNpmInvocation(["audit", "--json"], {
     npmExecPath: undefined,
+    nodeExecPath: "/opt/node/bin/node",
     platform: "linux",
   }), {
-    command: "npm",
-    args: ["audit", "--json"],
+    command: "/opt/node/bin/node",
+    args: ["/opt/node/lib/node_modules/npm/bin/npm-cli.js", "audit", "--json"],
+  });
+  assert.deepEqual(resolveNpmInvocation(["ci", "--omit=dev"], {
+    npmExecPath: undefined,
+    nodeExecPath: "/opt/mac-node/bin/node",
+    platform: "darwin",
+  }), {
+    command: "/opt/mac-node/bin/node",
+    args: [
+      "/opt/mac-node/lib/node_modules/npm/bin/npm-cli.js",
+      "ci",
+      "--omit=dev",
+    ],
   });
 });
 

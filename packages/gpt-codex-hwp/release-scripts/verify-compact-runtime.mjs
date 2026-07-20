@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { lstat, open, readFile, readdir, realpath, rm } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -68,10 +68,10 @@ export function resolveNpmInvocation(args, options = {}) {
   if (typeof npmExecPath === "string" && npmExecPath.length > 0) {
     return { command: nodeExecPath, args: [npmExecPath, ...args] };
   }
-  if (platform === "win32") {
-    return { command: "cmd.exe", args: ["/d", "/s", "/c", "npm.cmd", ...args] };
-  }
-  return { command: "npm", args: [...args] };
+  const npmCliPath = platform === "win32"
+    ? win32.join(win32.dirname(nodeExecPath), "node_modules", "npm", "bin", "npm-cli.js")
+    : posix.resolve(posix.dirname(nodeExecPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+  return { command: nodeExecPath, args: [npmCliPath, ...args] };
 }
 
 export async function runCommand(command, args, cwd, options = {}) {

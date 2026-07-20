@@ -66,7 +66,8 @@ const SAFE_SNAPSHOT_STAGES = new Set([
 ]);
 for (const prefix of ["spool-directory", "spool-file", "spool-file-reacl"]) {
   for (const reason of [
-    "process", "exception", "unprotected", "extra-rule", "missing-current", "invalid-output",
+    "process", "exception", "unprotected", "extra-rule", "missing-required", "invalid-rule",
+    "invalid-output",
   ]) SAFE_SNAPSHOT_STAGES.add(`${prefix}-verify-${reason}`);
 }
 const SAFE_ENGINE_STAGES = new Set([
