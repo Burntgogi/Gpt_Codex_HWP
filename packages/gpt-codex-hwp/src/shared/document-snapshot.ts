@@ -817,9 +817,11 @@ async function verifyWindowsAcl(
     "$sid=$env:GPT_CODEX_HWP_ACL_SID",
     `$system='${WINDOWS_SYSTEM_SID}'`,
     "if(-not $acl.AreAccessRulesProtected){exit 17}",
-    "$rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))",
-    "if(@($rules | Where-Object { $_.IdentityReference.Value -ne $sid -and $_.IdentityReference.Value -ne $system }).Count -ne 0){exit 18}",
-    "if(@($rules | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -eq $sid -and (($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl) }).Count -eq 0){exit 19}",
+    "$valid=$true",
+    "$hasCurrent=$false",
+    "foreach($rule in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){$ruleSid=$rule.IdentityReference.Value;if($ruleSid -ne $sid -and $ruleSid -ne $system){$valid=$false};if($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $ruleSid -eq $sid -and (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl)){$hasCurrent=$true}}",
+    "if(-not $valid){exit 18}",
+    "if(-not $hasCurrent){exit 19}",
     "[Console]::Out.Write('OK')",
   ].join(";");
   const result = await runAclCommand(

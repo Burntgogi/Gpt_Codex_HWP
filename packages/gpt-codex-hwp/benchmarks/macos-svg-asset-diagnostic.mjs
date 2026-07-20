@@ -29,7 +29,26 @@ async function diagnose() {
       output_svg_path: svgPath,
       output_png_path: pngPath,
     });
-    if (result?.isError === true) return "handler-error";
+    if (result?.isError === true) {
+      const bypass = await handleHwpCreateSvgAsset({
+        prompt_or_spec: JSON.stringify({
+          width: 320,
+          height: 180,
+          background: "#ffffff",
+          elements: [
+            { type: "rect", x: 10, y: 10, width: 300, height: 160, fill: "#dbeafe" },
+            { type: "text", x: 160, y: 90, text: "매출 <증가> & 안전", fill: "#111827", fontSize: 24, textAnchor: "middle" },
+          ],
+        }),
+        output_svg_path: join(root, "bypass.svg"),
+        output_png_path: join(root, "bypass.png"),
+      }, { validateSvg: async () => {} });
+      if (bypass?.isError === true) return "path-or-build";
+      const bypassWarnings = bypass?.structuredContent?.warnings;
+      return Array.isArray(bypassWarnings) && bypassWarnings.length === 0
+        ? "validation"
+        : "render";
+    }
     const details = result?.structuredContent;
     if (!Array.isArray(details?.warnings) || details.warnings.length !== 0) {
       return "handler-warning";

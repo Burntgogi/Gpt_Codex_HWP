@@ -678,6 +678,12 @@ test("document snapshot creates a protected Windows spool ACL", { skip: process.
   await snapshot.cleanup();
 });
 
+test("document snapshot Windows ACL verification avoids hosted-incompatible cmdlets", async () => {
+  const source = await readFile(new URL("../src/shared/document-snapshot.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Where-Object|ForEach-Object|ConvertTo-Json/u);
+  assert.match(source, /foreach\(\$rule in \$acl\.GetAccessRules/u);
+});
+
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -705,8 +711,9 @@ async function readWindowsAcl(path: string): Promise<WindowsAclReceipt> {
     "$item=if([System.IO.Directory]::Exists($env:GPT_CODEX_HWP_TEST_ACL_PATH)){[System.IO.DirectoryInfo]::new($env:GPT_CODEX_HWP_TEST_ACL_PATH)}else{[System.IO.FileInfo]::new($env:GPT_CODEX_HWP_TEST_ACL_PATH)}",
     "$acl=$item.GetAccessControl()",
     "$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-    "$rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { [ordered]@{ sid=$_.IdentityReference.Value; type=$_.AccessControlType.ToString(); rights=[int64]$_.FileSystemRights } })",
-    "[ordered]@{ protected=$acl.AreAccessRulesProtected; currentSid=$sid; rules=$rules } | ConvertTo-Json -Compress -Depth 4",
+    "[Console]::Out.WriteLine(('protected={0}' -f $acl.AreAccessRulesProtected))",
+    "[Console]::Out.WriteLine(('currentSid={0}' -f $sid))",
+    "foreach($rule in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){[Console]::Out.WriteLine(('rule={0}|{1}|{2}' -f $rule.IdentityReference.Value,$rule.AccessControlType,[int64]$rule.FileSystemRights))}",
   ].join(";");
   const result = await execFileAsync(
     "powershell.exe",
@@ -718,12 +725,21 @@ async function readWindowsAcl(path: string): Promise<WindowsAclReceipt> {
       windowsHide: true,
     },
   );
-  const parsed = JSON.parse(result.stdout) as Omit<WindowsAclReceipt, "rules"> & {
-    rules: WindowsAclReceipt["rules"] | WindowsAclReceipt["rules"][number];
-  };
+  const lines = result.stdout.trim().split(/\r?\n/u);
+  const protectedValue = lines.shift();
+  const currentSidValue = lines.shift();
+  if (protectedValue !== "protected=True" || !currentSidValue?.startsWith("currentSid=")) {
+    throw new Error("invalid ACL receipt");
+  }
+  const rules = lines.map((line) => {
+    const match = /^rule=(S-\d+(?:-\d+)+)\|(Allow|Deny)\|(-?[0-9]+)$/u.exec(line);
+    if (match === null) throw new Error("invalid ACL rule receipt");
+    return { sid: match[1], type: match[2], rights: Number(match[3]) };
+  });
   return {
-    ...parsed,
-    rules: Array.isArray(parsed.rules) ? parsed.rules : [parsed.rules],
+    protected: true,
+    currentSid: currentSidValue.slice("currentSid=".length),
+    rules,
   };
 }
 

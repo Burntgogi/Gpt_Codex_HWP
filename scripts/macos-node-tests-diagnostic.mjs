@@ -75,7 +75,8 @@ const ASSETS_CASES = Object.freeze([
 const SVG_ASSET_BOUNDARIES = new Set([
   "root", "handler-import", "sharp-import", "handler", "handler-error",
   "handler-warning", "svg-read", "svg-content", "png-read", "png-magic",
-  "metadata", "dimensions", "passed", "diagnostic-failed",
+  "metadata", "dimensions", "validation", "render", "path-or-build",
+  "passed", "diagnostic-failed",
 ]);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
