@@ -170,6 +170,18 @@ const DOCTOR_ORPHAN_CODES = Object.freeze([
   "DOCTOR_ORPHAN_ELAPSED", "DOCTOR_ORPHAN_PID", "DOCTOR_ORPHAN_WAIT_GONE",
   "DOCTOR_ORPHAN_SENTINEL",
 ]);
+const DOCUMENT_SEQUENTIAL_STAGES = new Set([
+  "close", "begin-closing", "seal", "parse", "retained", "count",
+  "read-0", "read-1", "pid-0", "pid-1", "gone-0", "gone-1",
+]);
+const DOCUMENT_SEQUENTIAL_CODES = Object.freeze([
+  "DOCUMENT_SEQUENTIAL_CLOSE", "DOCUMENT_SEQUENTIAL_BEGIN_CLOSING",
+  "DOCUMENT_SEQUENTIAL_SEAL", "DOCUMENT_SEQUENTIAL_PARSE",
+  "DOCUMENT_SEQUENTIAL_RETAINED", "DOCUMENT_SEQUENTIAL_COUNT",
+  "DOCUMENT_SEQUENTIAL_READ_0", "DOCUMENT_SEQUENTIAL_READ_1",
+  "DOCUMENT_SEQUENTIAL_PID_0", "DOCUMENT_SEQUENTIAL_PID_1",
+  "DOCUMENT_SEQUENTIAL_GONE_0", "DOCUMENT_SEQUENTIAL_GONE_1",
+]);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -228,6 +240,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? executeDoctorOrphanDiagnostic;
   const runDocumentProcessDiagnostic = options.runDocumentProcessDiagnostic
     ?? executeDocumentProcessDiagnostic;
+  const runDocumentSequentialDiagnostic = options.runDocumentSequentialDiagnostic
+    ?? executeDocumentSequentialDiagnostic;
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
     ?? executeBenchmarkPolicyDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -330,6 +344,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           const candidate = await runDocumentProcessDiagnostic();
           if (/^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate)) caseId = candidate;
         } catch {}
+        if (caseId === "dp45") {
+          let stage = "diagnostic-failed";
+          try {
+            const candidate = await runDocumentSequentialDiagnostic();
+            if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+          } catch {}
+          stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL stage=${stage}\n`);
+        }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
         return false;
@@ -388,6 +410,19 @@ async function executeDoctorOrphanDiagnostic() {
 
 async function executeDocumentProcessDiagnostic() {
   return executeSourceOrdinalDiagnostic("document-process-registration.test.ts", 51, "dp");
+}
+
+async function executeDocumentSequentialDiagnostic() {
+  let stage = "diagnostic-failed";
+  await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    testNamePattern: "^registration sequential transport completes two real bootstrap ACK handshakes without multiplexing$",
+    fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
+      stage = DOCUMENT_SEQUENTIAL_STAGES.has(candidate) ? candidate : "diagnostic-failed";
+    },
+  });
+  return stage;
 }
 
 async function executeBenchmarkPolicyDiagnostic() {

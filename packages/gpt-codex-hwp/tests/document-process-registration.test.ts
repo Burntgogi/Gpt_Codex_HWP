@@ -1677,18 +1677,31 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     caseExited: caseExit,
   });
   coordinator.start();
-  const result = await waitForClose(caseChild);
-  await coordinator.beginClosing();
-  await coordinator.seal();
-  const { bootstrapPids } = JSON.parse(result.stdout.trim()) as { bootstrapPids: number[] };
-  assert.deepEqual(retained, bootstrapPids);
-  assert.equal(bootstrapPids.length, 2);
-  for (let index = 0; index < 2; index += 1) {
-    const payload = JSON.parse(await readFile(`${markerPrefix}-${index}.json`, "utf8")) as {
-      payloadPid: number;
-    };
-    assert.equal(payload.payloadPid, bootstrapPids[index]);
-    await waitForPidAbsent(payload.payloadPid);
+  let diagnosticStage = "CLOSE";
+  try {
+    const result = await waitForClose(caseChild);
+    diagnosticStage = "BEGIN_CLOSING";
+    await coordinator.beginClosing();
+    diagnosticStage = "SEAL";
+    await coordinator.seal();
+    diagnosticStage = "PARSE";
+    const { bootstrapPids } = JSON.parse(result.stdout.trim()) as { bootstrapPids: number[] };
+    diagnosticStage = "RETAINED";
+    assert.deepEqual(retained, bootstrapPids);
+    diagnosticStage = "COUNT";
+    assert.equal(bootstrapPids.length, 2);
+    for (let index = 0; index < 2; index += 1) {
+      diagnosticStage = index === 0 ? "READ_0" : "READ_1";
+      const payload = JSON.parse(await readFile(`${markerPrefix}-${index}.json`, "utf8")) as {
+        payloadPid: number;
+      };
+      diagnosticStage = index === 0 ? "PID_0" : "PID_1";
+      assert.equal(payload.payloadPid, bootstrapPids[index]);
+      diagnosticStage = index === 0 ? "GONE_0" : "GONE_1";
+      await waitForPidAbsent(payload.payloadPid);
+    }
+  } catch {
+    throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);
   }
 });
 

@@ -225,6 +225,22 @@ test("macOS Node diagnostic maps document registration failure to one bounded or
   assert.equal(output, "MAC_NODE_TEST_CASE case=dp51 status=failed\n");
 });
 
+test("macOS Node diagnostic emits a bounded sequential-registration stage", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "document-process-registration.test.ts",
+    runDocumentProcessDiagnostic: async () => "dp45",
+    runDocumentSequentialDiagnostic: async () => "begin-closing",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_DOCUMENT_SEQUENTIAL stage=begin-closing\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
+  );
+});
+
 test("macOS Node diagnostic maps benchmark failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
