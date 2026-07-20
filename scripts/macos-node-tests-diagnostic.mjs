@@ -124,6 +124,10 @@ const COMPACT_RUNTIME_STAGES = new Set([
   "startup", "fixture", "source-hash", "temporary-root", "fixture-copy",
   "runtime-build", "provenance", "lockfile", "npm-ci", "npm-ls", "npm-audit",
   "public-runtime-measure", "node-modules-measure", "installed-tree-measure",
+  "node-modules-read", "node-modules-lstat", "node-modules-directory",
+  "node-modules-file", "node-modules-link-target", "node-modules-link-expected",
+  "node-modules-link-path-rejected", "node-modules-link-target-rejected",
+  "node-modules-link-allowed", "node-modules-entry-rejected",
   "installed-summary", "budgets", "mcp", "tool-smoke", "source-verify", "cleanup",
   "passed", "diagnostic-failed",
 ]);

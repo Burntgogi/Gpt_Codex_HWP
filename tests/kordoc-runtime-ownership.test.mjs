@@ -65,12 +65,22 @@ test("Kordoc builder remains compatible without a file-system hook", async () =>
   });
   await writeFile(tarballPath, archive);
   let stage = "BUILD";
+  const diagnosticStages = [];
   try {
-    const built = await buildKordocCoreRuntime({ tarballPath, outputRoot, expectedSource });
+    const built = await buildKordocCoreRuntime({
+      tarballPath,
+      outputRoot,
+      expectedSource,
+      onDiagnosticStage: (value) => {
+        diagnosticStages.push(value);
+        stage = value.toUpperCase().replaceAll("-", "_");
+      },
+    });
     stage = "VERIFY";
     const verified = await verifyKordocCoreRuntime(outputRoot, expectedSource);
     stage = "COMPARE";
     assert.deepEqual(verified, built);
+    assert.equal(diagnosticStages.at(-1), "verify");
   } catch {
     throw new Error(`KORDOC_DEFAULT_${stage}`);
   } finally {

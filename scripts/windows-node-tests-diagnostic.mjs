@@ -25,10 +25,16 @@ const KORDOC_OWNERSHIP_CASES = Object.freeze([
   id: `ko${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
 })));
-const KORDOC_DEFAULT_STAGES = new Set(["build", "verify", "compare", "cleanup"]);
+const KORDOC_DEFAULT_STAGES = new Set([
+  "output-check", "input-validate", "parent-create", "output-create", "file-write",
+  "package-write", "file-records", "provenance-write", "verify", "compare", "cleanup",
+]);
 const KORDOC_DEFAULT_CODES = Object.freeze([
-  "KORDOC_DEFAULT_BUILD", "KORDOC_DEFAULT_VERIFY",
-  "KORDOC_DEFAULT_COMPARE", "KORDOC_DEFAULT_CLEANUP",
+  "KORDOC_DEFAULT_OUTPUT_CHECK", "KORDOC_DEFAULT_INPUT_VALIDATE",
+  "KORDOC_DEFAULT_PARENT_CREATE", "KORDOC_DEFAULT_OUTPUT_CREATE",
+  "KORDOC_DEFAULT_FILE_WRITE", "KORDOC_DEFAULT_PACKAGE_WRITE",
+  "KORDOC_DEFAULT_FILE_RECORDS", "KORDOC_DEFAULT_PROVENANCE_WRITE",
+  "KORDOC_DEFAULT_VERIFY", "KORDOC_DEFAULT_COMPARE", "KORDOC_DEFAULT_CLEANUP",
 ]);
 
 export async function runWindowsNodeTestsDiagnostic(options = {}) {
@@ -100,7 +106,7 @@ async function executeKordocDefaultDiagnostic() {
     testNamePattern: KORDOC_OWNERSHIP_CASES[1].pattern,
     fixedDiagnostics: KORDOC_DEFAULT_CODES,
     onFixedDiagnostic: (code) => {
-      const candidate = code.slice("KORDOC_DEFAULT_".length).toLowerCase();
+      const candidate = code.slice("KORDOC_DEFAULT_".length).toLowerCase().replaceAll("_", "-");
       stage = KORDOC_DEFAULT_STAGES.has(candidate) ? candidate : "diagnostic-failed";
     },
   });

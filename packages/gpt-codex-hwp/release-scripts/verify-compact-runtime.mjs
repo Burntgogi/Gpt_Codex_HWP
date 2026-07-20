@@ -271,35 +271,55 @@ export function assertMcpStderr(stderr) {
   throw error;
 }
 
-async function measureTree(root, collectedEntries = undefined, pathRoot = root) {
+async function measureTree(root, collectedEntries = undefined, pathRoot = root, options = {}) {
   let bytes = 0;
   let canonicalExpectedKordocTarget;
+  const stagePrefix = typeof options.stagePrefix === "string" ? options.stagePrefix : "";
+  const reportStage = (stage) => {
+    if (stagePrefix.length === 0 || typeof options.onDiagnosticStage !== "function") return;
+    try { options.onDiagnosticStage(`${stagePrefix}-${stage}`); } catch {}
+  };
   async function expectedKordocTarget() {
+    reportStage("link-expected");
     canonicalExpectedKordocTarget ??= await realpath(join(pathRoot, "vendor", "kordoc-core"));
     return canonicalExpectedKordocTarget;
   }
   async function visit(directory) {
+    reportStage("read");
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
       const absolute = join(directory, entry.name);
+      reportStage("lstat");
       const info = await lstat(absolute);
       if (info.isSymbolicLink()) {
         const path = relative(pathRoot, absolute).split(sep).join("/");
+        reportStage("link-target");
         const target = await realpath(absolute);
-        const allowedLocalKordoc = isAllowedKordocLink({
-          linkPath: path,
-          canonicalTarget: target,
-          canonicalExpectedTarget: await expectedKordocTarget(),
-        });
-        if (!allowedLocalKordoc) throw new Error(`Installed runtime contains an unexpected symbolic link: ${absolute}`);
+        const expectedTarget = await expectedKordocTarget();
+        if (comparablePath(path, process.platform) !== comparablePath("node_modules/kordoc", process.platform)) {
+          reportStage("link-path-rejected");
+          throw new Error(`Installed runtime contains an unexpected symbolic link: ${absolute}`);
+        }
+        if (comparablePath(target, process.platform) !== comparablePath(expectedTarget, process.platform)) {
+          reportStage("link-target-rejected");
+          throw new Error(`Installed runtime contains an unexpected symbolic link: ${absolute}`);
+        }
+        reportStage("link-allowed");
         collectedEntries?.linkPaths.push(path);
         continue;
       }
-      if (info.isDirectory()) await visit(absolute);
+      if (info.isDirectory()) {
+        reportStage("directory");
+        await visit(absolute);
+      }
       else if (info.isFile()) {
+        reportStage("file");
         bytes += info.size;
         collectedEntries?.filePaths.push(relative(pathRoot, absolute).split(sep).join("/"));
-      } else throw new Error(`Unsupported installed entry: ${absolute}`);
+      } else {
+        reportStage("entry-rejected");
+        throw new Error(`Unsupported installed entry: ${absolute}`);
+      }
     }
   }
   await visit(root);
@@ -316,6 +336,10 @@ function requireSuccess(name, result) {
     throw error;
   }
   return result.structuredContent ?? {};
+}
+
+export async function measureTreeForTest(root, options = {}) {
+  return measureTree(root, options.collectedEntries, options.pathRoot ?? root, options);
 }
 
 export async function verifyReadOnlyHwpTools({
@@ -847,7 +871,12 @@ export async function verifyCompactRuntime({
     const audit = parseNpmAuditResult(auditRun);
     const installedEntries = { filePaths: [], linkPaths: [] };
     onDiagnosticStage("node-modules-measure");
-    const nodeModulesBytes = await measureTree(join(runtimeRoot, "node_modules"), installedEntries, runtimeRoot);
+    const nodeModulesBytes = await measureTree(
+      join(runtimeRoot, "node_modules"),
+      installedEntries,
+      runtimeRoot,
+      { onDiagnosticStage, stagePrefix: "node-modules" },
+    );
     onDiagnosticStage("installed-tree-measure");
     const installedBytes = await measureTree(runtimeRoot);
     onDiagnosticStage("installed-summary");

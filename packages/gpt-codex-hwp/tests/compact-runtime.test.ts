@@ -29,6 +29,7 @@ import {
 } from "../release-scripts/compact-policy.mjs";
 import {
   isAllowedKordocLink,
+  measureTreeForTest,
   parseCliArguments,
   parseNpmLsResult,
   resolveNpmInvocation,
@@ -259,6 +260,29 @@ test("installed runtime npm invocation resolver is injectable without environmen
       "--omit=dev",
     ],
   });
+});
+
+test("compact runtime tree measurement emits only fixed diagnostic stages", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-measure-tree-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "nested"));
+  await writeFile(join(root, "nested", "file.txt"), "fixed");
+  const stages: string[] = [];
+
+  const bytes = await measureTreeForTest(root, {
+    stagePrefix: "node-modules",
+    onDiagnosticStage: (stage: string) => stages.push(stage),
+  });
+
+  assert.equal(bytes, 5);
+  assert.deepEqual(stages, [
+    "node-modules-read",
+    "node-modules-lstat",
+    "node-modules-directory",
+    "node-modules-read",
+    "node-modules-lstat",
+    "node-modules-file",
+  ]);
 });
 
 test("installed runtime child timeout terminates the subprocess", { timeout: 5_000 }, async () => {

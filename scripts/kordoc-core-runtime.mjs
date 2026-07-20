@@ -179,45 +179,66 @@ export async function buildKordocCoreRuntime({
   outputRoot,
   expectedSource = KORDOC_SOURCE,
   fileSystem = {},
+  onDiagnosticStage = () => {},
 }) {
+  const reportStage = (stage) => {
+    try { onDiagnosticStage(stage); } catch {}
+  };
   const tarball = resolve(tarballPath);
   const output = resolve(outputRoot);
   const createOutput = fileSystem.createOutput ?? createOutputDirectory;
   if (typeof createOutput !== "function") {
     throw new Error("Kordoc fileSystem.createOutput must be a function.");
   }
+  reportStage("output-check");
   try {
     await lstat(output);
     throw new Error(`Output already exists: ${output}`);
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
+  reportStage("input-validate");
   const { archiveIntegrity, files, sourcePackage } = await validatedInputs(tarball, expectedSource);
 
   let ownsOutput = false;
   try {
+    reportStage("parent-create");
     await mkdir(dirname(output), { recursive: true });
+    reportStage("output-create");
     await createOutput(output);
     ownsOutput = true;
+    reportStage("file-write");
     for (const [path, bytes] of files) {
       if (path === "package.json") continue;
       const destination = join(output, ...path.split("/"));
       await mkdir(dirname(destination), { recursive: true });
       await writeFile(destination, bytes, { flag: "wx" });
     }
+    reportStage("package-write");
     await writeFile(join(output, "package.json"), json(kordocPackageSubset(sourcePackage)), { flag: "wx" });
+    reportStage("file-records");
+    const fileRecords = await kordocFileRecords(output);
     const provenance = {
       schemaVersion: 2,
       generatorVersion: KORDOC_GENERATOR_VERSION,
       source: expectedSource,
       archive: { sha512: archiveIntegrity },
-      files: await kordocFileRecords(output),
+      files: fileRecords,
     };
+    reportStage("provenance-write");
     await writeFile(join(output, "PROVENANCE.json"), json(provenance), { flag: "wx" });
+    reportStage("verify");
     await verifyKordocCoreRuntime(output, expectedSource);
     return provenance;
   } catch (error) {
-    if (ownsOutput) await rm(output, { recursive: true, force: true });
+    if (ownsOutput) {
+      try {
+        await rm(output, { recursive: true, force: true });
+      } catch (cleanupError) {
+        reportStage("cleanup");
+        throw cleanupError;
+      }
+    }
     throw error;
   }
 }
