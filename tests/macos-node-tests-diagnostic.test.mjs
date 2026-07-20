@@ -214,6 +214,22 @@ test("macOS Node diagnostic emits one bounded compact-runtime stage for cr36", a
   );
 });
 
+test("macOS compact-runtime diagnostic accepts the fixed installed-tree link stage", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "compact-runtime.test.ts",
+    runCompactRuntimeCase: async (record) => record.id !== "cr36",
+    runCompactRuntimeDiagnostic: async () => "installed-tree-link-allowed",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_COMPACT_RUNTIME stage=installed-tree-link-allowed\nMAC_NODE_TEST_CASE case=cr36 status=failed\n",
+  );
+});
+
 test("macOS compact-runtime diagnostic redacts invalid stage values", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({

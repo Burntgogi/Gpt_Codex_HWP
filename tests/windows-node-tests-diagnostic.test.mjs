@@ -7,7 +7,7 @@ test("Windows Node diagnostic reports only the fixed failed repository filename"
   let output = "";
   let sourceCalls = 0;
   const passed = await runWindowsNodeTestsDiagnostic({
-    runRepositoryFile: async (file) => file !== "release-verify.test.mjs",
+    runRepositoryFile: async (file) => file !== "governance-docs.test.mjs",
     runSourceDiagnostic: async () => { sourceCalls += 1; return true; },
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
@@ -16,8 +16,20 @@ test("Windows Node diagnostic reports only the fixed failed repository filename"
   assert.equal(sourceCalls, 0);
   assert.equal(
     output,
-    "WINDOWS_REPOSITORY_TEST_FILE file=release-verify.test.mjs status=failed\n",
+    "WINDOWS_REPOSITORY_TEST_FILE file=governance-docs.test.mjs status=failed\n",
   );
+});
+
+test("Windows Node diagnostic narrows release verification to one fixed case id", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "release-verify.test.mjs",
+    runReleaseVerifyCase: async (record) => record.id !== "rv17",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=rv17 status=failed\n");
 });
 
 test("Windows Node diagnostic narrows the Kordoc repository failure to one fixed case id", async () => {

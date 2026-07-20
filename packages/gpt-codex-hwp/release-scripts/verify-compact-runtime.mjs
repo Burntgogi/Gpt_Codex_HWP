@@ -938,7 +938,12 @@ export async function verifyCompactRuntime({
       { allowedBinLinks, onDiagnosticStage, stagePrefix: "node-modules" },
     );
     onDiagnosticStage("installed-tree-measure");
-    const installedBytes = await measureTree(runtimeRoot);
+    const installedBytes = await measureTree(
+      runtimeRoot,
+      undefined,
+      runtimeRoot,
+      { allowedBinLinks, onDiagnosticStage, stagePrefix: "installed-tree" },
+    );
     onDiagnosticStage("installed-summary");
     const installedSummary = summarizeInstalledEntries(installedEntries);
     if (installedSummary.excludedPaths.length > 0) {

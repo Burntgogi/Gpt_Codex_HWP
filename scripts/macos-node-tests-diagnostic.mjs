@@ -128,6 +128,10 @@ const COMPACT_RUNTIME_STAGES = new Set([
   "node-modules-file", "node-modules-link-target", "node-modules-link-expected",
   "node-modules-link-path-rejected", "node-modules-link-target-rejected",
   "node-modules-link-allowed", "node-modules-entry-rejected",
+  "installed-tree-read", "installed-tree-lstat", "installed-tree-directory",
+  "installed-tree-file", "installed-tree-link-target", "installed-tree-link-expected",
+  "installed-tree-link-path-rejected", "installed-tree-link-target-rejected",
+  "installed-tree-link-allowed", "installed-tree-entry-rejected",
   "installed-summary", "budgets", "mcp", "tool-smoke", "source-verify", "cleanup",
   "passed", "diagnostic-failed",
 ]);

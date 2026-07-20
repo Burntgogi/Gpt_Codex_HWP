@@ -25,6 +25,43 @@ const KORDOC_OWNERSHIP_CASES = Object.freeze([
   id: `ko${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
 })));
+const RELEASE_VERIFY_CASES = Object.freeze([
+  "release subprocess environments scrub Git semantics and Node test context",
+  "release subprocess environments preserve exact null-prototype record keys",
+  "release verification binds schema 2 receipts to independent source identity",
+  "release source identity ignores replacement refs and hostile Git selectors",
+  "release verification package scripts use the exact public entry points",
+  "release verification runs the exact required stage contract in order",
+  "release stages install source dependencies and keep temp nine-tools as runtime authority",
+  "release artifacts stage owns a fresh output, verifies it independently, and cleans it",
+  "release artifacts stage rejects missing receipts and preserves owned temp evidence",
+  "release artifact receipts must match independent identity, not only each other",
+  "release artifacts stage preserves late temp evidence after its deadline",
+  "release artifacts stage preserves a real temp after an expired deadline",
+  "release temp cleanup quarantines first and never deletes a swapped replacement",
+  "release temp cleanup preserves a file swapped after quarantine",
+  "release temp cleanup follows platform path case semantics",
+  "release temp cleanup accepts a canonical ancestor alias",
+  "release artifact staging canonicalizes a temporary-directory ancestor alias",
+  "release verification redacts command output, document data, paths, and environment",
+  "release verification converts runner exceptions to a redacted failure",
+  "release verification CLI emits only the receipt and exits nonzero on failure",
+  "release verification CLI redacts unexpected failures and exits nonzero",
+  "stage command execution is fail-closed and never returns process output",
+  "composite stage commands execute sequentially",
+  "composite stage commands fail fast before later commands",
+  "composite stage fails closed when its final verification command fails",
+  "composite stage shares one aggregate output bound across commands",
+  "composite stage shares one aggregate timeout across commands",
+  "stage command execution enforces output and timeout bounds",
+  "Windows process-tree termination bounds taskkill and falls back",
+  "POSIX process-tree termination preserves TERM-delay-KILL ordering",
+  "stage command requires one passed and zero skipped focused test",
+  "actual npm-wrapped real-HWP and HWPX stages satisfy their evidence oracles",
+].map((pattern, index) => Object.freeze({
+  id: `rv${String(index + 1).padStart(2, "0")}`,
+  pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+})));
 const KORDOC_DEFAULT_STAGES = new Set([
   "output-check", "input-validate", "parent-create", "output-create", "file-write",
   "package-write", "file-records", "provenance-write", "verify", "compare", "cleanup",
@@ -49,6 +86,11 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     }));
   const runKordocDefaultDiagnostic = options.runKordocDefaultDiagnostic
     ?? executeKordocDefaultDiagnostic;
+  const runReleaseVerifyCase = options.runReleaseVerifyCase
+    ?? ((record) => executeBoundedNodeTestFile("release-verify.test.mjs", {
+      repository: true,
+      testNamePattern: record.pattern,
+    }));
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
 
   for (const file of REPOSITORY_TEST_FILES) {
@@ -74,6 +116,20 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
           }
         }
         stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=aggregate status=failed\n");
+        setExitCode(1);
+        return false;
+      }
+      if (file === "release-verify.test.mjs") {
+        for (const record of RELEASE_VERIFY_CASES) {
+          let casePassed = false;
+          try { casePassed = await runReleaseVerifyCase(record) === true; } catch { casePassed = false; }
+          if (!casePassed) {
+            stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
+            setExitCode(1);
+            return false;
+          }
+        }
+        stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=release-aggregate status=failed\n");
         setExitCode(1);
         return false;
       }
