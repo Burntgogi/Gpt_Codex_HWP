@@ -357,6 +357,50 @@ test("doctor timeout still terminates the tree after root exit when close was no
   assert.equal(result.code, null);
 });
 
+test("doctor normal POSIX close verifies detached process-group cleanup", async () => {
+  for (const treeGone of [true, false]) {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      exitCode: number | null;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      unref(): void;
+    };
+    child.pid = 4390 + Number(treeGone);
+    child.exitCode = 0;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    let unrefCalls = 0;
+    child.unref = () => { unrefCalls += 1; };
+    const terminationCalls: number[] = [];
+
+    const execution = doctorModule.executeBoundedCommand(
+      commandSpecification(500),
+      process.cwd(),
+      {
+        platform: "linux",
+        spawnProcess: () => {
+          setImmediate(() => child.emit("close", 0, null));
+          return child;
+        },
+        terminateProcessTree: async (pid: number) => {
+          terminationCalls.push(pid);
+          return treeGone;
+        },
+      },
+    );
+    const result = await execution;
+
+    assert.deepEqual(terminationCalls, [child.pid]);
+    assert.equal(result.code, 0);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.terminationFailed, !treeGone);
+    assert.equal(unrefCalls, treeGone ? 0 : 1);
+    assert.equal(child.stdout.destroyed, !treeGone);
+    assert.equal(child.stderr.destroyed, !treeGone);
+  }
+});
+
 test("Windows doctor gate sends no command before Job readiness and verifies cleanup on normal close", async () => {
   const child = fakeWindowsRunner(4444);
   const input: Buffer[] = [];
@@ -596,7 +640,7 @@ test("doctor timeout terminates a grandchild after its parent exits but inherite
     descendantPid = Number.parseInt(String(result.stdout).trim(), 10);
 
     diagnosticStage = "TIMED_OUT";
-    assert.equal(result.timedOut, true);
+    assert.equal(result.timedOut, process.platform === "linux");
     diagnosticStage = "TERMINATION";
     assert.equal(result.terminationFailed, false);
     diagnosticStage = "ELAPSED";

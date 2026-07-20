@@ -508,6 +508,7 @@ export function executeBoundedCommand(
     const terminateProcessTree = dependencies.terminateProcessTree
       ?? ((pid: number) => terminateDocumentProcessTreeByPid(pid));
     let settled = false;
+    let terminalCleanupStarted = false;
     let timedOut = false;
     let truncated = false;
     let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
@@ -573,16 +574,31 @@ export function executeBoundedCommand(
       stderr: stderr.toString("utf8"),
     }));
     child.once("close", (code, signal) => {
-      if (timedOut) return;
-      finish({
-      code,
-      signal,
-      timedOut,
-      truncated,
-      terminationFailed: false,
-      stdout: stdout.toString("utf8"),
-      stderr: stderr.toString("utf8"),
-      });
+      if (timedOut || settled || terminalCleanupStarted) return;
+      terminalCleanupStarted = true;
+      clearTimeout(timer);
+      void (async () => {
+        let treeGone = false;
+        try {
+          treeGone = child.pid === undefined ? true : await terminateProcessTree(child.pid);
+        } catch {
+          treeGone = false;
+        }
+        if (!treeGone) {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          try { child.unref(); } catch {}
+        }
+        finish({
+          code,
+          signal,
+          timedOut: false,
+          truncated,
+          terminationFailed: !treeGone,
+          stdout: stdout.toString("utf8"),
+          stderr: stderr.toString("utf8"),
+        });
+      })();
     });
   });
 }
