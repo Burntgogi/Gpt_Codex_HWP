@@ -184,6 +184,18 @@ test("macOS Node diagnostic narrows a compact-runtime aggregate failure to one f
   assert.equal(output, "MAC_NODE_TEST_CASE case=cr03 status=failed\n");
 });
 
+test("macOS Node diagnostic narrows a doctor aggregate failure to one fixed case id", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "doctor.test.ts",
+    runDoctorCase: async (record) => record.id !== "dc18",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=dc18 status=failed\n");
+});
+
 test("macOS Node diagnostic reports the fixed aggregate id when every compact-runtime case passes alone", async () => {
   let output = "";
   let cases = 0;

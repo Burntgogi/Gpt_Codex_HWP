@@ -114,6 +114,33 @@ const COMPACT_RUNTIME_CASES = Object.freeze([
   id: `cr${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
 })));
+const DOCTOR_CASES = Object.freeze([
+  "doctor contract reports safe required and optional capability results",
+  "doctor contract treats a missing Python runtime as an optional capability",
+  "doctor contract treats Python older than 3.10 as optional unavailable",
+  "doctor contract keeps optional capabilities separate from required failures",
+  "doctor contract maps hostile probe output to stable codes without leaking it",
+  "doctor contract rejects an impossible shared Kordoc verifier result",
+  "doctor maps shared Kordoc verifier failures to a stable non-leaking code",
+  "doctor registration probe rejects wrong missing duplicate extra and throwing registrations",
+  "doctor registration probe lists the actual private in-process MCP registry",
+  "doctor runtime access rejects linked file and directory ancestors without reading outside bytes",
+  "doctor bounded command injects detached group termination and fails closed when it remains alive",
+  "doctor timeout still terminates the tree after root exit when close was not observed",
+  "Windows doctor gate sends no command before Job readiness and verifies cleanup on normal close",
+  "Windows doctor request stdin retains owner-lifetime error handling after its end callback",
+  "Windows doctor supervisor failure terminates the gated runner by its exact child handle",
+  "Windows doctor gate never dispatches through a forced cleanup-only tracker",
+  "Windows doctor gate rejects abnormal READY without dispatch and still finalizes the supervisor",
+  "doctor bounded command removes a real descendant after timeout",
+  "doctor timeout terminates a grandchild after its parent exits but inherited pipes remain open",
+  "Windows doctor Job removes a grandchild after the command parent exits",
+  "doctor contract rejects unsupported arguments and emits JSON only in json mode",
+].map((pattern, index) => Object.freeze({
+  id: `dc${String(index + 1).padStart(2, "0")}`,
+  pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+  allowAllSkipped: (index >= 12 && index <= 16) || index === 19,
+})));
 const SVG_ASSET_BOUNDARIES = new Set([
   "root", "handler-import", "sharp-import", "handler", "handler-error",
   "handler-warning", "svg-read", "svg-content", "png-read", "png-magic",
@@ -176,6 +203,17 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testNamePattern: record.pattern,
+    },
+  ));
+  const runDoctorCase = options.runDoctorCase ?? ((record) => executeTestFile(
+    "doctor.test.ts",
+    {
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      testNamePattern: record.pattern,
+      allowAllSkipped: record.allowAllSkipped,
     },
   ));
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -247,6 +285,20 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           }
         }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=aggregate status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
+      if (file === "doctor.test.ts") {
+        for (const record of DOCTOR_CASES) {
+          let casePassed = false;
+          try { casePassed = await runDoctorCase(record) === true; } catch { casePassed = false; }
+          if (!casePassed) {
+            stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${record.id} status=failed\n`);
+            setExitCode(1);
+            return false;
+          }
+        }
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=doctor-aggregate status=failed\n`);
         setExitCode(1);
         return false;
       }

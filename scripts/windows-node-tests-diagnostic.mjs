@@ -73,6 +73,10 @@ const KORDOC_DEFAULT_CODES = Object.freeze([
   "KORDOC_DEFAULT_FILE_RECORDS", "KORDOC_DEFAULT_PROVENANCE_WRITE",
   "KORDOC_DEFAULT_VERIFY", "KORDOC_DEFAULT_COMPARE", "KORDOC_DEFAULT_CLEANUP",
 ]);
+const RELEASE_ORACLE_STAGES = new Set(["real-hwp", "hwpx-roundtrip"]);
+const RELEASE_ORACLE_CODES = Object.freeze([
+  "RELEASE_ORACLE_REAL_HWP", "RELEASE_ORACLE_HWPX_ROUNDTRIP",
+]);
 
 export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -91,6 +95,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
       repository: true,
       testNamePattern: record.pattern,
     }));
+  const runReleaseOracleDiagnostic = options.runReleaseOracleDiagnostic
+    ?? executeReleaseOracleDiagnostic;
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
 
   for (const file of REPOSITORY_TEST_FILES) {
@@ -124,6 +130,14 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
           let casePassed = false;
           try { casePassed = await runReleaseVerifyCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
+            if (record.id === "rv32") {
+              let stage = "diagnostic-failed";
+              try {
+                const candidate = await runReleaseOracleDiagnostic();
+                if (RELEASE_ORACLE_STAGES.has(candidate)) stage = candidate;
+              } catch {}
+              stdout.write(`WINDOWS_RELEASE_ORACLE stage=${stage}\n`);
+            }
             stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;
@@ -164,6 +178,20 @@ async function executeKordocDefaultDiagnostic() {
     onFixedDiagnostic: (code) => {
       const candidate = code.slice("KORDOC_DEFAULT_".length).toLowerCase().replaceAll("_", "-");
       stage = KORDOC_DEFAULT_STAGES.has(candidate) ? candidate : "diagnostic-failed";
+    },
+  });
+  return stage;
+}
+
+async function executeReleaseOracleDiagnostic() {
+  let stage = "diagnostic-failed";
+  await executeBoundedNodeTestFile("release-verify.test.mjs", {
+    repository: true,
+    testNamePattern: RELEASE_VERIFY_CASES[31].pattern,
+    fixedDiagnostics: RELEASE_ORACLE_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("RELEASE_ORACLE_".length).toLowerCase().replaceAll("_", "-");
+      stage = RELEASE_ORACLE_STAGES.has(candidate) ? candidate : "diagnostic-failed";
     },
   });
   return stage;

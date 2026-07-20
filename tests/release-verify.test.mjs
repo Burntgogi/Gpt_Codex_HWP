@@ -1235,12 +1235,17 @@ test("actual npm-wrapped real-HWP and HWPX stages satisfy their evidence oracles
   assert.deepEqual(focused.map((stage) => stage.name), ["real-hwp", "hwpx-roundtrip"]);
 
   for (const stage of focused) {
-    const result = await runStageCommand(stage, {
-      timeoutMs: 30_000,
-      maxOutputBytes: 1024 * 1024,
-    });
-    assert.deepEqual(result, { status: "passed" });
-    assert.deepEqual(Object.keys(result), ["status"]);
+    try {
+      const result = await runStageCommand(stage, {
+        timeoutMs: 30_000,
+        maxOutputBytes: 1024 * 1024,
+      });
+      assert.deepEqual(result, { status: "passed" });
+      assert.deepEqual(Object.keys(result), ["status"]);
+    } catch {
+      const code = stage.name === "real-hwp" ? "REAL_HWP" : "HWPX_ROUNDTRIP";
+      throw new Error(`RELEASE_ORACLE_${code}`);
+    }
   }
 });
 

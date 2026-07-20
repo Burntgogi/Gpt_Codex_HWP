@@ -32,6 +32,23 @@ test("Windows Node diagnostic narrows release verification to one fixed case id"
   assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=rv17 status=failed\n");
 });
 
+test("Windows Node diagnostic emits a bounded real-document release stage", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "release-verify.test.mjs",
+    runReleaseVerifyCase: async (record) => record.id !== "rv32",
+    runReleaseOracleDiagnostic: async () => "hwpx-roundtrip",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_RELEASE_ORACLE stage=hwpx-roundtrip\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=rv32 status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic narrows the Kordoc repository failure to one fixed case id", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({
