@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 import { buildKordocCoreRuntime, verifyKordocCoreRuntime } from "../scripts/kordoc-core-runtime.mjs";
+import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
 test("Kordoc output creation race never deletes an unowned sentinel", async () => {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-kordoc-ownership-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-kordoc-ownership-" });
   const tarballPath = join(temporaryRoot, "kordoc.tgz");
   const outputRoot = join(temporaryRoot, "vendor-output");
   const sentinelPath = join(outputRoot, "unowned-sentinel.txt");
@@ -53,7 +53,7 @@ test("Kordoc output creation race never deletes an unowned sentinel", async () =
 });
 
 test("Kordoc builder remains compatible without a file-system hook", async () => {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-kordoc-default-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-kordoc-default-" });
   const tarballPath = join(temporaryRoot, "kordoc.tgz");
   const outputRoot = join(temporaryRoot, "vendor-output");
   const archive = syntheticKordocArchive();
@@ -93,7 +93,7 @@ test("Kordoc builder remains compatible without a file-system hook", async () =>
 });
 
 test("Kordoc verifier bounds files and empty directories in one streamed entry budget", async (t) => {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-kordoc-entry-budget-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-kordoc-entry-budget-" });
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const vendor = join(temporaryRoot, "vendor");
   await cp(join(ROOT, "packages", "gpt-codex-hwp", "vendor", "kordoc-core"), vendor, {
@@ -111,7 +111,7 @@ test("Kordoc verifier bounds files and empty directories in one streamed entry b
 });
 
 test("shared Kordoc verifier rejects every pinned provenance and tree-record deviation", async (t) => {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-kordoc-provenance-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-kordoc-provenance-" });
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const vendor = join(temporaryRoot, "vendor");
   await cp(join(ROOT, "packages", "gpt-codex-hwp", "vendor", "kordoc-core"), vendor, {

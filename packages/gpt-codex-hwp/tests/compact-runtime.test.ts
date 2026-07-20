@@ -28,6 +28,7 @@ import {
   summarizeInstalledEntries,
 } from "../release-scripts/compact-policy.mjs";
 import {
+  expectedCompactBinLinks,
   isAllowedKordocLink,
   measureTreeForTest,
   parseCliArguments,
@@ -283,6 +284,59 @@ test("compact runtime tree measurement emits only fixed diagnostic stages", asyn
     "node-modules-lstat",
     "node-modules-file",
   ]);
+});
+
+test("compact runtime derives only package-owned bin links from the lockfile", () => {
+  const runtimeRoot = resolve("runtime-root");
+  const links = expectedCompactBinLinks({
+    packages: {
+      "node_modules/markdown-it": { bin: { "markdown-it": "bin/markdown-it.mjs" } },
+      "node_modules/parent/node_modules/which": { bin: { "node-which": "bin/node-which" } },
+      "node_modules/unsafe": { bin: { "../escape": "../escape.js", safe: "../escape.js" } },
+      "../outside": { bin: { outside: "bin/outside.js" } },
+    },
+  }, runtimeRoot);
+
+  assert.deepEqual([...links.keys()], [
+    "node_modules/.bin/markdown-it",
+    "node_modules/parent/node_modules/.bin/node-which",
+  ]);
+  assert.deepEqual(links.get("node_modules/.bin/markdown-it"), [
+    resolve(runtimeRoot, "node_modules", "markdown-it", "bin", "markdown-it.mjs"),
+  ]);
+});
+
+test("compact runtime accepts only a bin link anchored to its package target", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bin-link-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const target = join(root, "node_modules", "owned", "bin", "tool.js");
+  const link = join(root, "node_modules", ".bin", "owned-tool");
+  const outside = join(root, "outside.js");
+  await mkdir(dirname(target), { recursive: true });
+  await mkdir(dirname(link), { recursive: true });
+  await writeFile(target, "owned");
+  await writeFile(outside, "outside");
+  try {
+    await symlink(target, link, "file");
+  } catch (error) {
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException)?.code ?? "")) {
+      t.skip("file symlinks are unavailable");
+      return;
+    }
+    throw error;
+  }
+  const options = {
+    pathRoot: root,
+    allowedBinLinks: new Map([["node_modules/.bin/owned-tool", [target]]]),
+  };
+
+  assert.equal(await measureTreeForTest(join(root, "node_modules"), options), 5);
+  await rm(link, { force: true });
+  await symlink(outside, link, "file");
+  await assert.rejects(
+    measureTreeForTest(join(root, "node_modules"), options),
+    /unexpected symbolic link/iu,
+  );
 });
 
 test("installed runtime child timeout terminates the subprocess", { timeout: 5_000 }, async () => {

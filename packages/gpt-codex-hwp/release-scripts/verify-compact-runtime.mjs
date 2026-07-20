@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { lstat, open, readFile, readdir, realpath, rm } from "node:fs/promises";
-import { dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -72,6 +72,50 @@ export function resolveNpmInvocation(args, options = {}) {
     ? win32.join(win32.dirname(nodeExecPath), "node_modules", "npm", "bin", "npm-cli.js")
     : posix.resolve(posix.dirname(nodeExecPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
   return { command: nodeExecPath, args: [npmCliPath, ...args] };
+}
+
+export function expectedCompactBinLinks(lock, runtimeRoot) {
+  const links = new Map();
+  if (lock === null || typeof lock !== "object" || Array.isArray(lock)
+    || lock.packages === null || typeof lock.packages !== "object" || Array.isArray(lock.packages)) {
+    return links;
+  }
+  for (const [packagePath, record] of Object.entries(lock.packages)) {
+    if (!safeLockPackagePath(packagePath)
+      || record === null || typeof record !== "object" || Array.isArray(record)
+      || record.bin === null || typeof record.bin !== "object" || Array.isArray(record.bin)) continue;
+    const marker = packagePath.lastIndexOf("node_modules/");
+    const nodeModulesPath = packagePath.slice(0, marker + "node_modules".length);
+    const packageRoot = resolve(runtimeRoot, ...packagePath.split("/"));
+    for (const [name, targetPath] of Object.entries(record.bin)) {
+      if (!safeBinName(name) || !safeBinTarget(targetPath)) continue;
+      const target = resolve(packageRoot, ...targetPath.split("/"));
+      const suffix = relative(packageRoot, target);
+      if (suffix === "" || isAbsolute(suffix) || suffix === ".." || suffix.startsWith(`..${sep}`)) continue;
+      const linkPath = `${nodeModulesPath}/.bin/${name}`;
+      const targets = links.get(linkPath) ?? [];
+      targets.push(target);
+      links.set(linkPath, targets);
+    }
+  }
+  return links;
+}
+
+function safeLockPackagePath(value) {
+  return typeof value === "string" && value.startsWith("node_modules/")
+    && !value.includes("\\") && !value.startsWith("/")
+    && value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function safeBinName(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 128
+    && !value.includes("/") && !value.includes("\\") && value !== "." && value !== "..";
+}
+
+function safeBinTarget(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 512
+    && !value.includes("\\") && !value.startsWith("/")
+    && value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
 export async function runCommand(command, args, cwd, options = {}) {
@@ -295,12 +339,19 @@ async function measureTree(root, collectedEntries = undefined, pathRoot = root, 
         const path = relative(pathRoot, absolute).split(sep).join("/");
         reportStage("link-target");
         const target = await realpath(absolute);
-        const expectedTarget = await expectedKordocTarget();
-        if (comparablePath(path, process.platform) !== comparablePath("node_modules/kordoc", process.platform)) {
+        const isKordocPath = comparablePath(path, process.platform)
+          === comparablePath("node_modules/kordoc", process.platform);
+        const expectedBinTargets = options.allowedBinLinks?.get(path) ?? [];
+        if (!isKordocPath && expectedBinTargets.length === 0) {
           reportStage("link-path-rejected");
           throw new Error(`Installed runtime contains an unexpected symbolic link: ${absolute}`);
         }
-        if (comparablePath(target, process.platform) !== comparablePath(expectedTarget, process.platform)) {
+        reportStage("link-expected");
+        const expectedTargets = isKordocPath
+          ? [await expectedKordocTarget()]
+          : await canonicalExistingTargets(expectedBinTargets);
+        if (!expectedTargets.some((expectedTarget) =>
+          comparablePath(target, process.platform) === comparablePath(expectedTarget, process.platform))) {
           reportStage("link-target-rejected");
           throw new Error(`Installed runtime contains an unexpected symbolic link: ${absolute}`);
         }
@@ -336,6 +387,14 @@ function requireSuccess(name, result) {
     throw error;
   }
   return result.structuredContent ?? {};
+}
+
+async function canonicalExistingTargets(targets) {
+  const canonical = [];
+  for (const target of targets) {
+    try { canonical.push(await realpath(target)); } catch {}
+  }
+  return canonical;
 }
 
 export async function measureTreeForTest(root, options = {}) {
@@ -853,6 +912,7 @@ export async function verifyCompactRuntime({
     onDiagnosticStage("lockfile");
     const lock = JSON.parse(await readFile(join(runtimeRoot, "package-lock.json"), "utf8"));
     assertCompactLockfile(lock);
+    const allowedBinLinks = expectedCompactBinLinks(lock, runtimeRoot);
     onDiagnosticStage("npm-ci");
     await runNpm(["ci", "--omit=dev", "--ignore-scripts"], runtimeRoot);
     onDiagnosticStage("npm-ls");
@@ -875,7 +935,7 @@ export async function verifyCompactRuntime({
       join(runtimeRoot, "node_modules"),
       installedEntries,
       runtimeRoot,
-      { onDiagnosticStage, stagePrefix: "node-modules" },
+      { allowedBinLinks, onDiagnosticStage, stagePrefix: "node-modules" },
     );
     onDiagnosticStage("installed-tree-measure");
     const installedBytes = await measureTree(runtimeRoot);
