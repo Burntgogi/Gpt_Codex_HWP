@@ -110,6 +110,32 @@ test("Windows Node diagnostic distinguishes a passing public-content rerun", asy
   );
 });
 
+test("Windows Node diagnostic preserves the first public-content receipt without rerunning", async () => {
+  let output = "";
+  let reruns = 0;
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async () => true,
+    runPublicContentFile: async () => ({
+      passed: false,
+      caseId: "pc23",
+      stage: "commit-header",
+    }),
+    runPublicContentDiagnostic: async () => {
+      reruns += 1;
+      return { passed: true, caseId: "public-content-rerun-passed" };
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(reruns, 0);
+  assert.equal(
+    output,
+    "WINDOWS_PUBLIC_CONTENT_METADATA stage=commit-header\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=pc23 status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic maps runtime-projection failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({

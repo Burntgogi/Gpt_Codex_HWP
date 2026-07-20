@@ -112,16 +112,27 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     ?? executeReleaseOracleDiagnostic;
   const runPublicContentDiagnostic = options.runPublicContentDiagnostic
     ?? executePublicContentDiagnostic;
+  const runPublicContentFile = options.runPublicContentFile
+    ?? (options.runRepositoryFile === undefined ? runPublicContentDiagnostic : undefined);
   const runRuntimeProjectionDiagnostic = options.runRuntimeProjectionDiagnostic
     ?? executeRuntimeProjectionDiagnostic;
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
 
   for (const file of REPOSITORY_TEST_FILES) {
     let passed = false;
+    let publicContentReceipt;
     const testTimeoutMs = file === "public-content-policy.test.mjs"
       ? PUBLIC_CONTENT_TEST_TIMEOUT_MS
       : DEFAULT_REPOSITORY_TEST_TIMEOUT_MS;
-    try { passed = await runRepositoryFile(file, { testTimeoutMs }) === true; } catch { passed = false; }
+    try {
+      if (file === "public-content-policy.test.mjs"
+        && typeof runPublicContentFile === "function") {
+        publicContentReceipt = await runPublicContentFile();
+        passed = publicContentReceipt?.passed === true;
+      } else {
+        passed = await runRepositoryFile(file, { testTimeoutMs }) === true;
+      }
+    } catch { passed = false; }
     if (!passed) {
       if (file === "kordoc-runtime-ownership.test.mjs") {
         for (const record of KORDOC_OWNERSHIP_CASES) {
@@ -171,7 +182,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
         let caseId = "aggregate";
         let stage;
         try {
-          const candidate = await runPublicContentDiagnostic();
+          const candidate = publicContentReceipt ?? await runPublicContentDiagnostic();
           if (typeof candidate === "string"
             && /^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate)) {
             caseId = candidate;
@@ -266,6 +277,7 @@ async function executePublicContentDiagnostic() {
     },
   });
   return {
+    passed,
     caseId: ordinal !== undefined
       ? `pc${String(ordinal).padStart(2, "0")}`
       : passed ? "public-content-rerun-passed" : "public-content-aggregate",
