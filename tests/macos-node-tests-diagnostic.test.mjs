@@ -56,7 +56,7 @@ test("macOS Node diagnostic requires a nonempty exact TAP summary", async () => 
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(output, "MAC_NODE_TEST_FILE file=allowed-roots.test.ts status=failed\n");
+  assert.equal(output, "MAC_NODE_TEST_CASE case=ar01 status=failed\n");
 });
 
 test("macOS Node diagnostic accepts capability skips when every executed test passes", async () => {
@@ -79,4 +79,96 @@ test("macOS Node diagnostic accepts capability skips when every executed test pa
   assert.equal(passed, true);
   assert.equal(calls, 41);
   assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=41\n");
+});
+
+test("macOS Node diagnostic narrows an allowed-roots aggregate failure to one fixed case id", async () => {
+  const cases = [];
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "allowed-roots.test.ts",
+    runAllowedRootsCase: async (record) => {
+      cases.push(record.id);
+      return record.id !== "ar03";
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.deepEqual(cases, ["ar01", "ar02", "ar03"]);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=ar03 status=failed\n");
+});
+
+test("macOS Node diagnostic reports fixed aggregate id when every allowed-roots case passes alone", async () => {
+  let output = "";
+  let cases = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "allowed-roots.test.ts",
+    runAllowedRootsCase: async () => { cases += 1; return true; },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(cases, 18);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+});
+
+test("macOS Node diagnostic accepts all-skipped TAP only for the two fixed UNC capability cases", async () => {
+  let output = "";
+  const argsSeen = [];
+  let call = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    spawnProcess(_command, args) {
+      call += 1;
+      argsSeen.push(args);
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        const caseIndex = call - 1;
+        if (call === 1) {
+          child.stdout.end("TAP version 13\n1..18\n# tests 18\n# pass 17\n# fail 1\n# cancelled 0\n# skipped 0\n");
+          child.emit("close", 1, null);
+          return;
+        }
+        if (caseIndex === 10 || caseIndex === 11) {
+          child.stdout.end("TAP version 13\n1..18\n# tests 18\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 18\n");
+        } else {
+          child.stdout.end("TAP version 13\n1..18\n# tests 18\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 17\n");
+        }
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(call, 19);
+  assert.equal(argsSeen.slice(1).every((args) => args.some(
+    (value) => value.startsWith("--test-name-pattern=^allowed roots:"),
+  )), true);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+});
+
+test("macOS Node diagnostic rejects all-skipped TAP for a non-capability case", async () => {
+  let output = "";
+  let call = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    spawnProcess() {
+      call += 1;
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end(call === 1
+          ? "TAP version 13\n1..18\n# tests 18\n# pass 17\n# fail 1\n# cancelled 0\n# skipped 0\n"
+          : "TAP version 13\n1..18\n# tests 18\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 18\n");
+        child.emit("close", call === 1 ? 1 : 0, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(call, 2);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=ar01 status=failed\n");
 });

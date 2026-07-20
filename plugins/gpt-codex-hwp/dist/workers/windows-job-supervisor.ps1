@@ -194,12 +194,16 @@ try {
   Write-HostedDiagnosticPhase 'job-create'
   $job = [GptCodexHwpJob]::CreateJobObject([IntPtr]::Zero, $null)
   if ($job -eq [IntPtr]::Zero) { throw 'CreateJobObject failed' }
+  Write-HostedDiagnosticPhase 'job-created'
   $limits = New-Object GptCodexHwpJob+JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+  Write-HostedDiagnosticPhase 'limits-created'
   $limits.BasicLimitInformation.LimitFlags = 0x00002000
   $limitSize = [Runtime.InteropServices.Marshal]::SizeOf($limits)
+  Write-HostedDiagnosticPhase 'limits-sized'
   if (-not [GptCodexHwpJob]::SetInformationJobObject($job, 9, [ref]$limits, $limitSize)) {
     throw 'SetInformationJobObject failed'
   }
+  Write-HostedDiagnosticPhase 'limits-applied'
   Write-HostedDiagnosticPhase 'target-open'
   $process = [GptCodexHwpJob]::OpenProcess(0x00101101, $false, $TargetPid)
   if ($process -eq [IntPtr]::Zero) { throw 'OpenProcess failed' }

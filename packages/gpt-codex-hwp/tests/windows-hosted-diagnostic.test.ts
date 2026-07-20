@@ -9,6 +9,10 @@ type WindowsPhase =
   | "assembly-verify"
   | "assembly-load"
   | "job-create"
+  | "job-created"
+  | "limits-created"
+  | "limits-sized"
+  | "limits-applied"
   | "target-open"
   | "target-identity"
   | "job-bind"
@@ -76,6 +80,8 @@ test("Windows diagnostic phase frames are consumed without becoming READY", asyn
   const frames = [
     "GPT_CODEX_HWP_JOB PHASE script-entry",
     "GPT_CODEX_HWP_JOB PHASE assembly-verify",
+    "GPT_CODEX_HWP_JOB PHASE job-created",
+    "GPT_CODEX_HWP_JOB PHASE limits-applied",
     "GPT_CODEX_HWP_JOB PHASE snapshot",
     "GPT_CODEX_HWP_JOB READY 8300 1 47",
   ];
@@ -89,7 +95,9 @@ test("Windows diagnostic phase frames are consumed without becoming READY", asyn
     phaseObserver: (phase) => phases.push(phase),
   });
   assert.equal(ready, "GPT_CODEX_HWP_JOB READY 8300 1 47");
-  assert.deepEqual(phases, ["script-entry", "assembly-verify", "snapshot"]);
+  assert.deepEqual(phases, [
+    "script-entry", "assembly-verify", "job-created", "limits-applied", "snapshot",
+  ]);
 });
 
 test("Windows late observer consumes fixed phases but never promotes late READY", async () => {
@@ -117,8 +125,8 @@ test("Windows late observer consumes fixed phases but never promotes late READY"
 test("Windows hosted phase formatter accepts only exact fixed-enum tuples", async () => {
   const diagnostics = await import("../benchmarks/hosted-platform-diagnostics.mjs");
   assert.equal(
-    diagnostics.formatHostedWindowsSupervisorPhaseDiagnostic({ boundary: "snapshot" }),
-    "HOSTED_WINDOWS_SUPERVISOR_PHASE boundary=snapshot",
+    diagnostics.formatHostedWindowsSupervisorPhaseDiagnostic({ boundary: "limits-applied" }),
+    "HOSTED_WINDOWS_SUPERVISOR_PHASE boundary=limits-applied",
   );
   for (const value of [
     { boundary: "PRIVATE RAW VALUE" },

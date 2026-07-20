@@ -25,6 +25,30 @@ const TEST_FILES = Object.freeze([
   "validation-regressions.test.ts", "windows-hosted-diagnostic.test.ts",
   "write-worker-safety.test.ts",
 ]);
+const ALLOWED_ROOTS_CASES = Object.freeze([
+  "allowed roots: absent configuration preserves unrestricted local paths",
+  "allowed roots: malformed, empty, relative, duplicate, and oversized configuration fails closed without values",
+  "allowed roots: normal descendants and missing output parents return canonical safe paths",
+  "allowed roots: prefix siblings, traversal, and mixed separators fail with a stable redacted error",
+  "allowed roots: an existing final symlink is rejected even when it targets the allowed tree",
+  "allowed roots: a configured symlink or junction root is rejected without disclosure",
+  "allowed roots: a hard link reached through an outside path is rejected",
+  "allowed roots: Unicode normalization aliases cannot escape the configured root",
+  "allowed roots: platform root and case semantics follow the filesystem",
+  "allowed roots: UNC semantics are capability-skipped when no test share is available",
+  "allowed roots: inaccessible UNC configuration fails closed without the server or share name",
+  "allowed roots: active policy is enforced at snapshot, bounded-read, output, and MCP result boundaries",
+  "allowed roots: MCP startup rejects malformed configuration without echoing environment values and sync server creation remains available",
+  "allowed roots: the MCP executable exits before transport startup and redacts malformed environment input",
+  "allowed roots: all nine MCP tools return the same redacted denial for blocked user paths",
+  "allowed roots: hwp_read blocks Markdown and extracted-image destinations before writing",
+  "allowed roots: an existing linked output parent is rejected",
+  "allowed roots: a directory-link swap between authorization and snapshot verification is rejected",
+].map((pattern, index) => Object.freeze({
+  id: `ar${String(index + 1).padStart(2, "0")}`,
+  pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+  allowAllSkipped: index === 9 || index === 10,
+})));
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -35,11 +59,36 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
     closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
   }));
+  const runAllowedRootsCase = options.runAllowedRootsCase ?? ((record) => executeTestFile(
+    "allowed-roots.test.ts",
+    {
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      testNamePattern: record.pattern,
+      allowAllSkipped: record.allowAllSkipped,
+    },
+  ));
 
   for (const file of TEST_FILES) {
     let passed = false;
     try { passed = await runFile(file) === true; } catch { passed = false; }
     if (!passed) {
+      if (file === "allowed-roots.test.ts") {
+        for (const record of ALLOWED_ROOTS_CASES) {
+          let casePassed = false;
+          try { casePassed = await runAllowedRootsCase(record) === true; } catch { casePassed = false; }
+          if (!casePassed) {
+            stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
+            setExitCode(1);
+            return false;
+          }
+        }
+        stdout.write("MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+        setExitCode(1);
+        return false;
+      }
       stdout.write(`MAC_NODE_TEST_FILE file=${file} status=failed\n`);
       setExitCode(1);
       return false;
@@ -80,9 +129,12 @@ function executeTestFile(file, options) {
       }, options.closeTimeoutMs);
     };
     try {
-      child = options.spawnProcess(process.execPath, [
-        "--import", "tsx", "--test", "--test-concurrency=1", `tests/${file}`,
-      ], {
+      const args = ["--import", "tsx", "--test", "--test-concurrency=1"];
+      if (options.testNamePattern !== undefined) {
+        args.push(`--test-name-pattern=${options.testNamePattern}`);
+      }
+      args.push(`tests/${file}`);
+      child = options.spawnProcess(process.execPath, args, {
         cwd: PACKAGE_ROOT,
         stdio: ["ignore", "pipe", "ignore"],
         detached: true,
@@ -113,22 +165,25 @@ function executeTestFile(file, options) {
     child.once("error", stopUnverified);
     child.once("close", (code, signal) => {
       if (stopping) finish(false);
-      else finish(code === 0 && signal === null && validTapReceipt(chunks, capturedBytes));
+      else finish(code === 0 && signal === null && validTapReceipt(
+        chunks, capturedBytes, options.allowAllSkipped === true,
+      ));
     });
     testTimer = setTimeout(stopUnverified, options.testTimeoutMs);
   });
 }
 
-function validTapReceipt(chunks, capturedBytes) {
+function validTapReceipt(chunks, capturedBytes, allowAllSkipped = false) {
   if (capturedBytes < 1 || capturedBytes > MAX_CAPTURE_BYTES) return false;
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
   catch { return false; }
   const tests = Number(/^# tests ([1-9][0-9]*)$/mu.exec(text)?.[1]);
-  const passed = Number(/^# pass ([1-9][0-9]*)$/mu.exec(text)?.[1]);
+  const passed = Number(/^# pass ([0-9]+)$/mu.exec(text)?.[1]);
   const skipped = Number(/^# skipped ([0-9]+)$/mu.exec(text)?.[1]);
+  const validExecution = passed >= 1 || (allowAllSkipped && passed === 0 && skipped === tests);
   return Number.isSafeInteger(tests) && Number.isSafeInteger(passed)
-    && Number.isSafeInteger(skipped) && passed >= 1 && tests === passed + skipped
+    && Number.isSafeInteger(skipped) && validExecution && tests === passed + skipped
     && /^# fail 0$/mu.test(text)
     && /^# cancelled 0$/mu.test(text);
 }
