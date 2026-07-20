@@ -164,6 +164,37 @@ test("macOS Node diagnostic reports the fixed aggregate id when every assets cas
   assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
 });
 
+test("macOS Node diagnostic narrows a compact-runtime aggregate failure to one fixed case id", async () => {
+  const cases = [];
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "compact-runtime.test.ts",
+    runCompactRuntimeCase: async (record) => {
+      cases.push(record.id);
+      return record.id !== "cr03";
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.deepEqual(cases, ["cr01", "cr02", "cr03"]);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=cr03 status=failed\n");
+});
+
+test("macOS Node diagnostic reports the fixed aggregate id when every compact-runtime case passes alone", async () => {
+  let output = "";
+  let cases = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "compact-runtime.test.ts",
+    runCompactRuntimeCase: async () => { cases += 1; return true; },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(cases, 37);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+});
+
 test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-only assets case", async () => {
   let output = "";
   let call = 0;

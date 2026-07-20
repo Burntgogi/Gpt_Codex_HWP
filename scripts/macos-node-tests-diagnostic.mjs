@@ -72,6 +72,48 @@ const ASSETS_CASES = Object.freeze([
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
   allowAllSkipped: index === 5,
 })));
+const COMPACT_RUNTIME_CASES = Object.freeze([
+  "obsolete public-source references are absent from split release suites",
+  "compact runtime package exclusions handle scoped and ordinary paths",
+  "compact runtime budgets accept exact limits and reject one byte above",
+  "compact runtime anchors Kordoc links to the canonical local vendor target",
+  "compact runtime summarizes regular files, links, and exact exclusion evidence",
+  "installed runtime npm invocation resolver is injectable without environment mutation",
+  "installed runtime child timeout terminates the subprocess",
+  "installed runtime child failures do not expose arguments or output",
+  "installed runtime child start failures do not expose executable paths",
+  "compact command, npm, and tool children receive one scrubbed environment",
+  "MCP SDK merges safe defaults with only the no-replace transport override",
+  "installed runtime allowFailure preserves raw diagnostic streams",
+  "POSIX descendant timeout kills a SIGTERM-resistant process group",
+  "npm-ls parser fails closed for invalid results",
+  "npm-ls failures redact raw streams and dependency problem details",
+  "npm-audit and MCP-stderr failures expose only sanitized evidence",
+  "compact runtime CLI accepts only release mode or one diagnostic sample",
+  "tool-smoke arguments bind file size and semantic oracle mode",
+  "plain compact runtime CLI rejects ambient diagnostic override without leaking it",
+  "read-only compact runtime HWP smokes verify the hash after every tool call",
+  "read-only compact runtime HWP smokes reject missing semantic evidence",
+  "read-only compact runtime HWP smokes accept general diagnostic evidence",
+  "read-only compact runtime tool failures do not expose structured content",
+  "compact runtime tools receive an owned verified HWP copy",
+  "owned HWP copy uses one bounded source handle and fsyncs exact bytes",
+  "owned HWP copy rejects changed sources and sanitizes filesystem failures",
+  "owned HWP copy post-hashes the source even when destination verification fails",
+  "MCP read-only smoke calls the advertised routes and rejects empty routing",
+  "classic HWP preview smoke uses the actual isolated runtime route",
+  "classic HWP preview smoke rejects non-rhwp or non-SVG evidence",
+  "compact integrity hashing rejects a fixture above 512 MiB without exposing its path",
+  "compact cleanup verifies owned and source HWP bytes even after a failed smoke",
+  "missing sample cleanup creates no compact temp residue",
+  "installed runtime gate is serialized in normal npm test",
+  "installed runtime skill metadata omits the HML claim",
+  "installed runtime verifies provenance, npm ls, and all nine tools",
+  "compact runtime staging canonicalizes an injected temporary parent",
+].map((pattern, index) => Object.freeze({
+  id: `cr${String(index + 1).padStart(2, "0")}`,
+  pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+})));
 const SVG_ASSET_BOUNDARIES = new Set([
   "root", "handler-import", "sharp-import", "handler", "handler-error",
   "handler-warning", "svg-read", "svg-content", "png-read", "png-magic",
@@ -108,6 +150,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testNamePattern: record.pattern,
       allowAllSkipped: record.allowAllSkipped,
+    },
+  ));
+  const runCompactRuntimeCase = options.runCompactRuntimeCase ?? ((record) => executeTestFile(
+    "compact-runtime.test.ts",
+    {
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      testNamePattern: record.pattern,
     },
   ));
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -149,6 +201,20 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
               } catch {}
               stdout.write(`MAC_SVG_ASSET boundary=${boundary}\n`);
             }
+            stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
+            setExitCode(1);
+            return false;
+          }
+        }
+        stdout.write("MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+        setExitCode(1);
+        return false;
+      }
+      if (file === "compact-runtime.test.ts") {
+        for (const record of COMPACT_RUNTIME_CASES) {
+          let casePassed = false;
+          try { casePassed = await runCompactRuntimeCase(record) === true; } catch { casePassed = false; }
+          if (!casePassed) {
             stdout.write(`MAC_NODE_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;

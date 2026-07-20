@@ -64,6 +64,11 @@ const SAFE_SNAPSHOT_STAGES = new Set([
   "spool-file-reacl-sid", "spool-file-reacl-icacls", "spool-file-reacl-verify",
   "source-reauthorize", "source-verify",
 ]);
+for (const prefix of ["spool-directory", "spool-file", "spool-file-reacl"]) {
+  for (const reason of [
+    "process", "exception", "unprotected", "extra-rule", "missing-current", "invalid-output",
+  ]) SAFE_SNAPSHOT_STAGES.add(`${prefix}-verify-${reason}`);
+}
 const SAFE_ENGINE_STAGES = new Set([
   "startup", "detect", "parse", "render", "generateHwpx", "patchHwpx",
   "fillHwpx", "validateHwpx", "insertImage", "shutdown",

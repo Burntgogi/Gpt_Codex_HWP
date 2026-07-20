@@ -468,7 +468,18 @@ async function setOwnerOnlyAccess(path, kind, mode, stagePrefix, observe) {
             "/q",
         ]);
         observe?.(`${stagePrefix}-verify`);
-        await verifyWindowsAcl(path, sid, kind);
+        let verification;
+        try {
+            verification = await verifyWindowsAcl(path, sid, kind);
+        }
+        catch {
+            observe?.(`${stagePrefix}-verify-process`);
+            throw openFailedError();
+        }
+        if (verification !== "OK") {
+            observe?.(`${stagePrefix}-verify-${verification}`);
+            throw openFailedError();
+        }
     }
     catch {
         throw openFailedError();
@@ -483,17 +494,19 @@ async function currentWindowsSid() {
 }
 async function verifyWindowsAcl(path, sid, kind) {
     const script = [
+        "try{",
         "$item=if($env:GPT_CODEX_HWP_ACL_KIND -eq 'directory'){[System.IO.DirectoryInfo]::new($env:GPT_CODEX_HWP_ACL_PATH)}else{[System.IO.FileInfo]::new($env:GPT_CODEX_HWP_ACL_PATH)}",
         "$acl=$item.GetAccessControl()",
         "$sid=$env:GPT_CODEX_HWP_ACL_SID",
         `$system='${WINDOWS_SYSTEM_SID}'`,
-        "if(-not $acl.AreAccessRulesProtected){exit 17}",
+        "if(-not $acl.AreAccessRulesProtected){[Console]::Out.Write('unprotected');exit 0}",
         "$valid=$true",
         "$hasCurrent=$false",
         "foreach($rule in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){$ruleSid=$rule.IdentityReference.Value;if($ruleSid -ne $sid -and $ruleSid -ne $system){$valid=$false};if($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $ruleSid -eq $sid -and (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl)){$hasCurrent=$true}}",
-        "if(-not $valid){exit 18}",
-        "if(-not $hasCurrent){exit 19}",
+        "if(-not $valid){[Console]::Out.Write('extra-rule');exit 0}",
+        "if(-not $hasCurrent){[Console]::Out.Write('missing-current');exit 0}",
         "[Console]::Out.Write('OK')",
+        "}catch{[Console]::Out.Write('exception')}",
     ].join(";");
     const result = await runAclCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
         ...process.env,
@@ -501,8 +514,7 @@ async function verifyWindowsAcl(path, sid, kind) {
         GPT_CODEX_HWP_ACL_SID: sid,
         GPT_CODEX_HWP_ACL_KIND: kind,
     });
-    if (result.stdout !== "OK")
-        throw openFailedError();
+    return ["OK", "exception", "unprotected", "extra-rule", "missing-current"].includes(result.stdout) ? result.stdout : "invalid-output";
 }
 async function runAclCommand(command, args, env = process.env) {
     const result = await execFileAsync(command, [...args], {

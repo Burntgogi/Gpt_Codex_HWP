@@ -1285,8 +1285,42 @@ test("benchmark snapshot diagnostics expose only a fixed internal stage", () => 
     formatBenchmarkSnapshotFailure("spool-file-acl"),
     "BENCHMARK_SNAPSHOT_FAILURE stage=spool-file-acl",
   );
+  for (const reason of [
+    "process",
+    "exception",
+    "unprotected",
+    "extra-rule",
+    "missing-current",
+    "invalid-output",
+  ]) {
+    assert.equal(
+      formatBenchmarkSnapshotFailure(`spool-directory-verify-${reason}`),
+      `BENCHMARK_SNAPSHOT_FAILURE stage=spool-directory-verify-${reason}`,
+    );
+    assert.equal(
+      formatBenchmarkSnapshotFailure(`spool-file-verify-${reason}`),
+      `BENCHMARK_SNAPSHOT_FAILURE stage=spool-file-verify-${reason}`,
+    );
+    assert.equal(
+      formatBenchmarkSnapshotFailure(`spool-file-reacl-verify-${reason}`),
+      `BENCHMARK_SNAPSHOT_FAILURE stage=spool-file-reacl-verify-${reason}`,
+    );
+  }
   assert.equal(
     formatBenchmarkSnapshotFailure(`C:\\private ${["AWS", "_SECRET_ACCESS_KEY=value"].join("")}`),
     "BENCHMARK_SNAPSHOT_FAILURE stage=unknown",
   );
+});
+
+test("Windows ACL verification reports bounded reasons without nonzero policy exits", async () => {
+  const source = await readFile(
+    join(PACKAGE_ROOT, "src", "shared", "document-snapshot.ts"),
+    "utf8",
+  );
+  for (const reason of ["exception", "unprotected", "extra-rule", "missing-current"]) {
+    assert.match(source, new RegExp(`Write\\('${reason}'\\)`, "u"));
+  }
+  assert.match(source, /verify-process/u);
+  assert.match(source, /verify-invalid-output/u);
+  assert.doesNotMatch(source, /exit (17|18|19)/u);
 });
