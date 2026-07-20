@@ -55,6 +55,12 @@ const SAFE_ERROR_CODES = new Set([
 ]);
 const SAFE_PROBE_ERROR_CODES = new Set([...SAFE_ERROR_CODES, "ENGINE_INIT_FAILED"]);
 const SAFE_CASE_PHASES = new Set(["facade", "snapshot", "detect", "probe"]);
+const SAFE_SNAPSHOT_STAGES = new Set([
+  "source-authorize", "source-open", "spool-directory-create",
+  "spool-directory-acl", "spool-file-create", "spool-file-acl",
+  "spool-copy", "spool-sync", "spool-file-reacl", "spool-verify",
+  "source-reauthorize", "source-verify",
+]);
 const SAFE_ENGINE_STAGES = new Set([
   "startup", "detect", "parse", "render", "generateHwpx", "patchHwpx",
   "fillHwpx", "validateHwpx", "insertImage", "shutdown",
@@ -577,8 +583,17 @@ function forwardSafeCaseDiagnostics(stderr) {
     const failure = /^BENCHMARK_CASE_FAILURE phase=(facade|snapshot|detect|probe|unknown) engineCode=([A-Z_]+) stage=(startup|detect|parse|render|generateHwpx|patchHwpx|fillHwpx|validateHwpx|insertImage|shutdown|unknown)$/u.exec(line);
     if (failure !== null && SAFE_PROBE_ERROR_CODES.has(failure[2])) {
       process.stderr.write(`${line}\n`);
+      continue;
+    }
+    const snapshot = /^BENCHMARK_SNAPSHOT_FAILURE stage=([a-z-]+)$/u.exec(line);
+    if (snapshot !== null && (SAFE_SNAPSHOT_STAGES.has(snapshot[1]) || snapshot[1] === "unknown")) {
+      process.stderr.write(`${line}\n`);
     }
   }
+}
+
+export function formatBenchmarkSnapshotFailure(stage) {
+  return `BENCHMARK_SNAPSHOT_FAILURE stage=${SAFE_SNAPSHOT_STAGES.has(stage) ? stage : "unknown"}`;
 }
 
 export function assertCaseProcessGone(result) {
@@ -985,6 +1000,7 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
   const started = telemetry.started;
   let outcome;
   let phase = "facade";
+  let snapshotStage = "source-authorize";
   const source = await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes });
   await writeCaseMetadata(ownedCase, source);
   let facade;
@@ -993,7 +1009,10 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
     phase = "snapshot";
     const { openDocumentSnapshot } = await import("../src/shared/document-snapshot.ts");
     const snapshot = await openDocumentSnapshot(sourcePath, {
-      testHooks: { spoolRoot: ownedCase },
+      testHooks: {
+        spoolRoot: ownedCase,
+        onDiagnosticStage: (stage) => { snapshotStage = stage; },
+      },
     });
     let responseBytes = 0;
     phase = "detect";
@@ -1025,6 +1044,9 @@ async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
       };
     }
   } catch (error) {
+    if (phase === "snapshot") {
+      process.stderr.write(`${formatBenchmarkSnapshotFailure(snapshotStage)}\n`);
+    }
     process.stderr.write(`${formatBenchmarkCaseFailure(error, phase)}\n`);
     const errorCode = safeEngineErrorCode(error);
     outcome = {

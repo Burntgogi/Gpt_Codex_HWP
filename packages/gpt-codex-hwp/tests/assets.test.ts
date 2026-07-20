@@ -8,6 +8,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -73,7 +74,7 @@ const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 type XmlEncoding = "utf8" | "utf16le" | "utf16be";
 
 test("Python XML policy rejects encoded DTDs and protection manifests", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-python-xml-policy-"));
+  const root = await canonicalTempRoot("hwp-python-xml-policy-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const script = join(root, "xml_policy_regression.py");
   const helperDirectory = HWPX_SAFE_EDIT_ROOT;
@@ -97,7 +98,7 @@ test("Python XML policy rejects encoded DTDs and protection manifests", async (t
 });
 
 test("hwp_create_svg_asset escapes a structured spec and renders a real PNG", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-svg-structured-"));
+  const root = await canonicalTempRoot("hwp-svg-structured-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const svgPath = join(root, "도표.svg");
   const pngPath = join(root, "도표.png");
@@ -131,7 +132,7 @@ test("hwp_create_svg_asset escapes a structured spec and renders a real PNG", as
 });
 
 test("hwp_create_svg_asset accepts safe inline SVG and rejects active content without artifacts", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-svg-sanitize-"));
+  const root = await canonicalTempRoot("hwp-svg-sanitize-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const safePath = join(root, "safe.svg");
   const safe = await handleHwpCreateSvgAsset({
@@ -174,7 +175,7 @@ test("hwp_create_svg_asset accepts safe inline SVG and rejects active content wi
 });
 
 test("hwp_create_svg_asset reserves both outputs atomically and preserves SVG on renderer failure", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-svg-output-"));
+  const root = await canonicalTempRoot("hwp-svg-output-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const input = '<svg width="32" height="24"><rect width="32" height="24" fill="#0f0"/></svg>';
 
@@ -228,7 +229,7 @@ test("hwp_create_svg_asset reserves both outputs atomically and preserves SVG on
 });
 
 test("hwp_create_svg_asset treats an unsafe PNG output parent as a hard failure", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-svg-unsafe-parent-"));
+  const root = await canonicalTempRoot("hwp-svg-unsafe-parent-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   if (process.platform !== "win32") {
     t.skip("Windows junction behavior is the target of this regression test.");
@@ -262,7 +263,7 @@ test("hwp_create_svg_asset treats an unsafe PNG output parent as a hard failure"
 });
 
 test("after-paragraph inserts a normalized PNG after a body anchor and passes structural gates", { timeout: 30_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "한글 그림 삽입-"));
+  const root = await canonicalTempRoot("한글 그림 삽입-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "원본 문서.hwpx");
   const imagePath = join(root, "원본 시각자료.svg");
@@ -322,7 +323,7 @@ test("after-paragraph inserts a normalized PNG after a body anchor and passes st
 });
 
 test("after-paragraph inserts inside the same table-cell subList", { timeout: 30_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-table-"));
+  const root = await canonicalTempRoot("hwp-image-table-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
@@ -351,7 +352,7 @@ test("after-paragraph inserts inside the same table-cell subList", { timeout: 30
 });
 
 test("after-paragraph ignores a hidden-comment anchor before the eligible body anchor", { timeout: 30_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-hidden-anchor-"));
+  const root = await canonicalTempRoot("hwp-image-hidden-anchor-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
@@ -381,7 +382,7 @@ test("after-paragraph ignores a hidden-comment anchor before the eligible body a
 });
 
 test("image insertion rejects a source path swapped and restored after snapshot capture", { timeout: 30_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-source-snapshot-"));
+  const root = await canonicalTempRoot("hwp-image-source-snapshot-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
@@ -432,7 +433,7 @@ test("image insertion rejects a source path swapped and restored after snapshot 
 });
 
 test("seal-anchor calls the real Kordoc placement path and preserves placement metadata", { timeout: 30_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-seal-"));
+  const root = await canonicalTempRoot("hwp-image-seal-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "seal.png");
@@ -460,7 +461,7 @@ test("seal-anchor calls the real Kordoc placement path and preserves placement m
 });
 
 test("image insertion rejects missing and ambiguous anchors before creating output", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-anchor-"));
+  const root = await canonicalTempRoot("hwp-image-anchor-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
@@ -499,7 +500,7 @@ test("image insertion rejects missing and ambiguous anchors before creating outp
 });
 
 test("image insertion rejects non-HWPX, bad images, existing output, and source/image aliases", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-errors-"));
+  const root = await canonicalTempRoot("hwp-image-errors-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
@@ -561,7 +562,7 @@ test("image insertion rejects non-HWPX, bad images, existing output, and source/
 });
 
 test("image insertion rejects encrypted and signed HWPX packages", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-protected-"));
+  const root = await canonicalTempRoot("hwp-image-protected-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const imagePath = join(root, "image.png");
   await writeFile(imagePath, await testPng());
@@ -620,7 +621,7 @@ test("image insertion rejects encrypted and signed HWPX packages", async (t) => 
 });
 
 test("image insertion rejects case-equivalent duplicate protection manifests", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-ambiguous-manifest-"));
+  const root = await canonicalTempRoot("hwp-image-ambiguous-manifest-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
@@ -644,7 +645,7 @@ test("image insertion rejects case-equivalent duplicate protection manifests", a
 });
 
 test("image insertion sanitizes SVG inputs even when XML comments precede the root", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-svg-sniff-"));
+  const root = await canonicalTempRoot("hwp-image-svg-sniff-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.svg");
@@ -666,7 +667,7 @@ test("image insertion sanitizes SVG inputs even when XML comments precede the ro
 });
 
 test("image insertion rejects a dangling manifest href before editing", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-image-manifest-"));
+  const root = await canonicalTempRoot("hwp-image-manifest-");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "image.png");
@@ -800,6 +801,10 @@ async function runVerifier(edited: string, original: string): Promise<{ stdout: 
 function details(result: { structuredContent?: Record<string, unknown> }): Record<string, unknown> {
   assert.ok(result.structuredContent);
   return result.structuredContent;
+}
+
+async function canonicalTempRoot(prefix: string): Promise<string> {
+  return await realpath(await mkdtemp(join(tmpdir(), prefix)));
 }
 
 function resultCode(result: { structuredContent?: Record<string, unknown> }): unknown {

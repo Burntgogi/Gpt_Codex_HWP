@@ -28,6 +28,7 @@ import {
   classifyBenchmarkSupervisorFrame,
   formatBenchmarkFailure,
   formatBenchmarkCaseFailure,
+  formatBenchmarkSnapshotFailure,
   formatBenchmarkProbeFailure,
   formatBenchmarkProgress,
   parseBenchmarkArguments,
@@ -1276,5 +1277,16 @@ test("benchmark case diagnostics expose only allowlisted phases, codes, and stag
       "C:\\private",
     ),
     "BENCHMARK_CASE_FAILURE phase=unknown engineCode=ENGINE_CRASH stage=unknown",
+  );
+});
+
+test("benchmark snapshot diagnostics expose only a fixed internal stage", () => {
+  assert.equal(
+    formatBenchmarkSnapshotFailure("spool-file-acl"),
+    "BENCHMARK_SNAPSHOT_FAILURE stage=spool-file-acl",
+  );
+  assert.equal(
+    formatBenchmarkSnapshotFailure(`C:\\private ${["AWS", "_SECRET_ACCESS_KEY=value"].join("")}`),
+    "BENCHMARK_SNAPSHOT_FAILURE stage=unknown",
   );
 });

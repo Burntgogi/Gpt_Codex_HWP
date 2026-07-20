@@ -32,9 +32,11 @@ export async function openDocumentSnapshot(path, options = {}) {
     if (typeof path !== "string" || path.trim().length === 0) {
         throw openFailedError();
     }
+    normalized.testHooks?.onDiagnosticStage?.("source-authorize");
     const authorizedPath = await authorizeExistingPath(path);
     let pendingSpool;
     try {
+        normalized.testHooks?.onDiagnosticStage?.("source-open");
         const handle = await openFileForBoundedRead(authorizedPath);
         let preparation;
         let sizeBytes;
@@ -58,10 +60,12 @@ export async function openDocumentSnapshot(path, options = {}) {
                 pendingSpool = preparation.owner;
             }
             await normalized.testHooks?.afterSourceRead?.();
+            normalized.testHooks?.onDiagnosticStage?.("source-reauthorize");
             const reauthorizedPath = await authorizeExistingPath(authorizedPath);
             if (comparableAuthorizedPath(reauthorizedPath) !== comparableAuthorizedPath(authorizedPath)) {
                 throw new AllowedRootsPathError();
             }
+            normalized.testHooks?.onDiagnosticStage?.("source-verify");
             assertSameSourceIdentity(initialIdentity, sourceIdentityOf(await handle.stat({ bigint: true })));
             assertSameSourceIdentity(initialIdentity, await pathSourceIdentity(authorizedPath));
         }
@@ -123,13 +127,17 @@ async function prepareSpoolSnapshot(sourceHandle, sizeBytes, options) {
     let writer;
     let reader;
     try {
+        options.testHooks?.onDiagnosticStage?.("spool-directory-create");
         directoryPath = await mkdtemp(join(options.spoolRoot, SPOOL_PREFIX));
         directoryIdentity = await ownedDirectoryIdentity(directoryPath);
+        options.testHooks?.onDiagnosticStage?.("spool-directory-acl");
         await setOwnerOnlyAccess(directoryPath, "directory", 0o700);
+        options.testHooks?.onDiagnosticStage?.("spool-file-create");
         filePath = join(directoryPath, SPOOL_FILENAME);
         writer = await open(filePath, "wx", 0o600);
         const created = await writer.stat({ bigint: true });
         fileIdentity = fileSystemIdentityOf(created);
+        options.testHooks?.onDiagnosticStage?.("spool-file-acl");
         await setOwnerOnlyAccess(filePath, "file", 0o600);
         const reusableBytes = Math.max(1, Math.min(READ_CHUNK_BYTES, sizeBytes));
         options.allocationObserver?.(reusableBytes);
@@ -138,6 +146,7 @@ async function prepareSpoolSnapshot(sourceHandle, sizeBytes, options) {
         const hash = createHash("sha256");
         let position = 0;
         let preflightBytes = 0;
+        options.testHooks?.onDiagnosticStage?.("spool-copy");
         while (position < sizeBytes) {
             const requested = Math.min(reusable.byteLength, sizeBytes - position);
             const { bytesRead } = await sourceHandle.read(reusable, 0, requested, position);
@@ -153,6 +162,7 @@ async function prepareSpoolSnapshot(sourceHandle, sizeBytes, options) {
             await writePositionally(writer, reusable, bytesRead, position);
             position += bytesRead;
         }
+        options.testHooks?.onDiagnosticStage?.("spool-sync");
         await writer.sync();
         const completed = await writer.stat({ bigint: true });
         if (completed.size !== BigInt(sizeBytes)) {
@@ -160,7 +170,9 @@ async function prepareSpoolSnapshot(sourceHandle, sizeBytes, options) {
         }
         await writer.close();
         writer = undefined;
+        options.testHooks?.onDiagnosticStage?.("spool-file-reacl");
         await setOwnerOnlyAccess(filePath, "file", 0o600);
+        options.testHooks?.onDiagnosticStage?.("spool-verify");
         const fileStatus = await lstat(filePath, { bigint: true });
         if (!fileStatus.isFile() ||
             fileStatus.isSymbolicLink() ||
@@ -473,9 +485,11 @@ async function verifyWindowsAcl(path, sid, kind) {
         "$sid=$env:GPT_CODEX_HWP_ACL_SID",
         `$system='${WINDOWS_SYSTEM_SID}'`,
         "if(-not $acl.AreAccessRulesProtected){exit 17}",
-        "$rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))",
-        "if(@($rules | Where-Object { $_.IdentityReference.Value -ne $sid -and $_.IdentityReference.Value -ne $system }).Count -ne 0){exit 18}",
-        "if(@($rules | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -eq $sid -and (($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl) }).Count -eq 0){exit 19}",
+        "$valid=$true",
+        "$hasCurrent=$false",
+        "foreach($rule in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){$ruleSid=$rule.IdentityReference.Value;if($ruleSid -ne $sid -and $ruleSid -ne $system){$valid=$false};if($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $ruleSid -eq $sid -and (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl)){$hasCurrent=$true}}",
+        "if(-not $valid){exit 18}",
+        "if(-not $hasCurrent){exit 19}",
         "[Console]::Out.Write('OK')",
     ].join(";");
     const result = await runAclCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
@@ -534,6 +548,7 @@ function validateOptions(rawOptions) {
             hooks.onSpoolCreated,
             hooks.beforeSpoolCleanup,
             hooks.afterSpoolFileUnlink,
+            hooks.onDiagnosticStage,
         ]) {
             if (hook !== undefined && typeof hook !== "function") {
                 throw optionsInvalidError();

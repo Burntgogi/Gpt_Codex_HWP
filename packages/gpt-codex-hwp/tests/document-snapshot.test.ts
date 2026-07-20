@@ -388,6 +388,30 @@ test("document snapshot streams large input into an owner-only spool with an off
   assert.deepEqual([...await readFile(sourcePath)], [...bytes]);
 });
 
+test("document snapshot reports only fixed spool stages to a diagnostic test hook", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hwp-spool-stage-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const spoolRoot = join(root, "spools");
+  await mkdir(spoolRoot);
+  const sourcePath = join(root, "source.hwpx");
+  await writeFile(sourcePath, Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 1]));
+  const stages: string[] = [];
+  const snapshot = await openDocumentSnapshot(sourcePath, {
+    workerInputMaxBytes: 4,
+    testHooks: {
+      spoolRoot,
+      onDiagnosticStage: (stage) => { stages.push(stage); },
+    },
+  });
+  assert.deepEqual(stages, [
+    "source-authorize", "source-open", "spool-directory-create",
+    "spool-directory-acl", "spool-file-create", "spool-file-acl",
+    "spool-copy", "spool-sync", "spool-file-reacl", "spool-verify",
+    "source-reauthorize", "source-verify",
+  ]);
+  await snapshot.cleanup();
+});
+
 test("document snapshot spool cleanup never deletes a replacement directory", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-replacement-"));
   t.after(async () => rm(root, { recursive: true, force: true }));

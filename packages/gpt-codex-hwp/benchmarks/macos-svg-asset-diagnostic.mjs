@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,7 +8,7 @@ async function diagnose() {
   let boundary = "root";
   let root;
   try {
-    root = await mkdtemp(join(tmpdir(), "hwp-svg-diagnostic-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "hwp-svg-diagnostic-")));
     boundary = "handler-import";
     const { handleHwpCreateSvgAsset } = await import("../src/tools/assets.ts");
     boundary = "sharp-import";

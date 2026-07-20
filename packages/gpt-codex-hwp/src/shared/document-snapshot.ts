@@ -96,11 +96,26 @@ export interface DocumentSnapshotSpoolPaths {
 
 export interface DocumentSnapshotTestHooks {
   spoolRoot?: string;
+  onDiagnosticStage?(stage: DocumentSnapshotDiagnosticStage): void;
   afterSourceRead?(): void | Promise<void>;
   onSpoolCreated?(paths: DocumentSnapshotSpoolPaths): void | Promise<void>;
   beforeSpoolCleanup?(paths: DocumentSnapshotSpoolPaths): void | Promise<void>;
   afterSpoolFileUnlink?(paths: DocumentSnapshotSpoolPaths): void | Promise<void>;
 }
+
+export type DocumentSnapshotDiagnosticStage =
+  | "source-authorize"
+  | "source-open"
+  | "spool-directory-create"
+  | "spool-directory-acl"
+  | "spool-file-create"
+  | "spool-file-acl"
+  | "spool-copy"
+  | "spool-sync"
+  | "spool-file-reacl"
+  | "spool-verify"
+  | "source-reauthorize"
+  | "source-verify";
 
 export interface OpenDocumentSnapshotOptions {
   workerInputMaxBytes?: number;
@@ -188,10 +203,12 @@ export async function openDocumentSnapshot(
   if (typeof path !== "string" || path.trim().length === 0) {
     throw openFailedError();
   }
+  normalized.testHooks?.onDiagnosticStage?.("source-authorize");
   const authorizedPath = await authorizeExistingPath(path);
 
   let pendingSpool: PrivateSpoolOwner | undefined;
   try {
+    normalized.testHooks?.onDiagnosticStage?.("source-open");
     const handle = await openFileForBoundedRead(authorizedPath);
     let preparation: SnapshotPreparation;
     let sizeBytes: number;
@@ -230,10 +247,12 @@ export async function openDocumentSnapshot(
       }
 
       await normalized.testHooks?.afterSourceRead?.();
+      normalized.testHooks?.onDiagnosticStage?.("source-reauthorize");
       const reauthorizedPath = await authorizeExistingPath(authorizedPath);
       if (comparableAuthorizedPath(reauthorizedPath) !== comparableAuthorizedPath(authorizedPath)) {
         throw new AllowedRootsPathError();
       }
+      normalized.testHooks?.onDiagnosticStage?.("source-verify");
       assertSameSourceIdentity(
         initialIdentity,
         sourceIdentityOf(await handle.stat({ bigint: true })),
@@ -334,14 +353,18 @@ async function prepareSpoolSnapshot(
   let reader: FileHandle | undefined;
 
   try {
+    options.testHooks?.onDiagnosticStage?.("spool-directory-create");
     directoryPath = await mkdtemp(join(options.spoolRoot, SPOOL_PREFIX));
     directoryIdentity = await ownedDirectoryIdentity(directoryPath);
+    options.testHooks?.onDiagnosticStage?.("spool-directory-acl");
     await setOwnerOnlyAccess(directoryPath, "directory", 0o700);
 
+    options.testHooks?.onDiagnosticStage?.("spool-file-create");
     filePath = join(directoryPath, SPOOL_FILENAME);
     writer = await open(filePath, "wx", 0o600);
     const created = await writer.stat({ bigint: true });
     fileIdentity = fileSystemIdentityOf(created);
+    options.testHooks?.onDiagnosticStage?.("spool-file-acl");
     await setOwnerOnlyAccess(filePath, "file", 0o600);
 
     const reusableBytes = Math.max(
@@ -354,6 +377,7 @@ async function prepareSpoolSnapshot(
     const hash = createHash("sha256");
     let position = 0;
     let preflightBytes = 0;
+    options.testHooks?.onDiagnosticStage?.("spool-copy");
     while (position < sizeBytes) {
       const requested = Math.min(reusable.byteLength, sizeBytes - position);
       const { bytesRead } = await sourceHandle.read(
@@ -376,6 +400,7 @@ async function prepareSpoolSnapshot(
       await writePositionally(writer, reusable, bytesRead, position);
       position += bytesRead;
     }
+    options.testHooks?.onDiagnosticStage?.("spool-sync");
     await writer.sync();
     const completed = await writer.stat({ bigint: true });
     if (completed.size !== BigInt(sizeBytes)) {
@@ -384,7 +409,9 @@ async function prepareSpoolSnapshot(
     await writer.close();
     writer = undefined;
 
+    options.testHooks?.onDiagnosticStage?.("spool-file-reacl");
     await setOwnerOnlyAccess(filePath, "file", 0o600);
+    options.testHooks?.onDiagnosticStage?.("spool-verify");
     const fileStatus = await lstat(filePath, { bigint: true });
     if (
       !fileStatus.isFile() ||
@@ -900,6 +927,7 @@ function validateOptions(
       hooks.onSpoolCreated,
       hooks.beforeSpoolCleanup,
       hooks.afterSpoolFileUnlink,
+      hooks.onDiagnosticStage,
     ]) {
       if (hook !== undefined && typeof hook !== "function") {
         throw optionsInvalidError();
