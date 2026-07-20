@@ -333,6 +333,7 @@ test("Git history privacy finds deleted blobs, metadata, identities, and refs wh
 });
 
 test("Git history binds binary approval to every reachable tree path", async (t) => {
+  t.diagnostic("PUBLIC_CONTENT_BINARY_PATH_STAGE_SCAN");
   const root = await temporaryGitRepository(t, "public-history-binary-path-");
   const banner = await readFile(new URL("../assets/gpt-codex-hwp-banner.png", import.meta.url));
   await commitFile(root, "assets/gpt-codex-hwp-banner.png", banner, "approved path", OWNER_EMAIL);
@@ -341,9 +342,12 @@ test("Git history binds binary approval to every reachable tree path", async (t)
   git(root, ["add", "copied/gpt-codex-hwp-banner.png"]);
   git(root, ["commit", "-qm", "same blob at unapproved path"]);
   const result = await scanPublicHistory(syntheticHistoryOptions(root));
+  t.diagnostic("PUBLIC_CONTENT_BINARY_PATH_STAGE_FINDING");
   assert.ok(result.findings.some((finding) =>
     finding.category === "binary not allowlisted"
-    && finding.label === "copied/gpt-codex-hwp-banner.png"));
+    && finding.label === "copied/gpt-codex-hwp-banner.png"),
+  "PUBLIC_CONTENT_BINARY_PATH_FINDING");
+  t.diagnostic("PUBLIC_CONTENT_BINARY_PATH_STAGE_BODY_COMPLETE");
 });
 
 test("Git history rejects private evidence paths after their files are deleted", async (t) => {

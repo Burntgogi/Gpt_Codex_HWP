@@ -136,6 +136,26 @@ test("Windows Node diagnostic preserves the first public-content receipt without
   );
 });
 
+test("Windows Node diagnostic emits a bounded binary-path stage for pc11", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "public-content-policy.test.mjs",
+    runPublicContentDiagnostic: async () => ({
+      passed: false,
+      caseId: "pc11",
+      stage: "binary-path-finding",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_PUBLIC_CONTENT_BINARY_PATH stage=binary-path-finding\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=pc11 status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic maps runtime-projection failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({
