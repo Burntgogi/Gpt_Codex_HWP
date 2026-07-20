@@ -191,6 +191,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
       }
       if (file === "public-content-policy.test.mjs") {
         let caseId = "aggregate";
+        let completionKind;
         let stage;
         try {
           const candidate = publicContentReceipt ?? await runPublicContentDiagnostic();
@@ -206,12 +207,19 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
               || PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate.stage)) {
               stage = candidate.stage;
             }
+            if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
+              .includes(candidate.completionKind)) {
+              completionKind = candidate.completionKind;
+            }
           }
         } catch {}
         if (caseId === "pc23") {
           stdout.write(`WINDOWS_PUBLIC_CONTENT_METADATA stage=${stage ?? "diagnostic-failed"}\n`);
         } else if (caseId === "pc11") {
           stdout.write(`WINDOWS_PUBLIC_CONTENT_BINARY_PATH stage=${stage ?? "diagnostic-failed"}\n`);
+        }
+        if (completionKind !== undefined) {
+          stdout.write(`WINDOWS_PUBLIC_CONTENT_COMPLETION kind=${completionKind}\n`);
         }
         stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -278,12 +286,14 @@ async function executeReleaseOracleDiagnostic() {
 }
 
 async function executePublicContentDiagnostic() {
+  let completionKind;
   let ordinal;
   let stage;
   const passed = await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
     repository: true,
     testTimeoutMs: PUBLIC_CONTENT_TEST_TIMEOUT_MS,
     maximumTopLevelTests: 61,
+    onCompletionKind: (value) => { completionKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     fixedDiagnostics: [
       ...PUBLIC_CONTENT_METADATA_CODES,
@@ -310,6 +320,7 @@ async function executePublicContentDiagnostic() {
     caseId: ordinal !== undefined
       ? `pc${String(ordinal).padStart(2, "0")}`
       : passed ? "public-content-rerun-passed" : "public-content-aggregate",
+    completionKind,
     stage,
   };
 }

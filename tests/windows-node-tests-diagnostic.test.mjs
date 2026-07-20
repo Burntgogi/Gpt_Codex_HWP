@@ -110,6 +110,26 @@ test("Windows Node diagnostic distinguishes a passing public-content rerun", asy
   );
 });
 
+test("Windows Node diagnostic emits one bounded public-content completion class", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async () => true,
+    runPublicContentFile: async () => ({
+      passed: false,
+      caseId: "public-content-aggregate",
+      completionKind: "nonzero-clean-tap",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_PUBLIC_CONTENT_COMPLETION kind=nonzero-clean-tap\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=public-content-aggregate status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic preserves the first public-content receipt without rerunning", async () => {
   let output = "";
   let reruns = 0;

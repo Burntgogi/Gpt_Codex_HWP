@@ -364,6 +364,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       }
       if (file === "document-process-registration.test.ts") {
         let caseId = "aggregate";
+        let completionKind;
+        let failureKind;
         let firstFailureStage;
         try {
           const candidate = documentReceipt ?? await runDocumentProcessDiagnostic();
@@ -378,6 +380,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate.stage)) {
               firstFailureStage = candidate.stage;
             }
+            if (["test-timeout", "hook-failure", "test-code", "async-failure", "cancelled", "unknown"]
+              .includes(candidate.failureKind)) {
+              failureKind = candidate.failureKind;
+            }
+            if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
+              .includes(candidate.completionKind)) {
+              completionKind = candidate.completionKind;
+            }
           }
         } catch {}
         if (caseId === "dp45") {
@@ -389,6 +399,12 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             } catch {}
           }
           stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL stage=${stage}\n`);
+          if (failureKind !== undefined) {
+            stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_FAILURE kind=${failureKind}\n`);
+          }
+          if (completionKind !== undefined) {
+            stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_COMPLETION kind=${completionKind}\n`);
+          }
         }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -448,7 +464,9 @@ async function executeDoctorOrphanDiagnostic() {
 }
 
 async function executeDocumentProcessDiagnostic(options = {}) {
+  let completionKind;
   let ordinal;
+  let failureKind;
   let stage;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
     spawnProcess: options.spawnProcess,
@@ -456,7 +474,9 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     testTimeoutMs: options.testTimeoutMs,
     closeTimeoutMs: options.closeTimeoutMs,
     maximumTopLevelTests: 51,
+    onCompletionKind: (value) => { completionKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    onFailedTopLevelFailureKind: (value) => { failureKind = value; },
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
     onFixedDiagnostic: (code) => {
       const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
@@ -474,6 +494,8 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     caseId: ordinal !== undefined
       ? `dp${String(ordinal).padStart(2, "0")}`
       : passed ? "document-rerun-passed" : "document-aggregate",
+    completionKind,
+    failureKind,
     stage,
   };
 }
@@ -656,6 +678,8 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         forwardFixedDiagnostic(chunks, capturedBytes, options);
         forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
         forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
+        forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
+        forwardCompletionKind(chunks, capturedBytes, code, signal, options);
         finish(code === 0 && signal === null && validTapReceipt(
           chunks, capturedBytes, options.allowAllSkipped === true,
         ));
@@ -677,6 +701,55 @@ function forwardFailedTopLevelOrdinal(chunks, capturedBytes, options) {
   const ordinal = failedTopLevelOrdinal(text, options.maximumTopLevelTests);
   if (ordinal === undefined) return;
   try { options.onFailedTopLevelOrdinal(ordinal); } catch {}
+}
+
+function forwardCompletionKind(chunks, capturedBytes, code, signal, options) {
+  if (typeof options.onCompletionKind !== "function") return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
+  catch { text = ""; }
+  const kind = classifyNodeTestCompletion(text, code, signal);
+  try { options.onCompletionKind(kind); } catch {}
+}
+
+export function classifyNodeTestCompletion(text, code, signal) {
+  if (signal !== null) return "child-signal";
+  if (typeof text !== "string") return "invalid-summary";
+  const tests = Number(/^# tests ([0-9]+)$/mu.exec(text)?.[1]);
+  const passed = Number(/^# pass ([0-9]+)$/mu.exec(text)?.[1]);
+  const failed = Number(/^# fail ([0-9]+)$/mu.exec(text)?.[1]);
+  const cancelled = Number(/^# cancelled ([0-9]+)$/mu.exec(text)?.[1]);
+  const skipped = Number(/^# skipped ([0-9]+)$/mu.exec(text)?.[1]);
+  if (![tests, passed, failed, cancelled, skipped].every(Number.isSafeInteger)
+    || tests < 1 || tests !== passed + failed + cancelled + skipped) {
+    return "invalid-summary";
+  }
+  if (failed > 0) return "test-failure";
+  if (cancelled > 0) return "cancelled";
+  if (code !== 0) return "nonzero-clean-tap";
+  return "passed";
+}
+
+function forwardFailedTopLevelFailureKind(chunks, capturedBytes, options) {
+  if (typeof options.onFailedTopLevelFailureKind !== "function") return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
+  catch { return; }
+  const kind = failedTopLevelFailureKind(text);
+  if (kind === undefined) return;
+  try { options.onFailedTopLevelFailureKind(kind); } catch {}
+}
+
+export function failedTopLevelFailureKind(text) {
+  if (typeof text !== "string" || !/^not ok [1-9][0-9]* - /mu.test(text)
+    || !/^# fail [1-9][0-9]*$/mu.test(text)) return undefined;
+  const raw = /^  failureType: '([^'\r\n]{1,64})'$/mu.exec(text)?.[1];
+  if (raw === "testTimeoutFailure") return "test-timeout";
+  if (raw === "hookFailed") return "hook-failure";
+  if (raw === "testCodeFailure" || raw === "subtestsFailed") return "test-code";
+  if (raw === "uncaughtException" || raw === "unhandledRejection") return "async-failure";
+  if (raw === "cancelledByParent") return "cancelled";
+  return "unknown";
 }
 
 export function failedTopLevelOrdinal(text, maximumTopLevelTests) {

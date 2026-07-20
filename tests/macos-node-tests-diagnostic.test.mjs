@@ -4,7 +4,9 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
+  classifyNodeTestCompletion,
   executeBoundedNodeTestFile,
+  failedTopLevelFailureKind,
   failedTopLevelOrdinal,
   runMacNodeTestsDiagnostic,
 } from "../scripts/macos-node-tests-diagnostic.mjs";
@@ -246,7 +248,11 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
   let isolatedReruns = 0;
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file) => file !== "document-process-registration.test.ts",
-    runDocumentProcessDiagnostic: async () => ({ caseId: "dp45", stage: "cleanup-complete" }),
+    runDocumentProcessDiagnostic: async () => ({
+      caseId: "dp45",
+      failureKind: "test-timeout",
+      stage: "cleanup-complete",
+    }),
     runDocumentSequentialDiagnostic: async () => {
       isolatedReruns += 1;
       return "passed-on-rerun";
@@ -258,7 +264,9 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
   assert.equal(isolatedReruns, 0);
   assert.equal(
     output,
-    "MAC_DOCUMENT_SEQUENTIAL stage=cleanup-complete\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
+    "MAC_DOCUMENT_SEQUENTIAL stage=cleanup-complete\n"
+      + "MAC_DOCUMENT_SEQUENTIAL_FAILURE kind=test-timeout\n"
+      + "MAC_NODE_TEST_CASE case=dp45 status=failed\n",
   );
 });
 
@@ -315,6 +323,37 @@ test("top-level TAP ordinal parser rejects nested, passing, and out-of-range lin
   assert.equal(failedTopLevelOrdinal("    not ok 3 - nested\n# fail 1\n", 51), undefined);
   assert.equal(failedTopLevelOrdinal("not ok 52 - outside\n# fail 1\n", 51), undefined);
   assert.equal(failedTopLevelOrdinal("not ok 19 - private\n# fail 0\n", 51), undefined);
+});
+
+test("top-level TAP failure parser exposes only fixed Node failure classes", () => {
+  assert.equal(failedTopLevelFailureKind(
+    "not ok 45 - private\n  failureType: 'testTimeoutFailure'\n# fail 1\n",
+  ), "test-timeout");
+  assert.equal(failedTopLevelFailureKind(
+    "not ok 45 - private\n  failureType: 'hookFailed'\n# fail 1\n",
+  ), "hook-failure");
+  assert.equal(failedTopLevelFailureKind(
+    "not ok 45 - private\n  failureType: 'testCodeFailure'\n# fail 1\n",
+  ), "test-code");
+  assert.equal(failedTopLevelFailureKind(
+    "not ok 45 - private\n  failureType: 'PRIVATE/path'\n# fail 1\n",
+  ), "unknown");
+  assert.equal(failedTopLevelFailureKind(
+    "ok 45 - private\n  failureType: 'testTimeoutFailure'\n# fail 0\n",
+  ), undefined);
+});
+
+test("Node TAP completion classifier exposes only fixed bounded outcomes", () => {
+  const clean = "# tests 1\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n";
+  assert.equal(classifyNodeTestCompletion(clean, 0, null), "passed");
+  assert.equal(classifyNodeTestCompletion(clean, 1, null), "nonzero-clean-tap");
+  assert.equal(classifyNodeTestCompletion(
+    "not ok 1 - private\n# tests 1\n# pass 0\n# fail 1\n# cancelled 0\n# skipped 0\n",
+    1,
+    null,
+  ), "test-failure");
+  assert.equal(classifyNodeTestCompletion("PRIVATE/path", 1, null), "invalid-summary");
+  assert.equal(classifyNodeTestCompletion(clean, null, "SIGKILL"), "child-signal");
 });
 
 test("macOS Node diagnostic reports the fixed aggregate id when every compact-runtime case passes alone", async () => {
