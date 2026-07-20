@@ -9,6 +9,7 @@ const DEFAULT_TEST_TIMEOUT_MS = 120_000;
 const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DOCUMENT_PROCESS_TEST_TIMEOUT_MS = 300_000;
+const DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS = 300_000;
 const TEST_FILES = Object.freeze([
   "allowed-roots.test.ts", "assets.test.ts", "benchmark-policy.test.ts",
   "bounded-frame.test.ts", "build-assets.test.ts", "compact-runtime.test.ts",
@@ -217,10 +218,10 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const receiptPrefix = options.receiptPrefix === "WINDOWS" ? "WINDOWS" : "MAC";
-  const runFile = options.runFile ?? ((file) => executeTestFile(file, {
+  const runFile = options.runFile ?? ((file, fileOptions) => executeTestFile(file, {
     spawnProcess: options.spawnProcess ?? spawn,
     terminateTree: options.terminateTree ?? terminateTree,
-    testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+    testTimeoutMs: fileOptions.testTimeoutMs,
     closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
   }));
   const runAllowedRootsCase = options.runAllowedRootsCase ?? ((record) => executeTestFile(
@@ -297,13 +298,19 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   for (const file of TEST_FILES) {
     let passed = false;
     let documentReceipt;
+    const testTimeoutMs = boundedTimeout(
+      options.testTimeoutMs,
+      file === "document-worker-operations.test.ts"
+        ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
+        : DEFAULT_TEST_TIMEOUT_MS,
+    );
     try {
       if (file === "document-process-registration.test.ts"
         && typeof runDocumentFile === "function") {
         documentReceipt = await runDocumentFile();
         passed = documentReceipt?.passed === true;
       } else {
-        passed = await runFile(file) === true;
+        passed = await runFile(file, { testTimeoutMs }) === true;
       }
     } catch { passed = false; }
     if (!passed) {
