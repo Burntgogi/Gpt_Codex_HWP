@@ -512,7 +512,11 @@ test("benchmark policy verifies descendant termination after abnormal case exit"
   ].join("\n"), "utf8");
   const result = await executeBounded(process.execPath, [fixture], {
     cwd: PACKAGE_ROOT,
-    timeoutMs: 5_000,
+    // Hosted macOS can spend more than five seconds establishing the
+    // identity-bound process-group and RSS baseline before releasing fd 3.
+    // Keep this control bounded, but leave enough room to exercise the
+    // abnormal-exit cleanup instead of timing out during supervision setup.
+    timeoutMs: 15_000,
     env: process.env,
     controlFrame: { bounded: true },
   });
