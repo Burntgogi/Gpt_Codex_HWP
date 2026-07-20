@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
@@ -20,6 +19,7 @@ import { DOCTOR_RUNNER_READY } from "../src/workers/doctor-command-runner.js";
 import {
   superviseDocumentProcessTreeWithForcedTrackerForTest,
 } from "../src/workers/document-child-client.js";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 const TOOL_NAMES = [
   "hwp_detect_format",
@@ -222,7 +222,7 @@ test("doctor runtime access rejects linked file and directory ancestors without 
   assert.equal(typeof createAccess, "function");
   if (createAccess === undefined) return;
 
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-path-boundary-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "doctor-path-boundary-" });
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const runtimeRoot = join(temporaryRoot, "runtime");
   const outsideRoot = join(temporaryRoot, "outside");
@@ -466,7 +466,7 @@ test("Windows doctor gate never dispatches through a forced cleanup-only tracker
   skip: process.platform !== "win32" ? "Windows process tracking is Windows-only" : false,
   timeout: 15_000,
 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "doctor-tracker-gate-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "doctor-tracker-gate-" });
   const markerPath = join(root, "dispatched.txt");
   t.after(() => rm(root, { recursive: true, force: true }));
   const supervisorFrames: string[] = [];
@@ -531,7 +531,7 @@ test("doctor bounded command removes a real descendant after timeout", { timeout
   assert.equal(typeof execute, "function");
   if (execute === undefined) return;
 
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-process-tree-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "doctor-process-tree-" });
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const fixturePath = join(temporaryRoot, "tree.mjs");
   await writeFile(fixturePath, [
@@ -559,7 +559,7 @@ test("doctor timeout terminates a grandchild after its parent exits but inherite
     return;
   }
   const execute = doctorModule.executeBoundedCommand;
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-orphaned-tree-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "doctor-orphaned-tree-" });
   const fixturePath = join(temporaryRoot, "orphaned-tree.mjs");
   const sentinelPath = join(temporaryRoot, "late-sentinel.txt");
   let descendantPid = 0;
@@ -607,7 +607,7 @@ test("Windows doctor Job removes a grandchild after the command parent exits", {
     t.skip("Windows Job verification is only available on Windows.");
     return;
   }
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-windows-job-tree-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "doctor-windows-job-tree-" });
   const fixturePath = join(temporaryRoot, "windows-job-tree.mjs");
   const sentinelPath = join(temporaryRoot, "late-sentinel.txt");
   let descendantPid = 0;

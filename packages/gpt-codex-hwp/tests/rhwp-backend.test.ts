@@ -4,12 +4,10 @@ import {
   access,
   copyFile,
   mkdir,
-  mkdtemp,
   readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before, type TestContext } from "node:test";
 
@@ -25,6 +23,7 @@ import {
 } from "kordoc";
 
 import { resolveHwpFixture } from "../release-scripts/hwp-fixture.mjs";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 import {
   RhwpBackendLoader,
   checkRhwpBackend,
@@ -55,7 +54,7 @@ interface PreviewDependencies {
 let tmpRoot = "";
 
 before(async () => {
-  tmpRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-rhwp-backend-"));
+  tmpRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-rhwp-backend-" });
 });
 
 after(async () => {
