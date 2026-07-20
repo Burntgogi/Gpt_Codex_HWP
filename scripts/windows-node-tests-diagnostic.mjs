@@ -77,6 +77,14 @@ const RELEASE_ORACLE_STAGES = new Set(["real-hwp", "hwpx-roundtrip"]);
 const RELEASE_ORACLE_CODES = Object.freeze([
   "RELEASE_ORACLE_REAL_HWP", "RELEASE_ORACLE_HWPX_ROUNDTRIP",
 ]);
+const PUBLIC_CONTENT_METADATA_STAGES = new Set([
+  "personal-identity", "commit-header", "ref-name",
+]);
+const PUBLIC_CONTENT_METADATA_CODES = Object.freeze([
+  "PUBLIC_CONTENT_METADATA_PERSONAL_IDENTITY",
+  "PUBLIC_CONTENT_METADATA_COMMIT_HEADER",
+  "PUBLIC_CONTENT_METADATA_REF_NAME",
+]);
 
 export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -153,10 +161,22 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
       }
       if (file === "public-content-policy.test.mjs") {
         let caseId = "aggregate";
+        let stage;
         try {
           const candidate = await runPublicContentDiagnostic();
-          if (/^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate)) caseId = candidate;
+          if (typeof candidate === "string"
+            && /^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate)) {
+            caseId = candidate;
+          } else if (candidate !== null && typeof candidate === "object") {
+            if (/^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate.caseId)) {
+              caseId = candidate.caseId;
+            }
+            if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate.stage)) stage = candidate.stage;
+          }
         } catch {}
+        if (caseId === "pc23") {
+          stdout.write(`WINDOWS_PUBLIC_CONTENT_METADATA stage=${stage ?? "diagnostic-failed"}\n`);
+        }
         stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
         return false;
@@ -223,12 +243,22 @@ async function executeReleaseOracleDiagnostic() {
 
 async function executePublicContentDiagnostic() {
   let ordinal;
+  let stage;
   await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
     repository: true,
     maximumTopLevelTests: 61,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    fixedDiagnostics: PUBLIC_CONTENT_METADATA_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("PUBLIC_CONTENT_METADATA_".length)
+        .toLowerCase().replaceAll("_", "-");
+      if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate)) stage = candidate;
+    },
   });
-  return ordinal === undefined ? "aggregate" : `pc${String(ordinal).padStart(2, "0")}`;
+  return {
+    caseId: ordinal === undefined ? "aggregate" : `pc${String(ordinal).padStart(2, "0")}`,
+    stage,
+  };
 }
 
 async function executeRuntimeProjectionDiagnostic() {

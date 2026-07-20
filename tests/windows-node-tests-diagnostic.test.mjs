@@ -61,6 +61,22 @@ test("Windows Node diagnostic maps public-content failure to one bounded ordinal
   assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=pc61 status=failed\n");
 });
 
+test("Windows Node diagnostic preserves the bounded metadata stage from the public-content rerun", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "public-content-policy.test.mjs",
+    runPublicContentDiagnostic: async () => ({ caseId: "pc23", stage: "commit-header" }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_PUBLIC_CONTENT_METADATA stage=commit-header\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=pc23 status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic maps runtime-projection failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({

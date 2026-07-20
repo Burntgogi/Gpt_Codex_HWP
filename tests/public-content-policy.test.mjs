@@ -600,10 +600,16 @@ test("Git history requires exact names and scans every header plus ref label", a
   git(root, ["update-ref", "refs/heads/credentials.json", "HEAD"]);
 
   const result = await scanPublicHistory(syntheticHistoryOptions(root));
-  assert.ok(result.findings.some((finding) => finding.category === "personal identity"));
+  assert.ok(
+    result.findings.some((finding) => finding.category === "personal identity"),
+    "PUBLIC_CONTENT_METADATA_PERSONAL_IDENTITY",
+  );
   assert.ok(result.findings.some((finding) => finding.objectId === craftedId
-    && finding.category === "sensitive Git metadata"));
-  assert.ok(result.findings.some((finding) => finding.category === "sensitive ref name"));
+    && finding.category === "sensitive Git metadata"), "PUBLIC_CONTENT_METADATA_COMMIT_HEADER");
+  assert.ok(
+    result.findings.some((finding) => finding.category === "sensitive ref name"),
+    "PUBLIC_CONTENT_METADATA_REF_NAME",
+  );
 });
 
 test("Git history pins frozen releases to annotated tag objects and peeled commits", async (t) => {

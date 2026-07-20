@@ -340,16 +340,29 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       }
       if (file === "document-process-registration.test.ts") {
         let caseId = "aggregate";
+        let firstFailureStage;
         try {
           const candidate = await runDocumentProcessDiagnostic();
-          if (/^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate)) caseId = candidate;
+          if (typeof candidate === "string"
+            && /^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate)) {
+            caseId = candidate;
+          } else if (candidate !== null && typeof candidate === "object") {
+            if (/^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate.caseId)) {
+              caseId = candidate.caseId;
+            }
+            if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate.stage)) {
+              firstFailureStage = candidate.stage;
+            }
+          }
         } catch {}
         if (caseId === "dp45") {
-          let stage = "diagnostic-failed";
-          try {
-            const candidate = await runDocumentSequentialDiagnostic();
-            if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
-          } catch {}
+          let stage = firstFailureStage ?? "diagnostic-failed";
+          if (firstFailureStage === undefined) {
+            try {
+              const candidate = await runDocumentSequentialDiagnostic();
+              if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+            } catch {}
+          }
           stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL stage=${stage}\n`);
         }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
@@ -409,7 +422,21 @@ async function executeDoctorOrphanDiagnostic() {
 }
 
 async function executeDocumentProcessDiagnostic() {
-  return executeSourceOrdinalDiagnostic("document-process-registration.test.ts", 51, "dp");
+  let ordinal;
+  let stage;
+  await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    maximumTopLevelTests: 51,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
+      if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+    },
+  });
+  return {
+    caseId: ordinal === undefined ? "aggregate" : `dp${String(ordinal).padStart(2, "0")}`,
+    stage,
+  };
 }
 
 async function executeDocumentSequentialDiagnostic() {

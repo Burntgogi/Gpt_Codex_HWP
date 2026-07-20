@@ -241,6 +241,27 @@ test("macOS Node diagnostic emits a bounded sequential-registration stage", asyn
   );
 });
 
+test("macOS Node diagnostic preserves the sequential stage from the ordinal rerun", async () => {
+  let output = "";
+  let isolatedReruns = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "document-process-registration.test.ts",
+    runDocumentProcessDiagnostic: async () => ({ caseId: "dp45", stage: "seal" }),
+    runDocumentSequentialDiagnostic: async () => {
+      isolatedReruns += 1;
+      return "passed-on-rerun";
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(isolatedReruns, 0);
+  assert.equal(
+    output,
+    "MAC_DOCUMENT_SEQUENTIAL stage=seal\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
+  );
+});
+
 test("macOS Node diagnostic maps benchmark failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
