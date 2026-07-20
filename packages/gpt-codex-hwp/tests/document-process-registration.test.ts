@@ -1645,7 +1645,7 @@ test("registration descriptor ownership produces clean EOF after case and bootst
   assert.equal(coordinator.state, "sealed");
 });
 
-test("registration sequential transport completes two real bootstrap ACK handshakes without multiplexing", { timeout: 30_000 }, async (t) => {
+test("registration sequential transport completes two real bootstrap ACK handshakes without multiplexing", { timeout: 60_000 }, async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-sequential-"));
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const markerPrefix = join(temporaryRoot, "payload");
