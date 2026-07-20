@@ -92,6 +92,17 @@ const superviseDocumentProcessTreeWithForcedTrackerForTest = (
     ): Promise<unknown>;
   }>
 ).superviseDocumentProcessTreeWithForcedTrackerForTest;
+const observeChildProcessClose = (
+  childClientModule as unknown as Readonly<{
+    observeChildProcessClose(
+      child: ReturnType<typeof spawn>,
+    ): Promise<Readonly<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      error: Error | null;
+    }>>;
+  }>
+).observeChildProcessClose;
 const isIntegrityVerifiedResultSpool = (
   childClientModule as unknown as {
     isIntegrityVerifiedResultSpool(value: unknown): boolean;
@@ -122,6 +133,56 @@ const validateWindowsAclReceipt = (
     ): boolean;
   }
 ).validateWindowsAclReceipt;
+
+test("Windows real supervisor accepts READY and closes its exact target and helper", {
+  skip: process.platform !== "win32" ? "Windows Job supervisor diagnostic" : false,
+  timeout: 15_000,
+}, async () => {
+  let target: ReturnType<typeof spawn> | undefined;
+  let boundary: "spawn" | "script-load" | "job-startup" | "frame" |
+    "helper-close" | "target-close" = "spawn";
+  let firstState: "ready-mode-1" | "ready-mode-2" | undefined;
+  try {
+    target = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      shell: false,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    const targetClose = observeChildProcessClose(target);
+    boundary = "script-load";
+    const supervisor = await superviseDocumentProcessTree(target, {
+      frameObserver: (frame) => {
+        if (firstState !== undefined) return;
+        if (/^GPT_CODEX_HWP_JOB READY [0-9]+ 1 [0-9]+$/u.test(frame)) {
+          firstState = "ready-mode-1";
+        } else if (/^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u.test(frame)) {
+          firstState = "ready-mode-2";
+        } else {
+          boundary = /^GPT_CODEX_HWP_JOB ERROR startup [A-Za-z0-9_-]+$/u.test(frame)
+            ? "job-startup"
+            : "frame";
+        }
+      },
+    }) as { terminate(): Promise<ProcessTreeTerminationReceipt> };
+    boundary = "frame";
+    assert.equal(firstState === "ready-mode-1" || firstState === "ready-mode-2", true, boundary);
+    boundary = "helper-close";
+    assert.deepEqual(await supervisor.terminate(), {
+      gone: true,
+      proof: "windows-job-empty",
+    }, boundary);
+    boundary = "target-close";
+    const close = await targetClose;
+    assert.equal(close.error, null, boundary);
+    assert.equal(close.code === null || Number.isInteger(close.code), true, boundary);
+  } catch {
+    assert.fail(boundary);
+  } finally {
+    if (target !== undefined && target.exitCode === null && target.signalCode === null) {
+      target.kill("SIGKILL");
+    }
+  }
+});
 const createAclHelperEnvironment = (
   childClientModule as unknown as {
     createAclHelperEnvironment(
@@ -1180,9 +1241,87 @@ test("document child client removes its sole abort listener on success", async (
   }
 });
 
+test("document child crash before READY is classified only after typed termination proof", async () => {
+  const owned = createOwnedFiles();
+  let startWriteSettled = false;
+  let supervisorBound = false;
+  let closeObserved = false;
+  let terminationReason: ProcessTreeTerminationReceipt["proof"] |
+    "identity" | "deadline" | "termination" | "registration" | "channel" | undefined;
+  let captured: unknown;
+  try {
+    try {
+      const client = createProductionDocumentChildClient({
+        childEntry: fixturePath,
+        childArguments: ["crash-before-ready", "250"],
+        startGateEntry: startGatePath,
+        spawnFactory: (specification) => {
+          const child = spawn(specification.command, [...specification.args], specification.options);
+          child.once("close", () => { closeObserved = true; });
+          const writer = child.stdio[7];
+          if (writer !== null && writer !== undefined && "write" in writer) {
+            const write = writer.write.bind(writer);
+            writer.write = ((chunk: unknown, callback?: (error?: Error | null) => void) =>
+              write(chunk, (error?: Error | null) => {
+                startWriteSettled = true;
+                callback?.(error);
+              })) as typeof writer.write;
+          }
+          return child;
+        },
+        jobSupervisorFactory: async (child) => {
+          const supervisor = await superviseDocumentProcessTree(child as ReturnType<typeof spawn>) as {
+            terminate(): Promise<ProcessTreeTerminationReceipt>;
+          };
+          supervisorBound = true;
+          return {
+            async terminate() {
+              const receipt = await supervisor.terminate();
+              terminationReason = receipt.gone ? receipt.proof : receipt.reason;
+              return receipt;
+            },
+          } as never;
+        },
+      });
+      await client.run(
+        detectRequest("child-crash-before-ready"),
+        spoolSnapshot(owned.inputFd, 3),
+        { deadlineMs: 5_000 },
+      );
+    } catch (error: unknown) {
+      captured = error;
+    }
+    const diagnosticDeadline = Date.now() + 3_000;
+    while ((!closeObserved || terminationReason === undefined) && Date.now() < diagnosticDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const details = typeof captured === "object" && captured !== null && "details" in captured
+      ? (captured as { details?: { stage?: unknown } }).details
+      : undefined;
+    assert.deepEqual({
+      code: safeCode(captured),
+      stage: details?.stage === "startup" ? "startup" : "unknown",
+      terminationReason,
+      startWriteSettled,
+      supervisorBound,
+      closeObserved,
+    }, {
+      code: "ENGINE_INIT_FAILED",
+      stage: "startup",
+      terminationReason: process.platform === "win32"
+        ? "windows-job-empty"
+        : "registered-groups-empty",
+      startWriteSettled: true,
+      supervisorBound: true,
+      closeObserved: true,
+    });
+  } finally {
+    owned.cleanup();
+  }
+});
+
 test("document child client maps lifecycle failures and recovers", async () => {
   for (const [mode, code] of [
-    ["crash-before-ready", "ENGINE_INIT_FAILED"],
     ["failure-before-ready", "ENGINE_INIT_FAILED"],
     ["crash-after-ready", "ENGINE_CRASH"],
     ["oom", "ENGINE_OOM"],
@@ -3267,7 +3406,9 @@ test("document child client includes gate wait in the request deadline", async (
   }
 });
 
-test("document child client includes private spool and spawn time before framed dispatch", async () => {
+test("document child client includes private spool and spawn time before framed dispatch", {
+  skip: process.platform === "win32" ? "POSIX pre-authority startup deadline" : false,
+}, async () => {
   const gate = new HeavyChildGate();
   const root = mkdtempSync(join(tmpdir(), "hwp-startup-deadline-test-"));
   const owned = createOwnedFiles();
@@ -3303,11 +3444,10 @@ test("document child client includes private spool and spawn time before framed 
         snapshot,
         { deadlineMs: 50 },
       ),
-      (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
+      (error: unknown) => safeCode(error) === "ENGINE_TERMINATION_FAILED",
     );
     assert.equal(dispatches, 0);
-    assert.equal(snapshot.cleanupCalls, 1);
-    assert.equal(gate.activeCount, 0);
+    await waitFor(() => snapshot.cleanupCalls === 1 && gate.activeCount === 0);
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();

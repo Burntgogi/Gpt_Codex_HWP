@@ -3,9 +3,9 @@ import {
   close,
   closeSync,
   createReadStream,
-  createWriteStream,
   fstatSync,
   readSync,
+  write,
   writeSync,
 } from "node:fs";
 import { performance } from "node:perf_hooks";
@@ -760,28 +760,21 @@ function writeDescriptor(
 ): Promise<number> {
   return new Promise<number>((resolvePromise, rejectPromise) => {
     const attempt = (): void => {
-      const output = createWriteStream("", {
-        fd: descriptor,
-        autoClose: false,
-      });
-      let settled = false;
-      const settle = (error?: Error | null): void => {
-        if (settled) return;
-        settled = true;
-        output.removeAllListeners();
-        output.destroy();
-        if (error !== undefined && error !== null && isRetryableNonBlockingError(error)) {
-          setTimeout(attempt, 1);
-        } else if (error !== undefined && error !== null) {
-          rejectPromise(error);
-        } else {
-          resolvePromise(length);
-        }
-      };
-      output.once("error", settle);
-      output.write(
-        Buffer.from(buffer.buffer, buffer.byteOffset + offset, length),
-        settle,
+      write(
+        descriptor,
+        buffer,
+        offset,
+        length,
+        null,
+        (error, written) => {
+          if (error !== undefined && error !== null && isRetryableNonBlockingError(error)) {
+            setTimeout(attempt, 1);
+          } else if (error !== undefined && error !== null) {
+            rejectPromise(error);
+          } else {
+            resolvePromise(written);
+          }
+        },
       );
     };
     attempt();

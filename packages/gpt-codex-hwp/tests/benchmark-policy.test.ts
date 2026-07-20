@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 
 import JSZip from "jszip";
 
 import { REQUIRED_RELEASE_STAGES } from "../../../scripts/release-verify.mjs";
 import { finalizeVerifiedWindowsSupervisor } from "../src/workers/document-child-client.js";
+import { createDocumentWorkerClient } from "../src/workers/document-worker-client.js";
 import {
   APPROVED_BENCHMARK_SIZES_MIB,
   BENCHMARK_CONCURRENCY,
@@ -41,6 +43,10 @@ import {
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, "..", "..");
 const BENCHMARK_ENTRY = join(PACKAGE_ROOT, "benchmarks", "document-engine-benchmark.mjs");
+const MACOS_BACKEND_PROBE = new URL(
+  "./fixtures/workers/backend-init-probe.mjs",
+  import.meta.url,
+);
 
 test("benchmark policy accepts only bounded approved sizes with fixed sequential execution", () => {
   assert.deepEqual(APPROVED_BENCHMARK_SIZES_MIB, [10, 100, 256, 512]);
@@ -298,8 +304,10 @@ test("benchmark policy bounds synthetic child-tree stress and verifies every ide
     controlFrame: { bounded: true },
   });
   const pids = JSON.parse(result.stdout) as number[];
-  assert.equal(result.status, "failed");
   assert.equal(result.processGone, true);
+  assert.equal(result.diagnosticStage, "finalizer");
+  assert.notEqual(result.caseMetrics, null);
+  assert.equal(result.status, "failed");
   assert.equal(pids.length, descendantCount);
   let goneCount = 0;
   for (const pid of pids) {
@@ -358,8 +366,10 @@ test("benchmark registration measures accepted-group RSS outside the case and te
     controlFrame: { bounded: true },
   });
 
-  assert.equal(result.status, "failed");
   assert.equal(result.processGone, true);
+  assert.equal(result.diagnosticStage, "finalizer");
+  assert.notEqual(result.caseMetrics, null);
+  assert.equal(result.status, "failed");
   const root = JSON.parse(result.stdout) as {
     childPid: number;
     rootRssDeltaBytes: number;
@@ -465,6 +475,7 @@ test("benchmark registration telemetry gate writes fd3 only after exact bounded 
   for (const [label, readiness, expectControl] of readinessCases) {
     await t.test(label, async () => {
       let terminateCalls = 0;
+      let telemetryFlushReceipts = 0;
       const result = await executeBounded(process.execPath, ["-e", caseScript], {
         cwd: PACKAGE_ROOT,
         timeoutMs: 300,
@@ -474,6 +485,10 @@ test("benchmark registration telemetry gate writes fd3 only after exact bounded 
           ...(readiness === undefined ? {} : { processTreeTelemetryReady: readiness }),
           registerProcessTreeTelemetryRoot: () => {},
           finishProcessTreeTelemetry: () => {},
+          flushProcessTreeTelemetry: async () => {
+            telemetryFlushReceipts += 1;
+            return true;
+          },
           terminate: async () => {
             terminateCalls += 1;
             child.kill("SIGKILL");
@@ -487,6 +502,11 @@ test("benchmark registration telemetry gate writes fd3 only after exact bounded 
       assert.equal(result.stdout.includes("FD3_CONTROL_RECEIVED"), expectControl, label);
       assert.equal(terminateCalls, 1, label);
       assert.equal(result.processGone, true, label);
+      assert.equal(
+        telemetryFlushReceipts,
+        process.platform === "win32" ? 0 : 1,
+        `${label}: telemetry-flush-receipt`,
+      );
       if (expectControl) {
         assert.equal(result.status, "passed", label);
       } else {
@@ -519,6 +539,10 @@ test("benchmark shutdown finalizes telemetry only after exact root authority", a
           : { gone: true, proof: "registered-groups-empty" };
       },
       finishProcessTreeTelemetry: () => { events.push("telemetry-finalizer"); },
+      flushProcessTreeTelemetry: async () => {
+        events.push("telemetry-flush-receipt");
+        return true;
+      },
       processTreeRss: () => {
         events.push("rss-read");
         return { baselineBytes: 1, peakBytes: 2 };
@@ -528,7 +552,104 @@ test("benchmark shutdown finalizes telemetry only after exact root authority", a
 
   assert.equal(result.processGone, true);
   assert.equal(result.status, "passed");
-  assert.deepEqual(events, ["root-authority", "telemetry-finalizer", "rss-read"]);
+  assert.deepEqual(events, process.platform === "win32"
+    ? ["root-authority", "telemetry-finalizer", "rss-read"]
+    : [
+        "root-authority",
+        "telemetry-flush-receipt",
+        "telemetry-finalizer",
+        "rss-read",
+      ]);
+});
+
+test("macOS arm64 worker initializes the built document compute backend", {
+  skip: process.platform !== "darwin" || process.arch !== "arm64"
+    ? "macOS arm64 worker diagnostic"
+    : false,
+  timeout: 30_000,
+}, async () => {
+  const backendUrl = new URL(
+    "../dist/workers/document-compute-backend.js",
+    import.meta.url,
+  ).href;
+  const worker = new Worker(MACOS_BACKEND_PROBE, {
+    workerData: { backendUrl },
+    stdout: true,
+    stderr: true,
+  });
+  const outcome = await new Promise<
+    "BACKEND_READY" | "worker-error" | "worker-exit" | "backend-import" | "backend-init"
+  >((resolveOutcome) => {
+    let settled = false;
+    const settle = (value: "BACKEND_READY" | "worker-error" | "worker-exit" |
+      "backend-import" | "backend-init"): void => {
+      if (settled) return;
+      settled = true;
+      resolveOutcome(value);
+    };
+    worker.once("message", (value: unknown) => {
+      settle(value === "BACKEND_READY" || value === "backend-import" || value === "backend-init"
+        ? value
+        : "worker-error");
+    });
+    worker.once("error", () => settle("worker-error"));
+    worker.once("exit", () => settle("worker-exit"));
+  });
+  await worker.terminate();
+  assert.equal(outcome, "BACKEND_READY");
+});
+
+test("macOS arm64 normal HWPX becomes READY before the real worker result", {
+  skip: process.platform !== "darwin" || process.arch !== "arm64"
+    ? "macOS arm64 worker diagnostic"
+    : false,
+  timeout: 30_000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hwp-macos-worker-probe-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sourcePath = join(root, "normal-probe.hwpx");
+  await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes: 128 * 1024 });
+  const source = await readFile(sourcePath);
+  const documentBuffer = source.buffer.slice(
+    source.byteOffset,
+    source.byteOffset + source.byteLength,
+  );
+  const events: string[] = [];
+  const client = createDocumentWorkerClient({
+    workerFactory: (options) => {
+      const worker = new Worker(
+        join(PACKAGE_ROOT, "dist", "workers", "document-worker.js"),
+        options,
+      );
+      worker.on("message", (value: unknown) => {
+        if (typeof value !== "object" || value === null || !("type" in value)) return;
+        const type = (value as { type?: unknown }).type;
+        if (type === "ready" || type === "result" || type === "failure") events.push(type);
+      });
+      return worker;
+    },
+  });
+  const result = await client.run(
+    { protocolVersion: 1, requestId: "macos-normal-probe", operation: "parse", input: {}, options: {} },
+    {
+      transport: "worker",
+      metadata: {
+        sizeBytes: documentBuffer.byteLength,
+        sha256: "0".repeat(64),
+        shallowFormat: { candidate: "hwpx", container: "zip", exact: true },
+        protection: { status: "clear", candidateFormat: "hwpx", exact: true },
+      },
+      takeTransferable: () => documentBuffer,
+      async verifySourceUnchanged() {},
+      async cleanup() {},
+    },
+    { deadlineMs: 30_000 },
+  );
+  assert.equal(typeof result.markdown, "string");
+  assert.deepEqual(events.filter((event) => event === "ready" || event === "result"), [
+    "ready",
+    "result",
+  ]);
 });
 
 test("benchmark source wires one reusable facade and ordered nested shutdown", async () => {

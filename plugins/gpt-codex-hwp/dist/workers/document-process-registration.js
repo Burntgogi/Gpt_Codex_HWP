@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { close, closeSync, createReadStream, createWriteStream, fstatSync, readSync, writeSync, } from "node:fs";
+import { close, closeSync, createReadStream, fstatSync, readSync, write, writeSync, } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 export const DOCUMENT_START_DESCRIPTOR = 7;
@@ -673,17 +673,7 @@ function readDescriptor(descriptor, buffer, offset, length) {
 function writeDescriptor(descriptor, buffer, offset, length) {
     return new Promise((resolvePromise, rejectPromise) => {
         const attempt = () => {
-            const output = createWriteStream("", {
-                fd: descriptor,
-                autoClose: false,
-            });
-            let settled = false;
-            const settle = (error) => {
-                if (settled)
-                    return;
-                settled = true;
-                output.removeAllListeners();
-                output.destroy();
+            write(descriptor, buffer, offset, length, null, (error, written) => {
                 if (error !== undefined && error !== null && isRetryableNonBlockingError(error)) {
                     setTimeout(attempt, 1);
                 }
@@ -691,11 +681,9 @@ function writeDescriptor(descriptor, buffer, offset, length) {
                     rejectPromise(error);
                 }
                 else {
-                    resolvePromise(length);
+                    resolvePromise(written);
                 }
-            };
-            output.once("error", settle);
-            output.write(Buffer.from(buffer.buffer, buffer.byteOffset + offset, length), settle);
+            });
         };
         attempt();
     });
