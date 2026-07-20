@@ -113,7 +113,7 @@ test("macOS Node diagnostic reports fixed aggregate id when every allowed-roots 
   });
   assert.equal(passed, false);
   assert.equal(cases, 18);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+  assert.equal(output, "MAC_NODE_TEST_CASE case=allowed-roots-aggregate status=failed\n");
 });
 
 test("macOS Node diagnostic narrows an assets aggregate failure to one fixed case id", async () => {
@@ -165,7 +165,7 @@ test("macOS Node diagnostic reports the fixed aggregate id when every assets cas
   });
   assert.equal(passed, false);
   assert.equal(cases, 17);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+  assert.equal(output, "MAC_NODE_TEST_CASE case=assets-aggregate status=failed\n");
 });
 
 test("macOS Node diagnostic narrows a compact-runtime aggregate failure to one fixed case id", async () => {
@@ -262,6 +262,42 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
   );
 });
 
+test("macOS Node diagnostic distinguishes a passing document-registration rerun", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "document-process-registration.test.ts",
+    runDocumentProcessDiagnostic: async () => ({ caseId: "document-rerun-passed" }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_NODE_TEST_CASE case=document-rerun-passed status=failed\n",
+  );
+});
+
+test("macOS Node diagnostic preserves the first document-registration receipt without rerunning", async () => {
+  let output = "";
+  let reruns = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async () => true,
+    runDocumentFile: async () => ({ passed: false, caseId: "dp45", stage: "closed-1" }),
+    runDocumentProcessDiagnostic: async () => {
+      reruns += 1;
+      return { passed: true, caseId: "document-rerun-passed" };
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(reruns, 0);
+  assert.equal(
+    output,
+    "MAC_DOCUMENT_SEQUENTIAL stage=closed-1\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
+  );
+});
+
 test("macOS Node diagnostic maps benchmark failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
@@ -292,7 +328,7 @@ test("macOS Node diagnostic reports the fixed aggregate id when every compact-ru
   });
   assert.equal(passed, false);
   assert.equal(cases, 37);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+  assert.equal(output, "MAC_NODE_TEST_CASE case=compact-runtime-aggregate status=failed\n");
 });
 
 test("macOS Node diagnostic emits one bounded compact-runtime stage for cr36", async () => {
@@ -429,7 +465,7 @@ test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-o
   assert.equal(argsSeen.every((args) => args.some(
     (value) => value.startsWith("--test-name-pattern=^"),
   )), true);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+  assert.equal(output, "MAC_NODE_TEST_CASE case=assets-aggregate status=failed\n");
 });
 
 test("macOS Node diagnostic rejects all-skipped TAP for a non-capability assets case", async () => {
@@ -489,7 +525,7 @@ test("macOS Node diagnostic accepts all-skipped TAP only for the two fixed UNC c
   assert.equal(argsSeen.slice(1).every((args) => args.some(
     (value) => value.startsWith("--test-name-pattern=^allowed roots:"),
   )), true);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=aggregate status=failed\n");
+  assert.equal(output, "MAC_NODE_TEST_CASE case=allowed-roots-aggregate status=failed\n");
 });
 
 test("macOS Node diagnostic rejects all-skipped TAP for a non-capability case", async () => {

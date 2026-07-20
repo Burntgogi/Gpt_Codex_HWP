@@ -245,7 +245,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   const runDoctorOrphanDiagnostic = options.runDoctorOrphanDiagnostic
     ?? executeDoctorOrphanDiagnostic;
   const runDocumentProcessDiagnostic = options.runDocumentProcessDiagnostic
-    ?? executeDocumentProcessDiagnostic;
+    ?? (() => executeDocumentProcessDiagnostic({
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+    }));
+  const runDocumentFile = options.runDocumentFile
+    ?? (options.runFile === undefined ? runDocumentProcessDiagnostic : undefined);
   const runDocumentSequentialDiagnostic = options.runDocumentSequentialDiagnostic
     ?? executeDocumentSequentialDiagnostic;
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
@@ -262,7 +269,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
 
   for (const file of TEST_FILES) {
     let passed = false;
-    try { passed = await runFile(file) === true; } catch { passed = false; }
+    let documentReceipt;
+    try {
+      if (file === "document-process-registration.test.ts"
+        && typeof runDocumentFile === "function") {
+        documentReceipt = await runDocumentFile();
+        passed = documentReceipt?.passed === true;
+      } else {
+        passed = await runFile(file) === true;
+      }
+    } catch { passed = false; }
     if (!passed) {
       if (file === "allowed-roots.test.ts") {
         for (const record of ALLOWED_ROOTS_CASES) {
@@ -274,7 +290,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             return false;
           }
         }
-        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=aggregate status=failed\n`);
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=allowed-roots-aggregate status=failed\n`);
         setExitCode(1);
         return false;
       }
@@ -296,7 +312,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             return false;
           }
         }
-        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=aggregate status=failed\n`);
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=assets-aggregate status=failed\n`);
         setExitCode(1);
         return false;
       }
@@ -318,7 +334,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             return false;
           }
         }
-        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=aggregate status=failed\n`);
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=compact-runtime-aggregate status=failed\n`);
         setExitCode(1);
         return false;
       }
@@ -348,12 +364,13 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let caseId = "aggregate";
         let firstFailureStage;
         try {
-          const candidate = await runDocumentProcessDiagnostic();
+          const candidate = documentReceipt ?? await runDocumentProcessDiagnostic();
           if (typeof candidate === "string"
             && /^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate)) {
             caseId = candidate;
           } else if (candidate !== null && typeof candidate === "object") {
-            if (/^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate.caseId)) {
+            if (/^(?:dp(?:0[1-9]|[1-4][0-9]|5[01])|document-(?:aggregate|rerun-passed))$/u
+              .test(candidate.caseId)) {
               caseId = candidate.caseId;
             }
             if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate.stage)) {
@@ -380,6 +397,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         try {
           const candidate = await runBenchmarkPolicyDiagnostic();
           if (/^bp(?:0[1-9]|[12][0-9]|3[0-8])$/u.test(candidate)) caseId = candidate;
+          else if (candidate === "aggregate") caseId = "benchmark-aggregate";
         } catch {}
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -427,10 +445,14 @@ async function executeDoctorOrphanDiagnostic() {
   return stage;
 }
 
-async function executeDocumentProcessDiagnostic() {
+async function executeDocumentProcessDiagnostic(options = {}) {
   let ordinal;
   let stage;
-  await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+  const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    spawnProcess: options.spawnProcess,
+    terminateTree: options.terminateTree,
+    testTimeoutMs: options.testTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs,
     maximumTopLevelTests: 51,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
@@ -446,7 +468,10 @@ async function executeDocumentProcessDiagnostic() {
     },
   });
   return {
-    caseId: ordinal === undefined ? "aggregate" : `dp${String(ordinal).padStart(2, "0")}`,
+    passed,
+    caseId: ordinal !== undefined
+      ? `dp${String(ordinal).padStart(2, "0")}`
+      : passed ? "document-rerun-passed" : "document-aggregate",
     stage,
   };
 }
