@@ -2218,6 +2218,10 @@ test("platform supervisors bind exact identities and bound topology sampling in 
     fileURLToPath(new URL("../src/workers/windows-job-supervisor.ps1", import.meta.url)),
     "utf8",
   );
+  const windowsInterop = readFileSync(
+    fileURLToPath(new URL("../src/workers/windows-job-interop.cs", import.meta.url)),
+    "utf8",
+  );
   assert.match(source, /expectedIdentity: child\.identity/u);
   assert.match(source, /statBefore[\s\S]*status[\s\S]*statAfter/u);
   assert.match(source, /Linux VmRSS unavailable/u);
@@ -2227,13 +2231,15 @@ test("platform supervisors bind exact identities and bound topology sampling in 
   assert.match(source, /WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 15_000/u);
   assert.match(source, /pbi_start_tvsec/u);
   assert.doesNotMatch(source, /pid=,ppid=,lstart=,rss=/u);
-  assert.match(windows, /NtQueryInformationProcess/u);
+  assert.match(windowsInterop, /NtQueryInformationProcess/u);
   assert.match(windows, /RecordFromHandle\(\$process, \$TargetPid\)/u);
-  assert.match(windows, /OpenProcess\(0x00101001/u);
+  assert.match(windowsInterop, /OpenProcess\(0x00101001/u);
   assert.match(windows, /OpenProcess\(0x00101101/u);
   assert.match(windows, /WorkingSetHandle\(\$entry\.Handle\)/u);
   assert.match(windows, /TerminateHandle\(\$entry\.Handle\)/u);
   assert.doesNotMatch(windows, /WorkingSetExact|TerminateExact/u);
+  assert.doesNotMatch(windows, /Add-Type\s+-TypeDefinition/u);
+  assert.match(windows, /System\.Reflection\.Assembly\]::Load\(\$assemblyBytes\)/u);
   assert.match(windows, /terminationRss = Measure-TrackedWorkingSet/u);
 });
 

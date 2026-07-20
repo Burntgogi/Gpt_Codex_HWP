@@ -246,6 +246,22 @@ test("public runtime privacy scanner enforces exact budgets and staged file type
     );
   });
 
+  await t.test("only the pinned Windows interop assembly is accepted", async (subtest) => {
+    const root = await temporaryRuntime(subtest, "privacy-windows-interop-");
+    const workers = join(root, "dist", "workers");
+    await mkdir(workers, { recursive: true });
+    await copyFile(
+      join(SOURCE_ROOT, "src", "workers", "gpt-codex-hwp-job.dll"),
+      join(workers, "gpt-codex-hwp-job.dll"),
+    );
+    await assert.doesNotReject(assertPublicRuntimePrivacy(root));
+    await writeFile(join(workers, "unexpected.dll"), Buffer.from([0, 1, 2, 3]));
+    await assert.rejects(
+      assertPublicRuntimePrivacy(root),
+      /binary not allowlisted.*unexpected\.dll/iu,
+    );
+  });
+
   await t.test("nested symlink reports from the original runtime root", async (subtest) => {
     const root = await temporaryRuntime(subtest, "privacy-symlink-");
     await mkdir(join(root, "deep", "nested"), { recursive: true });

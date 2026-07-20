@@ -42,7 +42,7 @@ const TOOL_NAMES = Object.freeze([
   "hwp_validate",
 ]);
 const ALLOWED_EXTENSIONS = new Set([
-  ".cjs", ".cts", ".js", ".json", ".md", ".png", ".ps1", ".py", ".ts", ".yaml",
+  ".cjs", ".cts", ".dll", ".js", ".json", ".md", ".png", ".ps1", ".py", ".ts", ".yaml",
 ]);
 const ALLOWED_EXTENSIONLESS = new Set([".npmrc", "LICENSE", "NOTICE"]);
 const ALLOWED_EXACT_PATHS = new Set(["scripts/kordoc-runtime-verifier.mjs"]);

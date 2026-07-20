@@ -213,6 +213,7 @@ test("runtime projection contains the exact sorted allowlist and no special entr
     "dist/doctor.js",
     "dist/workers/document-child-start-gate.js",
     "dist/workers/document-process-registration.js",
+    "dist/workers/gpt-codex-hwp-job.dll",
     "dist/workers/registered-process-supervisor.js",
   ]) {
     assert.ok(actual.some(({ path }) => path === requiredPath), requiredPath);
@@ -222,6 +223,9 @@ test("runtime projection contains the exact sorted allowlist and no special entr
     const segments = path.split("/");
     assert.equal(segments.some((segment) => FORBIDDEN_SEGMENTS.has(segment)), false, path);
     assert.equal(FORBIDDEN_EXTENSIONS.has(extname(path).toLowerCase()), false, path);
+    if (extname(path).toLowerCase() === ".dll") {
+      assert.equal(path, "dist/workers/gpt-codex-hwp-job.dll");
+    }
   }
 });
 

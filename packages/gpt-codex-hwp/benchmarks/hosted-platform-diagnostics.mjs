@@ -20,7 +20,8 @@ const WINDOWS_LATE_BOUNDARIES = new Set([
 const WINDOWS_PHASE_BOUNDARIES = new Set([
   "no-phase",
   "script-entry",
-  "add-type",
+  "assembly-verify",
+  "assembly-load",
   "job-create",
   "target-open",
   "target-identity",

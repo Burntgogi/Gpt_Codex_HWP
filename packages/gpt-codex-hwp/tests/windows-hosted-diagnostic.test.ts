@@ -5,7 +5,8 @@ import * as childClientModule from "../src/workers/document-child-client.js";
 
 type WindowsPhase =
   | "script-entry"
-  | "add-type"
+  | "assembly-verify"
+  | "assembly-load"
   | "job-create"
   | "target-open"
   | "target-identity"
@@ -73,7 +74,7 @@ test("Windows diagnostic phase frames are consumed without becoming READY", asyn
   const phases: WindowsPhase[] = [];
   const frames = [
     "GPT_CODEX_HWP_JOB PHASE script-entry",
-    "GPT_CODEX_HWP_JOB PHASE add-type",
+    "GPT_CODEX_HWP_JOB PHASE assembly-verify",
     "GPT_CODEX_HWP_JOB PHASE snapshot",
     "GPT_CODEX_HWP_JOB READY 8300 1 47",
   ];
@@ -87,7 +88,7 @@ test("Windows diagnostic phase frames are consumed without becoming READY", asyn
     phaseObserver: (phase) => phases.push(phase),
   });
   assert.equal(ready, "GPT_CODEX_HWP_JOB READY 8300 1 47");
-  assert.deepEqual(phases, ["script-entry", "add-type", "snapshot"]);
+  assert.deepEqual(phases, ["script-entry", "assembly-verify", "snapshot"]);
 });
 
 test("Windows late observer consumes fixed phases but never promotes late READY", async () => {

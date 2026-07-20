@@ -14,7 +14,7 @@ const TEXT_EXTENSIONS = new Set([
   ".txt", ".yaml", ".yml",
 ]);
 const BINARY_EXTENSIONS = new Set([
-  ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".otf", ".png", ".tif", ".tiff",
+  ".bmp", ".dll", ".gif", ".ico", ".jpeg", ".jpg", ".otf", ".png", ".tif", ".tiff",
   ".ttf", ".webp", ".woff", ".woff2",
 ]);
 const TEXT_FILENAMES = new Set([".npmrc", "LICENSE", "NOTICE"]);

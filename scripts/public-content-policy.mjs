@@ -22,11 +22,11 @@ const WINDOWS_SUPERVISOR = fileURLToPath(new URL(
 ));
 const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
 const TEXT_EXTENSIONS = new Set([
-  "", ".cjs", ".cts", ".css", ".csv", ".html", ".js", ".json", ".md",
+  "", ".cjs", ".cs", ".cts", ".css", ".csv", ".html", ".js", ".json", ".md",
   ".map", ".mjs", ".mts", ".ps1", ".py", ".svg", ".ts", ".txt", ".xml", ".yaml", ".yml",
 ]);
 const BINARY_EXTENSIONS = new Set([
-  ".bmp", ".gif", ".hwp", ".ico", ".jpeg", ".jpg", ".otf", ".png", ".tif",
+  ".bmp", ".dll", ".gif", ".hwp", ".ico", ".jpeg", ".jpg", ".otf", ".png", ".tif",
   ".tiff", ".ttf", ".webp", ".woff", ".woff2", ".zip", ".gz", ".tgz",
 ]);
 const PLACEHOLDER_USERS = new Set([
@@ -41,6 +41,11 @@ const OWNER_EMAIL = "224273819+Burntgogi@users.noreply.github.com";
 const OWNER_NAME = "Gpt_Codex_HWP contributors";
 
 export const PUBLIC_BINARY_ALLOWLIST = Object.freeze([
+  binaryRecord([
+    "dist/workers/gpt-codex-hwp-job.dll",
+    "packages/gpt-codex-hwp/src/workers/gpt-codex-hwp-job.dll",
+    "plugins/gpt-codex-hwp/dist/workers/gpt-codex-hwp-job.dll",
+  ], 9_216, "07459231d881addf577628ab42a77d43749a3ab12412991a8dbccc3cbd8f6656"),
   binaryRecord([
     "assets/gpt-codex-hwp-banner.png",
     "packages/gpt-codex-hwp/assets/gpt-codex-hwp-banner.png",

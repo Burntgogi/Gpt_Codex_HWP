@@ -11,29 +11,34 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const SOURCE = resolve(PACKAGE_ROOT, "src", "workers", "windows-job-supervisor.ps1");
-const DESTINATION = resolve(PACKAGE_ROOT, "dist", "workers", "windows-job-supervisor.ps1");
-
-await assertRegularFile(SOURCE, "source supervisor asset");
-await mkdir(dirname(DESTINATION), { recursive: true });
-try {
-  const existing = await lstat(DESTINATION);
-  if (existing.isSymbolicLink() || !existing.isFile()) {
-    throw new Error("destination supervisor asset must be a regular file");
-  }
-  await unlink(DESTINATION);
-} catch (error) {
-  if (error?.code !== "ENOENT") throw error;
-}
-await copyFile(SOURCE, DESTINATION, fsConstants.COPYFILE_EXCL);
-await assertRegularFile(DESTINATION, "copied supervisor asset");
-
-const [sourceBytes, destinationBytes] = await Promise.all([
-  readFile(SOURCE),
-  readFile(DESTINATION),
+const ASSETS = Object.freeze([
+  "windows-job-supervisor.ps1",
+  "gpt-codex-hwp-job.dll",
 ]);
-if (sha256(sourceBytes) !== sha256(destinationBytes)) {
-  throw new Error("copied supervisor asset hash does not match source");
+
+for (const filename of ASSETS) {
+  const source = resolve(PACKAGE_ROOT, "src", "workers", filename);
+  const destination = resolve(PACKAGE_ROOT, "dist", "workers", filename);
+  await assertRegularFile(source, `source worker asset ${filename}`);
+  await mkdir(dirname(destination), { recursive: true });
+  try {
+    const existing = await lstat(destination);
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      throw new Error(`destination worker asset ${filename} must be a regular file`);
+    }
+    await unlink(destination);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  await copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+  await assertRegularFile(destination, `copied worker asset ${filename}`);
+  const [sourceBytes, destinationBytes] = await Promise.all([
+    readFile(source),
+    readFile(destination),
+  ]);
+  if (sha256(sourceBytes) !== sha256(destinationBytes)) {
+    throw new Error(`copied worker asset ${filename} hash does not match source`);
+  }
 }
 
 async function assertRegularFile(path, label) {

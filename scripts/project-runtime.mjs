@@ -247,16 +247,21 @@ async function compileFreshTypeScript(sourceRoot, outputRoot, subprocessEnvironm
     "--inlineSourceMap",
     "false",
   ], sourceRoot, subprocessEnvironment);
-  const supervisorAsset = "workers/windows-job-supervisor.ps1";
-  await copyRegularFile(
-    join(sourceRoot, "src", ...supervisorAsset.split("/")),
-    join(outputRoot, ...supervisorAsset.split("/")),
-    `dist/${supervisorAsset}`,
-  );
+  const workerAssets = Object.freeze([
+    "workers/windows-job-supervisor.ps1",
+    "workers/gpt-codex-hwp-job.dll",
+  ]);
+  for (const workerAsset of workerAssets) {
+    await copyRegularFile(
+      join(sourceRoot, "src", ...workerAsset.split("/")),
+      join(outputRoot, ...workerAsset.split("/")),
+      `dist/${workerAsset}`,
+    );
+  }
   const records = await fileRecords(outputRoot);
   if (
     records.length === 0 ||
-    records.some(({ path }) => extname(path).toLowerCase() !== ".js" && path !== supervisorAsset)
+    records.some(({ path }) => extname(path).toLowerCase() !== ".js" && !workerAssets.includes(path))
   ) {
     throw runtimeBuildError("Fresh TypeScript output contains an unexpected file");
   }

@@ -44,6 +44,7 @@ test("public runtime projection stages only branded executable files", { timeout
     "dist/workers/document-child-start-gate.js",
     "dist/workers/document-process-registration.js",
     "dist/workers/registered-process-supervisor.js",
+    "dist/workers/gpt-codex-hwp-job.dll",
     "dist/workers/windows-job-supervisor.ps1",
     "scripts/hwpx-safe-edit/hwpxlib.py",
     "scripts/hwpx-safe-edit/insert_image.py",
@@ -118,6 +119,10 @@ test("public runtime projection stages only branded executable files", { timeout
     await readFile(join(output, "dist", "workers", "windows-job-supervisor.ps1")),
     await readFile(join(SOURCE_ROOT, "src", "workers", "windows-job-supervisor.ps1")),
   );
+  assert.deepEqual(
+    await readFile(join(output, "dist", "workers", "gpt-codex-hwp-job.dll")),
+    await readFile(join(SOURCE_ROOT, "src", "workers", "gpt-codex-hwp-job.dll")),
+  );
 
   const notice = await readFile(join(output, "NOTICE"), "utf8");
   assert.match(notice, /Copyright 2026 Gpt_Codex_HWP contributors/u);
@@ -129,6 +134,9 @@ test("public runtime projection stages only branded executable files", { timeout
     assert.doesNotMatch(file.path, /(?:^|\/)(?:src|tests|node_modules|release-scripts)(?:\/|$)/iu);
     assert.doesNotMatch(file.path, /(?:^|\/)\.env(?:\.|$)/iu);
     assert.equal([".hwp", ".hwpx", ".hml", ".docx", ".pdf", ".map"].includes(extname(file.path).toLowerCase()), false);
+    if (extname(file.path).toLowerCase() === ".dll") {
+      assert.equal(file.path, "dist/workers/gpt-codex-hwp-job.dll");
+    }
   }
 });
 

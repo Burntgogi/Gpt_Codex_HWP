@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "component": "Gpt_Codex_HWP Windows Job interop",
+  "source": "windows-job-interop.cs",
+  "artifact": "gpt-codex-hwp-job.dll",
+  "artifactBytes": 9216,
+  "artifactSha256": "07459231d881addf577628ab42a77d43749a3ab12412991a8dbccc3cbd8f6656",
+  "compiler": {
+    "name": "Microsoft .NET Framework C# compiler",
+    "fileVersion": "4.8.9221.0 built by: NET481REL1LAST_25H2",
+    "frameworkPath": "%WINDIR%/Microsoft.NET/Framework64/v4.0.30319/csc.exe",
+    "arguments": ["/target:library", "/optimize+", "/debug-"]
+  },
+  "runtimeDependencies": ["Windows .NET Framework already used by Windows PowerShell 5.1"],
+  "externalRuntimePackages": [],
+  "notes": [
+    "The canonical artifact is built from the adjacent reviewed source.",
+    "The runtime verifies the exact SHA-256 before loading the assembly.",
+    "The compiler emits PE metadata, so independent rebuild hashes may differ; compare source and public API, then review any canonical hash update."
+  ]
+}
