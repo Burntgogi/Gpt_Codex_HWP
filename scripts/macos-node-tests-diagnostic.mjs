@@ -173,7 +173,7 @@ const DOCTOR_ORPHAN_CODES = Object.freeze([
 ]);
 const DOCUMENT_SEQUENTIAL_STAGES = new Set([
   "close", "begin-closing", "seal", "parse", "retained", "count",
-  "read-0", "read-1", "pid-0", "pid-1", "gone-0", "gone-1",
+  "read-0", "read-1", "pid-0", "pid-1", "closed-0", "closed-1",
 ]);
 const DOCUMENT_SEQUENTIAL_CODES = Object.freeze([
   "DOCUMENT_SEQUENTIAL_CLOSE", "DOCUMENT_SEQUENTIAL_BEGIN_CLOSING",
@@ -181,7 +181,7 @@ const DOCUMENT_SEQUENTIAL_CODES = Object.freeze([
   "DOCUMENT_SEQUENTIAL_RETAINED", "DOCUMENT_SEQUENTIAL_COUNT",
   "DOCUMENT_SEQUENTIAL_READ_0", "DOCUMENT_SEQUENTIAL_READ_1",
   "DOCUMENT_SEQUENTIAL_PID_0", "DOCUMENT_SEQUENTIAL_PID_1",
-  "DOCUMENT_SEQUENTIAL_GONE_0", "DOCUMENT_SEQUENTIAL_GONE_1",
+  "DOCUMENT_SEQUENTIAL_CLOSED_0", "DOCUMENT_SEQUENTIAL_CLOSED_1",
 ]);
 const DOCUMENT_SEQUENTIAL_PROGRESS_CODES = Object.freeze(
   [...DOCUMENT_SEQUENTIAL_STAGES].map((stage) =>

@@ -1690,7 +1690,10 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     enterDiagnosticStage("SEAL");
     await coordinator.seal();
     enterDiagnosticStage("PARSE");
-    const { bootstrapPids } = JSON.parse(result.stdout.trim()) as { bootstrapPids: number[] };
+    const { bootstrapPids, closedBootstrapPids } = JSON.parse(result.stdout.trim()) as {
+      bootstrapPids: number[];
+      closedBootstrapPids: number[];
+    };
     enterDiagnosticStage("RETAINED");
     assert.deepEqual(retained, bootstrapPids);
     enterDiagnosticStage("COUNT");
@@ -1702,8 +1705,8 @@ test("registration sequential transport completes two real bootstrap ACK handsha
       };
       enterDiagnosticStage(index === 0 ? "PID_0" : "PID_1");
       assert.equal(payload.payloadPid, bootstrapPids[index]);
-      enterDiagnosticStage(index === 0 ? "GONE_0" : "GONE_1");
-      await waitForPidAbsent(payload.payloadPid);
+      enterDiagnosticStage(index === 0 ? "CLOSED_0" : "CLOSED_1");
+      assert.equal(closedBootstrapPids[index], payload.payloadPid);
     }
   } catch {
     throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);

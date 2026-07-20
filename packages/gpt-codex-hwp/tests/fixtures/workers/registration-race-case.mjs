@@ -23,6 +23,7 @@ if (mode === "--descriptor-case") {
 } else if (mode === "--sequential-case") {
   const [markerPrefix, startGatePath, fixturePath] = process.argv.slice(3);
   const bootstrapPids = [];
+  const closedBootstrapPids = [];
   for (let index = 0; index < 2; index += 1) {
     const markerPath = `${markerPrefix}-${index}.json`;
     const bootstrap = spawnGatedBootstrap(
@@ -30,14 +31,16 @@ if (mode === "--descriptor-case") {
       fixturePath,
       ["--descriptor-payload", markerPath],
     );
-    bootstrapPids.push(bootstrap.pid);
+    const bootstrapPid = bootstrap.pid;
+    bootstrapPids.push(bootstrapPid);
     await sendStart(bootstrap);
     await waitForPath(markerPath);
     await waitForPath(`${markerPath}.helper`);
     closeStart(bootstrap);
     await once(bootstrap, "close");
+    closedBootstrapPids.push(bootstrapPid);
   }
-  process.stdout.write(`${JSON.stringify({ bootstrapPids })}\n`);
+  process.stdout.write(`${JSON.stringify({ bootstrapPids, closedBootstrapPids })}\n`);
   process.exit(0);
 } else if (mode === "--overlap-case") {
   const [markerPrefix, identityBarrierPath, startGatePath, fixturePath] = process.argv.slice(3);
