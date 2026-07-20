@@ -1594,9 +1594,10 @@ test("registration descriptor ownership produces clean EOF after case and bootst
   assert.ok(caseChild.stdio[5] instanceof Readable);
   assert.ok(caseChild.stdio[6] instanceof Writable);
   const retained: number[] = [];
+  const observedParentPids: Array<number | undefined> = [];
   const supervisor: RegisteredProcessGroupSupervisor = {
     async registerRoot(pid, expectedParentPid) {
-      assert.equal(expectedParentPid, caseChild.pid);
+      observedParentPids.push(expectedParentPid);
       retained.push(pid);
       return registeredIdentity(pid, caseChild.pid!);
     },
@@ -1634,6 +1635,7 @@ test("registration descriptor ownership produces clean EOF after case and bootst
 
   assert.equal(caseResult.code, 0);
   const caseMessage = JSON.parse(caseResult.stdout.trim()) as { bootstrapPid: number };
+  assert.deepEqual(observedParentPids, [caseChild.pid]);
   assert.deepEqual(retained, [caseMessage.bootstrapPid]);
   assert.equal(payload.payloadPid, caseMessage.bootstrapPid);
   assert.equal(payload.registrationDeclared, false);
