@@ -27,14 +27,26 @@ const TEST_FILES = Object.freeze([
   "validation-regressions.test.ts", "windows-hosted-diagnostic.test.ts",
   "write-worker-safety.test.ts",
 ]);
-const KORDOC_CORE_STAGES = new Set([
+const KORDOC_CORE_OUTER_STAGES = new Set([
   "setup", "first-build", "second-build", "generated-assertions",
   "package-assertions", "layout-assertions", "provenance-assertions",
   "verify-first", "verify-second", "body-complete",
 ]);
+const KORDOC_CORE_BUILD_STAGES = new Set([
+  "output-check", "input-validate", "parent-create", "output-create",
+  "file-write", "package-write", "file-records", "provenance-write", "verify",
+]);
+const KORDOC_CORE_STAGES = new Set([
+  ...KORDOC_CORE_OUTER_STAGES,
+  ...[...KORDOC_CORE_BUILD_STAGES].map((stage) => `first-build-${stage}`),
+]);
 const KORDOC_CORE_PROGRESS_CODES = Object.freeze(
-  [...KORDOC_CORE_STAGES].map((stage) =>
-    `KORDOC_KC01_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+  [
+    ...[...KORDOC_CORE_OUTER_STAGES].map((stage) =>
+      `KORDOC_KC01_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+    ...[...KORDOC_CORE_BUILD_STAGES].map((stage) =>
+      `KORDOC_KC01_BUILD_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+  ],
 );
 const ALLOWED_ROOTS_CASES = Object.freeze([
   "allowed roots: absent configuration preserves unrestricted local paths",
@@ -593,9 +605,15 @@ async function executeKordocCoreDiagnostic() {
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     fixedProgressDiagnostics: KORDOC_CORE_PROGRESS_CODES,
     onFixedProgressDiagnostic: (code) => {
+      if (code.startsWith("KORDOC_KC01_BUILD_STAGE_")) {
+        const candidate = code.slice("KORDOC_KC01_BUILD_STAGE_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (KORDOC_CORE_BUILD_STAGES.has(candidate)) stage = `first-build-${candidate}`;
+        return;
+      }
       const candidate = code.slice("KORDOC_KC01_STAGE_".length)
         .toLowerCase().replaceAll("_", "-");
-      if (KORDOC_CORE_STAGES.has(candidate)) stage = candidate;
+      if (KORDOC_CORE_OUTER_STAGES.has(candidate)) stage = candidate;
     },
   });
   return {

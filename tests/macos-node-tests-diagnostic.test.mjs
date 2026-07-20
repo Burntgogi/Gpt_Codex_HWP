@@ -376,6 +376,42 @@ test("shared Node diagnostic emits the bounded Kordoc Core stage", async () => {
   );
 });
 
+test("shared Node diagnostic emits the bounded Kordoc first-build stage", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "kordoc-core-runtime.test.ts",
+    runKordocCoreDiagnostic: async () => ({
+      caseId: "kc01",
+      stage: "first-build-file-records",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_KORDOC_CORE stage=first-build-file-records\n"
+      + "WINDOWS_NODE_TEST_CASE case=kc01 status=failed\n",
+  );
+});
+
+test("shared Node diagnostic rejects an unknown Kordoc first-build stage", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "kordoc-core-runtime.test.ts",
+    runKordocCoreDiagnostic: async () => ({
+      caseId: "kc01",
+      stage: "first-build-private-value",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_NODE_TEST_CASE case=kc01 status=failed\n");
+});
+
 test("top-level TAP ordinal parser rejects nested, passing, and out-of-range lines", () => {
   assert.equal(failedTopLevelOrdinal("TAP version 13\nnot ok 19 - private\n# fail 1\n", 51), 19);
   assert.equal(failedTopLevelOrdinal("    not ok 3 - nested\n# fail 1\n", 51), undefined);

@@ -40,7 +40,14 @@ test("authenticated Kordoc archive generation is deterministic and source maps a
   const expectedSource = testSource(tarball);
 
   t.diagnostic("KORDOC_KC01_STAGE_FIRST_BUILD");
-  const generated = await buildKordocCoreRuntime({ tarballPath, outputRoot: first, expectedSource });
+  const generated = await buildKordocCoreRuntime({
+    tarballPath,
+    outputRoot: first,
+    expectedSource,
+    onDiagnosticStage: (stage) => {
+      t.diagnostic(`KORDOC_KC01_BUILD_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`);
+    },
+  });
   t.diagnostic("KORDOC_KC01_STAGE_SECOND_BUILD");
   await buildKordocCoreRuntime({ tarballPath, outputRoot: second, expectedSource });
 
