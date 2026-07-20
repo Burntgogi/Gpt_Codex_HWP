@@ -484,17 +484,25 @@ test("Kordoc provenance rejects tampering, extra files, source maps, and links",
   await t.test("link", async (linkTest) => {
     const copy = join(temporaryRoot, "kordoc-link");
     await cp(source, copy, { recursive: true, errorOnExist: true, force: false });
-    const target = join(copy, "linked-license");
+    const windows = process.platform === "win32";
+    const target = join(copy, "dist", windows ? "linked-dist" : "linked-license");
     try {
-      await symlink(join(copy, "LICENSE"), target, "file");
+      await symlink(
+        join(copy, windows ? "dist" : "LICENSE"),
+        target,
+        windows ? "junction" : "file",
+      );
     } catch (error) {
       if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
-        linkTest.skip(`symlink creation is unavailable: ${error.code}`);
+        linkTest.skip(`link creation is unavailable: ${error.code}`);
         return;
       }
       throw error;
     }
-    await assert.rejects(verifyKordocCoreRuntime(copy), /Symbolic links are forbidden/u);
+    await assert.rejects(
+      verifyKordocCoreRuntime(copy),
+      /Vendored Kordoc links are forbidden/u,
+    );
   });
 });
 
