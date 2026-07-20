@@ -675,8 +675,8 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       if (stopping) {
         finish(false);
       } else {
-        forwardFixedDiagnostic(chunks, capturedBytes, options);
         forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
+        forwardFixedDiagnostic(chunks, capturedBytes, options);
         forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
         forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
         forwardCompletionKind(chunks, capturedBytes, code, signal, options);

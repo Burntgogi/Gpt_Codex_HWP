@@ -477,6 +477,35 @@ test("bounded Node runner returns the last allowlisted fixed progress diagnostic
   assert.equal(observed, "DOCUMENT_SEQUENTIAL_STAGE_SEAL");
 });
 
+test("bounded Node runner reports definitive failure after provisional progress", async () => {
+  const observed = [];
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  queueMicrotask(() => {
+    child.stdout.end([
+      "TAP version 13",
+      "not ok 1 - fixed diagnostic probe",
+      "# DOCUMENT_SEQUENTIAL_STAGE_TERMINATE_COMPLETE",
+      "  error: 'DOCUMENT_SEQUENTIAL_CLOSED_1'",
+      "# fail 1",
+      "",
+    ].join("\n"));
+    child.emit("close", 1, null);
+  });
+  await executeBoundedNodeTestFile("fixture.test.mjs", {
+    repository: true,
+    spawnProcess: () => child,
+    fixedDiagnostics: ["DOCUMENT_SEQUENTIAL_CLOSED_1"],
+    onFixedDiagnostic: (value) => { observed.push(`failure:${value}`); },
+    fixedProgressDiagnostics: ["DOCUMENT_SEQUENTIAL_STAGE_TERMINATE_COMPLETE"],
+    onFixedProgressDiagnostic: (value) => { observed.push(`progress:${value}`); },
+  });
+  assert.deepEqual(observed, [
+    "progress:DOCUMENT_SEQUENTIAL_STAGE_TERMINATE_COMPLETE",
+    "failure:DOCUMENT_SEQUENTIAL_CLOSED_1",
+  ]);
+});
+
 test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-only assets case", async () => {
   let output = "";
   let call = 0;
