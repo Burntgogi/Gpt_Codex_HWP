@@ -2695,6 +2695,93 @@ test("Linux RSS skips only a stable exited identity while retaining a live root"
   assert.equal((exited?.rssBytes ?? 0) + (live?.rssBytes ?? 0), 47 * 1024);
 });
 
+test("Linux RSS revalidates a missing VmRSS until the exact process disappears", async () => {
+  const pid = 8_092;
+  const reads = [
+    linuxProcStat(pid, "S", 1, pid, 80_920),
+    "Name:\tfixture\nState:\tS (sleeping)\n",
+    linuxProcStat(pid, "S", 1, pid, 80_920),
+  ];
+  let readIndex = 0;
+
+  const result = await snapshotLinuxProcessForTest(pid, true, async () => {
+    const value = reads[readIndex++];
+    if (value !== undefined) return value;
+    throw Object.assign(new Error("process disappeared"), { code: "ENOENT" });
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(readIndex, 4);
+});
+
+test("Linux RSS revalidates a missing VmRSS until the same identity is stably exited", async () => {
+  const pid = 8_093;
+  const reads = [
+    linuxProcStat(pid, "S", 1, pid, 80_930),
+    "Name:\tfixture\nState:\tS (sleeping)\n",
+    linuxProcStat(pid, "S", 1, pid, 80_930),
+    linuxProcStat(pid, "Z", 1, pid, 80_930),
+    "Name:\tfixture\nState:\tZ (zombie)\n",
+    linuxProcStat(pid, "Z", 1, pid, 80_930),
+  ];
+  let readIndex = 0;
+
+  const result = await snapshotLinuxProcessForTest(pid, true, async () => {
+    const value = reads[readIndex++];
+    if (value === undefined) throw new Error("unexpected proc read");
+    return value;
+  });
+
+  assert.deepEqual(result, {
+    pid,
+    parentPid: 1,
+    processGroupId: pid,
+    identity: "80930",
+    startOrder: 80_930,
+    rssBytes: 0,
+  });
+  assert.equal(readIndex, 6);
+});
+
+test("Linux RSS revalidates a missing VmRSS until the same identity reports real RSS", async () => {
+  const pid = 8_094;
+  const reads = [
+    linuxProcStat(pid, "S", 1, pid, 80_940),
+    "Name:\tfixture\nState:\tS (sleeping)\n",
+    linuxProcStat(pid, "S", 1, pid, 80_940),
+    linuxProcStat(pid, "S", 1, pid, 80_940),
+    "Name:\tfixture\nState:\tS (sleeping)\nVmRSS:\t53 kB\n",
+    linuxProcStat(pid, "S", 1, pid, 80_940),
+  ];
+  let readIndex = 0;
+
+  const result = await snapshotLinuxProcessForTest(pid, true, async () => {
+    const value = reads[readIndex++];
+    if (value === undefined) throw new Error("unexpected proc read");
+    return value;
+  });
+
+  assert.equal(result?.rssBytes, 53 * 1024);
+  assert.equal(result?.identity, "80940");
+  assert.equal(readIndex, 6);
+});
+
+test("Linux RSS bounds missing VmRSS revalidation for a persistently live process", async () => {
+  const pid = 8_095;
+  let readCount = 0;
+
+  await assert.rejects(
+    snapshotLinuxProcessForTest(pid, true, async (path: string) => {
+      readCount += 1;
+      return path.endsWith("/status")
+        ? "Name:\tfixture\nState:\tS (sleeping)\n"
+        : linuxProcStat(pid, "S", 1, pid, 80_950);
+    }),
+    /Linux VmRSS unavailable/u,
+  );
+  assert.equal(readCount, 9);
+});
+
 for (const state of ["R", "S", "D", "T", "I", "?"] as const) {
   test(`Linux RSS rejects missing VmRSS for stable non-exited state ${state}`, async () => {
     const pid = 8_092;

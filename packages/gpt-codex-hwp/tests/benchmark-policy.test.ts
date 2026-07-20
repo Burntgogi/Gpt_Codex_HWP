@@ -514,8 +514,9 @@ test("benchmark policy verifies descendant termination after abnormal case exit"
     env: process.env,
     controlFrame: { bounded: true },
   });
-  assert.equal(result.status, "failed");
-  assert.equal(result.processGone, true);
+  const telemetryDiagnostic = JSON.stringify(result.telemetryDiagnostic ?? null);
+  assert.equal(result.processGone, true, telemetryDiagnostic);
+  assert.equal(result.status, "failed", telemetryDiagnostic);
   assert.ok(result.elapsedMs > 0);
   assert.deepEqual(result.caseMetrics, {
     elapsedMs: 25,

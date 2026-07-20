@@ -200,6 +200,32 @@ test("both CI jobs bind full release receipts to the exact feature head and uplo
   assert.equal(countMatches(workflow, /platform-receipts\.mjs checksum/gu), 2);
 });
 
+test("macOS CI runs the safe POSIX controls only once immediately before the release gate", async () => {
+  const workflow = await readFile(WORKFLOW_PATH, "utf8");
+  const windows = jobSection(workflow, "windows", "macos");
+  const macos = jobSection(workflow, "macos", "linux");
+  const linux = jobSection(workflow, "linux");
+  const command = "node scripts/macos-posix-controls.mjs";
+
+  assert.match(
+    macos,
+    /^      - name: Run safe macOS POSIX controls\r?\n        run: node scripts\/macos-posix-controls\.mjs$/mu,
+  );
+  assert.equal(countMatches(workflow, /node scripts\/macos-posix-controls\.mjs/gu), 1);
+  assert.doesNotMatch(windows, /macos-posix-controls/iu);
+  assert.doesNotMatch(linux, /macos-posix-controls/iu);
+  assert.doesNotMatch(macos, /continue-on-error|if:\s*\$\{\{\s*always\(\)/u);
+
+  const largeEvidence = macos.indexOf("benchmark:documents -- --sizes 100,256,512");
+  const diagnostic = macos.indexOf(command);
+  const releaseGate = macos.indexOf("node scripts/platform-receipts.mjs create");
+  assert.equal(
+    largeEvidence >= 0 && largeEvidence < diagnostic && diagnostic < releaseGate,
+    true,
+    "the diagnostic follows fresh evidence and cannot replace the authoritative release gate",
+  );
+});
+
 test("workflow policy: security is the least-privilege stable Security policy gate", async () => {
   const workflow = await readFile(SECURITY_WORKFLOW_PATH, "utf8");
   assert.match(workflow, /^on:\n  pull_request:\n  push:\n    branches: \[main\]$/mu);

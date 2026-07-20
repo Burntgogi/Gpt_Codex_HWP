@@ -26,6 +26,7 @@ const MAX_LINUX_CHILDREN_PER_PROCESS = 4_096;
 const MAX_LINUX_PROC_STAT_BYTES = 64 * 1024;
 const MAX_LINUX_PROC_STATUS_BYTES = 256 * 1024;
 const MAX_LINUX_TASK_CHILDREN_BYTES = 64 * 1024;
+const MAX_LINUX_MISSING_RSS_ATTEMPTS = 3;
 const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
 const WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 15_000;
 const WINDOWS_HOSTED_LATE_OBSERVER_MS = 10_000;
@@ -1875,31 +1876,42 @@ export function snapshotLinuxProcessForTest(pid, requireRss, readProcText) {
 }
 async function snapshotLinuxProcess(pid, requireRss = true, readProcText = readBoundedProcText) {
     try {
-        const statBefore = await readProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
-        const status = requireRss
-            ? await readProcText(`/proc/${pid}/status`, MAX_LINUX_PROC_STATUS_BYTES)
-            : undefined;
-        const statAfter = await readProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
-        const before = parseLinuxStat(pid, statBefore);
-        const after = parseLinuxStat(pid, statAfter);
-        if (before.identity !== after.identity || before.parentPid !== after.parentPid)
-            return undefined;
-        const record = linuxPosixProcessRecord(after);
-        if (status === undefined)
-            return Object.freeze({ ...record, rssBytes: 0 });
-        const rssMatch = /^VmRSS:\s+([0-9]+)\s+kB$/mu.exec(status);
-        if (rssMatch === null) {
+        let expectedIdentity;
+        const attempts = requireRss ? MAX_LINUX_MISSING_RSS_ATTEMPTS : 1;
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+            const statBefore = await readProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
+            const status = requireRss
+                ? await readProcText(`/proc/${pid}/status`, MAX_LINUX_PROC_STATUS_BYTES)
+                : undefined;
+            const statAfter = await readProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
+            const before = parseLinuxStat(pid, statBefore);
+            const after = parseLinuxStat(pid, statAfter);
+            if (before.identity !== after.identity || before.parentPid !== after.parentPid)
+                return undefined;
+            if (expectedIdentity !== undefined && after.identity !== expectedIdentity)
+                return undefined;
+            const record = linuxPosixProcessRecord(after);
+            if (status === undefined)
+                return Object.freeze({ ...record, rssBytes: 0 });
+            const rssMatch = /^VmRSS:\s+([0-9]+)\s+kB$/mu.exec(status);
+            if (rssMatch !== null) {
+                const rssBytes = Number(rssMatch[1]) * 1024;
+                if (!Number.isSafeInteger(rssBytes) || rssBytes < 0) {
+                    throw new Error("invalid Linux VmRSS");
+                }
+                return Object.freeze({ ...record, rssBytes });
+            }
             const statusState = /^State:\s+([A-Za-z])(?:\s|\()/mu.exec(status)?.[1];
             if (before.state === after.state && statusState === after.state &&
                 (after.state === "Z" || after.state === "X")) {
                 return Object.freeze({ ...record, rssBytes: 0 });
             }
-            throw new Error("Linux VmRSS unavailable");
+            if (attempt + 1 === attempts)
+                throw new Error("Linux VmRSS unavailable");
+            expectedIdentity ??= after.identity;
+            await new Promise((resolveWait) => setImmediate(resolveWait));
         }
-        const rssBytes = Number(rssMatch[1]) * 1024;
-        if (!Number.isSafeInteger(rssBytes) || rssBytes < 0)
-            throw new Error("invalid Linux VmRSS");
-        return Object.freeze({ ...record, rssBytes });
+        throw new Error("Linux VmRSS unavailable");
     }
     catch (error) {
         if (isMissingProcessError(error))

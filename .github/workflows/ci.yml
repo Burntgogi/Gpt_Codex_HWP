@@ -113,6 +113,8 @@ jobs:
         run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker
       - name: Generate fresh large-document evidence
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
+      - name: Run safe macOS POSIX controls
+        run: node scripts/macos-posix-controls.mjs
       - name: Run full release gate and create platform receipt
         run: node scripts/platform-receipts.mjs create
       - name: Independently verify platform receipt
