@@ -53,7 +53,7 @@ let siblingFile = "";
 const execFileAsync = promisify(execFile);
 
 before(async () => {
-  sandbox = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-allowed-roots-"));
+  sandbox = await realpath(await mkdtemp(join(tmpdir(), "gpt-codex-hwp-allowed-roots-")));
   allowedRoot = join(sandbox, "documents");
   siblingRoot = join(sandbox, "documents-private");
   await Promise.all([

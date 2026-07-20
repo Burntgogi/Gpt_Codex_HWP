@@ -60,6 +60,18 @@ test("Windows supervisor loads only the pinned first-party interop assembly", as
     join(SOURCE_ROOT, "src", "workers", "gpt-codex-hwp-job.dll"),
   );
   assert.doesNotMatch(script, /Add-Type\s+-TypeDefinition/iu);
+  assert.doesNotMatch(
+    script,
+    /New-Object\s+GptCodexHwpJob\+/iu,
+  );
+  assert.match(
+    script,
+    /\[GptCodexHwpJob\+JOBOBJECT_EXTENDED_LIMIT_INFORMATION\]::new\(\)/u,
+  );
+  assert.match(
+    script,
+    /\[GptCodexHwpJob\+JOBOBJECT_BASIC_ACCOUNTING_INFORMATION\]::new\(\)/u,
+  );
   assert.match(script, /\[System\.Reflection\.Assembly\]::Load\(\$assemblyBytes\)/u);
   assert.match(script, new RegExp(sha256(assembly), "u"));
   const provenance = JSON.parse(await readFile(

@@ -195,7 +195,7 @@ try {
   $job = [GptCodexHwpJob]::CreateJobObject([IntPtr]::Zero, $null)
   if ($job -eq [IntPtr]::Zero) { throw 'CreateJobObject failed' }
   Write-HostedDiagnosticPhase 'job-created'
-  $limits = New-Object GptCodexHwpJob+JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+  $limits = [GptCodexHwpJob+JOBOBJECT_EXTENDED_LIMIT_INFORMATION]::new()
   Write-HostedDiagnosticPhase 'limits-created'
   $limits.BasicLimitInformation.LimitFlags = 0x00002000
   $limitSize = [Runtime.InteropServices.Marshal]::SizeOf($limits)
@@ -261,7 +261,7 @@ try {
     throw 'tracked tree did not reach zero'
   }
   if ($mode -eq 1) {
-    $accounting = New-Object GptCodexHwpJob+JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+    $accounting = [GptCodexHwpJob+JOBOBJECT_BASIC_ACCOUNTING_INFORMATION]::new()
     $accountingSize = [Runtime.InteropServices.Marshal]::SizeOf($accounting)
     if (-not [GptCodexHwpJob]::QueryInformationJobObject($job, 1, [ref]$accounting, $accountingSize, [IntPtr]::Zero)) { throw 'QueryInformationJobObject failed' }
     if ($accounting.ActiveProcesses -ne 0) { throw 'job active process count did not reach zero' }
