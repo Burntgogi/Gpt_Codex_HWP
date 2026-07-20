@@ -99,6 +99,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     ?? executeReleaseOracleDiagnostic;
   const runPublicContentDiagnostic = options.runPublicContentDiagnostic
     ?? executePublicContentDiagnostic;
+  const runRuntimeProjectionDiagnostic = options.runRuntimeProjectionDiagnostic
+    ?? executeRuntimeProjectionDiagnostic;
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
 
   for (const file of REPOSITORY_TEST_FILES) {
@@ -154,6 +156,16 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
         try {
           const candidate = await runPublicContentDiagnostic();
           if (/^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
+      if (file === "runtime-projection.test.mjs") {
+        let caseId = "aggregate";
+        try {
+          const candidate = await runRuntimeProjectionDiagnostic();
+          if (/^rp(?:0[1-9]|1[0-9]|2[0-5])$/u.test(candidate)) caseId = candidate;
         } catch {}
         stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -217,6 +229,16 @@ async function executePublicContentDiagnostic() {
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
   });
   return ordinal === undefined ? "aggregate" : `pc${String(ordinal).padStart(2, "0")}`;
+}
+
+async function executeRuntimeProjectionDiagnostic() {
+  let ordinal;
+  await executeBoundedNodeTestFile("runtime-projection.test.mjs", {
+    repository: true,
+    maximumTopLevelTests: 25,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+  });
+  return ordinal === undefined ? "aggregate" : `rp${String(ordinal).padStart(2, "0")}`;
 }
 
 const entryPoint = process.argv[1];

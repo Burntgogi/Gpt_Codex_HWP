@@ -61,6 +61,18 @@ test("Windows Node diagnostic maps public-content failure to one bounded ordinal
   assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=pc61 status=failed\n");
 });
 
+test("Windows Node diagnostic maps runtime-projection failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "runtime-projection.test.mjs",
+    runRuntimeProjectionDiagnostic: async () => "rp25",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=rp25 status=failed\n");
+});
+
 test("Windows Node diagnostic narrows the Kordoc repository failure to one fixed case id", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({
