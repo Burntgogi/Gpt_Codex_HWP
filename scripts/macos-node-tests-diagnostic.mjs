@@ -162,6 +162,14 @@ const COMPACT_RUNTIME_STAGES = new Set([
   "installed-summary", "budgets", "mcp", "tool-smoke", "source-verify", "cleanup",
   "passed", "diagnostic-failed",
 ]);
+const DOCTOR_ORPHAN_STAGES = new Set([
+  "execute", "timed-out", "termination", "elapsed", "pid", "wait-gone", "sentinel",
+]);
+const DOCTOR_ORPHAN_CODES = Object.freeze([
+  "DOCTOR_ORPHAN_EXECUTE", "DOCTOR_ORPHAN_TIMED_OUT", "DOCTOR_ORPHAN_TERMINATION",
+  "DOCTOR_ORPHAN_ELAPSED", "DOCTOR_ORPHAN_PID", "DOCTOR_ORPHAN_WAIT_GONE",
+  "DOCTOR_ORPHAN_SENTINEL",
+]);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -216,6 +224,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       allowAllSkipped: record.allowAllSkipped,
     },
   ));
+  const runDoctorOrphanDiagnostic = options.runDoctorOrphanDiagnostic
+    ?? executeDoctorOrphanDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
     ?? (() => executeSvgAssetDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
@@ -293,6 +303,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           let casePassed = false;
           try { casePassed = await runDoctorCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
+            if (record.id === "dc19") {
+              let stage = "diagnostic-failed";
+              try {
+                const candidate = await runDoctorOrphanDiagnostic();
+                if (DOCTOR_ORPHAN_STAGES.has(candidate)) stage = candidate;
+              } catch {}
+              stdout.write(`${receiptPrefix}_DOCTOR_ORPHAN stage=${stage}\n`);
+            }
             stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${record.id} status=failed\n`);
             setExitCode(1);
             return false;
@@ -329,6 +347,19 @@ async function executeCompactRuntimeDiagnostic() {
   } catch {
     return stage;
   }
+}
+
+async function executeDoctorOrphanDiagnostic() {
+  let stage = "diagnostic-failed";
+  await executeBoundedNodeTestFile("doctor.test.ts", {
+    testNamePattern: DOCTOR_CASES[18].pattern,
+    fixedDiagnostics: DOCTOR_ORPHAN_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("DOCTOR_ORPHAN_".length).toLowerCase().replaceAll("_", "-");
+      stage = DOCTOR_ORPHAN_STAGES.has(candidate) ? candidate : "diagnostic-failed";
+    },
+  });
+  return stage;
 }
 
 function executeSvgAssetDiagnostic(options) {

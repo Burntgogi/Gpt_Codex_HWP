@@ -3,14 +3,12 @@ import {
   access,
   link,
   mkdir,
-  mkdtemp,
   readFile,
   rm,
   stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -28,6 +26,7 @@ import {
   type RenderSvgResult,
   type ValidateResult,
 } from "kordoc";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 import {
   inspectHwpxFontReferences,
@@ -465,7 +464,7 @@ function codedError(code: string, message: string): Error {
 }
 
 before(async () => {
-  tmpRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-source-tests-"));
+  tmpRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-source-tests-" });
   simplePath = join(tmpRoot, "simple.hwpx");
   const markdown = await readFile(fixturePath, "utf8");
   simpleHwpxBytes = (

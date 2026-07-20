@@ -196,6 +196,22 @@ test("macOS Node diagnostic narrows a doctor aggregate failure to one fixed case
   assert.equal(output, "MAC_NODE_TEST_CASE case=dc18 status=failed\n");
 });
 
+test("macOS Node diagnostic emits a bounded orphan-cleanup stage", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "doctor.test.ts",
+    runDoctorCase: async (record) => record.id !== "dc19",
+    runDoctorOrphanDiagnostic: async () => "wait-gone",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_DOCTOR_ORPHAN stage=wait-gone\nMAC_NODE_TEST_CASE case=dc19 status=failed\n",
+  );
+});
+
 test("macOS Node diagnostic reports the fixed aggregate id when every compact-runtime case passes alone", async () => {
   let output = "";
   let cases = 0;

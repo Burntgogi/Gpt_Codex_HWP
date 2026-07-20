@@ -584,22 +584,33 @@ test("doctor timeout terminates a grandchild after its parent exits but inherite
     'process.stdout.write(String(descendant.pid) + "\\n");',
   ].join("\n"));
 
-  const startedAt = Date.now();
-  const result = await execute({
-    ...commandSpecification(500),
-    command: process.execPath,
-    args: [fixturePath, sentinelPath],
-  }, temporaryRoot);
-  const elapsedMs = Date.now() - startedAt;
-  descendantPid = Number.parseInt(String(result.stdout).trim(), 10);
+  let diagnosticStage = "EXECUTE";
+  try {
+    const startedAt = Date.now();
+    const result = await execute({
+      ...commandSpecification(500),
+      command: process.execPath,
+      args: [fixturePath, sentinelPath],
+    }, temporaryRoot);
+    const elapsedMs = Date.now() - startedAt;
+    descendantPid = Number.parseInt(String(result.stdout).trim(), 10);
 
-  assert.equal(result.timedOut, true);
-  assert.equal(result.terminationFailed, false);
-  assert.ok(elapsedMs < 6_000, `bounded command took ${elapsedMs}ms`);
-  assert.equal(Number.isSafeInteger(descendantPid), true);
-  await waitUntilProcessGone(descendantPid);
-  await new Promise((resolve) => setTimeout(resolve, 1_600));
-  await assert.rejects(access(sentinelPath), { code: "ENOENT" });
+    diagnosticStage = "TIMED_OUT";
+    assert.equal(result.timedOut, true);
+    diagnosticStage = "TERMINATION";
+    assert.equal(result.terminationFailed, false);
+    diagnosticStage = "ELAPSED";
+    assert.ok(elapsedMs < 6_000, `bounded command took ${elapsedMs}ms`);
+    diagnosticStage = "PID";
+    assert.equal(Number.isSafeInteger(descendantPid), true);
+    diagnosticStage = "WAIT_GONE";
+    await waitUntilProcessGone(descendantPid);
+    diagnosticStage = "SENTINEL";
+    await new Promise((resolve) => setTimeout(resolve, 1_600));
+    await assert.rejects(access(sentinelPath), { code: "ENOENT" });
+  } catch {
+    throw new Error(`DOCTOR_ORPHAN_${diagnosticStage}`);
+  }
 });
 
 test("Windows doctor Job removes a grandchild after the command parent exits", { timeout: 15_000 }, async (t) => {
