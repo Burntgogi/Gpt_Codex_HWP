@@ -137,18 +137,19 @@ async function listDetailedTagRulesets(request, base, summaries, desired) {
     if ((summary?.name !== desired.name && !desired.legacyNames.includes(summary?.name))
       || summary?.target !== "tag") continue;
     const summaryId = summary?.id;
+    const summaryName = typeof summary.name === "string" ? summary.name : undefined;
     if (!Number.isSafeInteger(summaryId) || summaryId <= 0) {
-      projected.push(Object.freeze({ summaryIdMatches: false }));
+      projected.push(Object.freeze({ summaryIdMatches: false, summaryName }));
       continue;
     }
     const detail = await request({ method: "GET", path: `${base}/rulesets/${summaryId}` });
-    projected.push(projectTagRulesetDetail(detail, summaryId));
+    projected.push(projectTagRulesetDetail(detail, summaryId, summaryName));
   }
   return Object.freeze(projected);
 }
 
-function projectTagRulesetDetail(detail, summaryId) {
-  if (!isRecord(detail)) return Object.freeze({ summaryIdMatches: false });
+function projectTagRulesetDetail(detail, summaryId, summaryName) {
+  if (!isRecord(detail)) return Object.freeze({ summaryIdMatches: false, summaryName });
   const include = detail.conditions?.ref_name?.include;
   const exclude = detail.conditions?.ref_name?.exclude;
   const bypassPresent = Object.hasOwn(detail, "bypass_actors");
@@ -156,6 +157,7 @@ function projectTagRulesetDetail(detail, summaryId) {
   const rules = detail.rules;
   return Object.freeze({
     summaryIdMatches: Number.isSafeInteger(detail.id) && detail.id === summaryId,
+    summaryName,
     id: Number.isSafeInteger(detail.id) && detail.id === summaryId ? detail.id : undefined,
     name: typeof detail.name === "string" ? detail.name : undefined,
     target: typeof detail.target === "string" ? detail.target : undefined,
@@ -365,26 +367,29 @@ function mainProtectionMatches(actual, desired) {
 }
 
 function tagRulesetMatches(rulesets, desired) {
-  if (!Array.isArray(rulesets)) return false;
-  return rulesets.some((ruleset) => {
-    const types = new Set(Array.isArray(ruleset?.ruleTypes) ? ruleset.ruleTypes : []);
-    return ruleset?.summaryIdMatches === true
-      && ruleset?.name === desired.name && ruleset?.target === "tag"
-      && ruleset?.enforcement === desired.enforcement
-      && sameSet(ruleset?.include, desired.include)
-      && sameSet(ruleset?.exclude, desired.exclude)
-      && ruleset?.bypassPresent === true
-      && ruleset?.bypassCount === desired.bypassActors.length
-      && (!desired.blockUpdate || types.has("update"))
-      && (!desired.blockDeletion || types.has("deletion"))
-      && (!desired.blockNonFastForward || types.has("non_fast_forward"));
-  });
+  if (!Array.isArray(rulesets) || rulesets.length !== 1) return false;
+  const [ruleset] = rulesets;
+  const types = new Set(Array.isArray(ruleset?.ruleTypes) ? ruleset.ruleTypes : []);
+  return ruleset?.summaryIdMatches === true
+    && ruleset?.summaryName === desired.name
+    && ruleset?.name === desired.name && ruleset?.target === "tag"
+    && ruleset?.enforcement === desired.enforcement
+    && sameSet(ruleset?.include, desired.include)
+    && sameSet(ruleset?.exclude, desired.exclude)
+    && ruleset?.bypassPresent === true
+    && ruleset?.bypassCount === desired.bypassActors.length
+    && (!desired.blockUpdate || types.has("update"))
+    && (!desired.blockDeletion || types.has("deletion"))
+    && (!desired.blockNonFastForward || types.has("non_fast_forward"));
 }
 
 function tagRulesetMigrationCandidate(rulesets, desired) {
-  if (!Array.isArray(rulesets)) return undefined;
-  const candidates = rulesets.filter((ruleset) => ruleset?.summaryIdMatches === true
+  if (!Array.isArray(rulesets) || rulesets.length !== 1) return undefined;
+  const [ruleset] = rulesets;
+  return ruleset?.summaryIdMatches === true
     && Number.isSafeInteger(ruleset?.id) && ruleset.id > 0
+    && desired.legacyNames.includes(ruleset?.summaryName)
+    && ruleset?.summaryName === ruleset?.name
     && desired.legacyNames.includes(ruleset?.name)
     && ruleset?.target === "tag"
     && ruleset?.enforcement === "active"
@@ -392,8 +397,9 @@ function tagRulesetMigrationCandidate(rulesets, desired) {
     && sameSet(ruleset?.exclude, desired.exclude)
     && ruleset?.bypassPresent === true
     && ruleset?.bypassCount === 0
-    && sameSet(ruleset?.ruleTypes, ["deletion", "update"]));
-  return candidates.length === 1 ? candidates[0] : undefined;
+    && sameSet(ruleset?.ruleTypes, ["deletion", "update"])
+    ? ruleset
+    : undefined;
 }
 
 function tagRulesetPayload(desired) {

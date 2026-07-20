@@ -214,6 +214,22 @@ test("GitHub repository policy fails closed when a legacy tag-ruleset migration 
       ? [legacyRulesetSummary(73), legacyRulesetSummary(74)] : response],
     ["malformed ID", (request, response) => request.path.endsWith("/rulesets")
       ? [{ ...legacyRulesetSummary(73), id: "73" }] : response],
+    ["valid legacy plus malformed ID", (request, response) => request.path.endsWith("/rulesets")
+      ? [legacyRulesetSummary(73), { ...legacyRulesetSummary(74), id: "74" }] : response],
+    ["valid legacy plus changed-condition legacy", (request, response) => {
+      if (request.path.endsWith("/rulesets")) return [legacyRulesetSummary(73), legacyRulesetSummary(74)];
+      return request.path.endsWith("/rulesets/74")
+        ? { ...response, conditions: { ref_name: { include: ["refs/tags/v*"], exclude: ["refs/tags/v1.0.0"] } } }
+        : response;
+    }],
+    ["valid legacy plus desired-name summary", (request, response) => {
+      if (request.path.endsWith("/rulesets")) return [legacyRulesetSummary(73), desiredRulesetSummary(74)];
+      return request.path.endsWith("/rulesets/74")
+        ? { ...desiredRulesetDetail(74), conditions: { ref_name: { include: ["refs/tags/v*"], exclude: ["refs/tags/v1.0.0"] } } }
+        : response;
+    }],
+    ["summary/detail name mismatch", (request, response) => request.path.endsWith("/rulesets")
+      ? [desiredRulesetSummary(73)] : response],
     ["changed conditions", (request, response) => request.path.endsWith("/rulesets/73")
       ? { ...response, conditions: { ref_name: { include: ["refs/tags/v*"], exclude: ["refs/tags/v1.0.0"] } } }
       : response],
@@ -763,6 +779,22 @@ test("GitHub repository policy evidence is a strict safe DTO, never a raw API pr
 
 function legacyRulesetSummary(id) {
   return { id, name: "Protect version release tags", enforcement: "active", target: "tag" };
+}
+
+function desiredRulesetSummary(id) {
+  return { id, name: "immutable-version-tags", enforcement: "active", target: "tag" };
+}
+
+function desiredRulesetDetail(id) {
+  return {
+    id,
+    name: "immutable-version-tags",
+    enforcement: "active",
+    target: "tag",
+    bypass_actors: [],
+    conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+    rules: [{ type: "deletion" }, { type: "update" }, { type: "non_fast_forward" }],
+  };
 }
 
 function legacyRulesetResponse({ path }) {
