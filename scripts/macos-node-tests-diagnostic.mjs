@@ -27,6 +27,15 @@ const TEST_FILES = Object.freeze([
   "validation-regressions.test.ts", "windows-hosted-diagnostic.test.ts",
   "write-worker-safety.test.ts",
 ]);
+const KORDOC_CORE_STAGES = new Set([
+  "setup", "first-build", "second-build", "generated-assertions",
+  "package-assertions", "layout-assertions", "provenance-assertions",
+  "verify-first", "verify-second", "body-complete",
+]);
+const KORDOC_CORE_PROGRESS_CODES = Object.freeze(
+  [...KORDOC_CORE_STAGES].map((stage) =>
+    `KORDOC_KC01_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
 const ALLOWED_ROOTS_CASES = Object.freeze([
   "allowed roots: absent configuration preserves unrestricted local paths",
   "allowed roots: malformed, empty, relative, duplicate, and oversized configuration fails closed without values",
@@ -448,11 +457,22 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       }
       if (file === "kordoc-core-runtime.test.ts") {
         let caseId = "aggregate";
+        let stage;
         try {
           const candidate = await runKordocCoreDiagnostic();
-          if (/^kc(?:0[1-9]|10)$/u.test(candidate)) caseId = candidate;
-          else if (candidate === "aggregate") caseId = "kordoc-core-aggregate";
+          if (typeof candidate === "string") {
+            if (/^kc(?:0[1-9]|10)$/u.test(candidate)) caseId = candidate;
+            else if (candidate === "aggregate") caseId = "kordoc-core-aggregate";
+          } else if (candidate !== null && typeof candidate === "object") {
+            if (/^(?:kc(?:0[1-9]|10)|kordoc-core-aggregate)$/u.test(candidate.caseId)) {
+              caseId = candidate.caseId;
+            }
+            if (KORDOC_CORE_STAGES.has(candidate.stage)) stage = candidate.stage;
+          }
         } catch {}
+        if (stage !== undefined) {
+          stdout.write(`${receiptPrefix}_KORDOC_CORE stage=${stage}\n`);
+        }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
         return false;
@@ -564,7 +584,24 @@ async function executeBenchmarkPolicyDiagnostic() {
 }
 
 async function executeKordocCoreDiagnostic() {
-  return executeSourceOrdinalDiagnostic("kordoc-core-runtime.test.ts", 10, "kc");
+  let ordinal;
+  let stage;
+  await executeBoundedNodeTestFile("kordoc-core-runtime.test.ts", {
+    maximumTopLevelTests: 10,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    fixedProgressDiagnostics: KORDOC_CORE_PROGRESS_CODES,
+    onFixedProgressDiagnostic: (code) => {
+      const candidate = code.slice("KORDOC_KC01_STAGE_".length)
+        .toLowerCase().replaceAll("_", "-");
+      if (KORDOC_CORE_STAGES.has(candidate)) stage = candidate;
+    },
+  });
+  return {
+    caseId: ordinal === undefined
+      ? "kordoc-core-aggregate"
+      : `kc${String(ordinal).padStart(2, "0")}`,
+    stage,
+  };
 }
 
 async function executeSourceOrdinalDiagnostic(file, maximum, prefix) {

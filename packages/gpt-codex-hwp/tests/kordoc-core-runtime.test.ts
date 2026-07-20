@@ -22,6 +22,7 @@ const SOURCE_ROOT = resolve(TEST_ROOT, "..");
 const VENDOR_ROOT = join(SOURCE_ROOT, "vendor", "kordoc-core");
 
 test("authenticated Kordoc archive generation is deterministic and source maps are excluded", async (t) => {
+  t.diagnostic("KORDOC_KC01_STAGE_SETUP");
   const root = await mkdtemp(join(tmpdir(), "kordoc-core-generator-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const first = join(root, "first");
@@ -38,12 +39,16 @@ test("authenticated Kordoc archive generation is deterministic and source maps a
   await writeFile(tarballPath, tarball);
   const expectedSource = testSource(tarball);
 
+  t.diagnostic("KORDOC_KC01_STAGE_FIRST_BUILD");
   const generated = await buildKordocCoreRuntime({ tarballPath, outputRoot: first, expectedSource });
+  t.diagnostic("KORDOC_KC01_STAGE_SECOND_BUILD");
   await buildKordocCoreRuntime({ tarballPath, outputRoot: second, expectedSource });
 
+  t.diagnostic("KORDOC_KC01_STAGE_GENERATED_ASSERTIONS");
   assert.equal(generated.schemaVersion, 2);
   assert.equal(generated.generatorVersion, 2);
   assert.equal(generated.archive.sha512, expectedSource.integrity);
+  t.diagnostic("KORDOC_KC01_STAGE_PACKAGE_ASSERTIONS");
   const packageJson = JSON.parse(await readFile(join(first, "package.json"), "utf8"));
   assert.equal(packageJson.name, "kordoc");
   assert.equal(packageJson.version, "3.18.1");
@@ -51,18 +56,23 @@ test("authenticated Kordoc archive generation is deterministic and source maps a
   assert.equal(packageJson.devDependencies, undefined);
   assert.equal(packageJson.scripts, undefined);
   assert.equal(packageJson.bin, undefined);
+  t.diagnostic("KORDOC_KC01_STAGE_LAYOUT_ASSERTIONS");
   assert.deepEqual(
     (await readdir(first)).sort(),
     ["dist", "LICENSE", "package.json", "PROVENANCE.json", "README.md"].sort(),
   );
   assert.equal(await exists(join(first, "dist", "index.js.map")), false);
   assert.equal((await readFile(join(first, "PROVENANCE.json"), "utf8")).includes(map), false);
+  t.diagnostic("KORDOC_KC01_STAGE_PROVENANCE_ASSERTIONS");
   assert.deepEqual(
     JSON.parse(await readFile(join(first, "PROVENANCE.json"), "utf8")),
     JSON.parse(await readFile(join(second, "PROVENANCE.json"), "utf8")),
   );
+  t.diagnostic("KORDOC_KC01_STAGE_VERIFY_FIRST");
   await verifyKordocCoreRuntime(first, expectedSource);
+  t.diagnostic("KORDOC_KC01_STAGE_VERIFY_SECOND");
   await verifyKordocCoreRuntime(second, expectedSource);
+  t.diagnostic("KORDOC_KC01_STAGE_BODY_COMPLETE");
 });
 
 test("tampered Kordoc archive is rejected before output", async (t) => {
