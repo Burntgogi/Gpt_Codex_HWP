@@ -5,6 +5,7 @@ import * as childClientModule from "../src/workers/document-child-client.js";
 
 type WindowsPhase =
   | "script-entry"
+  | "assembly-path"
   | "assembly-verify"
   | "assembly-load"
   | "job-create"

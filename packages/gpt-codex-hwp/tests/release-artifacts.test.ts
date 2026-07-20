@@ -688,6 +688,22 @@ test("release artifacts allow only the pinned runtime verifier as an MJS entry",
   );
 });
 
+test("release artifact producer and verifier accept the pinned managed runtime DLL path", async () => {
+  const dllPath = "dist/workers/gpt-codex-hwp-job.dll";
+  const archive = buildDeterministicZip([
+    {
+      name: dllPath,
+      bytes: await readFile(new URL(
+        "../../../plugins/gpt-codex-hwp/dist/workers/gpt-codex-hwp-job.dll",
+        import.meta.url,
+      )),
+    },
+  ], EPOCH);
+  const entries = inspectReleaseZipForTest(archive);
+  assert.deepEqual(entries.map((entry) => entry.name), [dllPath]);
+  assert.doesNotThrow(() => assertVerifiedZipPrivacyForTest(entries));
+});
+
 test("release artifacts verifier fails closed on tampering and unexpected output", async (t) => {
   const fixture = await createReleaseFixture(t);
   const output = join(fixture.parent, "verified-output");

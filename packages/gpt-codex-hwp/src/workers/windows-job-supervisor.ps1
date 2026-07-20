@@ -13,7 +13,8 @@ function Write-HostedDiagnosticPhase([string]$Phase) {
 }
 
 Write-HostedDiagnosticPhase 'script-entry'
-$assemblyPath = Join-Path $PSScriptRoot 'gpt-codex-hwp-job.dll'
+Write-HostedDiagnosticPhase 'assembly-path'
+$assemblyPath = [System.IO.Path]::Combine($PSScriptRoot, 'gpt-codex-hwp-job.dll')
 Write-HostedDiagnosticPhase 'assembly-verify'
 try {
   $assemblyBytes = [System.IO.File]::ReadAllBytes($assemblyPath)

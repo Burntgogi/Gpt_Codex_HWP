@@ -124,9 +124,11 @@ function validTapReceipt(chunks, capturedBytes) {
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
   catch { return false; }
-  const tests = /^# tests ([1-9][0-9]*)$/mu.exec(text)?.[1];
-  const passed = /^# pass ([1-9][0-9]*)$/mu.exec(text)?.[1];
-  return tests !== undefined && tests === passed
+  const tests = Number(/^# tests ([1-9][0-9]*)$/mu.exec(text)?.[1]);
+  const passed = Number(/^# pass ([1-9][0-9]*)$/mu.exec(text)?.[1]);
+  const skipped = Number(/^# skipped ([0-9]+)$/mu.exec(text)?.[1]);
+  return Number.isSafeInteger(tests) && Number.isSafeInteger(passed)
+    && Number.isSafeInteger(skipped) && passed >= 1 && tests === passed + skipped
     && /^# fail 0$/mu.test(text)
     && /^# cancelled 0$/mu.test(text);
 }

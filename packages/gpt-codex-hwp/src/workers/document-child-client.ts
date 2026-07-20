@@ -1497,6 +1497,7 @@ export type WindowsSupervisorHostedLateBoundary =
 
 export type WindowsSupervisorHostedPhaseBoundary =
   | "script-entry"
+  | "assembly-path"
   | "assembly-verify"
   | "assembly-load"
   | "job-create"
@@ -1507,7 +1508,7 @@ export type WindowsSupervisorHostedPhaseBoundary =
   | "baseline-rss"
   | "ready-write";
 
-const WINDOWS_SUPERVISOR_PHASE_PATTERN = /^GPT_CODEX_HWP_JOB PHASE (script-entry|assembly-verify|assembly-load|job-create|target-open|target-identity|job-bind|snapshot|baseline-rss|ready-write)$/u;
+const WINDOWS_SUPERVISOR_PHASE_PATTERN = /^GPT_CODEX_HWP_JOB PHASE (script-entry|assembly-path|assembly-verify|assembly-load|job-create|target-open|target-identity|job-bind|snapshot|baseline-rss|ready-write)$/u;
 
 export function classifyWindowsSupervisorPreframeDiagnostic(receipt: Readonly<{
   helperSpawnFailed: boolean;

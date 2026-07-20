@@ -58,3 +58,25 @@ test("macOS Node diagnostic requires a nonempty exact TAP summary", async () => 
   assert.equal(passed, false);
   assert.equal(output, "MAC_NODE_TEST_FILE file=allowed-roots.test.ts status=failed\n");
 });
+
+test("macOS Node diagnostic accepts capability skips when every executed test passes", async () => {
+  let output = "";
+  let calls = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    spawnProcess() {
+      calls += 1;
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end("TAP version 13\n1..3\n# tests 3\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 1\n");
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, true);
+  assert.equal(calls, 41);
+  assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=41\n");
+});
