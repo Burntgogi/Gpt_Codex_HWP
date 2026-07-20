@@ -35,7 +35,7 @@ test("Windows Node diagnostic gives only the Git-history policy file an extended
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(observedTimeout, 300_000);
+  assert.equal(observedTimeout, 600_000);
 });
 
 test("Windows Node diagnostic narrows release verification to one fixed case id", async () => {

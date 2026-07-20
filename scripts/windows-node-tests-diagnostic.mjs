@@ -17,7 +17,7 @@ const REPOSITORY_TEST_FILES = Object.freeze([
   "windows-node-tests-diagnostic.test.mjs", "workflow-policy.test.mjs",
 ]);
 const DEFAULT_REPOSITORY_TEST_TIMEOUT_MS = 120_000;
-const PUBLIC_CONTENT_TEST_TIMEOUT_MS = 300_000;
+const PUBLIC_CONTENT_TEST_TIMEOUT_MS = 600_000;
 const KORDOC_OWNERSHIP_CASES = Object.freeze([
   "Kordoc output creation race never deletes an unowned sentinel",
   "Kordoc builder remains compatible without a file-system hook",

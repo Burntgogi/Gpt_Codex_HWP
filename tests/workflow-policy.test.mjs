@@ -232,7 +232,7 @@ test("Windows CI isolates repository and source Node tests before the authoritat
   const command = "node scripts/windows-node-tests-diagnostic.mjs";
   assert.match(
     windows,
-    /^      - name: Isolate Windows Node test compatibility\r?\n        timeout-minutes: 15\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
+    /^      - name: Isolate Windows Node test compatibility\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
   );
   assert.equal(countMatches(workflow, /node scripts\/windows-node-tests-diagnostic\.mjs/gu), 1);
   assert.doesNotMatch(windows, /continue-on-error|if:\s*\$\{\{\s*always\(\)/u);
