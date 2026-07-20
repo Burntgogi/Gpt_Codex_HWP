@@ -259,6 +259,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? executeDocumentSequentialDiagnostic;
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
     ?? executeBenchmarkPolicyDiagnostic;
+  const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
+    ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
     ?? (() => executeSvgAssetDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
@@ -444,6 +446,17 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         setExitCode(1);
         return false;
       }
+      if (file === "kordoc-core-runtime.test.ts") {
+        let caseId = "aggregate";
+        try {
+          const candidate = await runKordocCoreDiagnostic();
+          if (/^kc(?:0[1-9]|10)$/u.test(candidate)) caseId = candidate;
+          else if (candidate === "aggregate") caseId = "kordoc-core-aggregate";
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
       stdout.write(`${receiptPrefix}_NODE_TEST_FILE file=${file} status=failed\n`);
       setExitCode(1);
       return false;
@@ -548,6 +561,10 @@ async function executeDocumentSequentialDiagnostic() {
 
 async function executeBenchmarkPolicyDiagnostic() {
   return executeSourceOrdinalDiagnostic("benchmark-policy.test.ts", 38, "bp");
+}
+
+async function executeKordocCoreDiagnostic() {
+  return executeSourceOrdinalDiagnostic("kordoc-core-runtime.test.ts", 10, "kc");
 }
 
 async function executeSourceOrdinalDiagnostic(file, maximum, prefix) {
