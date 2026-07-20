@@ -38,6 +38,32 @@ test("Windows Node diagnostic gives only the Git-history policy file an extended
   assert.equal(observedTimeout, 600_000);
 });
 
+test("Windows Node diagnostic gives only runtime projection a measured extended bound", async () => {
+  let ordinaryTimeout;
+  let observedTimeout;
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file, options) => {
+      if (file === "dependency-contract.test.mjs") {
+        ordinaryTimeout = options.testTimeoutMs;
+      }
+      if (file === "runtime-projection.test.mjs") {
+        observedTimeout = options.testTimeoutMs;
+        return false;
+      }
+      return true;
+    },
+    runRuntimeProjectionDiagnostic: async () => ({
+      passed: false,
+      caseId: "rp25",
+    }),
+    stdout: { write() {} },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(ordinaryTimeout, 120_000);
+  assert.equal(observedTimeout, 300_000);
+});
+
 test("Windows Node diagnostic narrows release verification to one fixed case id", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({
@@ -210,6 +236,26 @@ test("Windows Node diagnostic maps runtime-projection failure to one bounded ord
   });
   assert.equal(passed, false);
   assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=rp25 status=failed\n");
+});
+
+test("Windows Node diagnostic classifies a runtime-projection runner timeout", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "runtime-projection.test.mjs",
+    runRuntimeProjectionDiagnostic: async () => ({
+      passed: false,
+      caseId: "runtime-projection-aggregate",
+      runnerFailureKind: "runner-timeout",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_RUNTIME_PROJECTION_RUNNER kind=runner-timeout\n"
+      + "WINDOWS_REPOSITORY_TEST_CASE case=runtime-projection-aggregate status=failed\n",
+  );
 });
 
 test("Windows Node diagnostic narrows the Kordoc repository failure to one fixed case id", async () => {

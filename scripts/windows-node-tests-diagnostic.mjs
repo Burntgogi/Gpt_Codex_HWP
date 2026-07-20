@@ -18,6 +18,11 @@ const REPOSITORY_TEST_FILES = Object.freeze([
 ]);
 const DEFAULT_REPOSITORY_TEST_TIMEOUT_MS = 120_000;
 const PUBLIC_CONTENT_TEST_TIMEOUT_MS = 600_000;
+const RUNTIME_PROJECTION_TEST_TIMEOUT_MS = 300_000;
+const RUNNER_FAILURE_KINDS = new Set([
+  "spawn-error", "missing-stdout", "stdout-error", "child-error",
+  "invalid-chunk", "capture-limit", "runner-timeout",
+]);
 const KORDOC_OWNERSHIP_CASES = Object.freeze([
   "Kordoc output creation race never deletes an unowned sentinel",
   "Kordoc builder remains compatible without a file-system hook",
@@ -146,7 +151,9 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     let publicContentReceipt;
     const testTimeoutMs = file === "public-content-policy.test.mjs"
       ? PUBLIC_CONTENT_TEST_TIMEOUT_MS
-      : DEFAULT_REPOSITORY_TEST_TIMEOUT_MS;
+      : file === "runtime-projection.test.mjs"
+        ? RUNTIME_PROJECTION_TEST_TIMEOUT_MS
+        : DEFAULT_REPOSITORY_TEST_TIMEOUT_MS;
     try {
       if (file === "public-content-policy.test.mjs"
         && typeof runPublicContentFile === "function") {
@@ -250,10 +257,25 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
       }
       if (file === "runtime-projection.test.mjs") {
         let caseId = "aggregate";
+        let runnerFailureKind;
         try {
           const candidate = await runRuntimeProjectionDiagnostic();
-          if (/^rp(?:0[1-9]|1[0-9]|2[0-5])$/u.test(candidate)) caseId = candidate;
+          if (typeof candidate === "string"
+            && /^rp(?:0[1-9]|1[0-9]|2[0-5])$/u.test(candidate)) {
+            caseId = candidate;
+          } else if (candidate !== null && typeof candidate === "object") {
+            if (/^(?:rp(?:0[1-9]|1[0-9]|2[0-5])|runtime-projection-(?:aggregate|rerun-passed))$/u
+              .test(candidate.caseId)) {
+              caseId = candidate.caseId;
+            }
+            if (RUNNER_FAILURE_KINDS.has(candidate.runnerFailureKind)) {
+              runnerFailureKind = candidate.runnerFailureKind;
+            }
+          }
         } catch {}
+        if (runnerFailureKind !== undefined) {
+          stdout.write(`WINDOWS_RUNTIME_PROJECTION_RUNNER kind=${runnerFailureKind}\n`);
+        }
         stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
         return false;
@@ -367,12 +389,21 @@ async function executePublicContentDiagnostic() {
 
 async function executeRuntimeProjectionDiagnostic() {
   let ordinal;
-  await executeBoundedNodeTestFile("runtime-projection.test.mjs", {
+  let runnerFailureKind;
+  const passed = await executeBoundedNodeTestFile("runtime-projection.test.mjs", {
     repository: true,
+    testTimeoutMs: RUNTIME_PROJECTION_TEST_TIMEOUT_MS,
     maximumTopLevelTests: 25,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    onRunnerFailureKind: (value) => { runnerFailureKind = value; },
   });
-  return ordinal === undefined ? "aggregate" : `rp${String(ordinal).padStart(2, "0")}`;
+  return {
+    passed,
+    caseId: ordinal === undefined
+      ? passed ? "runtime-projection-rerun-passed" : "runtime-projection-aggregate"
+      : `rp${String(ordinal).padStart(2, "0")}`,
+    runnerFailureKind,
+  };
 }
 
 const entryPoint = process.argv[1];
