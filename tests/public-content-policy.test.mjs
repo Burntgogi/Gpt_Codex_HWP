@@ -736,6 +736,8 @@ test("Git history privacy allows only the approved owner and exact neutral immut
 test("Git history privacy fails closed for shallow and malformed Git operations", async (t) => {
   const source = await temporaryGitRepository(t, "public-history-source-");
   await commitFile(source, "safe.txt", "safe\n", "safe", OWNER_EMAIL);
+  const sourceOptions = syntheticHistoryOptions(source);
+  assert.equal(typeof sourceOptions.runGit, "function");
   const clone = await temporaryDirectory(t, "public-history-shallow-");
   await rm(clone, { recursive: true, force: true });
   git(process.cwd(), ["clone", "-q", "--depth=1", `file:///${source.replaceAll("\\", "/")}`, clone]);
@@ -1578,7 +1580,25 @@ function captureThrown(operation) {
 }
 
 function syntheticHistoryOptions(root, overrides = {}) {
-  return { root, frozenReleaseTags: new Map(), ...overrides };
+  return { root, frozenReleaseTags: new Map(), runGit: runSyntheticGit, ...overrides };
+}
+
+function runSyntheticGit(root, args) {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !/^GIT_/iu.test(name)),
+  );
+  env.GIT_NO_REPLACE_OBJECTS = "1";
+  const result = spawnSync("git", ["--no-replace-objects", "-C", root, ...args], {
+    env,
+    maxBuffer: 32 * 1024 * 1024,
+    shell: false,
+    windowsHide: true,
+  });
+  return {
+    code: Number.isSafeInteger(result.status) ? result.status : -1,
+    stdout: Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.alloc(0),
+    stderr: Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.from([0x01]),
+  };
 }
 
 async function temporaryDirectory(t, prefix, parent) {
