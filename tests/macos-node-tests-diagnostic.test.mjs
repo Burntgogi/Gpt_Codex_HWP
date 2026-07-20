@@ -364,6 +364,19 @@ test("macOS Node diagnostic maps benchmark failure to one bounded ordinal", asyn
   assert.equal(output, "MAC_NODE_TEST_CASE case=bp17 status=failed\n");
 });
 
+test("shared Node diagnostic maps MCP cancellation failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "mcp-cancellation-progress.test.ts",
+    runMcpCancellationProgressDiagnostic: async () => "mp10",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_NODE_TEST_CASE case=mp10 status=failed\n");
+});
+
 test("shared Node diagnostic maps Kordoc Core source failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({

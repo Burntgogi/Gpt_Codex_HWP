@@ -283,6 +283,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? executeDocumentSequentialDiagnostic;
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
     ?? executeBenchmarkPolicyDiagnostic;
+  const runMcpCancellationProgressDiagnostic = options.runMcpCancellationProgressDiagnostic
+    ?? executeMcpCancellationProgressDiagnostic;
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
     ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -476,6 +478,17 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         setExitCode(1);
         return false;
       }
+      if (file === "mcp-cancellation-progress.test.ts") {
+        let caseId = "aggregate";
+        try {
+          const candidate = await runMcpCancellationProgressDiagnostic();
+          if (/^mp(?:0[1-9]|1[0-3])$/u.test(candidate)) caseId = candidate;
+          else if (candidate === "aggregate") caseId = "mcp-cancellation-aggregate";
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
       if (file === "kordoc-core-runtime.test.ts") {
         let caseId = "aggregate";
         let stage;
@@ -602,6 +615,10 @@ async function executeDocumentSequentialDiagnostic() {
 
 async function executeBenchmarkPolicyDiagnostic() {
   return executeSourceOrdinalDiagnostic("benchmark-policy.test.ts", 38, "bp");
+}
+
+async function executeMcpCancellationProgressDiagnostic() {
+  return executeSourceOrdinalDiagnostic("mcp-cancellation-progress.test.ts", 13, "mp");
 }
 
 async function executeKordocCoreDiagnostic() {
