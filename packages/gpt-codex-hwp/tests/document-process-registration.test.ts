@@ -1671,9 +1671,10 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     enterDiagnosticStage("TERMINATE_COMPLETE");
   });
   const retained: number[] = [];
+  const observedParentPids: Array<number | undefined> = [];
   const supervisor: RegisteredProcessGroupSupervisor = {
     async registerRoot(pid, expectedParentPid) {
-      assert.equal(expectedParentPid, caseChild.pid);
+      observedParentPids.push(expectedParentPid);
       retained.push(pid);
       return registeredIdentity(pid, caseChild.pid!);
     },
@@ -1702,6 +1703,8 @@ test("registration sequential transport completes two real bootstrap ACK handsha
       bootstrapPids: number[];
       closedBootstrapPids: number[];
     };
+    enterDiagnosticStage("PARENTS");
+    assert.deepEqual(observedParentPids, bootstrapPids.map(() => caseChild.pid));
     enterDiagnosticStage("RETAINED");
     assert.deepEqual(retained, bootstrapPids);
     enterDiagnosticStage("COUNT");

@@ -204,6 +204,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
       if (file === "public-content-policy.test.mjs") {
         let caseId = "aggregate";
         let completionKind;
+        let runnerFailureKind;
         let stage;
         try {
           const candidate = publicContentReceipt ?? await runPublicContentDiagnostic();
@@ -224,6 +225,10 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
               .includes(candidate.completionKind)) {
               completionKind = candidate.completionKind;
             }
+            if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
+              .includes(candidate.runnerFailureKind)) {
+              runnerFailureKind = candidate.runnerFailureKind;
+            }
           }
         } catch {}
         if (caseId === "pc23") {
@@ -235,6 +240,9 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
         }
         if (completionKind !== undefined) {
           stdout.write(`WINDOWS_PUBLIC_CONTENT_COMPLETION kind=${completionKind}\n`);
+        }
+        if (runnerFailureKind !== undefined) {
+          stdout.write(`WINDOWS_PUBLIC_CONTENT_RUNNER kind=${runnerFailureKind}\n`);
         }
         stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -303,12 +311,14 @@ async function executeReleaseOracleDiagnostic() {
 async function executePublicContentDiagnostic() {
   let completionKind;
   let ordinal;
+  let runnerFailureKind;
   let stage;
   const passed = await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
     repository: true,
     testTimeoutMs: PUBLIC_CONTENT_TEST_TIMEOUT_MS,
     maximumTopLevelTests: 61,
     onCompletionKind: (value) => { completionKind = value; },
+    onRunnerFailureKind: (value) => { runnerFailureKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     fixedDiagnostics: [
       ...PUBLIC_CONTENT_METADATA_CODES,
@@ -350,6 +360,7 @@ async function executePublicContentDiagnostic() {
       ? `pc${String(ordinal).padStart(2, "0")}`
       : passed ? "public-content-rerun-passed" : "public-content-aggregate",
     completionKind,
+    runnerFailureKind,
     stage,
   };
 }

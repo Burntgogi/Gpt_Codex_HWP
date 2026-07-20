@@ -495,6 +495,26 @@ test("bounded Node runner returns the last allowlisted fixed progress diagnostic
   assert.equal(observed, "DOCUMENT_SEQUENTIAL_STAGE_SEAL");
 });
 
+test("bounded Node runner classifies invalid stdout without exposing content", async () => {
+  let runnerFailureKind;
+  const child = new EventEmitter();
+  child.pid = 12345;
+  child.stdout = new PassThrough();
+  queueMicrotask(() => child.stdout.emit("data", "PRIVATE/path"));
+  const passed = await executeBoundedNodeTestFile("fixture.test.mjs", {
+    repository: true,
+    spawnProcess: () => child,
+    terminateTree: () => {
+      child.emit("close", null, "SIGKILL");
+      return true;
+    },
+    closeTimeoutMs: 25,
+    onRunnerFailureKind: (value) => { runnerFailureKind = value; },
+  });
+  assert.equal(passed, false);
+  assert.equal(runnerFailureKind, "invalid-chunk");
+});
+
 test("bounded Node runner reports definitive failure after provisional progress", async () => {
   const observed = [];
   const child = new EventEmitter();

@@ -118,6 +118,7 @@ test("Windows Node diagnostic emits one bounded public-content completion class"
       passed: false,
       caseId: "public-content-aggregate",
       completionKind: "nonzero-clean-tap",
+      runnerFailureKind: "capture-limit",
     }),
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
@@ -126,6 +127,7 @@ test("Windows Node diagnostic emits one bounded public-content completion class"
   assert.equal(
     output,
     "WINDOWS_PUBLIC_CONTENT_COMPLETION kind=nonzero-clean-tap\n"
+      + "WINDOWS_PUBLIC_CONTENT_RUNNER kind=capture-limit\n"
       + "WINDOWS_REPOSITORY_TEST_CASE case=public-content-aggregate status=failed\n",
   );
 });

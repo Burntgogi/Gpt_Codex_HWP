@@ -173,14 +173,14 @@ const DOCTOR_ORPHAN_CODES = Object.freeze([
   "DOCTOR_ORPHAN_SENTINEL",
 ]);
 const DOCUMENT_SEQUENTIAL_STAGES = new Set([
-  "close", "begin-closing", "seal", "parse", "retained", "count",
+  "close", "begin-closing", "seal", "parse", "parents", "retained", "count",
   "read-0", "read-1", "pid-0", "pid-1", "closed-0", "closed-1", "body-complete",
   "terminate-begin", "terminate-complete", "cleanup-begin", "cleanup-complete",
 ]);
 const DOCUMENT_SEQUENTIAL_CODES = Object.freeze([
   "DOCUMENT_SEQUENTIAL_CLOSE", "DOCUMENT_SEQUENTIAL_BEGIN_CLOSING",
   "DOCUMENT_SEQUENTIAL_SEAL", "DOCUMENT_SEQUENTIAL_PARSE",
-  "DOCUMENT_SEQUENTIAL_RETAINED", "DOCUMENT_SEQUENTIAL_COUNT",
+  "DOCUMENT_SEQUENTIAL_PARENTS", "DOCUMENT_SEQUENTIAL_RETAINED", "DOCUMENT_SEQUENTIAL_COUNT",
   "DOCUMENT_SEQUENTIAL_READ_0", "DOCUMENT_SEQUENTIAL_READ_1",
   "DOCUMENT_SEQUENTIAL_PID_0", "DOCUMENT_SEQUENTIAL_PID_1",
   "DOCUMENT_SEQUENTIAL_CLOSED_0", "DOCUMENT_SEQUENTIAL_CLOSED_1",
@@ -366,6 +366,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let caseId = "aggregate";
         let completionKind;
         let failureKind;
+        let runnerFailureKind;
         let testCodeReason;
         let firstFailureStage;
         try {
@@ -393,6 +394,10 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
               .includes(candidate.testCodeReason)) {
               testCodeReason = candidate.testCodeReason;
             }
+            if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
+              .includes(candidate.runnerFailureKind)) {
+              runnerFailureKind = candidate.runnerFailureKind;
+            }
           }
         } catch {}
         if (caseId === "dp45") {
@@ -412,6 +417,9 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           }
           if (testCodeReason !== undefined) {
             stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_TEST_CODE reason=${testCodeReason}\n`);
+          }
+          if (runnerFailureKind !== undefined) {
+            stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_RUNNER kind=${runnerFailureKind}\n`);
           }
         }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
@@ -475,6 +483,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
   let completionKind;
   let ordinal;
   let failureKind;
+  let runnerFailureKind;
   let stage;
   let testCodeReason;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
@@ -487,6 +496,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     onFailedTopLevelFailureKind: (value) => { failureKind = value; },
     onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
+    onRunnerFailureKind: (value) => { runnerFailureKind = value; },
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
     onFixedDiagnostic: (code) => {
       const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
@@ -506,6 +516,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
       : passed ? "document-rerun-passed" : "document-aggregate",
     completionKind,
     failureKind,
+    runnerFailureKind,
     stage,
     testCodeReason,
   };
@@ -624,6 +635,12 @@ export function executeBoundedNodeTestFile(file, options = {}) {
     const chunks = [];
     let testTimer;
     let closeTimer;
+    let runnerFailureReported = false;
+    const reportRunnerFailure = (kind) => {
+      if (runnerFailureReported || typeof options.onRunnerFailureKind !== "function") return;
+      runnerFailureReported = true;
+      try { options.onRunnerFailureKind(kind); } catch {}
+    };
     const finish = (value) => {
       if (settled) return;
       settled = true;
@@ -632,8 +649,9 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       child?.stdout?.destroy();
       resolveTest(value);
     };
-    const stopUnverified = () => {
+    const stopUnverified = (kind) => {
       if (settled || stopping) return;
+      reportRunnerFailure(kind);
       stopping = true;
       clearTimeout(testTimer);
       try { void terminateProcessTree(child); } catch {}
@@ -661,27 +679,28 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         windowsHide: true,
       });
     } catch {
+      reportRunnerFailure("spawn-error");
       finish(false);
       return;
     }
     if (child.stdout === null || child.stdout === undefined || !("on" in child.stdout)) {
-      stopUnverified();
+      stopUnverified("missing-stdout");
       return;
     }
-    child.stdout.once("error", stopUnverified);
+    child.stdout.once("error", () => stopUnverified("stdout-error"));
     child.stdout.on("data", (chunk) => {
       if (settled || stopping || !Buffer.isBuffer(chunk)) {
-        if (!Buffer.isBuffer(chunk)) stopUnverified();
+        if (!Buffer.isBuffer(chunk)) stopUnverified("invalid-chunk");
         return;
       }
       capturedBytes += chunk.byteLength;
       if (capturedBytes > MAX_CAPTURE_BYTES) {
-        stopUnverified();
+        stopUnverified("capture-limit");
         return;
       }
       chunks.push(chunk);
     });
-    child.once("error", stopUnverified);
+    child.once("error", () => stopUnverified("child-error"));
     child.once("close", (code, signal) => {
       if (stopping) {
         finish(false);
@@ -697,7 +716,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         ));
       }
     });
-    testTimer = setTimeout(stopUnverified, testTimeoutMs);
+    testTimer = setTimeout(() => stopUnverified("runner-timeout"), testTimeoutMs);
   });
 }
 
