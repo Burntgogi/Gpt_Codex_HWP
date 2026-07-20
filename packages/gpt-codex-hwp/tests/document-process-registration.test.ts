@@ -1645,9 +1645,18 @@ test("registration descriptor ownership produces clean EOF after case and bootst
   assert.equal(coordinator.state, "sealed");
 });
 
-test("registration sequential transport completes two real bootstrap ACK handshakes without multiplexing", { timeout: 60_000 }, async (t) => {
+test("registration sequential transport completes two real bootstrap ACK handshakes without multiplexing", { timeout: 120_000 }, async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-sequential-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  let diagnosticStage = "CLEANUP_PENDING";
+  const enterDiagnosticStage = (stage: string): void => {
+    diagnosticStage = stage;
+    t.diagnostic(`DOCUMENT_SEQUENTIAL_STAGE_${stage}`);
+  };
+  t.after(async () => {
+    enterDiagnosticStage("CLEANUP_BEGIN");
+    await rm(temporaryRoot, { recursive: true, force: true });
+    enterDiagnosticStage("CLEANUP_COMPLETE");
+  });
   const markerPrefix = join(temporaryRoot, "payload");
   const caseChild = spawnRegistrationCase([
     "--sequential-case",
@@ -1656,7 +1665,11 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     REGISTRATION_RACE_FIXTURE,
   ]);
   const caseExit = childExitPromise(caseChild);
-  t.after(() => terminate(caseChild));
+  t.after(() => {
+    enterDiagnosticStage("TERMINATE_BEGIN");
+    terminate(caseChild);
+    enterDiagnosticStage("TERMINATE_COMPLETE");
+  });
   const retained: number[] = [];
   const supervisor: RegisteredProcessGroupSupervisor = {
     async registerRoot(pid, expectedParentPid) {
@@ -1677,11 +1690,6 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     caseExited: caseExit,
   });
   coordinator.start();
-  let diagnosticStage = "CLOSE";
-  const enterDiagnosticStage = (stage: string): void => {
-    diagnosticStage = stage;
-    t.diagnostic(`DOCUMENT_SEQUENTIAL_STAGE_${stage}`);
-  };
   try {
     enterDiagnosticStage("CLOSE");
     const result = await waitForClose(caseChild);

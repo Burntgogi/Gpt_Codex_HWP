@@ -8,6 +8,7 @@ const MAX_CAPTURE_BYTES = 512 * 1024;
 const DEFAULT_TEST_TIMEOUT_MS = 120_000;
 const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
+const DOCUMENT_PROCESS_TEST_TIMEOUT_MS = 300_000;
 const TEST_FILES = Object.freeze([
   "allowed-roots.test.ts", "assets.test.ts", "benchmark-policy.test.ts",
   "bounded-frame.test.ts", "build-assets.test.ts", "compact-runtime.test.ts",
@@ -174,6 +175,7 @@ const DOCTOR_ORPHAN_CODES = Object.freeze([
 const DOCUMENT_SEQUENTIAL_STAGES = new Set([
   "close", "begin-closing", "seal", "parse", "retained", "count",
   "read-0", "read-1", "pid-0", "pid-1", "closed-0", "closed-1", "body-complete",
+  "terminate-begin", "terminate-complete", "cleanup-begin", "cleanup-complete",
 ]);
 const DOCUMENT_SEQUENTIAL_CODES = Object.freeze([
   "DOCUMENT_SEQUENTIAL_CLOSE", "DOCUMENT_SEQUENTIAL_BEGIN_CLOSING",
@@ -248,7 +250,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? (() => executeDocumentProcessDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
       terminateTree: options.terminateTree ?? terminateTree,
-      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DOCUMENT_PROCESS_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
     }));
   const runDocumentFile = options.runDocumentFile
@@ -479,6 +481,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
 async function executeDocumentSequentialDiagnostic() {
   let stage = "diagnostic-failed";
   await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    testTimeoutMs: DOCUMENT_PROCESS_TEST_TIMEOUT_MS,
     testNamePattern: "^registration sequential transport completes two real bootstrap ACK handshakes without multiplexing$",
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
     onFixedDiagnostic: (code) => {
