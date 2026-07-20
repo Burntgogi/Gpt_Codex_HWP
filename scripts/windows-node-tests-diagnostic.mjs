@@ -16,6 +16,8 @@ const REPOSITORY_TEST_FILES = Object.freeze([
   "runtime-projection.test.mjs", "security-boundary-docs.test.mjs",
   "windows-node-tests-diagnostic.test.mjs", "workflow-policy.test.mjs",
 ]);
+const DEFAULT_REPOSITORY_TEST_TIMEOUT_MS = 120_000;
+const PUBLIC_CONTENT_TEST_TIMEOUT_MS = 300_000;
 const KORDOC_OWNERSHIP_CASES = Object.freeze([
   "Kordoc output creation race never deletes an unowned sentinel",
   "Kordoc builder remains compatible without a file-system hook",
@@ -90,7 +92,10 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const runRepositoryFile = options.runRepositoryFile
-    ?? ((file) => executeBoundedNodeTestFile(file, { repository: true }));
+    ?? ((file, fileOptions) => executeBoundedNodeTestFile(file, {
+      repository: true,
+      testTimeoutMs: fileOptions.testTimeoutMs,
+    }));
   const runKordocCase = options.runKordocCase
     ?? ((record) => executeBoundedNodeTestFile("kordoc-runtime-ownership.test.mjs", {
       repository: true,
@@ -113,7 +118,10 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
 
   for (const file of REPOSITORY_TEST_FILES) {
     let passed = false;
-    try { passed = await runRepositoryFile(file) === true; } catch { passed = false; }
+    const testTimeoutMs = file === "public-content-policy.test.mjs"
+      ? PUBLIC_CONTENT_TEST_TIMEOUT_MS
+      : DEFAULT_REPOSITORY_TEST_TIMEOUT_MS;
+    try { passed = await runRepositoryFile(file, { testTimeoutMs }) === true; } catch { passed = false; }
     if (!passed) {
       if (file === "kordoc-runtime-ownership.test.mjs") {
         for (const record of KORDOC_OWNERSHIP_CASES) {
@@ -246,6 +254,7 @@ async function executePublicContentDiagnostic() {
   let stage;
   await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
     repository: true,
+    testTimeoutMs: PUBLIC_CONTENT_TEST_TIMEOUT_MS,
     maximumTopLevelTests: 61,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     fixedDiagnostics: PUBLIC_CONTENT_METADATA_CODES,

@@ -374,6 +374,34 @@ test("bounded Node runner returns only an allowlisted fixed failure diagnostic",
   assert.equal(observed, "KORDOC_DEFAULT_BUILD");
 });
 
+test("bounded Node runner returns the last allowlisted fixed progress diagnostic", async () => {
+  let observed;
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  queueMicrotask(() => {
+    child.stdout.end([
+      "TAP version 13",
+      "not ok 1 - fixed diagnostic probe",
+      "# DOCUMENT_SEQUENTIAL_STAGE_CLOSE",
+      "# DOCUMENT_SEQUENTIAL_STAGE_SEAL",
+      "# fail 1",
+      "",
+    ].join("\n"));
+    child.emit("close", 1, null);
+  });
+  const passed = await executeBoundedNodeTestFile("fixture.test.mjs", {
+    repository: true,
+    spawnProcess: () => child,
+    fixedProgressDiagnostics: [
+      "DOCUMENT_SEQUENTIAL_STAGE_CLOSE",
+      "DOCUMENT_SEQUENTIAL_STAGE_SEAL",
+    ],
+    onFixedProgressDiagnostic: (value) => { observed = value; },
+  });
+  assert.equal(passed, false);
+  assert.equal(observed, "DOCUMENT_SEQUENTIAL_STAGE_SEAL");
+});
+
 test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-only assets case", async () => {
   let output = "";
   let call = 0;

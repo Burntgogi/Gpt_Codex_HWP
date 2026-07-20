@@ -20,6 +20,24 @@ test("Windows Node diagnostic reports only the fixed failed repository filename"
   );
 });
 
+test("Windows Node diagnostic gives only the Git-history policy file an extended bound", async () => {
+  let observedTimeout;
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file, options) => {
+      if (file === "public-content-policy.test.mjs") {
+        observedTimeout = options.testTimeoutMs;
+        return false;
+      }
+      return true;
+    },
+    runPublicContentDiagnostic: async () => "pc23",
+    stdout: { write() {} },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(observedTimeout, 300_000);
+});
+
 test("Windows Node diagnostic narrows release verification to one fixed case id", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({

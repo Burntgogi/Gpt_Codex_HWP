@@ -6,6 +6,7 @@ const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_ROOT = resolve(PROJECT_ROOT, "packages/gpt-codex-hwp");
 const MAX_CAPTURE_BYTES = 512 * 1024;
 const DEFAULT_TEST_TIMEOUT_MS = 120_000;
+const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const TEST_FILES = Object.freeze([
   "allowed-roots.test.ts", "assets.test.ts", "benchmark-policy.test.ts",
@@ -182,6 +183,10 @@ const DOCUMENT_SEQUENTIAL_CODES = Object.freeze([
   "DOCUMENT_SEQUENTIAL_PID_0", "DOCUMENT_SEQUENTIAL_PID_1",
   "DOCUMENT_SEQUENTIAL_GONE_0", "DOCUMENT_SEQUENTIAL_GONE_1",
 ]);
+const DOCUMENT_SEQUENTIAL_PROGRESS_CODES = Object.freeze(
+  [...DOCUMENT_SEQUENTIAL_STAGES].map((stage) =>
+    `DOCUMENT_SEQUENTIAL_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -432,6 +437,12 @@ async function executeDocumentProcessDiagnostic() {
       const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
       if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
     },
+    fixedProgressDiagnostics: DOCUMENT_SEQUENTIAL_PROGRESS_CODES,
+    onFixedProgressDiagnostic: (code) => {
+      const candidate = code.slice("DOCUMENT_SEQUENTIAL_STAGE_".length)
+        .toLowerCase().replaceAll("_", "-");
+      if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+    },
   });
   return {
     caseId: ordinal === undefined ? "aggregate" : `dp${String(ordinal).padStart(2, "0")}`,
@@ -538,7 +549,11 @@ export function executeBoundedNodeTestFile(file, options = {}) {
   return new Promise((resolveTest) => {
     const spawnProcess = options.spawnProcess ?? spawn;
     const terminateProcessTree = options.terminateTree ?? terminateTree;
-    const testTimeoutMs = boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS);
+    const testTimeoutMs = boundedTimeout(
+      options.testTimeoutMs,
+      DEFAULT_TEST_TIMEOUT_MS,
+      MAX_TEST_TIMEOUT_MS,
+    );
     const closeTimeoutMs = boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS);
     let child;
     let settled = false;
@@ -610,6 +625,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         finish(false);
       } else {
         forwardFixedDiagnostic(chunks, capturedBytes, options);
+        forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
         forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
         finish(code === 0 && signal === null && validTapReceipt(
           chunks, capturedBytes, options.allowAllSkipped === true,
@@ -660,6 +676,24 @@ function forwardFixedDiagnostic(chunks, capturedBytes, options) {
   }
 }
 
+function forwardFixedProgressDiagnostic(chunks, capturedBytes, options) {
+  if (!Array.isArray(options.fixedProgressDiagnostics)
+    || typeof options.onFixedProgressDiagnostic !== "function") return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
+  catch { return; }
+  const allowlisted = new Set(options.fixedProgressDiagnostics.filter((code) =>
+    typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(code)));
+  let observed;
+  for (const line of text.split(/\r?\n/u)) {
+    if (!line.startsWith("# ")) continue;
+    const candidate = line.slice(2);
+    if (allowlisted.has(candidate)) observed = candidate;
+  }
+  if (observed === undefined) return;
+  try { options.onFixedProgressDiagnostic(observed); } catch {}
+}
+
 function validTapReceipt(chunks, capturedBytes, allowAllSkipped = false) {
   if (capturedBytes < 1 || capturedBytes > MAX_CAPTURE_BYTES) return false;
   let text;
@@ -685,9 +719,9 @@ function terminateTree(child) {
   }
 }
 
-function boundedTimeout(value, fallback) {
+function boundedTimeout(value, fallback, maximum = 120_000) {
   if (value === undefined) return fallback;
-  if (!Number.isSafeInteger(value) || value < 1 || value > 120_000) return fallback;
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) return fallback;
   return value;
 }
 
