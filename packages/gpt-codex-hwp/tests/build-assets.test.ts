@@ -14,13 +14,9 @@ const WORKER_ASSETS = Object.freeze([
 ]);
 
 test("package build copies the exact Windows supervisor beside the compiled client", async () => {
-  const npmCli = process.env.npm_execpath ?? join(
-    dirname(process.execPath),
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
-  );
+  const npmCli = process.env.npm_execpath ?? (process.platform === "win32"
+    ? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
+    : resolve(dirname(process.execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"));
   const build = spawnSync(process.execPath, [npmCli, "run", "build", "--silent"], {
     cwd: SOURCE_ROOT,
     encoding: "utf8",

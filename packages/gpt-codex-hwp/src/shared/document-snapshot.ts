@@ -108,11 +108,20 @@ export type DocumentSnapshotDiagnosticStage =
   | "source-open"
   | "spool-directory-create"
   | "spool-directory-acl"
+  | "spool-directory-sid"
+  | "spool-directory-icacls"
+  | "spool-directory-verify"
   | "spool-file-create"
   | "spool-file-acl"
+  | "spool-file-sid"
+  | "spool-file-icacls"
+  | "spool-file-verify"
   | "spool-copy"
   | "spool-sync"
   | "spool-file-reacl"
+  | "spool-file-reacl-sid"
+  | "spool-file-reacl-icacls"
+  | "spool-file-reacl-verify"
   | "spool-verify"
   | "source-reauthorize"
   | "source-verify";
@@ -357,7 +366,13 @@ async function prepareSpoolSnapshot(
     directoryPath = await mkdtemp(join(options.spoolRoot, SPOOL_PREFIX));
     directoryIdentity = await ownedDirectoryIdentity(directoryPath);
     options.testHooks?.onDiagnosticStage?.("spool-directory-acl");
-    await setOwnerOnlyAccess(directoryPath, "directory", 0o700);
+    await setOwnerOnlyAccess(
+      directoryPath,
+      "directory",
+      0o700,
+      "spool-directory",
+      options.testHooks?.onDiagnosticStage,
+    );
 
     options.testHooks?.onDiagnosticStage?.("spool-file-create");
     filePath = join(directoryPath, SPOOL_FILENAME);
@@ -365,7 +380,13 @@ async function prepareSpoolSnapshot(
     const created = await writer.stat({ bigint: true });
     fileIdentity = fileSystemIdentityOf(created);
     options.testHooks?.onDiagnosticStage?.("spool-file-acl");
-    await setOwnerOnlyAccess(filePath, "file", 0o600);
+    await setOwnerOnlyAccess(
+      filePath,
+      "file",
+      0o600,
+      "spool-file",
+      options.testHooks?.onDiagnosticStage,
+    );
 
     const reusableBytes = Math.max(
       1,
@@ -410,7 +431,13 @@ async function prepareSpoolSnapshot(
     writer = undefined;
 
     options.testHooks?.onDiagnosticStage?.("spool-file-reacl");
-    await setOwnerOnlyAccess(filePath, "file", 0o600);
+    await setOwnerOnlyAccess(
+      filePath,
+      "file",
+      0o600,
+      "spool-file-reacl",
+      options.testHooks?.onDiagnosticStage,
+    );
     options.testHooks?.onDiagnosticStage?.("spool-verify");
     const fileStatus = await lstat(filePath, { bigint: true });
     if (
@@ -797,6 +824,8 @@ async function setOwnerOnlyAccess(
   path: string,
   kind: "directory" | "file",
   mode: number,
+  stagePrefix: "spool-directory" | "spool-file" | "spool-file-reacl",
+  observe?: (stage: DocumentSnapshotDiagnosticStage) => void,
 ): Promise<void> {
   if (process.platform !== "win32") {
     await chmod(path, mode);
@@ -804,11 +833,13 @@ async function setOwnerOnlyAccess(
   }
 
   try {
+    observe?.(`${stagePrefix}-sid`);
     const sid = await currentWindowsSid();
     const currentGrant = kind === "directory" ? `*${sid}:(OI)(CI)F` : `*${sid}:F`;
     const systemGrant = kind === "directory"
       ? `*${WINDOWS_SYSTEM_SID}:(OI)(CI)F`
       : `*${WINDOWS_SYSTEM_SID}:F`;
+    observe?.(`${stagePrefix}-icacls`);
     await runAclCommand("icacls.exe", [
       path,
       "/inheritance:r",
@@ -817,6 +848,7 @@ async function setOwnerOnlyAccess(
       systemGrant,
       "/q",
     ]);
+    observe?.(`${stagePrefix}-verify`);
     await verifyWindowsAcl(path, sid, kind);
   } catch {
     throw openFailedError();

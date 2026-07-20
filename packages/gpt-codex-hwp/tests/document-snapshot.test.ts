@@ -405,8 +405,19 @@ test("document snapshot reports only fixed spool stages to a diagnostic test hoo
   });
   assert.deepEqual(stages, [
     "source-authorize", "source-open", "spool-directory-create",
-    "spool-directory-acl", "spool-file-create", "spool-file-acl",
-    "spool-copy", "spool-sync", "spool-file-reacl", "spool-verify",
+    "spool-directory-acl",
+    ...(process.platform === "win32"
+      ? ["spool-directory-sid", "spool-directory-icacls", "spool-directory-verify"]
+      : []),
+    "spool-file-create", "spool-file-acl",
+    ...(process.platform === "win32"
+      ? ["spool-file-sid", "spool-file-icacls", "spool-file-verify"]
+      : []),
+    "spool-copy", "spool-sync", "spool-file-reacl",
+    ...(process.platform === "win32"
+      ? ["spool-file-reacl-sid", "spool-file-reacl-icacls", "spool-file-reacl-verify"]
+      : []),
+    "spool-verify",
     "source-reauthorize", "source-verify",
   ]);
   await snapshot.cleanup();

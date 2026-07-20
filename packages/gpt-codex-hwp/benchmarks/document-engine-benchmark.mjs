@@ -57,8 +57,11 @@ const SAFE_PROBE_ERROR_CODES = new Set([...SAFE_ERROR_CODES, "ENGINE_INIT_FAILED
 const SAFE_CASE_PHASES = new Set(["facade", "snapshot", "detect", "probe"]);
 const SAFE_SNAPSHOT_STAGES = new Set([
   "source-authorize", "source-open", "spool-directory-create",
-  "spool-directory-acl", "spool-file-create", "spool-file-acl",
+  "spool-directory-acl", "spool-directory-sid", "spool-directory-icacls",
+  "spool-directory-verify", "spool-file-create", "spool-file-acl",
+  "spool-file-sid", "spool-file-icacls", "spool-file-verify",
   "spool-copy", "spool-sync", "spool-file-reacl", "spool-verify",
+  "spool-file-reacl-sid", "spool-file-reacl-icacls", "spool-file-reacl-verify",
   "source-reauthorize", "source-verify",
 ]);
 const SAFE_ENGINE_STAGES = new Set([
