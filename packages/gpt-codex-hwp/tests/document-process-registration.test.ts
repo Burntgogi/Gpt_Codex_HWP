@@ -1708,6 +1708,7 @@ test("registration sequential transport completes two real bootstrap ACK handsha
       enterDiagnosticStage(index === 0 ? "CLOSED_0" : "CLOSED_1");
       assert.equal(closedBootstrapPids[index], payload.payloadPid);
     }
+    enterDiagnosticStage("BODY_COMPLETE");
   } catch {
     throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);
   }

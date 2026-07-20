@@ -95,6 +95,21 @@ test("Windows Node diagnostic preserves the bounded metadata stage from the publ
   );
 });
 
+test("Windows Node diagnostic distinguishes a passing public-content rerun", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "public-content-policy.test.mjs",
+    runPublicContentDiagnostic: async () => ({ caseId: "public-content-rerun-passed" }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_REPOSITORY_TEST_CASE case=public-content-rerun-passed status=failed\n",
+  );
+});
+
 test("Windows Node diagnostic maps runtime-projection failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({
@@ -145,7 +160,7 @@ test("Windows Node diagnostic reports a fixed aggregate when isolated Kordoc cas
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=aggregate status=failed\n");
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=kordoc-aggregate status=failed\n");
 });
 
 test("Windows Node diagnostic delegates to the bounded source diagnostic after repository success", async () => {

@@ -246,7 +246,7 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
   let isolatedReruns = 0;
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file) => file !== "document-process-registration.test.ts",
-    runDocumentProcessDiagnostic: async () => ({ caseId: "dp45", stage: "seal" }),
+    runDocumentProcessDiagnostic: async () => ({ caseId: "dp45", stage: "body-complete" }),
     runDocumentSequentialDiagnostic: async () => {
       isolatedReruns += 1;
       return "passed-on-rerun";
@@ -258,7 +258,7 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
   assert.equal(isolatedReruns, 0);
   assert.equal(
     output,
-    "MAC_DOCUMENT_SEQUENTIAL stage=seal\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
+    "MAC_DOCUMENT_SEQUENTIAL stage=body-complete\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
   );
 });
 

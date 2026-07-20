@@ -141,7 +141,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
             return false;
           }
         }
-        stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=aggregate status=failed\n");
+        stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=kordoc-aggregate status=failed\n");
         setExitCode(1);
         return false;
       }
@@ -176,7 +176,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
             && /^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate)) {
             caseId = candidate;
           } else if (candidate !== null && typeof candidate === "object") {
-            if (/^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate.caseId)) {
+            if (/^(?:pc(?:0[1-9]|[1-5][0-9]|6[01])|public-content-(?:aggregate|rerun-passed))$/u
+              .test(candidate.caseId)) {
               caseId = candidate.caseId;
             }
             if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate.stage)) stage = candidate.stage;
@@ -252,7 +253,7 @@ async function executeReleaseOracleDiagnostic() {
 async function executePublicContentDiagnostic() {
   let ordinal;
   let stage;
-  await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
+  const passed = await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
     repository: true,
     testTimeoutMs: PUBLIC_CONTENT_TEST_TIMEOUT_MS,
     maximumTopLevelTests: 61,
@@ -265,7 +266,9 @@ async function executePublicContentDiagnostic() {
     },
   });
   return {
-    caseId: ordinal === undefined ? "aggregate" : `pc${String(ordinal).padStart(2, "0")}`,
+    caseId: ordinal !== undefined
+      ? `pc${String(ordinal).padStart(2, "0")}`
+      : passed ? "public-content-rerun-passed" : "public-content-aggregate",
     stage,
   };
 }
