@@ -368,6 +368,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let failureKind;
         let runnerFailureKind;
         let testCodeReason;
+        let assertionOrigin;
         let firstFailureStage;
         try {
           const candidate = documentReceipt ?? await runDocumentProcessDiagnostic();
@@ -394,6 +395,9 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
               .includes(candidate.testCodeReason)) {
               testCodeReason = candidate.testCodeReason;
             }
+            if (["register-root", "test-body", "unknown"].includes(candidate.assertionOrigin)) {
+              assertionOrigin = candidate.assertionOrigin;
+            }
             if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
               .includes(candidate.runnerFailureKind)) {
               runnerFailureKind = candidate.runnerFailureKind;
@@ -417,6 +421,9 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           }
           if (testCodeReason !== undefined) {
             stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_TEST_CODE reason=${testCodeReason}\n`);
+          }
+          if (assertionOrigin !== undefined) {
+            stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_ASSERTION origin=${assertionOrigin}\n`);
           }
           if (runnerFailureKind !== undefined) {
             stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_RUNNER kind=${runnerFailureKind}\n`);
@@ -486,6 +493,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
   let runnerFailureKind;
   let stage;
   let testCodeReason;
+  let assertionOrigin;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
@@ -496,6 +504,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     onFailedTopLevelFailureKind: (value) => { failureKind = value; },
     onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
+    onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
     onFixedDiagnostic: (code) => {
@@ -519,6 +528,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     runnerFailureKind,
     stage,
     testCodeReason,
+    assertionOrigin,
   };
 }
 
@@ -710,6 +720,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
         forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
         forwardFailedTopLevelTestCodeReason(chunks, capturedBytes, options);
+        forwardFailedTopLevelAssertionOrigin(chunks, capturedBytes, options);
         forwardCompletionKind(chunks, capturedBytes, code, signal, options);
         finish(code === 0 && signal === null && validTapReceipt(
           chunks, capturedBytes, options.allowAllSkipped === true,
@@ -802,6 +813,26 @@ export function failedTopLevelTestCodeReason(text) {
     return "async-activity";
   }
   if (/^  code: 'ERR_TEST_FAILURE'$/mu.test(text)) return "test-failure";
+  return "unknown";
+}
+
+function forwardFailedTopLevelAssertionOrigin(chunks, capturedBytes, options) {
+  if (typeof options.onFailedTopLevelAssertionOrigin !== "function") return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
+  catch { return; }
+  const origin = failedTopLevelAssertionOrigin(text);
+  if (origin === undefined) return;
+  try { options.onFailedTopLevelAssertionOrigin(origin); } catch {}
+}
+
+export function failedTopLevelAssertionOrigin(text) {
+  if (typeof text !== "string" || !/^not ok [1-9][0-9]* - /mu.test(text)
+    || !/^# fail [1-9][0-9]*$/mu.test(text)
+    || !/^  failureType: 'testCodeFailure'$/mu.test(text)
+    || !/^  code: 'ERR_ASSERTION'$/mu.test(text)) return undefined;
+  if (/^ {4}at Object\.registerRoot \(/mu.test(text)) return "register-root";
+  if (/^ {4}at TestContext\.<anonymous> \(/mu.test(text)) return "test-body";
   return "unknown";
 }
 

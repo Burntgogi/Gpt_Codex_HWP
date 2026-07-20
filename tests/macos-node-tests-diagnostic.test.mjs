@@ -7,10 +7,30 @@ import {
   classifyNodeTestCompletion,
   executeBoundedNodeTestFile,
   failedTopLevelFailureKind,
+  failedTopLevelAssertionOrigin,
   failedTopLevelOrdinal,
   failedTopLevelTestCodeReason,
   runMacNodeTestsDiagnostic,
 } from "../scripts/macos-node-tests-diagnostic.mjs";
+
+test("macOS Node diagnostic classifies assertion origins without exposing stack paths", () => {
+  const registrationCallback = [
+    "not ok 45 - sequential registration",
+    "  failureType: 'testCodeFailure'",
+    "  code: 'ERR_ASSERTION'",
+    "  stack: |-",
+    "    at Object.registerRoot (/private/runner/document-process-registration.test.ts:2399:16)",
+    "# fail 1",
+  ].join("\n");
+  const testBody = registrationCallback.replace(
+    "at Object.registerRoot",
+    "at TestContext.<anonymous>",
+  );
+
+  assert.equal(failedTopLevelAssertionOrigin(registrationCallback), "register-root");
+  assert.equal(failedTopLevelAssertionOrigin(testBody), "test-body");
+  assert.equal(failedTopLevelAssertionOrigin("not ok 1 - malformed\n# fail 1"), undefined);
+});
 
 test("macOS Node diagnostic emits one fixed success receipt after every allowlisted file", async () => {
   const files = [];
@@ -253,6 +273,7 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
       caseId: "dp45",
       failureKind: "test-timeout",
       testCodeReason: "async-activity",
+      assertionOrigin: "register-root",
       stage: "cleanup-complete",
     }),
     runDocumentSequentialDiagnostic: async () => {
@@ -269,6 +290,7 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
     "MAC_DOCUMENT_SEQUENTIAL stage=cleanup-complete\n"
       + "MAC_DOCUMENT_SEQUENTIAL_FAILURE kind=test-timeout\n"
       + "MAC_DOCUMENT_SEQUENTIAL_TEST_CODE reason=async-activity\n"
+      + "MAC_DOCUMENT_SEQUENTIAL_ASSERTION origin=register-root\n"
       + "MAC_NODE_TEST_CASE case=dp45 status=failed\n",
   );
 });
