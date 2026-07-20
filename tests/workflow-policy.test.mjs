@@ -200,13 +200,22 @@ test("both CI jobs bind full release receipts to the exact feature head and uplo
   assert.equal(countMatches(workflow, /platform-receipts\.mjs checksum/gu), 2);
 });
 
-test("macOS CI runs the safe POSIX controls only once immediately before the release gate", async () => {
+test("macOS CI keeps hosted compatibility diagnostics manual and runs POSIX controls once before the release gate", async () => {
   const workflow = await readFile(WORKFLOW_PATH, "utf8");
+  const compatibilityDiagnostic = await readFile(
+    join(ROOT, "scripts", "macos-node-tests-diagnostic.mjs"),
+    "utf8",
+  );
   const windows = jobSection(workflow, "windows", "macos");
   const macos = jobSection(workflow, "macos", "linux");
   const linux = jobSection(workflow, "linux");
   const command = "node scripts/macos-posix-controls.mjs";
 
+  assert.match(
+    compatibilityDiagnostic,
+    /export async function runMacNodeTestsDiagnostic/u,
+  );
+  assert.doesNotMatch(macos, /macos-node-tests-diagnostic/iu);
   assert.match(
     macos,
     /^      - name: Run safe macOS POSIX controls\r?\n        run: node scripts\/macos-posix-controls\.mjs$/mu,
