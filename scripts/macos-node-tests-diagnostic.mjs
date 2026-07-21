@@ -313,6 +313,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? executeMcpCancellationProgressDiagnostic;
   const runOutputBudgetAtomicityDiagnostic = options.runOutputBudgetAtomicityDiagnostic
     ?? executeOutputBudgetAtomicityDiagnostic;
+  const runPatchDiagnostic = options.runPatchDiagnostic ?? executePatchDiagnostic;
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
     ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -528,7 +529,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let caseId = "aggregate";
         try {
           const candidate = await runBenchmarkPolicyDiagnostic();
-          if (/^bp(?:0[1-9]|[12][0-9]|3[0-8])$/u.test(candidate)) caseId = candidate;
+          if (/^bp(?:0[1-9]|[12][0-9]|3[0-9])$/u.test(candidate)) caseId = candidate;
           else if (candidate === "aggregate") caseId = "benchmark-aggregate";
         } catch {}
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
@@ -617,6 +618,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         try {
           const candidate = await runOutputBudgetAtomicityDiagnostic();
           if (/^ob(?:0[1-9]|1[0-5])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
+      if (file === "patch.test.ts") {
+        let caseId = "patch-aggregate";
+        try {
+          const candidate = await runPatchDiagnostic();
+          if (/^pa(?:0[1-9]|1[0-9]|2[0-3])$/u.test(candidate)) caseId = candidate;
         } catch {}
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -758,7 +769,7 @@ async function executeDocumentSequentialDiagnostic() {
 }
 
 async function executeBenchmarkPolicyDiagnostic() {
-  return executeSourceOrdinalDiagnostic("benchmark-policy.test.ts", 38, "bp");
+  return executeSourceOrdinalDiagnostic("benchmark-policy.test.ts", 39, "bp");
 }
 
 async function executeMcpCancellationProgressDiagnostic() {
@@ -835,6 +846,10 @@ async function executeSourceOrdinalDiagnostic(file, maximum, prefix) {
 
 async function executeOutputBudgetAtomicityDiagnostic() {
   return executeSourceOrdinalDiagnostic("output-budget-atomicity.test.ts", 15, "ob");
+}
+
+async function executePatchDiagnostic() {
+  return executeSourceOrdinalDiagnostic("patch.test.ts", 23, "pa");
 }
 
 function executeSvgAssetDiagnostic(options) {

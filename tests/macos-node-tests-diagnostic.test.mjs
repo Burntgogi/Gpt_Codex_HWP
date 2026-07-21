@@ -436,6 +436,31 @@ test("macOS Node diagnostic maps benchmark failure to one bounded ordinal", asyn
   assert.equal(output, "MAC_NODE_TEST_CASE case=bp17 status=failed\n");
 });
 
+test("macOS Node diagnostic accepts the current final benchmark ordinal", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    runBenchmarkPolicyDiagnostic: async () => "bp39",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=bp39 status=failed\n");
+});
+
+test("Windows source diagnostic maps patch failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "patch.test.ts",
+    runPatchDiagnostic: async () => "pa23",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_NODE_TEST_CASE case=pa23 status=failed\n");
+});
+
 test("shared Node diagnostic maps MCP cancellation failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
