@@ -45,8 +45,8 @@ GitHub repository search on 2026-07-22 found no repository with at least one mil
 
 Release policy requires the exact commit referenced by the tag to pass the Windows x64, macOS arm64, Linux, and security checks. The runs below are passing records for the pre-release hardening baseline; the final tag is published only after the current release commit passes every required check.
 
-- [CI run 29834487275](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29834487275): Windows x64 full release gate and platform receipt, macOS arm64 full release gate and platform receipt, and Linux lifecycle checks passed
-- [Security run 29834486173](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29834486173): public-tree and all-reachable Git object/identity scans, source/runtime production audits, runtime projection, and artifact build and verification passed
+- [v0.2.1 CI run 29861590295](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29861590295): Windows x64 full release gate and platform receipt, macOS arm64 full release gate and platform receipt, and Linux lifecycle checks passed
+- [v0.2.1 Security run 29861590517](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29861590517): public-tree and all-reachable Git object/identity scans, source/runtime production audits, runtime projection, and artifact build and verification passed
 - The platform release gates include the authenticated Kordoc rebuild, fresh large-document evidence, real read-only HWP smoke, all nine MCP tool smokes, and artifact-integrity checks
 - The hosted macOS arm64 gate passed, but actual use with Codex Desktop and Hancom Office Hangul on a physical Mac remains unverified
 

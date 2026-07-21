@@ -45,8 +45,8 @@ v0.2.1은 HWP를 안전한 읽기 전용 입력 형식으로 사용하고 모든
 
 릴리즈 정책은 태그가 가리키는 정확한 커밋에서 Windows x64, macOS arm64, Linux와 보안 필수 검사를 모두 통과하도록 요구합니다. 다음 실행은 릴리즈 전 강화 기준선의 통과 기록이며, 최종 태그는 현재 릴리즈 커밋의 필수 검사가 통과한 뒤에만 게시합니다.
 
-- [CI 실행 29834487275](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29834487275): Windows x64 전체 배포 게이트와 플랫폼 영수증, macOS arm64 전체 배포 게이트와 플랫폼 영수증, Linux lifecycle 검사 통과
-- [보안 실행 29834486173](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29834486173): 공개 트리와 전체 도달 가능 Git 객체/신원 검사, source/runtime production audit, 런타임 투영, 배포물 빌드·검증 통과
+- [v0.2.1 CI 실행 29861590295](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29861590295): Windows x64 전체 배포 게이트와 플랫폼 영수증, macOS arm64 전체 배포 게이트와 플랫폼 영수증, Linux lifecycle 검사 통과
+- [v0.2.1 보안 실행 29861590517](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29861590517): 공개 트리와 전체 도달 가능 Git 객체/신원 검사, source/runtime production audit, 런타임 투영, 배포물 빌드·검증 통과
 - 공식 Kordoc 재생성, 대용량 문서 증적, 실제 HWP 읽기 전용 스모크, 9개 MCP 도구 스모크와 배포물 무결성 검사가 각 플랫폼의 전체 배포 게이트에 포함됨
 - macOS arm64 호스티드 러너 검사는 통과했지만 실제 Mac 기기의 Codex Desktop·한컴오피스 한글 사용은 아직 검증하지 않음
 
