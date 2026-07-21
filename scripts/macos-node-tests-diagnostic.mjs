@@ -487,7 +487,12 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       }
       if (file === "mcp-cancellation-progress.test.ts") {
         let caseId = "aggregate";
+        let assertionOrigin;
+        let completionKind;
+        let failureKind;
+        let runnerFailureKind;
         let stage;
+        let testCodeReason;
         try {
           const candidate = await runMcpCancellationProgressDiagnostic();
           if (typeof candidate === "string") {
@@ -499,11 +504,37 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
               || candidate.caseId === "mcp-cancellation-rerun-passed") {
               caseId = candidate.caseId;
             }
+            if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
+              .includes(candidate.completionKind)) completionKind = candidate.completionKind;
+            if (["test-timeout", "hook-failure", "test-code", "async-failure", "cancelled", "unknown"]
+              .includes(candidate.failureKind)) failureKind = candidate.failureKind;
+            if (["assertion", "async-activity", "test-failure", "unknown"]
+              .includes(candidate.testCodeReason)) testCodeReason = candidate.testCodeReason;
+            if (["register-root", "test-body", "unknown"].includes(candidate.assertionOrigin)) {
+              assertionOrigin = candidate.assertionOrigin;
+            }
+            if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
+              .includes(candidate.runnerFailureKind)) runnerFailureKind = candidate.runnerFailureKind;
             if (MCP_PREVIEW_CANCELLATION_STAGES.has(candidate.stage)) stage = candidate.stage;
           }
         } catch {}
         if (caseId === "mp03" && stage !== undefined) {
           stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION stage=${stage}\n`);
+        }
+        if (caseId === "mp03" && failureKind !== undefined) {
+          stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION_FAILURE kind=${failureKind}\n`);
+        }
+        if (caseId === "mp03" && completionKind !== undefined) {
+          stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION_COMPLETION kind=${completionKind}\n`);
+        }
+        if (caseId === "mp03" && testCodeReason !== undefined) {
+          stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION_TEST_CODE reason=${testCodeReason}\n`);
+        }
+        if (caseId === "mp03" && assertionOrigin !== undefined) {
+          stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION_ASSERTION origin=${assertionOrigin}\n`);
+        }
+        if (caseId === "mp03" && runnerFailureKind !== undefined) {
+          stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION_RUNNER kind=${runnerFailureKind}\n`);
         }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -638,11 +669,21 @@ async function executeBenchmarkPolicyDiagnostic() {
 }
 
 async function executeMcpCancellationProgressDiagnostic() {
+  let assertionOrigin;
+  let completionKind;
+  let failureKind;
   let ordinal;
+  let runnerFailureKind;
   let stage;
+  let testCodeReason;
   const passed = await executeBoundedNodeTestFile("mcp-cancellation-progress.test.ts", {
     maximumTopLevelTests: 13,
+    onCompletionKind: (value) => { completionKind = value; },
+    onFailedTopLevelFailureKind: (value) => { failureKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
+    onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
+    onRunnerFailureKind: (value) => { runnerFailureKind = value; },
     fixedDiagnostics: MCP_PREVIEW_CANCELLATION_CODES,
     onFixedDiagnostic: (code) => {
       const candidate = code.slice("MCP_PREVIEW_CANCELLATION_FAILURE_".length)
@@ -651,10 +692,15 @@ async function executeMcpCancellationProgressDiagnostic() {
     },
   });
   return {
+    assertionOrigin,
     caseId: ordinal === undefined
       ? passed ? "mcp-cancellation-rerun-passed" : "mcp-cancellation-aggregate"
       : `mp${String(ordinal).padStart(2, "0")}`,
+    completionKind,
+    failureKind,
+    runnerFailureKind,
     stage,
+    testCodeReason,
   };
 }
 

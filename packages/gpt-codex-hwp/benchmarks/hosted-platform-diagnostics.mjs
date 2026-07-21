@@ -268,6 +268,24 @@ export function rethrowWithLinuxRealDetectDiagnostic(error, emit) {
   throw error;
 }
 
+export function isRetryablePosixRealDetectTelemetryGap(error) {
+  try {
+    if (error?.code !== "BENCHMARK_TELEMETRY_UNAVAILABLE") return false;
+    const value = error.telemetryDiagnostic;
+    assertExactKeys(value, [
+      "status", "processGone", "telemetryEnded", "framePresent", "rssPresent", "stage",
+    ]);
+    return value.status === "failed"
+      && value.processGone === true
+      && value.telemetryEnded === true
+      && value.framePresent === true
+      && value.rssPresent === false
+      && value.stage === "posix-telemetry-sample";
+  } catch {
+    return false;
+  }
+}
+
 function assertExactBoundary(value, boundaries) {
   assertExactKeys(value, ["boundary"]);
   if (!boundaries.has(value.boundary)) throw diagnosticError();

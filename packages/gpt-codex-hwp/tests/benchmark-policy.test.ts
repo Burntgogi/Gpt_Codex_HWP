@@ -10,7 +10,10 @@ import { Worker } from "node:worker_threads";
 import JSZip from "jszip";
 
 import { REQUIRED_RELEASE_STAGES } from "../../../scripts/release-verify.mjs";
-import { rethrowWithLinuxRealDetectDiagnostic } from "../benchmarks/hosted-platform-diagnostics.mjs";
+import {
+  isRetryablePosixRealDetectTelemetryGap,
+  rethrowWithLinuxRealDetectDiagnostic,
+} from "../benchmarks/hosted-platform-diagnostics.mjs";
 import { finalizeVerifiedWindowsSupervisor } from "../src/workers/document-child-client.js";
 import { createDocumentWorkerClient } from "../src/workers/document-worker-client.js";
 import {
@@ -166,6 +169,33 @@ test("Linux real-detect diagnostic emits the safe tuple and rethrows the origina
   assert.deepEqual(lines, [
     "LINUX_REAL_DETECT status=failed processGone=true telemetryEnded=true framePresent=false rssPresent=true stage=error-sampling",
   ]);
+});
+
+test("POSIX real-detect retry accepts only the exact missing-RSS telemetry gap", async () => {
+  const exact = {
+    code: "BENCHMARK_TELEMETRY_UNAVAILABLE",
+    telemetryDiagnostic: {
+      status: "failed",
+      processGone: true,
+      telemetryEnded: true,
+      framePresent: true,
+      rssPresent: false,
+      stage: "posix-telemetry-sample",
+    },
+  };
+  assert.equal(isRetryablePosixRealDetectTelemetryGap(exact), true);
+  assert.equal(isRetryablePosixRealDetectTelemetryGap({
+    ...exact,
+    code: "ENGINE_CRASH",
+  }), false);
+  assert.equal(isRetryablePosixRealDetectTelemetryGap({
+    ...exact,
+    telemetryDiagnostic: { ...exact.telemetryDiagnostic, rssPresent: true },
+  }), false);
+  assert.equal(isRetryablePosixRealDetectTelemetryGap({
+    ...exact,
+    telemetryDiagnostic: { ...exact.telemetryDiagnostic, privatePath: "/private/file" },
+  }), false);
 });
 
 test("hosted platform wrappers return only bounded classifier tuples", async () => {
@@ -446,23 +476,33 @@ test("benchmark source does not overwrite a classified supervisor startup frame"
 });
 
 test("benchmark policy records a real nonempty detect dispatch before its one defensive copy", { timeout: 120_000 }, async (t) => {
-  const outputPath = join(
+  const outputPaths = [0, 1].map((attempt) => join(
     REPOSITORY_ROOT,
     ".superpowers",
     "benchmarks",
-    `real-detect-${process.pid}-${Date.now()}.json`,
-  );
-  t.after(() => rm(outputPath, { force: true }));
+    `real-detect-${process.pid}-${Date.now()}-${attempt}.json`,
+  ));
+  t.after(async () => {
+    await Promise.all(outputPaths.map((path) => rm(path, { force: true })));
+  });
 
   let evidence;
-  try {
-    evidence = await runBenchmark({
-      sizesMiB: [10],
-      outputPath,
-    });
-  } catch (error: unknown) {
-    rethrowWithLinuxRealDetectDiagnostic(error, (line: string) => t.diagnostic(line));
+  for (const [attempt, outputPath] of outputPaths.entries()) {
+    try {
+      evidence = await runBenchmark({
+        sizesMiB: [10],
+        outputPath,
+      });
+      break;
+    } catch (error: unknown) {
+      const retry = process.platform !== "win32"
+        && attempt === 0
+        && isRetryablePosixRealDetectTelemetryGap(error);
+      if (retry) continue;
+      rethrowWithLinuxRealDetectDiagnostic(error, (line: string) => t.diagnostic(line));
+    }
   }
+  assert.ok(evidence);
   const receipt = evidence.receipts[0];
 
   assert.ok(receipt);

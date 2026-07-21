@@ -384,6 +384,11 @@ test("shared Node diagnostic emits one allowlisted preview cancellation failure 
     runFile: async (file) => file !== "mcp-cancellation-progress.test.ts",
     runMcpCancellationProgressDiagnostic: async () => ({
       caseId: "mp03",
+      completionKind: "test-failure",
+      failureKind: "async-failure",
+      testCodeReason: "async-activity",
+      assertionOrigin: "test-body",
+      runnerFailureKind: "runner-timeout",
       stage: "output-absence",
     }),
     stdout: { write: (value) => { output += value; } },
@@ -393,6 +398,11 @@ test("shared Node diagnostic emits one allowlisted preview cancellation failure 
   assert.equal(
     output,
     "WINDOWS_MCP_PREVIEW_CANCELLATION stage=output-absence\n"
+      + "WINDOWS_MCP_PREVIEW_CANCELLATION_FAILURE kind=async-failure\n"
+      + "WINDOWS_MCP_PREVIEW_CANCELLATION_COMPLETION kind=test-failure\n"
+      + "WINDOWS_MCP_PREVIEW_CANCELLATION_TEST_CODE reason=async-activity\n"
+      + "WINDOWS_MCP_PREVIEW_CANCELLATION_ASSERTION origin=test-body\n"
+      + "WINDOWS_MCP_PREVIEW_CANCELLATION_RUNNER kind=runner-timeout\n"
       + "WINDOWS_NODE_TEST_CASE case=mp03 status=failed\n",
   );
 });
