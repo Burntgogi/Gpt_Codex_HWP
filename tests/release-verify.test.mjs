@@ -906,6 +906,47 @@ test("document benchmark stage maps a silent nonzero child to one fixed runner r
   });
 });
 
+test("Node test stage preserves only the first bounded phase and TAP ordinal", async () => {
+  for (const [phase, prefix, ordinal] of [
+    ["repository", "> gpt-codex-hwp-repository@0.2.0 test:repository\n", 7],
+    [
+      "source",
+      "> gpt-codex-hwp-repository@0.2.0 test:repository\n"
+        + "> gpt-codex-hwp-repository@0.2.0 test:source\n",
+      17,
+    ],
+  ]) {
+    const result = await runStageCommand(
+      nodeStage(
+        "node-tests",
+        `process.stdout.write(${JSON.stringify(`${prefix}not ok ${ordinal} - PRIVATE/path/document.hwpx\n`)}); process.exit(9)`,
+      ),
+      { timeoutMs: 2_000, maxOutputBytes: 4_096 },
+    );
+
+    assert.deepEqual(result, {
+      status: "failed",
+      diagnostic: { kind: "node-tests", phase, ordinal },
+    });
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
+  }
+});
+
+test("Node test stage maps a silent nonzero child to one fixed runner receipt", async () => {
+  const result = await runStageCommand(
+    nodeStage("node-tests", "process.exit(9)"),
+    { timeoutMs: 2_000, maxOutputBytes: 1_024 },
+  );
+
+  assert.deepEqual(result, {
+    status: "failed",
+    diagnostic: {
+      kind: "node-tests-runner",
+      receipt: "NODE_TEST_RUNNER_NONZERO",
+    },
+  });
+});
+
 test("release verification reports a bounded document benchmark diagnostic out of band", async () => {
   const diagnostics = [];
   const receipt = await runReleaseVerification({
@@ -934,6 +975,31 @@ test("release verification reports a bounded document benchmark diagnostic out o
     command: 2,
     receipt: "BENCHMARK_EVIDENCE_INVALID",
   }]);
+  assert.equal(JSON.stringify(receipt).includes("diagnostic"), false);
+});
+
+test("release verification reports a bounded Node test diagnostic out of band", async () => {
+  const diagnostics = [];
+  const receipt = await runReleaseVerification({
+    root: ROOT,
+    platform: "test-platform",
+    arch: "test-arch",
+    versions: VERSIONS,
+    resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: collectStableSourceIdentity,
+    diagnosticObserver: (value) => { diagnostics.push(value); },
+    runStage: async (stage) => stage.name === "node-tests"
+      ? {
+          status: "failed",
+          diagnostic: { kind: "node-tests", phase: "source", ordinal: 17 },
+        }
+      : passedReleaseStage(stage),
+  });
+
+  assert.equal(receipt.status, "failed");
+  assert.deepEqual(diagnostics, [
+    { kind: "node-tests", phase: "source", ordinal: 17 },
+  ]);
   assert.equal(JSON.stringify(receipt).includes("diagnostic"), false);
 });
 

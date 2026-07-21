@@ -106,9 +106,7 @@ export async function runReleaseVerification(options = {}) {
     }
     stages.push(Object.freeze({ name: stage.name, status, elapsedMs }));
     if (status !== "passed") {
-      const diagnostic = stage.name === "document-benchmark"
-        ? normalizedDocumentBenchmarkDiagnostic(outcome?.diagnostic)
-        : undefined;
+      const diagnostic = normalizedReleaseStageDiagnostic(stage.name, outcome?.diagnostic);
       if (diagnostic !== undefined && diagnosticObserver !== undefined) {
         try {
           diagnosticObserver(diagnostic);
@@ -236,7 +234,7 @@ export async function runStageCommand(stage, options = {}) {
       timeoutMs: remainingTimeoutMs,
       maxOutputBytes,
       outputBudget,
-      captureOutput: stage.name === "document-benchmark"
+      captureOutput: ["document-benchmark", "node-tests"].includes(stage.name)
         || (evidence !== undefined && index === invocations.length - 1),
     });
     if (result.status !== "passed") return failedStageOutcome(stage.name, index, result);
@@ -247,13 +245,38 @@ export async function runStageCommand(stage, options = {}) {
 }
 
 function failedStageOutcome(stageName, commandIndex, result) {
-  if (stageName !== "document-benchmark") return Object.freeze({ status: "failed" });
-  const diagnostic = Object.freeze({
-    kind: "document-benchmark",
-    command: commandIndex + 1,
-    receipt: selectDocumentBenchmarkFailureReceipt(result),
-  });
+  let diagnostic;
+  if (stageName === "document-benchmark") {
+    diagnostic = Object.freeze({
+      kind: "document-benchmark",
+      command: commandIndex + 1,
+      receipt: selectDocumentBenchmarkFailureReceipt(result),
+    });
+  } else if (stageName === "node-tests") {
+    diagnostic = selectNodeTestFailureDiagnostic(result);
+  } else {
+    return Object.freeze({ status: "failed" });
+  }
   return Object.freeze({ status: "failed", diagnostic });
+}
+
+function selectNodeTestFailureDiagnostic(result) {
+  const output = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replaceAll("\r\n", "\n");
+  const failure = /^not ok ([1-9][0-9]{0,5}) - /mu.exec(output);
+  if (failure !== null) {
+    const headers = [...output.matchAll(
+      /^> gpt-codex-hwp-repository@[^\s]+ test:(repository|source)$/gmu,
+    )].filter((match) => match.index < failure.index);
+    const phase = headers.at(-1)?.[1];
+    const ordinal = Number(failure[1]);
+    if (["repository", "source"].includes(phase) && Number.isSafeInteger(ordinal)) {
+      return Object.freeze({ kind: "node-tests", phase, ordinal });
+    }
+  }
+  return Object.freeze({
+    kind: "node-tests-runner",
+    receipt: `NODE_TEST_RUNNER_${runnerFailureKind(result)}`,
+  });
 }
 
 function selectDocumentBenchmarkFailureReceipt(result) {
@@ -272,13 +295,16 @@ function selectDocumentBenchmarkFailureReceipt(result) {
     const match = lines.findLast((line) => pattern.test(line));
     if (match !== undefined) return match;
   }
-  const runnerKind = typeof result?.failureKind === "string"
+  return `BENCHMARK_RUNNER_${runnerFailureKind(result)}`;
+}
+
+function runnerFailureKind(result) {
+  return typeof result?.failureKind === "string"
     && [
       "child-error", "nonzero", "output-limit", "signal", "spawn-error", "timeout",
     ].includes(result.failureKind)
     ? result.failureKind.replaceAll("-", "_").toUpperCase()
     : result === undefined ? "STAGE_TIMEOUT" : "UNAVAILABLE";
-  return `BENCHMARK_RUNNER_${runnerKind}`;
 }
 
 function normalizedDocumentBenchmarkDiagnostic(value) {
@@ -307,11 +333,54 @@ function isSafeDocumentBenchmarkReceipt(value) {
     || /^BENCHMARK_[A-Z_]+(?: stage=[a-z0-9-]+)?$/u.test(value);
 }
 
+function normalizedNodeTestDiagnostic(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  if (Object.keys(value).sort().join(",") === "kind,ordinal,phase"
+    && value.kind === "node-tests"
+    && ["repository", "source"].includes(value.phase)
+    && Number.isSafeInteger(value.ordinal)
+    && value.ordinal >= 1
+    && value.ordinal <= 999_999) {
+    return Object.freeze({
+      kind: "node-tests",
+      phase: value.phase,
+      ordinal: value.ordinal,
+    });
+  }
+  if (Object.keys(value).sort().join(",") === "kind,receipt"
+    && value.kind === "node-tests-runner"
+    && typeof value.receipt === "string"
+    && /^NODE_TEST_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value.receipt)) {
+    return Object.freeze({ kind: "node-tests-runner", receipt: value.receipt });
+  }
+  return undefined;
+}
+
+function normalizedReleaseStageDiagnostic(stageName, value) {
+  if (stageName === "document-benchmark") {
+    return normalizedDocumentBenchmarkDiagnostic(value);
+  }
+  if (stageName === "node-tests") return normalizedNodeTestDiagnostic(value);
+  return undefined;
+}
+
 export function formatDocumentBenchmarkDiagnostic(value) {
   const diagnostic = normalizedDocumentBenchmarkDiagnostic(value);
   return diagnostic === undefined
     ? undefined
     : `DOCUMENT_BENCHMARK_FIRST_FAILURE command=${diagnostic.command} ${diagnostic.receipt}`;
+}
+
+export function formatReleaseStageDiagnostic(value) {
+  const benchmark = formatDocumentBenchmarkDiagnostic(value);
+  if (benchmark !== undefined) return benchmark;
+  const nodeTest = normalizedNodeTestDiagnostic(value);
+  if (nodeTest?.kind === "node-tests") {
+    return `NODE_TEST_FIRST_FAILURE phase=${nodeTest.phase} ordinal=${nodeTest.ordinal}`;
+  }
+  return nodeTest?.kind === "node-tests-runner" ? nodeTest.receipt : undefined;
 }
 
 export async function runReleaseArtifactsStage(stage, options = {}) {

@@ -761,6 +761,41 @@ test("platform receipt CLI emits only a validated first document benchmark failu
   assert.equal(exitCode, 1);
 });
 
+test("platform receipt CLI emits only a validated first Node test ordinal", async () => {
+  let stdout = "";
+  let stderr = "";
+  let exitCode;
+
+  const result = await runPlatformReceiptCli({
+    args: ["create"],
+    env: { EXPECTED_HEAD_SHA: EXPECTED.commit },
+    root: process.cwd(),
+    stdout: { write: (value) => { stdout += value; } },
+    stderr: { write: (value) => { stderr += value; } },
+    setExitCode: (value) => { exitCode = value; },
+    collectExpectation: async () => EXPECTED,
+    runVerification: async (options) => {
+      options.diagnosticObserver({
+        kind: "node-tests",
+        phase: "PRIVATE/path/document.hwpx",
+        ordinal: 999999,
+      });
+      options.diagnosticObserver({ kind: "node-tests", phase: "source", ordinal: 17 });
+      return failedReleaseReceipt("node-tests");
+    },
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(stdout, "");
+  assert.equal(
+    stderr,
+    "NODE_TEST_FIRST_FAILURE phase=source ordinal=17\n"
+      + "PLATFORM_RECEIPT_RELEASE_INVALID stage=node-tests\n",
+  );
+  assert.doesNotMatch(stderr, /PRIVATE|\.hwpx|[\\/]/u);
+  assert.equal(exitCode, 1);
+});
+
 test("platform receipt CLI rejects an authentic failed-stage error replayed from an earlier call", async () => {
   let captured;
   try {

@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 
 import {
-  formatDocumentBenchmarkDiagnostic,
+  formatReleaseStageDiagnostic,
   REQUIRED_RELEASE_STAGES,
   runReleaseVerification,
 } from "./release-verify.mjs";
@@ -1043,7 +1043,7 @@ export async function runPlatformReceiptCli(options = {}) {
       result = await createPlatformReceipt({
         ...common,
         diagnosticObserver: (value) => {
-          const line = formatDocumentBenchmarkDiagnostic(value);
+          const line = formatReleaseStageDiagnostic(value);
           if (line !== undefined) stderr.write(`${line}\n`);
         },
         ...(options.runVerification === undefined
