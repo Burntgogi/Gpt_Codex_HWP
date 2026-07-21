@@ -523,6 +523,59 @@ test("shared Node diagnostic maps MCP cancellation failure to one bounded ordina
   assert.equal(output, "WINDOWS_NODE_TEST_CASE case=mp10 status=failed\n");
 });
 
+test("macOS Node diagnostic emits one allowlisted running-child stage for mp10", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "mcp-cancellation-progress.test.ts",
+    runMcpCancellationProgressDiagnostic: async () => ({
+      caseId: "mp10",
+      runningChildStage: "lifecycle",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_MCP_RUNNING_CHILD stage=lifecycle\nMAC_NODE_TEST_CASE case=mp10 status=failed\n",
+  );
+});
+
+test("macOS Node diagnostic parses the running-child stage from the bounded MCP rerun", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "mcp-cancellation-progress.test.ts",
+    spawnProcess() {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end([
+          "TAP version 13",
+          "not ok 10 - supervised child cancellation",
+          "# MCP_RUNNING_CHILD_STAGE_SIGNAL",
+          "  failureType: 'testCodeFailure'",
+          "  code: 'ERR_ASSERTION'",
+          "# tests 13",
+          "# pass 12",
+          "# fail 1",
+          "# cancelled 0",
+          "# skipped 0",
+          "",
+        ].join("\n"));
+        child.emit("close", 1, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_MCP_RUNNING_CHILD stage=signal\nMAC_NODE_TEST_CASE case=mp10 status=failed\n",
+  );
+});
+
 test("shared Node diagnostic emits one allowlisted preview cancellation failure stage", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({

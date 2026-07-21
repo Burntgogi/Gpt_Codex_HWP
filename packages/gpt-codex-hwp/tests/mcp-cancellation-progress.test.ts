@@ -391,7 +391,13 @@ test("MCP progress preserves the caller token and filters unsafe reports", async
 });
 
 for (const engine of ["worker", "supervised child"] as const) {
-  test(`MCP cancellation reaches a running ${engine} and the server recovers`, async () => {
+  test(`MCP cancellation reaches a running ${engine} and the server recovers`, async (t) => {
+    const enterRunningChildStage = (stage: string): void => {
+      if (engine === "supervised child") {
+        t.diagnostic(`MCP_RUNNING_CHILD_STAGE_${stage}`);
+      }
+    };
+    enterRunningChildStage("SETUP");
     let observedSignal: AbortSignal | undefined;
     let resolveStarted!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -404,6 +410,7 @@ for (const engine of ["worker", "supervised child"] as const) {
     });
     const connection = await connectDetectServer(facade);
     const abort = new AbortController();
+    let bodyCompleted = false;
 
     try {
       const running = connection.client.callTool(
@@ -425,21 +432,31 @@ for (const engine of ["worker", "supervised child"] as const) {
         new Promise<never>((_resolve, reject) =>
           setTimeout(() => reject(new Error("engine did not start")), 2_500)),
       ]);
+      enterRunningChildStage("FIRST_START");
       abort.abort();
       await assert.rejects(running, /abort/iu);
+      enterRunningChildStage("ABORT_REJECTION");
       assert.equal(observedSignal?.aborted, true);
+      enterRunningChildStage("SIGNAL");
 
       const recovered = await connection.client.callTool({
         name: "hwp_detect_format",
         arguments: { file_path: HWP_FIXTURE },
       });
+      enterRunningChildStage("RECOVERY");
       assert.equal(recovered.isError, false);
       assert.equal(isolated.requestCount(), 2);
       assert.equal(isolated.clientCreations(), 1);
+      enterRunningChildStage("REUSE");
       await isolated.assertLifecycleClean();
+      enterRunningChildStage("LIFECYCLE");
+      bodyCompleted = true;
     } finally {
+      if (bodyCompleted) enterRunningChildStage("CONNECTION_CLEANUP");
       await connection.close();
+      if (bodyCompleted) enterRunningChildStage("FIXTURE_CLEANUP");
       await isolated.cleanup();
+      if (bodyCompleted) enterRunningChildStage("CLEANUP_COMPLETE");
     }
   });
 }

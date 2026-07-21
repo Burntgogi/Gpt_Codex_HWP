@@ -239,6 +239,14 @@ const MCP_PREVIEW_CANCELLATION_CODES = Object.freeze(
   [...MCP_PREVIEW_CANCELLATION_STAGES].map((stage) =>
     `MCP_PREVIEW_CANCELLATION_FAILURE_${stage.toUpperCase().replaceAll("-", "_")}`),
 );
+const MCP_RUNNING_CHILD_STAGES = new Set([
+  "setup", "first-start", "abort-rejection", "signal", "recovery", "reuse",
+  "lifecycle", "connection-cleanup", "fixture-cleanup", "cleanup-complete",
+]);
+const MCP_RUNNING_CHILD_CODES = Object.freeze(
+  [...MCP_RUNNING_CHILD_STAGES].map((stage) =>
+    `MCP_RUNNING_CHILD_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -312,7 +320,12 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
     ?? executeBenchmarkPolicyDiagnostic;
   const runMcpCancellationProgressDiagnostic = options.runMcpCancellationProgressDiagnostic
-    ?? executeMcpCancellationProgressDiagnostic;
+    ?? (() => executeMcpCancellationProgressDiagnostic({
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+    }));
   const runOutputBudgetAtomicityDiagnostic = options.runOutputBudgetAtomicityDiagnostic
     ?? executeOutputBudgetAtomicityDiagnostic;
   const runPatchDiagnostic = options.runPatchDiagnostic ?? executePatchDiagnostic;
@@ -553,6 +566,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let failureKind;
         let runnerFailureKind;
         let stage;
+        let runningChildStage;
         let testCodeReason;
         try {
           const candidate = await runMcpCancellationProgressDiagnostic();
@@ -577,6 +591,9 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
               .includes(candidate.runnerFailureKind)) runnerFailureKind = candidate.runnerFailureKind;
             if (MCP_PREVIEW_CANCELLATION_STAGES.has(candidate.stage)) stage = candidate.stage;
+            if (MCP_RUNNING_CHILD_STAGES.has(candidate.runningChildStage)) {
+              runningChildStage = candidate.runningChildStage;
+            }
           }
         } catch {}
         if (caseId === "mp03" && stage !== undefined) {
@@ -596,6 +613,11 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         }
         if (caseId === "mp03" && runnerFailureKind !== undefined) {
           stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION_RUNNER kind=${runnerFailureKind}\n`);
+        }
+        if (caseId === "mp10" && runningChildStage !== undefined) {
+          stdout.write(
+            `${receiptPrefix}_MCP_RUNNING_CHILD stage=${runningChildStage}\n`,
+          );
         }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -808,15 +830,20 @@ async function executeBenchmarkPolicyDiagnostic() {
   return executeSourceOrdinalDiagnostic("benchmark-policy.test.ts", 39, "bp");
 }
 
-async function executeMcpCancellationProgressDiagnostic() {
+async function executeMcpCancellationProgressDiagnostic(options = {}) {
   let assertionOrigin;
   let completionKind;
   let failureKind;
   let ordinal;
   let runnerFailureKind;
   let stage;
+  let runningChildStage;
   let testCodeReason;
   const passed = await executeBoundedNodeTestFile("mcp-cancellation-progress.test.ts", {
+    spawnProcess: options.spawnProcess,
+    terminateTree: options.terminateTree,
+    testTimeoutMs: options.testTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs,
     maximumTopLevelTests: 13,
     onCompletionKind: (value) => { completionKind = value; },
     onFailedTopLevelFailureKind: (value) => { failureKind = value; },
@@ -824,11 +851,20 @@ async function executeMcpCancellationProgressDiagnostic() {
     onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
     onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
-    fixedProgressDiagnostics: MCP_PREVIEW_CANCELLATION_CODES,
+    fixedProgressDiagnostics: [
+      ...MCP_PREVIEW_CANCELLATION_CODES,
+      ...MCP_RUNNING_CHILD_CODES,
+    ],
     onFixedProgressDiagnostic: (code) => {
-      const candidate = code.slice("MCP_PREVIEW_CANCELLATION_FAILURE_".length)
-        .toLowerCase().replaceAll("_", "-");
-      if (MCP_PREVIEW_CANCELLATION_STAGES.has(candidate)) stage = candidate;
+      if (code.startsWith("MCP_PREVIEW_CANCELLATION_FAILURE_")) {
+        const candidate = code.slice("MCP_PREVIEW_CANCELLATION_FAILURE_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (MCP_PREVIEW_CANCELLATION_STAGES.has(candidate)) stage = candidate;
+      } else if (code.startsWith("MCP_RUNNING_CHILD_STAGE_")) {
+        const candidate = code.slice("MCP_RUNNING_CHILD_STAGE_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (MCP_RUNNING_CHILD_STAGES.has(candidate)) runningChildStage = candidate;
+      }
     },
   });
   return {
@@ -839,6 +875,7 @@ async function executeMcpCancellationProgressDiagnostic() {
     completionKind,
     failureKind,
     runnerFailureKind,
+    runningChildStage,
     stage,
     testCodeReason,
   };
