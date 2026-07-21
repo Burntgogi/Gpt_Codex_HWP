@@ -41,7 +41,7 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
 const EXPECTED_OPTIONAL_DEPENDENCIES = Object.freeze({ "@rhwp/core": "0.7.17" });
 const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
   "@types/node": "22.20.1",
-  tsx: "4.21.0",
+  tsx: "4.23.1",
   typescript: "5.9.3",
 });
 const EXPECTED_TOOL_NAMES = Object.freeze([
