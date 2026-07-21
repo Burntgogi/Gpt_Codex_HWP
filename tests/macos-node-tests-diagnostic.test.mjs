@@ -497,6 +497,34 @@ test("macOS Node diagnostic accepts the current final benchmark ordinal", async 
   assert.equal(output, "MAC_NODE_TEST_CASE case=bp39 status=failed\n");
 });
 
+test("macOS Node diagnostic preserves the first classified benchmark receipt", async () => {
+  let output = "";
+  let fallbackRuns = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async () => true,
+    runBenchmarkFile: async () => ({
+      passed: false,
+      caseId: "benchmark-aggregate",
+      completionKind: "invalid-summary",
+      runnerFailureKind: "capture-limit",
+    }),
+    runBenchmarkPolicyDiagnostic: async () => {
+      fallbackRuns += 1;
+      return { passed: true, caseId: "benchmark-rerun-passed" };
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(fallbackRuns, 0);
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_AGGREGATE completion=invalid-summary\n"
+      + "MAC_BENCHMARK_AGGREGATE_RUNNER kind=capture-limit\n"
+      + "MAC_NODE_TEST_CASE case=benchmark-aggregate status=failed\n",
+  );
+});
+
 test("macOS Node diagnostic projects only bounded benchmark aggregate classifications", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({

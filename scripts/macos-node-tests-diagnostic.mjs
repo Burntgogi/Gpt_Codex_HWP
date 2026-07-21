@@ -326,6 +326,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
     }));
+  const runBenchmarkFile = options.runBenchmarkFile
+    ?? (options.runFile === undefined ? runBenchmarkPolicyDiagnostic : undefined);
   const runMcpCancellationProgressDiagnostic = options.runMcpCancellationProgressDiagnostic
     ?? (() => executeMcpCancellationProgressDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
@@ -357,6 +359,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
 
   for (const file of TEST_FILES) {
     let passed = false;
+    let benchmarkReceipt;
     let documentReceipt;
     const testTimeoutMs = boundedTimeout(
       options.testTimeoutMs,
@@ -365,7 +368,10 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         : DEFAULT_TEST_TIMEOUT_MS,
     );
     try {
-      if (file === "document-process-registration.test.ts"
+      if (file === "benchmark-policy.test.ts" && typeof runBenchmarkFile === "function") {
+        benchmarkReceipt = await runBenchmarkFile();
+        passed = benchmarkReceipt?.passed === true;
+      } else if (file === "document-process-registration.test.ts"
         && typeof runDocumentFile === "function") {
         documentReceipt = await runDocumentFile();
         passed = documentReceipt?.passed === true;
@@ -570,7 +576,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let runnerFailureKind;
         let testCodeReason;
         try {
-          const candidate = await runBenchmarkPolicyDiagnostic();
+          const candidate = benchmarkReceipt ?? await runBenchmarkPolicyDiagnostic();
           if (typeof candidate === "string") {
             if (/^bp(?:0[1-9]|[12][0-9]|3[0-9])$/u.test(candidate)) caseId = candidate;
             else if (candidate === "aggregate") caseId = "benchmark-aggregate";
@@ -923,6 +929,7 @@ async function executeBenchmarkPolicyDiagnostic(options = {}) {
   });
   return {
     assertionOrigin,
+    passed,
     caseId: ordinal === undefined
       ? passed ? "benchmark-rerun-passed" : "benchmark-aggregate"
       : `bp${String(ordinal).padStart(2, "0")}`,
