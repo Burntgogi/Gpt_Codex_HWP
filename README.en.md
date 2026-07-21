@@ -33,7 +33,7 @@ Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating
 
 ## v0.1.4 Release
 
-`v0.1.4` is the current release and has completed final Windows x64 validation. See the [English release notes](RELEASE_NOTES.en.md) for highlights, verification evidence, and installation or upgrade cautions; [Korean release notes](RELEASE_NOTES.md) are provided alongside them. Pin the `v0.1.4` tag instead of installing from the moving `main` branch.
+`v0.1.4` is the previous stable release and completed final Windows x64 validation. Its highlights and verification evidence remain in the [English release notes](RELEASE_NOTES.en.md) and [Korean release notes](RELEASE_NOTES.md). New installations should pin `v0.2.0` instead of the moving `main` branch.
 
 ## Features
 
@@ -96,17 +96,17 @@ The final release passed 330 of 334 Node tests with 4 expected platform/privileg
 
 ## Agent-assisted installation from GitHub
 
-`v0.1.4` is the current recommended release. `v0.1.0`, `v0.1.1`, `v0.1.2`, and `v0.1.3` remain historical releases. New installations should pin `v0.1.4` and review the [release notes](RELEASE_NOTES.en.md) first.
+`v0.2.0` is the current recommended release. `v0.1.0` through `v0.1.4` remain historical releases. New installations should pin `v0.2.0` and review the [release notes](RELEASE_NOTES.en.md) first.
 
 A user can ask a Codex agent:
 
-> Install release `v0.1.4` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
+> Install release `v0.2.0` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.4 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.0 --json
 ```
 
 Verify that the returned JSON has `marketplaceName` equal to `gpt-codex-hwp-local`.

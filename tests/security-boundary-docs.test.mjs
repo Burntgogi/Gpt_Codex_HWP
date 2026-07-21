@@ -45,7 +45,7 @@ test("security boundary documentation is linked from both public READMEs", async
   ]);
 
   for (const readme of [korean, english]) {
-    assert.match(readme, /\[SECURITY\.md\]\(SECURITY\.md\)/u);
-    assert.match(readme, /\[.+\]\(docs\/SECURITY-BOUNDARIES\.md\)/u);
+    assert.match(readme, /\[SECURITY\.md\]\(https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\/blob\/main\/SECURITY\.md\)/u);
+    assert.match(readme, /\[.+\]\(https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\/blob\/main\/docs\/SECURITY-BOUNDARIES\.md\)/u);
   }
 });

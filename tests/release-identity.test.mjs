@@ -10,7 +10,7 @@ const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)))
 const IMMUTABLE_RELEASES = Object.freeze(["0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4"]);
 const LAST_BUILD_ID = "20260713023606";
 
-test("release identity derives every changed candidate surface from 0.2.0 root metadata", async () => {
+test("release identity derives every stable 0.2.0 surface from root metadata", async () => {
   const metadata = await loadProjectMetadata(ROOT);
   const expectedPluginVersion = pluginVersion(metadata);
   const rootPackage = await readJson("package.json");
@@ -26,7 +26,7 @@ test("release identity derives every changed candidate surface from 0.2.0 root m
   const artifactBuilder = await readText(
     "packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
   );
-  const candidateDocs = await Promise.all([
+  const releaseDocs = await Promise.all([
     "README.md", "README.en.md", "RELEASE_NOTES.md", "RELEASE_NOTES.en.md", "CHANGELOG.md",
   ].map(readText));
 
@@ -63,16 +63,16 @@ test("release identity derives every changed candidate surface from 0.2.0 root m
     assert.notEqual(expectedPluginVersion, immutable);
     assert.ok(!expectedPluginVersion.startsWith(`${immutable}+`));
   }
-  for (const document of candidateDocs) {
+  for (const document of releaseDocs) {
     assert.match(document, /v?0\.2\.0/u);
   }
-  assert.match(candidateDocs[0], /릴리즈 후보/u);
-  assert.match(candidateDocs[1], /release candidate/iu);
-  assert.match(candidateDocs[2], /상태: 릴리즈 후보/u);
-  assert.match(candidateDocs[3], /Status: release candidate/iu);
-  assert.match(candidateDocs[4], /0\.2\.0 release candidate/iu);
-  assert.match(candidateDocs[0], /macOS[^\n]+실제 기기[^\n]+미검증/u);
-  assert.match(candidateDocs[1], /macOS[^\n]+physical Mac[^\n]+unverified/iu);
+  assert.match(releaseDocs[0], /## v0\.2\.0 릴리즈/u);
+  assert.match(releaseDocs[1], /## v0\.2\.0 Release/u);
+  assert.match(releaseDocs[2], /상태: 정식 릴리즈/u);
+  assert.match(releaseDocs[3], /Status: stable release/iu);
+  assert.match(releaseDocs[4], /## \[0\.2\.0\] - 2026-07-22/u);
+  assert.match(releaseDocs[0], /macOS[^\n]+실제 (?:Mac )?기기[^\n]+(?:미검증|아직 검증하지 않았)/u);
+  assert.match(releaseDocs[1], /macOS[^\n]+physical Mac[^\n]+unverified/iu);
 });
 
 async function readJson(relativePath) {

@@ -33,7 +33,7 @@ Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수
 
 ## v0.1.4 릴리즈
 
-`v0.1.4`는 Windows x64 최종 검증을 마친 현재 릴리즈입니다. 주요 변경, 검증 수치, 설치·업그레이드 주의사항은 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있으며 [영문 릴리즈 노트](RELEASE_NOTES.en.md)도 함께 제공합니다. 설치할 때는 움직이는 `main` 대신 `v0.1.4` 태그를 지정하십시오.
+`v0.1.4`는 Windows x64 최종 검증을 마친 이전 안정 릴리즈입니다. 주요 변경과 검증 수치는 [한국어 릴리즈 노트](RELEASE_NOTES.md) 및 [영문 릴리즈 노트](RELEASE_NOTES.en.md)의 릴리즈 이력에서 확인할 수 있습니다. 새 설치에는 움직이는 `main` 대신 `v0.2.0` 태그를 지정하십시오.
 
 ## 기능
 
@@ -96,17 +96,17 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 ## 에이전트를 통한 GitHub 설치
 
-`v0.1.4`는 현재 권장 릴리즈입니다. `v0.1.0`, `v0.1.1`, `v0.1.2`, `v0.1.3`은 과거 릴리스로 유지됩니다. 새 설치는 `v0.1.4` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
+`v0.2.0`은 현재 권장 릴리즈입니다. `v0.1.0`부터 `v0.1.4`까지는 과거 릴리스로 유지됩니다. 새 설치는 `v0.2.0` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
 
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
-> `Burntgogi/Gpt_Codex_HWP`의 `v0.1.4` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 설치된 경로에서 `doctor`를 실행한 다음 새 작업에서 MCP 도구 9개를 확인해 주세요.
+> `Burntgogi/Gpt_Codex_HWP`의 `v0.2.0` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 설치된 경로에서 `doctor`를 실행한 다음 새 작업에서 MCP 도구 9개를 확인해 주세요.
 
 1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
 2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.4 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.0 --json
 ```
 
 반환된 JSON의 `marketplaceName`이 `gpt-codex-hwp-local`인지 확인합니다.
