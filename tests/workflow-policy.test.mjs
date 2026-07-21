@@ -352,6 +352,12 @@ test("workflow policy: release verification uploads checksummed candidates and o
   assert.doesNotMatch(workflow, /\b(?:git\s+push|gh\s+release|create-release|softprops\/action-gh-release|contents:\s*write)\b/iu);
   const build = jobSection(workflow, "build", "attest");
   const attest = jobSection(workflow, "attest");
+  assert.match(build, /^    runs-on: windows-2025$/mu,
+    "release subjects must be built on the platform that passes the large-document gate");
+  assert.match(build, /^      EXPECTED_RELEASE_SHA: "df6b20740c39b731f883bee73a75bd547eb1c1cf"$/mu);
+  assert.match(build, /^          ref: v0\.2\.0$/mu);
+  assert.match(build, /name: Assert exact immutable release tag/u);
+  assert.match(build, /process\.env\.EXPECTED_RELEASE_SHA/u);
   assert.match(build, /^    permissions:\n      contents: read$/mu);
   assert.equal(countMatches(build, /^\s+package-manager-cache: false$/gmu), 1,
     "release verification must not enable setup-node's implicit npm cache without a root lockfile");
@@ -374,8 +380,8 @@ test("workflow policy: release verification uploads checksummed candidates and o
   assert.match(build, /npm run release:verify/u);
   assert.match(build, /npm run release:artifacts/u);
   assert.match(build, /npm run verify:release-artifacts/u);
-  assert.match(build, /release:artifacts -- --output "\$RELEASE_ARTIFACT_DIR"/u);
-  assert.match(build, /verify:release-artifacts -- --artifacts "\$RELEASE_ARTIFACT_DIR"/u);
+  assert.match(build, /release:artifacts -- --output "\$env:RELEASE_ARTIFACT_DIR"/u);
+  assert.match(build, /verify:release-artifacts -- --artifacts "\$env:RELEASE_ARTIFACT_DIR"/u);
   assert.doesNotMatch(build, /--(?:output|artifacts) release-artifacts(?:\s|$)/u);
   assert.match(build, /SHA256SUMS/u);
   assert.match(build, /actions\/upload-artifact@/u);

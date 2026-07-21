@@ -8,12 +8,15 @@ permissions: {}
 jobs:
   build:
     name: Build verified v0.2.0 candidate
-    runs-on: ubuntu-24.04
+    runs-on: windows-2025
     permissions:
       contents: read
+    env:
+      EXPECTED_RELEASE_SHA: "df6b20740c39b731f883bee73a75bd547eb1c1cf"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: v0.2.0
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -23,6 +26,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
+      - name: Assert Windows x64 runtime
+        run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
+      - name: Assert exact immutable release tag
+        run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_RELEASE_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
       - name: Install source dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Install runtime dependencies without lifecycle scripts
@@ -44,11 +51,11 @@ jobs:
       - name: Build checksummed candidate outputs
         env:
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
-        run: npm run release:artifacts -- --output "$RELEASE_ARTIFACT_DIR"
+        run: npm run release:artifacts -- --output "$env:RELEASE_ARTIFACT_DIR"
       - name: Verify candidate outputs
         env:
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
-        run: npm run verify:release-artifacts -- --artifacts "$RELEASE_ARTIFACT_DIR"
+        run: npm run verify:release-artifacts -- --artifacts "$env:RELEASE_ARTIFACT_DIR"
       - name: Require checksum manifest and clean tree
         env:
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
