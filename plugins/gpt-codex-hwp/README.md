@@ -1,16 +1,35 @@
-![Gpt_Codex_HWP](assets/gpt-codex-hwp-banner.png)
+<p align="center">
+  <img src="assets/gpt-codex-hwp-banner.png" alt="Gpt_Codex_HWP 픽셀아트 배너" width="100%">
+</p>
 
-[한국어](README.md) | [English](README.en.md)
+<h1 align="center">Gpt_Codex_HWP</h1>
 
-# Gpt_Codex_HWP
+<p align="center"><strong>Codex에서 한글 HWP를 읽고, 검증 가능한 HWPX를 만드는 로컬 문서 플러그인</strong></p>
+
+<p align="center">
+  <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
+  <img alt="Release v0.2.0" src="https://img.shields.io/badge/release-v0.2.0-5865F2">
+  <img alt="Node.js 22 이상" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
+  <a href="LICENSE"><img alt="Apache-2.0 라이선스" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">한국어</a> ·
+  <a href="README.en.md">English</a> ·
+  <a href="#실제-hwpx-결과">결과 보기</a> ·
+  <a href="#에이전트를-통한-github-설치">빠른 설치</a> ·
+  <a href="#형식-지원">지원 범위</a> ·
+  <a href="#안전">보안</a>
+</p>
 
 ## 개요
 
 Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
 
-## v0.2.0 릴리즈 후보
+## v0.2.0 릴리즈
 
-`v0.2.0`은 공개 소스·보안 경계·재현 가능한 배포물·보호된 GitHub 배포 게이트를 강화하는 미배포 릴리즈 후보입니다. 후보 워크플로는 ZIP, SBOM, provenance를 빌드·검증·증명하지만 태그나 GitHub 릴리즈를 만들지 않습니다. Windows x64에서 개발·로컬 검증 중이며, macOS Apple Silicon은 호환 대상이나 현재 exact-head `macOS arm64` 원격 영수증과 실제 기기 검증이 없어 미검증 상태입니다. 세 플랫폼 필수 검사와 전체 배포 검증이 끝나기 전에는 이 후보를 정식 릴리즈로 표현하거나 설치 대상으로 권장하지 않습니다.
+`v0.2.0`은 공개 소스·보안 경계·재현 가능한 배포물·보호된 GitHub 배포 게이트를 강화합니다. 릴리즈 커밋은 Windows x64, macOS arm64, Linux와 보안 검사를 통과한 뒤 불변 태그로 게시되며 ZIP, SBOM과 provenance를 함께 제공합니다. 개발과 실제 문서 검증은 Windows x64 기반으로 수행했으며, macOS 호환성을 목표로 하지만 실제 Mac 기기의 Codex Desktop·한컴오피스 한글 사용은 아직 검증하지 않았습니다.
 
 ## v0.1.4 릴리즈
 
@@ -24,6 +43,16 @@ Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수
 - HWP/HWPX 형식 감지, Markdown 읽기, 구조/글꼴 참조 검증, SVG 미리보기
 - 보호 문서 거부, 출력 덮어쓰기 방지, 경로/ZIP 순회 방어
 - 대용량 문서를 한 번만 파싱해 UTF-8 Markdown으로 저장한 뒤 안전하게 분할 읽기
+
+## 실제 HWPX 결과
+
+아래 이미지는 README 공개용 합성 Markdown을 `hwp_generate_hwpx`의 `report` 프리셋으로 HWPX에 작성하고, 구조 검증을 통과한 문서를 SVG로 미리 본 뒤 PNG로 렌더링한 결과입니다. 개인정보, 사용자 문서, 외부 문서 내용은 사용하지 않았습니다.
+
+<p align="center">
+  <img src="assets/gpt-codex-hwp-document-example.png" alt="Gpt Codex HWP가 생성한 한글 HWPX 기능 소개 보고서 예시" width="720">
+</p>
+
+<p align="center"><sub>실제 생성 결과 · 1쪽 · 표 1개 · 검증 문제 0개 · 미리보기 경고 0개</sub></p>
 
 ## 형식 지원
 
@@ -165,7 +194,7 @@ codex plugin remove hwp-korean-docs@hwp-local
 
 ## 안전
 
-취약점은 공개 이슈에 비밀·개인 문서·개인정보를 첨부하지 말고 [SECURITY.md](SECURITY.md)의 GitHub 비공개 신고 절차를 이용하십시오. 문서 내용과 격리 수준을 포함한 정확한 신뢰 모델은 [보안 경계](docs/SECURITY-BOUNDARIES.md)에 설명되어 있습니다.
+취약점은 공개 이슈에 비밀·개인 문서·개인정보를 첨부하지 말고 [SECURITY.md](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/SECURITY.md)의 GitHub 비공개 신고 절차를 이용하십시오. 문서 내용과 격리 수준을 포함한 정확한 신뢰 모델은 [보안 경계](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/docs/SECURITY-BOUNDARIES.md)에 설명되어 있습니다.
 
 ### 선택적 문서 루트 제한
 
@@ -239,8 +268,8 @@ Gpt_Codex_HWP 프로젝트는 [Apache-2.0](LICENSE)으로 배포됩니다. 제3�
 공개 이슈와 풀 리퀘스트에서의 논의는 환영합니다. 공식 브랜치, 태그,
 릴리스, 벤더 런타임, 생성 런타임의 변경은 저장소 소유자가 검토하고 직접
 작성하며, 의존성 자동화는 이슈를 통한 권고만 수행합니다. 먼저
-[기여 지침](CONTRIBUTING.md)을 읽고 [아키텍처](docs/ARCHITECTURE.md)의
-원본과 생성 런타임 경계 및 [변경 기록](CHANGELOG.md)을 확인하십시오.
+[기여 지침](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CONTRIBUTING.md)을 읽고 [아키텍처](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/docs/ARCHITECTURE.md)의
+원본과 생성 런타임 경계 및 [변경 기록](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md)을 확인하십시오.
 자격증명, 개인 문서, 환경 파일, 개인 경로, 미공개 감사 자료는 공개 보고에
-포함하지 않습니다. 보안 문제는 [SECURITY.md](SECURITY.md)의 비공개 절차로
+포함하지 않습니다. 보안 문제는 [SECURITY.md](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/SECURITY.md)의 비공개 절차로
 신고합니다.

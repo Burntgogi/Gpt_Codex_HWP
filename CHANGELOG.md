@@ -4,12 +4,16 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 ## [Unreleased]
 
-- Prepared the unpublished 0.2.0 release candidate identity without changing
-  immutable v0.1.0-v0.1.4 release bytes.
+- No unreleased changes.
+
+## [0.2.0] - 2026-07-22
+
+- Published the 0.2.0 release without changing immutable v0.1.0-v0.1.4
+  release bytes.
 - Added SHA-pinned Windows x64, macOS arm64, and Security policy gates plus a
   non-publishing artifact attestation workflow and declarative repository policy.
-- Public-source hardening and governance work remains subject to exact-head
-  remote receipts and whole-release verification.
+- Added public-source hardening, governance controls, reproducible ZIP/SBOM/
+  provenance artifacts, and an actual generated HWPX result preview.
 
 ## [0.1.4] - 2026-07-13
 
@@ -34,7 +38,8 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.2.0
 [0.1.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4
 [0.1.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.3
 [0.1.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.2

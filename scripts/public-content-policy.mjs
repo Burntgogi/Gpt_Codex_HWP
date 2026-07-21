@@ -52,6 +52,11 @@ export const PUBLIC_BINARY_ALLOWLIST = Object.freeze([
     "plugins/gpt-codex-hwp/assets/gpt-codex-hwp-banner.png",
   ], 1_659_083, "2a17366c5d9d164c5b7c837fad1e13182f9414ff1363bf1a0e5ab9ec88bfabfd"),
   binaryRecord([
+    "assets/gpt-codex-hwp-document-example.png",
+    "packages/gpt-codex-hwp/assets/gpt-codex-hwp-document-example.png",
+    "plugins/gpt-codex-hwp/assets/gpt-codex-hwp-document-example.png",
+  ], 167_759, "afe9077c8cd495061d23c38a53d8d85d70f5bbdd0309319ef2ecaef8dc1aece3"),
+  binaryRecord([
     "assets/gpt-codex-hwp-icon.png",
     "packages/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
     "plugins/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
