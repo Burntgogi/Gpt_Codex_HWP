@@ -55,6 +55,11 @@ jobs:
       - name: Run full release gate and create platform receipt
         id: windows_release_gate
         run: node scripts/platform-receipts.mjs create
+      - name: Diagnose failed document benchmark
+        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/diagnostic-10.json
       - name: Diagnose failed Windows Node release gate
         if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
         continue-on-error: true
@@ -124,6 +129,11 @@ jobs:
       - name: Run full release gate and create platform receipt
         id: macos_release_gate
         run: node scripts/platform-receipts.mjs create
+      - name: Diagnose failed document benchmark
+        if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/diagnostic-10.json
       - name: Diagnose failed macOS Node release gate
         if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
         continue-on-error: true

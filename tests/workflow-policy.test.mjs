@@ -221,6 +221,7 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   const windowsDiagnosticCommand = "node scripts/windows-node-tests-diagnostic.mjs";
   const macosDiagnosticCommand = "node scripts/macos-node-tests-diagnostic.mjs";
   const pythonDiagnosticCommand = "node scripts/python-tests-diagnostic.mjs";
+  const documentBenchmarkDiagnosticCommand = "npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/diagnostic-10.json";
 
   assert.match(
     macosDiagnostic,
@@ -240,16 +241,17 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   );
   assert.match(
     windows,
-    /^      - name: Run full release gate and create platform receipt\r?\n        id: windows_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed Windows Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
+    /^      - name: Run full release gate and create platform receipt\r?\n        id: windows_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed document benchmark\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 10\r?\n        run: npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output \.superpowers\/benchmarks\/diagnostic-10\.json\r?\n      - name: Diagnose failed Windows Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
   );
   assert.match(
     macos,
-    /^      - name: Run full release gate and create platform receipt\r?\n        id: macos_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed macOS Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/macos-node-tests-diagnostic\.mjs\r?\n      - name: Diagnose failed macOS Python release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 15\r?\n        run: node scripts\/python-tests-diagnostic\.mjs$/mu,
+    /^      - name: Run full release gate and create platform receipt\r?\n        id: macos_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed document benchmark\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 10\r?\n        run: npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output \.superpowers\/benchmarks\/diagnostic-10\.json\r?\n      - name: Diagnose failed macOS Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/macos-node-tests-diagnostic\.mjs\r?\n      - name: Diagnose failed macOS Python release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 15\r?\n        run: node scripts\/python-tests-diagnostic\.mjs$/mu,
   );
   assert.equal(countMatches(workflow, /node scripts\/macos-posix-controls\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/windows-node-tests-diagnostic\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/macos-node-tests-diagnostic\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/python-tests-diagnostic\.mjs/gu), 1);
+  assert.equal(countMatches(workflow, /--output \.superpowers\/benchmarks\/diagnostic-10\.json/gu), 2);
   assert.doesNotMatch(windows, /macos-posix-controls/iu);
   assert.doesNotMatch(linux, /macos-posix-controls/iu);
   assert.doesNotMatch(windows, /macos-node-tests-diagnostic/iu);
@@ -260,12 +262,14 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   const largeEvidence = macos.indexOf("benchmark:documents -- --sizes 100,256,512");
   const macosControl = macos.indexOf(macosControlCommand);
   const macosReleaseGate = macos.indexOf("node scripts/platform-receipts.mjs create");
+  const documentBenchmarkDiagnostic = macos.indexOf(documentBenchmarkDiagnosticCommand);
   const macosForensicDiagnostic = macos.indexOf(macosDiagnosticCommand);
   const pythonForensicDiagnostic = macos.indexOf(pythonDiagnosticCommand);
   const macosReceiptVerification = macos.indexOf("node scripts/platform-receipts.mjs verify");
   assert.equal(
     largeEvidence >= 0 && largeEvidence < macosControl && macosControl < macosReleaseGate
-      && macosReleaseGate < macosForensicDiagnostic
+      && macosReleaseGate < documentBenchmarkDiagnostic
+      && documentBenchmarkDiagnostic < macosForensicDiagnostic
       && macosForensicDiagnostic < pythonForensicDiagnostic
       && pythonForensicDiagnostic < macosReceiptVerification,
     true,
