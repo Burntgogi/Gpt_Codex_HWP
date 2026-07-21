@@ -2086,14 +2086,24 @@ function spawnGatedFixture(
     detached: true,
     shell: false,
     windowsHide: true,
-    env: {
-      ...process.env,
-      [DOCUMENT_REGISTRATION_ENV]: registrationMode === "absent" ? "0" : "1",
-    },
+    env: fixtureChildEnvironment(registrationMode),
     stdio,
   });
   observeFixtureClose(child);
   return child;
+}
+
+function fixtureChildEnvironment(registrationMode: RegistrationMode): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    [DOCUMENT_REGISTRATION_ENV]: registrationMode === "absent" ? "0" : "1",
+  };
+  for (const key of [
+    "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
+  ]) {
+    const value = process.env[key];
+    if (value !== undefined) environment[key] = value;
+  }
+  return environment;
 }
 
 function spawnRegistrationCase(arguments_: readonly string[]): ChildProcess {
