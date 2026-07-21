@@ -1585,12 +1585,26 @@ test("document child registration rejects a one-present descriptor pair", async 
     enterDiagnosticStage("STDOUT");
     assert.equal(result.stdout, "");
     enterDiagnosticStage("STDERR");
+    if (result.stderr !== "") {
+      t.diagnostic(`DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_${classifyDescriptorMismatchStderr(result.stderr)}`);
+    }
     assert.equal(result.stderr, "");
     enterDiagnosticStage("BODY_COMPLETE");
   } catch {
     throw new Error(`DOCUMENT_DESCRIPTOR_MISMATCH_${diagnosticStage}`);
   }
 });
+
+function classifyDescriptorMismatchStderr(stderr: string): string {
+  if (/\bEBADF\b|bad file descriptor/iu.test(stderr)) return "BAD_DESCRIPTOR";
+  if (/Unhandled ['"]error['"] event|uncaught(?:Exception| exception)/iu.test(stderr)) {
+    return "UNHANDLED_ERROR";
+  }
+  if (/\bEPIPE\b|broken pipe/iu.test(stderr)) return "BROKEN_PIPE";
+  if (/(?:Experimental|Deprecation|Runtime)?Warning:/u.test(stderr)) return "RUNTIME_WARNING";
+  if (/node:(?:internal|events)|node:internal\//u.test(stderr)) return "NODE_INTERNAL";
+  return "OTHER";
+}
 
 test("registration descriptor ownership produces clean EOF after case and bootstrap exit", { timeout: 15_000 }, async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-eof-"));

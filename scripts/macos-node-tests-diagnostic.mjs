@@ -224,6 +224,14 @@ const DOCUMENT_DESCRIPTOR_MISMATCH_PROGRESS_CODES = Object.freeze(
   [...DOCUMENT_DESCRIPTOR_MISMATCH_STAGES].map((stage) =>
     `DOCUMENT_DESCRIPTOR_MISMATCH_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
 );
+const DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_KINDS = new Set([
+  "bad-descriptor", "unhandled-error", "broken-pipe", "runtime-warning",
+  "node-internal", "other",
+]);
+const DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_CODES = Object.freeze(
+  [...DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_KINDS].map((kind) =>
+    `DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_${kind.toUpperCase().replaceAll("-", "_")}`),
+);
 const MCP_PREVIEW_CANCELLATION_STAGES = new Set([
   "setup", "rejection", "cancellation", "output-absence", "cleanup",
 ]);
@@ -424,6 +432,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let testCodeReason;
         let assertionOrigin;
         let descriptorMismatchStage;
+        let descriptorMismatchStderrKind;
         let firstFailureStage;
         try {
           const candidate = documentReceipt ?? await runDocumentProcessDiagnostic();
@@ -440,6 +449,9 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             }
             if (DOCUMENT_DESCRIPTOR_MISMATCH_STAGES.has(candidate.descriptorMismatchStage)) {
               descriptorMismatchStage = candidate.descriptorMismatchStage;
+            }
+            if (DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_KINDS.has(candidate.descriptorMismatchStderrKind)) {
+              descriptorMismatchStderrKind = candidate.descriptorMismatchStderrKind;
             }
             if (["test-timeout", "hook-failure", "test-code", "async-failure", "cancelled", "unknown"]
               .includes(candidate.failureKind)) {
@@ -466,6 +478,11 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           stdout.write(
             `${receiptPrefix}_DOCUMENT_DESCRIPTOR_MISMATCH stage=${descriptorMismatchStage ?? "diagnostic-failed"}\n`,
           );
+          if (descriptorMismatchStage === "stderr") {
+            stdout.write(
+              `${receiptPrefix}_DOCUMENT_DESCRIPTOR_MISMATCH_STDERR kind=${descriptorMismatchStderrKind ?? "unclassified"}\n`,
+            );
+          }
         }
         if (caseId === "dp47") {
           let stage = firstFailureStage ?? "diagnostic-failed";
@@ -656,6 +673,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
   let testCodeReason;
   let assertionOrigin;
   let descriptorMismatchStage;
+  let descriptorMismatchStderrKind;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
@@ -683,6 +701,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     fixedProgressDiagnostics: [
       ...DOCUMENT_SEQUENTIAL_PROGRESS_CODES,
       ...DOCUMENT_DESCRIPTOR_MISMATCH_PROGRESS_CODES,
+      ...DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_CODES,
     ],
     onFixedProgressDiagnostic: (code) => {
       if (code.startsWith("DOCUMENT_SEQUENTIAL_STAGE_")) {
@@ -693,6 +712,12 @@ async function executeDocumentProcessDiagnostic(options = {}) {
         const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_STAGE_".length)
           .toLowerCase().replaceAll("_", "-");
         if (DOCUMENT_DESCRIPTOR_MISMATCH_STAGES.has(candidate)) descriptorMismatchStage = candidate;
+      } else if (code.startsWith("DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_")) {
+        const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_KINDS.has(candidate)) {
+          descriptorMismatchStderrKind = candidate;
+        }
       }
     },
   });
@@ -708,6 +733,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     testCodeReason,
     assertionOrigin,
     descriptorMismatchStage,
+    descriptorMismatchStderrKind,
   };
 }
 

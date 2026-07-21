@@ -292,6 +292,7 @@ test("macOS Node diagnostic keeps the real dp45 descriptor stage separate", asyn
     runDocumentProcessDiagnostic: async () => ({
       caseId: "dp45",
       descriptorMismatchStage: "stderr",
+      descriptorMismatchStderrKind: "bad-descriptor",
     }),
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
@@ -300,9 +301,32 @@ test("macOS Node diagnostic keeps the real dp45 descriptor stage separate", asyn
   assert.equal(
     output,
     "MAC_DOCUMENT_DESCRIPTOR_MISMATCH stage=stderr\n"
+      + "MAC_DOCUMENT_DESCRIPTOR_MISMATCH_STDERR kind=bad-descriptor\n"
       + "MAC_NODE_TEST_CASE case=dp45 status=failed\n",
   );
   assert.doesNotMatch(output, /DOCUMENT_SEQUENTIAL/u);
+});
+
+test("macOS Node diagnostic redacts an unrecognized descriptor stderr class", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "document-process-registration.test.ts",
+    runDocumentProcessDiagnostic: async () => ({
+      caseId: "dp45",
+      descriptorMismatchStage: "stderr",
+      descriptorMismatchStderrKind: "hostile/path/value",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_DOCUMENT_DESCRIPTOR_MISMATCH stage=stderr\n"
+      + "MAC_DOCUMENT_DESCRIPTOR_MISMATCH_STDERR kind=unclassified\n"
+      + "MAC_NODE_TEST_CASE case=dp45 status=failed\n",
+  );
+  assert.doesNotMatch(output, /hostile|path|value/u);
 });
 
 test("macOS Node diagnostic isolates a sequential failure after cleanup completes", async () => {
