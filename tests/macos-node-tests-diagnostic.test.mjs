@@ -285,7 +285,7 @@ test("macOS Node diagnostic emits a bounded sequential-registration stage", asyn
   );
 });
 
-test("macOS Node diagnostic preserves the sequential stage from the ordinal rerun", async () => {
+test("macOS Node diagnostic isolates a sequential failure after cleanup completes", async () => {
   let output = "";
   let isolatedReruns = 0;
   const passed = await runMacNodeTestsDiagnostic({
@@ -299,16 +299,17 @@ test("macOS Node diagnostic preserves the sequential stage from the ordinal reru
     }),
     runDocumentSequentialDiagnostic: async () => {
       isolatedReruns += 1;
-      return "passed-on-rerun";
+      return { passed: true, stage: "cleanup-complete" };
     },
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(isolatedReruns, 0);
+  assert.equal(isolatedReruns, 1);
   assert.equal(
     output,
     "MAC_DOCUMENT_SEQUENTIAL stage=cleanup-complete\n"
+      + "MAC_DOCUMENT_SEQUENTIAL_ISOLATED status=passed\n"
       + "MAC_DOCUMENT_SEQUENTIAL_FAILURE kind=test-timeout\n"
       + "MAC_DOCUMENT_SEQUENTIAL_TEST_CODE reason=async-activity\n"
       + "MAC_DOCUMENT_SEQUENTIAL_ASSERTION origin=register-root\n"

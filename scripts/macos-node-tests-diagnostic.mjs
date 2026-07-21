@@ -449,13 +449,24 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         } catch {}
         if (caseId === "dp45") {
           let stage = firstFailureStage ?? "diagnostic-failed";
-          if (firstFailureStage === undefined) {
+          let isolatedStatus;
+          if (firstFailureStage === undefined || firstFailureStage === "cleanup-complete") {
             try {
               const candidate = await runDocumentSequentialDiagnostic();
-              if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+              if (typeof candidate === "string") {
+                if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+              } else if (candidate !== null && typeof candidate === "object") {
+                if (firstFailureStage === undefined
+                  && DOCUMENT_SEQUENTIAL_STAGES.has(candidate.stage)) stage = candidate.stage;
+                if (candidate.passed === true) isolatedStatus = "passed";
+                else if (candidate.passed === false) isolatedStatus = "failed";
+              }
             } catch {}
           }
           stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL stage=${stage}\n`);
+          if (isolatedStatus !== undefined) {
+            stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_ISOLATED status=${isolatedStatus}\n`);
+          }
           if (failureKind !== undefined) {
             stdout.write(`${receiptPrefix}_DOCUMENT_SEQUENTIAL_FAILURE kind=${failureKind}\n`);
           }
@@ -664,7 +675,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
 
 async function executeDocumentSequentialDiagnostic() {
   let stage = "diagnostic-failed";
-  await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+  const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
     testTimeoutMs: DOCUMENT_PROCESS_TEST_TIMEOUT_MS,
     testNamePattern: "^registration sequential transport completes two real bootstrap ACK handshakes without multiplexing$",
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
@@ -672,8 +683,14 @@ async function executeDocumentSequentialDiagnostic() {
       const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
       stage = DOCUMENT_SEQUENTIAL_STAGES.has(candidate) ? candidate : "diagnostic-failed";
     },
+    fixedProgressDiagnostics: DOCUMENT_SEQUENTIAL_PROGRESS_CODES,
+    onFixedProgressDiagnostic: (code) => {
+      const candidate = code.slice("DOCUMENT_SEQUENTIAL_STAGE_".length)
+        .toLowerCase().replaceAll("_", "-");
+      if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+    },
   });
-  return stage;
+  return { passed, stage };
 }
 
 async function executeBenchmarkPolicyDiagnostic() {

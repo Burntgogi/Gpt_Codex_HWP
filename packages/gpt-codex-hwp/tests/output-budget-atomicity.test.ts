@@ -40,6 +40,7 @@ import {
   handleHwpCreateSvgAsset,
   handleHwpInsertImage,
 } from "../src/tools/assets.js";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 test("defense-in-depth: hwp_read budgets oversized facade details before image and Markdown destinations", async () => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-read-"));
@@ -100,7 +101,9 @@ test("hwp_read does not create an empty image directory", async () => {
 });
 
 test("hwp_read rechecks source identity after response budgeting and before commit", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-source-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-source-",
+  });
   const sourcePath = join(root, "source.hwpx");
   const markdownPath = join(root, "out", "document.md");
   await writeFile(sourcePath, Buffer.from(await markdownToHwpx("# Source check")));
