@@ -4,7 +4,6 @@ import { once } from "node:events";
 import {
   access,
   mkdir,
-  mkdtemp,
   open,
   readFile,
   readdir,
@@ -14,7 +13,6 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
@@ -22,6 +20,7 @@ import { Worker } from "node:worker_threads";
 import JSZip from "jszip";
 import { markdownToHwpx } from "kordoc";
 
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 import { openDocumentSnapshot } from "../src/shared/document-snapshot.js";
 import { prepareDocumentRenderOutput } from "../src/shared/document-render-output.js";
 import { captureExistingOutputDirectoryIdentity } from "../src/shared/output.js";
@@ -50,7 +49,7 @@ const FIXTURE_CHILD = new URL(
 );
 
 test("read worker safety opens one worker snapshot and sends no path to the engine", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-worker-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-worker-" });
   try {
     const sourcePath = join(root, "source.hwpx");
     const source = new Uint8Array(await markdownToHwpx("# 격리 읽기\n\n본문"));
@@ -93,7 +92,7 @@ test("read worker safety opens one worker snapshot and sends no path to the engi
 });
 
 test("read worker safety uses shallow unknown metadata without starting an engine", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-detect-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-detect-" });
   try {
     const sourcePath = join(root, "unknown.bin");
     await writeFile(sourcePath, "not a document");
@@ -119,7 +118,7 @@ test("read worker safety uses shallow unknown metadata without starting an engin
 });
 
 test("read worker safety returns stable isolate errors and the next call still succeeds", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-errors-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-errors-" });
   try {
     const sourcePath = join(root, "source.hwpx");
     await writeFile(sourcePath, new Uint8Array(await markdownToHwpx("# 오류 격리")));
@@ -159,7 +158,7 @@ test("read worker safety returns stable isolate errors and the next call still s
 });
 
 test("read worker safety uses a fresh real worker below the threshold and cleans its snapshot", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-real-worker-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-real-worker-" });
   try {
     const sourcePath = join(root, "source.hwpx");
     await writeFile(sourcePath, new Uint8Array(await markdownToHwpx("# 실제 워커\n\n본문")));
@@ -189,7 +188,7 @@ test("read worker safety uses a fresh real worker below the threshold and cleans
 });
 
 test("read worker safety keeps preview requests path-free and preserves exclusive output", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-preview-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-preview-" });
   try {
     const sourcePath = join(root, "source.hwpx");
     const outputPath = join(root, "existing.svg");
@@ -253,7 +252,7 @@ test("read worker safety production routes do not import in-process Kordoc or rh
 });
 
 test("real isolate maps exact-unknown ZIP and OLE candidates to stable tool format errors", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-unsupported-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-unsupported-" });
   try {
     const docx = new JSZip();
     docx.file("[Content_Types].xml", [
@@ -289,7 +288,7 @@ test("real isolate maps exact-unknown ZIP and OLE candidates to stable tool form
 });
 
 test("detect restores a bounded stable warning for exact-unknown containers", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-warning-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-warning-" });
   try {
     const path = join(root, "foreign.docx");
     const archive = new JSZip();
@@ -310,7 +309,7 @@ test("detect restores a bounded stable warning for exact-unknown containers", as
 });
 
 test("read worker safety routes an above-threshold valid HWPX through the real supervised child and cleans spools", { timeout: 120_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-child-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-child-" });
   const snapshotRoot = join(root, "snapshot-spools");
   const resultRoot = join(root, "result-spools");
   await mkdir(snapshotRoot);
@@ -368,7 +367,7 @@ test("read worker safety routes an above-threshold valid HWPX through the real s
 });
 
 test("parent streams a branded render spool with metadata without materializing the SVG", { timeout: 60_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-render-stream-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-render-stream-" });
   const inputPath = join(root, "source.hwpx");
   const outputPath = join(root, "preview.svg");
   const resultRoot = join(root, "result-spools");
@@ -441,7 +440,7 @@ test("parent streams a branded render spool with metadata without materializing 
 });
 
 test("render spool validation and cancellation create no output and always clean the spool", { timeout: 60_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-render-invalid-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-render-invalid-" });
   const sourcePath = join(root, "source.hwpx");
   const resultRoot = join(root, "result-spools");
   await writeFile(sourcePath, "owned source");
@@ -600,7 +599,7 @@ test("render spool validation and cancellation create no output and always clean
 });
 
 test("preview releases each taken render spool exactly once across every terminal path", { timeout: 60_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-render-spool-cleanup-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-render-spool-cleanup-" });
   const sourcePath = join(root, "source.hwpx");
   const resultRoot = join(root, "result-spools");
   await writeFile(sourcePath, Buffer.from(await markdownToHwpx("# Spool cleanup")));
@@ -805,7 +804,9 @@ test("read and inline or spooled preview reverify the source at the writer open 
 test("inline and spooled render writers enforce the same expected directory identity", { timeout: 60_000 }, async (t) => {
   for (const kind of ["inline", "spooled"] as const) {
     await t.test(kind, async () => {
-      const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-render-identity-${kind}-`));
+      const root = await createCanonicalTemporaryDirectory({
+        prefix: `gpt-codex-hwp-render-identity-${kind}-`,
+      });
       const sourcePath = join(root, "source.hwpx");
       const outputDir = join(root, "output");
       const displacedDir = join(root, "output-displaced");
@@ -904,7 +905,7 @@ test("inline and spooled render writers verify the source after caller beforeOpe
 });
 
 test("validated render spool preserves an existing output without partial replacement", { timeout: 30_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task5-render-conflict-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task5-render-conflict-" });
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "existing.svg");
   const resultRoot = join(root, "result-spools");
@@ -938,7 +939,7 @@ test("validated render spool preserves an existing output without partial replac
 });
 
 test("MCP cancellation reaches the spooled preview exclusive-open boundary", { timeout: 30_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task7-spool-cancel-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task7-spool-cancel-" });
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "cancelled.svg");
   const resultRoot = join(root, "result-spools");
@@ -1099,7 +1100,9 @@ async function sourceSwapFixture(label: string): Promise<{
   readonly replacement: Uint8Array;
   cleanup(): Promise<void>;
 }> {
-  const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-source-swap-${label}-`));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: `gpt-codex-hwp-source-swap-${label}-`,
+  });
   const sourcePath = join(root, "source.hwpx");
   await writeFile(sourcePath, Buffer.from(await markdownToHwpx(`# ${label} source`)));
   return {
