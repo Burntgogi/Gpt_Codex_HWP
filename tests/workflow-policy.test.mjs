@@ -210,12 +210,17 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
     join(ROOT, "scripts", "windows-node-tests-diagnostic.mjs"),
     "utf8",
   );
+  const pythonDiagnostic = await readFile(
+    join(ROOT, "scripts", "python-tests-diagnostic.mjs"),
+    "utf8",
+  );
   const windows = jobSection(workflow, "windows", "macos");
   const macos = jobSection(workflow, "macos", "linux");
   const linux = jobSection(workflow, "linux");
   const macosControlCommand = "node scripts/macos-posix-controls.mjs";
   const windowsDiagnosticCommand = "node scripts/windows-node-tests-diagnostic.mjs";
   const macosDiagnosticCommand = "node scripts/macos-node-tests-diagnostic.mjs";
+  const pythonDiagnosticCommand = "node scripts/python-tests-diagnostic.mjs";
 
   assert.match(
     macosDiagnostic,
@@ -224,6 +229,10 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   assert.match(
     windowsDiagnostic,
     /export async function runWindowsNodeTestsDiagnostic/u,
+  );
+  assert.match(
+    pythonDiagnostic,
+    /export async function runHostedPythonTestsDiagnostic/u,
   );
   assert.match(
     macos,
@@ -235,14 +244,16 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   );
   assert.match(
     macos,
-    /^      - name: Run full release gate and create platform receipt\r?\n        id: macos_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed macOS Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/macos-node-tests-diagnostic\.mjs$/mu,
+    /^      - name: Run full release gate and create platform receipt\r?\n        id: macos_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed macOS Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/macos-node-tests-diagnostic\.mjs\r?\n      - name: Diagnose failed macOS Python release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 15\r?\n        run: node scripts\/python-tests-diagnostic\.mjs$/mu,
   );
   assert.equal(countMatches(workflow, /node scripts\/macos-posix-controls\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/windows-node-tests-diagnostic\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/macos-node-tests-diagnostic\.mjs/gu), 1);
+  assert.equal(countMatches(workflow, /node scripts\/python-tests-diagnostic\.mjs/gu), 1);
   assert.doesNotMatch(windows, /macos-posix-controls/iu);
   assert.doesNotMatch(linux, /macos-posix-controls/iu);
   assert.doesNotMatch(windows, /macos-node-tests-diagnostic/iu);
+  assert.doesNotMatch(windows, /python-tests-diagnostic/iu);
   assert.doesNotMatch(macos, /windows-node-tests-diagnostic/iu);
   assert.doesNotMatch(`${windows}\n${macos}`, /if:\s*\$\{\{\s*always\(\)/u);
 
@@ -250,11 +261,13 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   const macosControl = macos.indexOf(macosControlCommand);
   const macosReleaseGate = macos.indexOf("node scripts/platform-receipts.mjs create");
   const macosForensicDiagnostic = macos.indexOf(macosDiagnosticCommand);
+  const pythonForensicDiagnostic = macos.indexOf(pythonDiagnosticCommand);
   const macosReceiptVerification = macos.indexOf("node scripts/platform-receipts.mjs verify");
   assert.equal(
     largeEvidence >= 0 && largeEvidence < macosControl && macosControl < macosReleaseGate
       && macosReleaseGate < macosForensicDiagnostic
-      && macosForensicDiagnostic < macosReceiptVerification,
+      && macosForensicDiagnostic < pythonForensicDiagnostic
+      && pythonForensicDiagnostic < macosReceiptVerification,
     true,
     "macOS controls precede the release gate and forensic diagnostics follow its failure boundary",
   );
