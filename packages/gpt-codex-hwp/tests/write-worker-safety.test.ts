@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
 import { markdownToHwpx } from "kordoc";
 
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 import {
   handleHwpGenerateHwpx,
   handleHwpValidate,
@@ -20,7 +20,7 @@ import { createDocumentEngineFacade } from "../src/shared/document-engine.js";
 import { openDocumentSnapshot } from "../src/shared/document-snapshot.js";
 
 test("write worker safety routes generation through one path-free facade request", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task6-generate-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task6-generate-" });
   try {
     const outputPath = join(root, "generated.hwpx");
     const previewPath = join(root, "generated.svg");
@@ -106,7 +106,7 @@ test("write worker safety routes generation through one path-free facade request
 });
 
 test("write worker safety opens one immutable snapshot for validation and sends no path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task6-validate-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task6-validate-" });
   try {
     const sourcePath = join(root, "source.hwpx");
     const source = new Uint8Array(await markdownToHwpx("# 격리 검증"));
@@ -150,7 +150,7 @@ test("write tool production routes do not import in-process Kordoc or rhwp", asy
 });
 
 test("write worker safety routes patch through one snapshot and preserves operation metadata", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task6-patch-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task6-patch-" });
   try {
     const sourcePath = join(root, "source.hwpx");
     const outputPath = join(root, "patched.hwpx");
@@ -225,7 +225,7 @@ test("write worker safety routes patch through one snapshot and preserves operat
 });
 
 test("write worker safety routes fill through one snapshot and preserves matched metadata", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task6-fill-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task6-fill-" });
   try {
     const sourcePath = join(root, "source.hwpx");
     const outputPath = join(root, "filled.hwpx");
@@ -312,7 +312,9 @@ test("patch and fill production routes do not import in-process Kordoc or rhwp",
 
 for (const mode of ["after-paragraph", "seal-anchor"] as const) {
   test(`write worker safety routes ${mode} image insertion through owned spools`, async () => {
-    const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-task6-${mode}-`));
+    const root = await createCanonicalTemporaryDirectory({
+      prefix: `gpt-codex-hwp-task6-${mode}-`,
+    });
     try {
       const sourcePath = join(root, "source.hwpx");
       const imagePath = join(root, "source.png");
@@ -424,7 +426,7 @@ test("image insertion production route has no in-process Kordoc or path-based he
 });
 
 test("authorized inline HWPX bytes remain immutable when the exposed engine payload is changed", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task6-inline-ownership-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task6-inline-ownership-" });
   try {
     const outputPath = join(root, "authorized.hwpx");
     const original = new Uint8Array(await markdownToHwpx("# immutable inline candidate"));
@@ -465,7 +467,7 @@ test("authorized inline HWPX bytes remain immutable when the exposed engine payl
 });
 
 test("generation validates preview metadata before opening either output", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-task6-preview-preflight-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-task6-preview-preflight-" });
   try {
     const outputPath = join(root, "generated.hwpx");
     const previewPath = join(root, "generated.svg");
@@ -515,7 +517,7 @@ test("generation validates preview metadata before opening either output", async
 });
 
 test("the common HWPX mutation writer rechecks cancellation after source verification", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-common-writer-cancel-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-common-writer-cancel-" });
   const sourcePath = join(root, "source.hwpx");
   const outputDir = join(root, "prepared-output");
   const outputPath = join(outputDir, "patched.hwpx");

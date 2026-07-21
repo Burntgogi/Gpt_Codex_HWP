@@ -347,6 +347,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     }));
   const runReadWorkerSafetyDiagnostic = options.runReadWorkerSafetyDiagnostic
     ?? (() => executeSourceOrdinalDiagnostic("read-worker-safety.test.ts", 17, "rw"));
+  const runWriteWorkerSafetyDiagnostic = options.runWriteWorkerSafetyDiagnostic
+    ?? (() => executeSourceOrdinalDiagnostic("write-worker-safety.test.ts", 10, "ww"));
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
     ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -753,6 +755,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         try {
           const candidate = await runReadWorkerSafetyDiagnostic();
           if (/^rw(?:0[1-9]|1[0-7])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
+      if (file === "write-worker-safety.test.ts") {
+        let caseId = "write-worker-safety-aggregate";
+        try {
+          const candidate = await runWriteWorkerSafetyDiagnostic();
+          if (/^ww(?:0[1-9]|10)$/u.test(candidate)) caseId = candidate;
         } catch {}
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);

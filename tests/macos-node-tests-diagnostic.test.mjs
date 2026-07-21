@@ -670,6 +670,18 @@ test("macOS Node diagnostic maps read-worker safety failure to one bounded ordin
   assert.equal(output, "MAC_NODE_TEST_CASE case=rw17 status=failed\n");
 });
 
+test("macOS Node diagnostic maps write-worker safety failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "write-worker-safety.test.ts",
+    runWriteWorkerSafetyDiagnostic: async () => "ww10",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=ww10 status=failed\n");
+});
+
 test("shared Node diagnostic maps MCP cancellation failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
