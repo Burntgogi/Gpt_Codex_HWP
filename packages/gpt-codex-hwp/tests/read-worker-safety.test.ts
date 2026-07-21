@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 
 import JSZip from "jszip";
@@ -171,7 +172,7 @@ test("read worker safety uses a fresh real worker below the threshold and cleans
           workerFactory: (options) => new Worker(BUILT_WORKER, options),
         }),
         childClient: createDocumentChildClient({
-          childEntry: BUILT_CHILD.pathname.slice(1).replaceAll("/", "\\"),
+          childEntry: fileURLToPath(BUILT_CHILD),
         }),
       }),
       requestIdFactory: () => "task5-real-worker",
@@ -331,7 +332,7 @@ test("read worker safety routes an above-threshold valid HWPX through the real s
     const isolatedEngine = createIsolatedDocumentEngine({
       workerClient: createDocumentWorkerClient(),
       childClient: createDocumentChildClient({
-        childEntry: BUILT_CHILD.pathname.slice(1).replaceAll("/", "\\"),
+        childEntry: fileURLToPath(BUILT_CHILD),
         spoolRoot: resultRoot,
         jobSupervisorFactory: async (child) => ({
           terminate: async () => {
@@ -384,7 +385,7 @@ test("parent streams a branded render spool with metadata without materializing 
     const sourceHandle = await open(inputPath, "r");
     let sourceClosed = false;
     const child = createDocumentChildClient({
-      childEntry: FIXTURE_CHILD.pathname.slice(1).replaceAll("/", "\\"),
+      childEntry: fileURLToPath(FIXTURE_CHILD),
       childArguments: ["render-spool", String(9 * 1024 * 1024)],
       spoolRoot: resultRoot,
       jobSupervisorFactory: unitTestChildSupervisor,
@@ -1010,7 +1011,7 @@ async function fixtureRenderSpool(
   const handle = await open(sourcePath, "r");
   let closed = false;
   const child = createDocumentChildClient({
-    childEntry: FIXTURE_CHILD.pathname.slice(1).replaceAll("/", "\\"),
+    childEntry: fileURLToPath(FIXTURE_CHILD),
     childArguments,
     spoolRoot,
     jobSupervisorFactory: unitTestChildSupervisor,
