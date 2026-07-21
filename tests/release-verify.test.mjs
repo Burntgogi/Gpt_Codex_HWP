@@ -890,6 +890,22 @@ test("document benchmark stage preserves only the first bounded failure receipt"
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
 });
 
+test("document benchmark stage maps a silent nonzero child to one fixed runner receipt", async () => {
+  const result = await runStageCommand(
+    nodeStage("document-benchmark", "process.exit(9)"),
+    { timeoutMs: 2_000, maxOutputBytes: 1_024 },
+  );
+
+  assert.deepEqual(result, {
+    status: "failed",
+    diagnostic: {
+      kind: "document-benchmark",
+      command: 1,
+      receipt: "BENCHMARK_RUNNER_NONZERO",
+    },
+  });
+});
+
 test("release verification reports a bounded document benchmark diagnostic out of band", async () => {
   const diagnostics = [];
   const receipt = await runReleaseVerification({

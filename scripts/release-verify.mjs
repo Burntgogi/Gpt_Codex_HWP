@@ -272,7 +272,13 @@ function selectDocumentBenchmarkFailureReceipt(result) {
     const match = lines.findLast((line) => pattern.test(line));
     if (match !== undefined) return match;
   }
-  return "BENCHMARK_DIAGNOSTIC_UNAVAILABLE";
+  const runnerKind = typeof result?.failureKind === "string"
+    && [
+      "child-error", "nonzero", "output-limit", "signal", "spawn-error", "timeout",
+    ].includes(result.failureKind)
+    ? result.failureKind.replaceAll("-", "_").toUpperCase()
+    : result === undefined ? "STAGE_TIMEOUT" : "UNAVAILABLE";
+  return `BENCHMARK_RUNNER_${runnerKind}`;
 }
 
 function normalizedDocumentBenchmarkDiagnostic(value) {
@@ -292,7 +298,7 @@ function normalizedDocumentBenchmarkDiagnostic(value) {
 }
 
 function isSafeDocumentBenchmarkReceipt(value) {
-  return value === "BENCHMARK_DIAGNOSTIC_UNAVAILABLE"
+  return /^BENCHMARK_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value)
     || /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u.test(value)
     || /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u.test(value)
     || /^BENCHMARK_CASE_FAILURE phase=(?:facade|snapshot|detect|probe|unknown) engineCode=[A-Z_]+ stage=[a-zA-Z0-9-]+$/u.test(value)
@@ -1077,7 +1083,12 @@ async function executeCommand({
         shell: false,
       });
     } catch {
-      resolvePromise({ status: "failed", stdout: "", stderr: "" });
+      resolvePromise({
+        status: "failed",
+        stdout: "",
+        stderr: "",
+        failureKind: "spawn-error",
+      });
       return;
     }
 
@@ -1087,7 +1098,7 @@ async function executeCommand({
     let terminating = false;
     let timer;
 
-    const finish = (status) => {
+    const finish = (status, failureKind) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -1095,9 +1106,12 @@ async function executeCommand({
         status,
         stdout: captureOutput ? stdout : "",
         stderr: captureOutput ? stderr : "",
+        ...(status === "failed" && typeof failureKind === "string"
+          ? { failureKind }
+          : {}),
       });
     };
-    const stop = async () => {
+    const stop = async (failureKind) => {
       if (settled || terminating) return;
       terminating = true;
       clearTimeout(timer);
@@ -1106,7 +1120,7 @@ async function executeCommand({
       } catch {
         // Termination failures remain a failed, redacted stage result.
       }
-      finish("failed");
+      finish("failed", failureKind);
     };
     const observe = (stream, target) => {
       stream?.on("data", (chunk) => {
@@ -1118,17 +1132,20 @@ async function executeCommand({
         } else {
           if (captureOutput && outputBudget.used <= outputBudget.limit) stderr += text;
         }
-        if (outputBudget.used > outputBudget.limit) void stop();
+        if (outputBudget.used > outputBudget.limit) void stop("output-limit");
       });
     };
     observe(child.stdout, "stdout");
     observe(child.stderr, "stderr");
-    child.once("error", () => finish("failed"));
-    child.once("close", (code) => {
+    child.once("error", () => finish("failed", "child-error"));
+    child.once("close", (code, signal) => {
       if (terminating) return;
-      finish(code === 0 ? "passed" : "failed");
+      finish(
+        code === 0 && signal === null ? "passed" : "failed",
+        code !== null ? "nonzero" : "signal",
+      );
     });
-    timer = setTimeout(() => { void stop(); }, timeoutMs);
+    timer = setTimeout(() => { void stop("timeout"); }, timeoutMs);
   });
 }
 

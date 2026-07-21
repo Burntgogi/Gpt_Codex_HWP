@@ -60,6 +60,11 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/diagnostic-10.json
+      - name: Diagnose failed large-evidence validation
+        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node packages/gpt-codex-hwp/benchmarks/document-engine-benchmark.mjs --validate-large .superpowers/benchmarks/release-large.json
       - name: Diagnose failed Windows Node release gate
         if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
         continue-on-error: true
@@ -134,6 +139,11 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/diagnostic-10.json
+      - name: Diagnose failed large-evidence validation
+        if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node packages/gpt-codex-hwp/benchmarks/document-engine-benchmark.mjs --validate-large .superpowers/benchmarks/release-large.json
       - name: Diagnose failed macOS Node release gate
         if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
         continue-on-error: true
