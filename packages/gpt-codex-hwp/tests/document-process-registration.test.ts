@@ -1564,7 +1564,7 @@ test("document child registration rejects concatenated ACK frames before payload
   assert.equal(result.stderr, "");
 });
 
-test("document child registration rejects a one-present descriptor pair", async (t) => {
+test("document child registration rejects an inert acknowledgement peer", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-mismatch-"));
   t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const markerPath = join(temporaryRoot, "marker.json");
@@ -2073,6 +2073,7 @@ function spawnGatedFixture(
   ];
   if (registrationMode !== "absent") stdio.push("pipe");
   if (registrationMode === "both") stdio.push("pipe");
+  else if (registrationMode === "registration-only") stdio.push("ignore");
   const child = spawn(process.execPath, [
     "--import",
     "tsx",

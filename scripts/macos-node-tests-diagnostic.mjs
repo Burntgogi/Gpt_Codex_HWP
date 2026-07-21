@@ -793,7 +793,7 @@ async function executeDocumentDescriptorMismatchDiagnostic() {
   let stderrKind;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
     testTimeoutMs: DOCUMENT_PROCESS_TEST_TIMEOUT_MS,
-    testNamePattern: "^document child registration rejects a one-present descriptor pair$",
+    testNamePattern: "^document child registration rejects an inert acknowledgement peer$",
     fixedDiagnostics: DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_CODES,
     onFixedDiagnostic: (code) => {
       const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_".length)

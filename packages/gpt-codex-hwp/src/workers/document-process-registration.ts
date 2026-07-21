@@ -4,7 +4,6 @@ import {
   closeSync,
   createReadStream,
   fstatSync,
-  read,
   readSync,
   write,
   writeSync,
@@ -720,15 +719,34 @@ function readDescriptor(
 ): Promise<number> {
   return new Promise<number>((resolvePromise, rejectPromise) => {
     const attempt = (): void => {
-      read(descriptor, buffer, offset, length, null, (error, bytesRead) => {
-        if (error !== null && isRetryableNonBlockingError(error)) {
-          setTimeout(attempt, 1);
-        } else if (error !== null) {
-          rejectPromise(error);
-        } else {
-          resolvePromise(bytesRead);
-        }
+      const input = createReadStream("", {
+        fd: descriptor,
+        autoClose: false,
+        highWaterMark: length,
       });
+      let settled = false;
+      const settle = (error: Error | undefined, bytes?: Buffer): void => {
+        if (settled) return;
+        settled = true;
+        input.removeAllListeners();
+        input.destroy();
+        if (error !== undefined && isRetryableNonBlockingError(error)) {
+          setTimeout(attempt, 1);
+        } else if (error !== undefined) {
+          rejectPromise(error);
+        } else if (bytes === undefined) {
+          resolvePromise(0);
+        } else {
+          buffer.set(bytes, offset);
+          resolvePromise(bytes.byteLength);
+        }
+      };
+      input.once("data", (chunk: Buffer | string) => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        settle(undefined, bytes);
+      });
+      input.once("end", () => settle(undefined));
+      input.once("error", (error) => settle(error));
     };
     attempt();
   });
