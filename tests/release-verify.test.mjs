@@ -270,7 +270,7 @@ test("release verification package scripts use the exact public entry points", a
     sourcePackage.scripts.build,
     "tsc -p tsconfig.json && node scripts/copy-build-assets.mjs",
   );
-  assert.equal(sourcePackage.scripts.test, "node --import tsx --test --test-concurrency=1 tests/*.test.ts");
+  assert.equal(sourcePackage.scripts.test, "node ../../scripts/source-node-tests-isolated.mjs");
   assert.equal(sourcePackage.scripts["test:python"], "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit");
   assert.equal(
     sourcePackage.scripts["verify:compact-runtime"],

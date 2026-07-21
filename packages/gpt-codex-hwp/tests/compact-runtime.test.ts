@@ -1426,7 +1426,8 @@ test("missing sample cleanup creates no compact temp residue", { timeout: 10_000
 
 test("installed runtime gate is serialized in normal npm test", async () => {
   const packageJson = JSON.parse(await readFile(join(SOURCE_ROOT, "package.json"), "utf8"));
-  assert.match(packageJson.scripts.test, /--test-concurrency=1/u);
+  assert.equal(packageJson.scripts.test, "node ../../scripts/source-node-tests-isolated.mjs");
+  assert.match(packageJson.scripts["test:focused"], /--test-concurrency=1/u);
   assert.doesNotMatch(packageJson.scripts.test, /verify:compact-runtime/u);
 });
 

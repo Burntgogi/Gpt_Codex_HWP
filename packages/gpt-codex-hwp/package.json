@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-build-assets.mjs",
     "doctor": "node dist/doctor.js",
     "pretest": "npm run build",
-    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test": "node ../../scripts/source-node-tests-isolated.mjs",
     "test:focused": "node --import tsx --test --test-concurrency=1",
     "test:python": "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit",
     "prebenchmark:documents": "npm run build",
