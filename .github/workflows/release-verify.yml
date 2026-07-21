@@ -2,21 +2,36 @@ name: Release candidate verification
 
 on:
   workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Immutable release tag (for example, v0.2.1)
+        required: true
+        type: string
+      expected_release_sha:
+        description: Exact 40-character commit SHA referenced by the tag
+        required: true
+        type: string
+      release_version:
+        description: SemVer without the v prefix (for example, 0.2.1)
+        required: true
+        type: string
 
 permissions: {}
 
 jobs:
   build:
-    name: Build verified v0.2.0 candidate
+    name: Build verified v${{ inputs.release_version }} candidate
     runs-on: windows-2025
     permissions:
       contents: read
     env:
-      EXPECTED_RELEASE_SHA: "df6b20740c39b731f883bee73a75bd547eb1c1cf"
+      EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+      RELEASE_REF: ${{ inputs.release_ref }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: v0.2.0
+          ref: ${{ inputs.release_ref }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -29,7 +44,7 @@ jobs:
       - name: Assert Windows x64 runtime
         run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
       - name: Assert exact immutable release tag
-        run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_RELEASE_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
+        run: node -e "const { execFileSync } = require('node:child_process'); const s = process.env.EXPECTED_RELEASE_SHA; const r = process.env.RELEASE_REF; const v = process.env.RELEASE_VERSION; const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim(); const tag = execFileSync('git', ['tag', '--points-at', 'HEAD', '--list', r], { encoding:'utf8' }).trim(); if (!/^[0-9a-f]{40}$/.test(s) || !/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(r) || r !== 'v' + v || s !== head || tag !== r) process.exit(1)"
       - name: Install source dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Install runtime dependencies without lifecycle scripts
@@ -64,13 +79,13 @@ jobs:
           git diff --exit-code -- .
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
-          name: gpt-codex-hwp-v0.2.0-candidate
+          name: gpt-codex-hwp-v${{ inputs.release_version }}-candidate
           path: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts/
           if-no-files-found: error
           retention-days: 7
 
   attest:
-    name: Attest verified v0.2.0 subjects
+    name: Attest verified v${{ inputs.release_version }} subjects
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -81,14 +96,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7.0.0
         with:
-          name: gpt-codex-hwp-v0.2.0-candidate
+          name: gpt-codex-hwp-v${{ inputs.release_version }}-candidate
           path: release-artifacts
       - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.0
         with:
-          subject-path: release-artifacts/gpt-codex-hwp-0.2.0.zip
+          subject-path: release-artifacts/gpt-codex-hwp-${{ inputs.release_version }}.zip
       - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.0
         with:
-          subject-path: release-artifacts/gpt-codex-hwp-0.2.0.spdx.json
+          subject-path: release-artifacts/gpt-codex-hwp-${{ inputs.release_version }}.spdx.json
       - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.0
         with:
           subject-path: release-artifacts/provenance.json

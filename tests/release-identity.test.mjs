@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 import { loadProjectMetadata, pluginVersion } from "../scripts/project-metadata.mjs";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-const IMMUTABLE_RELEASES = Object.freeze(["0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4"]);
+const IMMUTABLE_RELEASES = Object.freeze(["0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0"]);
 const LAST_BUILD_ID = "20260713023606";
 
-test("release identity derives every stable 0.2.0 surface from root metadata", async () => {
+test("release identity derives every stable 0.2.1 surface from root metadata", async () => {
   const metadata = await loadProjectMetadata(ROOT);
   const expectedPluginVersion = pluginVersion(metadata);
   const rootPackage = await readJson("package.json");
@@ -30,11 +30,11 @@ test("release identity derives every stable 0.2.0 surface from root metadata", a
     "README.md", "README.en.md", "RELEASE_NOTES.md", "RELEASE_NOTES.en.md", "CHANGELOG.md",
   ].map(readText));
 
-  assert.equal(rootPackage.version, "0.2.0");
+  assert.equal(rootPackage.version, "0.2.1");
   assert.equal(metadata.version, rootPackage.version);
   assert.match(metadata.codexBuildId, /^[0-9]{14}$/u);
   assert.ok(metadata.codexBuildId > LAST_BUILD_ID);
-  assert.equal(expectedPluginVersion, `0.2.0+codex.${metadata.codexBuildId}`);
+  assert.equal(expectedPluginVersion, `0.2.1+codex.${metadata.codexBuildId}`);
   assert.equal(sourcePackage.version, metadata.version);
   assert.equal(sourceLock.version, metadata.version);
   assert.equal(sourceLock.packages[""].version, metadata.version);
@@ -64,13 +64,13 @@ test("release identity derives every stable 0.2.0 surface from root metadata", a
     assert.ok(!expectedPluginVersion.startsWith(`${immutable}+`));
   }
   for (const document of releaseDocs) {
-    assert.match(document, /v?0\.2\.0/u);
+    assert.match(document, /v?0\.2\.1/u);
   }
-  assert.match(releaseDocs[0], /## v0\.2\.0 릴리즈/u);
-  assert.match(releaseDocs[1], /## v0\.2\.0 Release/u);
+  assert.match(releaseDocs[0], /## v0\.2\.1 릴리즈/u);
+  assert.match(releaseDocs[1], /## v0\.2\.1 Release/u);
   assert.match(releaseDocs[2], /상태: 정식 릴리즈/u);
   assert.match(releaseDocs[3], /Status: final release/iu);
-  assert.match(releaseDocs[4], /## \[0\.2\.0\] - 2026-07-22/u);
+  assert.match(releaseDocs[4], /## \[0\.2\.1\] - 2026-07-22/u);
   assert.match(releaseDocs[0], /macOS[^\n]+실제 (?:Mac )?기기[^\n]+(?:미검증|아직 검증하지 않았)/u);
   assert.match(releaseDocs[1], /macOS[^\n]+physical Mac[^\n]+unverified/iu);
 });

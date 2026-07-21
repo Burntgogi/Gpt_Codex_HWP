@@ -908,11 +908,11 @@ test("document benchmark stage maps a silent nonzero child to one fixed runner r
 
 test("Node test stage preserves only the first bounded phase and TAP ordinal", async () => {
   for (const [phase, prefix, ordinal] of [
-    ["repository", "> gpt-codex-hwp-repository@0.2.0 test:repository\n", 7],
+    ["repository", "> gpt-codex-hwp-repository@0.2.1 test:repository\n", 7],
     [
       "source",
-      "> gpt-codex-hwp-repository@0.2.0 test:repository\n"
-        + "> gpt-codex-hwp-repository@0.2.0 test:source\n",
+      "> gpt-codex-hwp-repository@0.2.1 test:repository\n"
+        + "> gpt-codex-hwp-repository@0.2.1 test:source\n",
       17,
     ],
   ]) {

@@ -354,8 +354,13 @@ test("workflow policy: release verification uploads checksummed candidates and o
   const attest = jobSection(workflow, "attest");
   assert.match(build, /^    runs-on: windows-2025$/mu,
     "release subjects must be built on the platform that passes the large-document gate");
-  assert.match(build, /^      EXPECTED_RELEASE_SHA: "df6b20740c39b731f883bee73a75bd547eb1c1cf"$/mu);
-  assert.match(build, /^          ref: v0\.2\.0$/mu);
+  assert.match(workflow, /^      release_ref:\n        description: .*\n        required: true\n        type: string$/mu);
+  assert.match(workflow, /^      expected_release_sha:\n        description: .*\n        required: true\n        type: string$/mu);
+  assert.match(workflow, /^      release_version:\n        description: .*\n        required: true\n        type: string$/mu);
+  assert.match(build, /^      EXPECTED_RELEASE_SHA: \$\{\{ inputs\.expected_release_sha \}\}$/mu);
+  assert.match(build, /^      RELEASE_VERSION: \$\{\{ inputs\.release_version \}\}$/mu);
+  assert.match(build, /^          ref: \$\{\{ inputs\.release_ref \}\}$/mu);
+  assert.doesNotMatch(workflow, /df6b20740c39b731f883bee73a75bd547eb1c1cf|v0\.2\.0/u);
   assert.match(build, /name: Assert exact immutable release tag/u);
   assert.match(build, /process\.env\.EXPECTED_RELEASE_SHA/u);
   assert.match(build, /^    permissions:\n      contents: read$/mu);
@@ -403,8 +408,8 @@ test("workflow policy: release verification uploads checksummed candidates and o
   );
   assert.match(attest, /actions\/download-artifact@/u);
   assert.equal(countMatches(attest, /actions\/attest@/gu), 3);
-  assert.match(attest, /gpt-codex-hwp-0\.2\.0\.zip/u);
-  assert.match(attest, /gpt-codex-hwp-0\.2\.0\.spdx\.json/u);
+  assert.match(attest, /gpt-codex-hwp-\$\{\{ inputs\.release_version \}\}\.zip/u);
+  assert.match(attest, /gpt-codex-hwp-\$\{\{ inputs\.release_version \}\}\.spdx\.json/u);
   assert.match(attest, /provenance\.json/u);
   assertPinnedActions(workflow);
 });

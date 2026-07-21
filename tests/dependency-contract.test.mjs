@@ -44,6 +44,7 @@ const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
   tsx: "4.23.1",
   typescript: "5.9.3",
 });
+const EXPECTED_OVERRIDES = Object.freeze({ "@hono/node-server": "2.0.11" });
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
   "hwp_detect_format",
@@ -64,8 +65,10 @@ test("dependency contract pins exact direct source and runtime metadata", async 
   assert.deepEqual(sourcePackage.dependencies, EXPECTED_DEPENDENCIES);
   assert.deepEqual(sourcePackage.optionalDependencies, EXPECTED_OPTIONAL_DEPENDENCIES);
   assert.deepEqual(sourcePackage.devDependencies, EXPECTED_DEV_DEPENDENCIES);
+  assert.deepEqual(sourcePackage.overrides, EXPECTED_OVERRIDES);
   assert.deepEqual(runtimePackage.dependencies, EXPECTED_DEPENDENCIES);
   assert.deepEqual(runtimePackage.optionalDependencies, EXPECTED_OPTIONAL_DEPENDENCIES);
+  assert.deepEqual(runtimePackage.overrides, EXPECTED_OVERRIDES);
   assert.equal(Object.hasOwn(runtimePackage, "devDependencies"), false);
   assert.deepEqual(runtimePackage.scripts, {
     doctor: "node dist/doctor.js",
@@ -76,6 +79,19 @@ test("dependency contract pins exact direct source and runtime metadata", async 
     rootPackage.scripts?.["verify:source-dependencies"],
     "node scripts/verify-installed-dependencies.mjs --source-only",
   );
+});
+
+test("dependency contract resolves the patched Hono Node adapter in both locks", async () => {
+  for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
+    const lock = await readJson(join(root, "package-lock.json"));
+    const adapter = lock.packages?.["node_modules/@hono/node-server"];
+    assert.equal(adapter?.version, "2.0.11", label);
+    assert.equal(
+      adapter?.resolved,
+      "https://registry.npmjs.org/@hono/node-server/-/node-server-2.0.11.tgz",
+      label,
+    );
+  }
 });
 
 test("dependency contract resolves Kordoc only through the vendored compact core", async () => {

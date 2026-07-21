@@ -319,6 +319,7 @@ function renderRuntimePackage(metadata, license, sourcePackage) {
     dependencies: sourcePackage.dependencies,
     engines: sourcePackage.engines,
     optionalDependencies: sourcePackage.optionalDependencies,
+    overrides: sourcePackage.overrides,
     license,
   };
 }

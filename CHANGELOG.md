@@ -6,10 +6,22 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - No unreleased changes.
 
+## [0.2.1] - 2026-07-22
+
+- Published the first public 0.2 series release without changing immutable
+  v0.1.0-v0.1.4 release bytes.
+- Pinned the MCP SDK's transitive `@hono/node-server` adapter to security-fixed
+  2.0.11 and verified zero known production vulnerabilities in source and
+  compact runtime locks.
+- Moved release-subject generation to the validated Windows x64 gate and
+  parameterized immutable tag, exact SHA, and SemVer attestation inputs.
+- Preserved `v0.2.0` as an unpublished candidate tag after the security
+  advisory appeared; no GitHub Release was created for that candidate.
+
 ## [0.2.0] - 2026-07-22
 
-- Published the 0.2.0 release without changing immutable v0.1.0-v0.1.4
-  release bytes.
+- Tagged a release candidate that was withdrawn before publication after a new
+  production dependency advisory appeared.
 - Added SHA-pinned Windows x64, macOS arm64, and Security policy gates plus a
   non-publishing artifact attestation workflow and declarative repository policy.
 - Added public-source hardening, governance controls, reproducible ZIP/SBOM/
@@ -38,7 +50,8 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.2.0
 [0.1.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4
 [0.1.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.3

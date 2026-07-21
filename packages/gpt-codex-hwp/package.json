@@ -1,6 +1,6 @@
 {
   "name": "gpt-codex-hwp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "private": true,
   "license": "Apache-2.0",
@@ -36,5 +36,8 @@
   },
   "optionalDependencies": {
     "@rhwp/core": "0.7.17"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.11"
   }
 }
