@@ -69,7 +69,7 @@ test("release identity derives every stable 0.2.0 surface from root metadata", a
   assert.match(releaseDocs[0], /## v0\.2\.0 릴리즈/u);
   assert.match(releaseDocs[1], /## v0\.2\.0 Release/u);
   assert.match(releaseDocs[2], /상태: 정식 릴리즈/u);
-  assert.match(releaseDocs[3], /Status: stable release/iu);
+  assert.match(releaseDocs[3], /Status: final release/iu);
   assert.match(releaseDocs[4], /## \[0\.2\.0\] - 2026-07-22/u);
   assert.match(releaseDocs[0], /macOS[^\n]+실제 (?:Mac )?기기[^\n]+(?:미검증|아직 검증하지 않았)/u);
   assert.match(releaseDocs[1], /macOS[^\n]+physical Mac[^\n]+unverified/iu);

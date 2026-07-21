@@ -1,6 +1,6 @@
 # Gpt_Codex_HWP v0.2.0 Release Notes
 
-- Status: stable release
+- Status: final release
 - Prepared: 2026-07-22
 - Validation: Windows x64, macOS arm64, Linux, and security release gates; physical Mac unverified
 

@@ -258,7 +258,7 @@ test("the staged runtime documents secure agent-assisted GitHub installation", a
     () => assertSecureAgentInstallSection(missingMarketplaceIdentity, metadata),
     /marketplaceName/u,
   );
-  const staleRelease = sections[0].replaceAll(PREVIOUS_RELEASE_TAG, "v0.1.3");
+  const staleRelease = sections[0].replaceAll(`v${metadata.version}`, "v0.1.3");
   assert.throws(
     () => assertSecureAgentInstallSection(staleRelease, metadata),
     /verified release tag/u,
