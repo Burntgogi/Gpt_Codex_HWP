@@ -1654,11 +1654,6 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     diagnosticStage = stage;
     t.diagnostic(`DOCUMENT_SEQUENTIAL_STAGE_${stage}`);
   };
-  t.after(async () => {
-    enterDiagnosticStage("CLEANUP_BEGIN");
-    await rm(temporaryRoot, { recursive: true, force: true });
-    enterDiagnosticStage("CLEANUP_COMPLETE");
-  });
   const markerPrefix = join(temporaryRoot, "payload");
   const caseChild = spawnRegistrationCase([
     "--sequential-case",
@@ -1667,10 +1662,9 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     REGISTRATION_RACE_FIXTURE,
   ]);
   const caseExit = childExitPromise(caseChild);
-  t.after(() => {
-    enterDiagnosticStage("TERMINATE_BEGIN");
+  t.after(async () => {
     terminate(caseChild);
-    enterDiagnosticStage("TERMINATE_COMPLETE");
+    await rm(temporaryRoot, { recursive: true, force: true });
   });
   const retained: number[] = [];
   const observedParentPids: Array<number | undefined> = [];

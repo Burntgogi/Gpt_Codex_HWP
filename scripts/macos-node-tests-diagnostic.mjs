@@ -684,8 +684,8 @@ async function executeMcpCancellationProgressDiagnostic() {
     onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
     onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
-    fixedDiagnostics: MCP_PREVIEW_CANCELLATION_CODES,
-    onFixedDiagnostic: (code) => {
+    fixedProgressDiagnostics: MCP_PREVIEW_CANCELLATION_CODES,
+    onFixedProgressDiagnostic: (code) => {
       const candidate = code.slice("MCP_PREVIEW_CANCELLATION_FAILURE_".length)
         .toLowerCase().replaceAll("_", "-");
       if (MCP_PREVIEW_CANCELLATION_STAGES.has(candidate)) stage = candidate;
