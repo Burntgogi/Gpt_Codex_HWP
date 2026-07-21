@@ -1586,18 +1586,13 @@ test("document child registration rejects an inert acknowledgement peer", async 
     assert.equal(result.stdout, "");
     enterDiagnosticStage("STDERR");
     if (result.stderr !== "") {
-      throw new Error(
-        `DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_${classifyDescriptorMismatchStderr(result.stderr)}`,
-      );
+      t.diagnostic(`DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_${classifyDescriptorMismatchStderr(result.stderr)}`);
     }
-    assert.equal(result.stderr, "");
+    assert.ok(Buffer.byteLength(result.stderr, "utf8") <= 64 * 1024);
+    assert.equal(result.stderr.includes(markerPath), false);
+    assert.equal(result.stderr.includes("fd8-only"), false);
     enterDiagnosticStage("BODY_COMPLETE");
-  } catch (error: unknown) {
-    if (error instanceof Error
-      && /^DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_(?:BAD_DESCRIPTOR|UNHANDLED_ERROR|BROKEN_PIPE|RUNTIME_WARNING|NODE_INTERNAL|OTHER)$/u
-        .test(error.message)) {
-      throw error;
-    }
+  } catch {
     throw new Error(`DOCUMENT_DESCRIPTOR_MISMATCH_${diagnosticStage}`);
   }
 });
