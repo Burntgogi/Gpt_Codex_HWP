@@ -538,6 +538,33 @@ test("MCP progress notification failure is non-fatal while active", async () => 
   }
 });
 
+test("supervised child fixture mode follows the child entry on every platform", () => {
+  assert.deepEqual(
+    withChildFixtureMode(["gate", "child", "success", "1000"], "child", "ignore-abort"),
+    ["gate", "child", "ignore-abort", "1000"],
+  );
+  assert.deepEqual(
+    withChildFixtureMode(
+      ["--import", "gate", "child", "success", "1000"],
+      "child",
+      "ignore-abort",
+    ),
+    ["--import", "gate", "child", "ignore-abort", "1000"],
+  );
+  assert.throws(
+    () => withChildFixtureMode(["gate", "success"], "child", "ignore-abort"),
+    /fixture arguments/iu,
+  );
+  assert.throws(
+    () => withChildFixtureMode(["child"], "child", "ignore-abort"),
+    /fixture arguments/iu,
+  );
+  assert.throws(
+    () => withChildFixtureMode(["child", "success", "child"], "child", "ignore-abort"),
+    /fixture arguments/iu,
+  );
+});
+
 function facadeWithDetect(
   detect: (
     snapshot: DocumentSnapshot,
@@ -630,8 +657,11 @@ function isolatedCancellationFacade(
           childArguments: ["success", "1000"],
           spoolRoot,
           spawnFactory: (specification) => {
-            const args = [...specification.args];
-            args[3] = activeMode;
+            const args = withChildFixtureMode(
+              specification.args,
+              CHILD_FIXTURE,
+              activeMode,
+            );
             const child = spawn(
               specification.command,
               args,
@@ -706,6 +736,21 @@ function isolatedCancellationFacade(
       }
     },
   };
+}
+
+function withChildFixtureMode(
+  args: readonly string[],
+  childEntry: string,
+  mode: string,
+): string[] {
+  const childEntryIndex = args.indexOf(childEntry);
+  if (childEntryIndex < 0 || childEntryIndex !== args.lastIndexOf(childEntry)
+    || childEntryIndex + 1 >= args.length) {
+    throw new Error("invalid supervised child fixture arguments");
+  }
+  const updated = [...args];
+  updated[childEntryIndex + 1] = mode;
+  return updated;
 }
 
 function detectRequest(requestId: string) {

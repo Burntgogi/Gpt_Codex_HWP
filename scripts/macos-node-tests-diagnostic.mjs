@@ -846,7 +846,7 @@ async function executeMcpCancellationProgressDiagnostic(options = {}) {
     terminateTree: options.terminateTree,
     testTimeoutMs: options.testTimeoutMs,
     closeTimeoutMs: options.closeTimeoutMs,
-    maximumTopLevelTests: 13,
+    maximumTopLevelTests: 14,
     onCompletionKind: (value) => { completionKind = value; },
     onFailedTopLevelFailureKind: (value) => { failureKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
