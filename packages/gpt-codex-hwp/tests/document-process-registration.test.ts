@@ -1661,63 +1661,64 @@ test("registration sequential transport completes two real bootstrap ACK handsha
     START_GATE,
     REGISTRATION_RACE_FIXTURE,
   ]);
-  const caseExit = childExitPromise(caseChild);
-  t.after(async () => {
+  try {
+    const caseExit = childExitPromise(caseChild);
+    const retained: number[] = [];
+    const observedParentPids: Array<number | undefined> = [];
+    const supervisor: RegisteredProcessGroupSupervisor = {
+      async registerRoot(pid, expectedParentPid) {
+        observedParentPids.push(expectedParentPid);
+        retained.push(pid);
+        return registeredIdentity(pid, caseChild.pid!);
+      },
+      async terminate() {
+        return { gone: true, proof: "registered-groups-empty" };
+      },
+    };
+    const coordinator = createProcessRegistrationCoordinator({
+      casePid: caseChild.pid!,
+      registrationInput: caseChild.stdio[5]!,
+      acknowledgementOutput: caseChild.stdio[6]!,
+      supervisor,
+      deadlineAt: performance.now() + 15_000,
+      caseExited: caseExit,
+    });
+    coordinator.start();
+    try {
+      enterDiagnosticStage("CLOSE");
+      const result = await waitForClose(caseChild, 30_000);
+      enterDiagnosticStage("BEGIN_CLOSING");
+      await coordinator.beginClosing();
+      enterDiagnosticStage("SEAL");
+      await coordinator.seal();
+      enterDiagnosticStage("PARSE");
+      const { bootstrapPids, closedBootstrapPids } = JSON.parse(result.stdout.trim()) as {
+        bootstrapPids: number[];
+        closedBootstrapPids: number[];
+      };
+      enterDiagnosticStage("PARENTS");
+      assert.deepEqual(observedParentPids, bootstrapPids.map(() => caseChild.pid));
+      enterDiagnosticStage("RETAINED");
+      assert.deepEqual(retained, bootstrapPids);
+      enterDiagnosticStage("COUNT");
+      assert.equal(bootstrapPids.length, 2);
+      for (let index = 0; index < 2; index += 1) {
+        enterDiagnosticStage(index === 0 ? "READ_0" : "READ_1");
+        const payload = JSON.parse(await readFile(`${markerPrefix}-${index}.json`, "utf8")) as {
+          payloadPid: number;
+        };
+        enterDiagnosticStage(index === 0 ? "PID_0" : "PID_1");
+        assert.equal(payload.payloadPid, bootstrapPids[index]);
+        enterDiagnosticStage(index === 0 ? "CLOSED_0" : "CLOSED_1");
+        assert.equal(closedBootstrapPids[index], payload.payloadPid);
+      }
+      enterDiagnosticStage("BODY_COMPLETE");
+    } catch {
+      throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);
+    }
+  } finally {
     terminate(caseChild);
     await rm(temporaryRoot, { recursive: true, force: true });
-  });
-  const retained: number[] = [];
-  const observedParentPids: Array<number | undefined> = [];
-  const supervisor: RegisteredProcessGroupSupervisor = {
-    async registerRoot(pid, expectedParentPid) {
-      observedParentPids.push(expectedParentPid);
-      retained.push(pid);
-      return registeredIdentity(pid, caseChild.pid!);
-    },
-    async terminate() {
-      return { gone: true, proof: "registered-groups-empty" };
-    },
-  };
-  const coordinator = createProcessRegistrationCoordinator({
-    casePid: caseChild.pid!,
-    registrationInput: caseChild.stdio[5]!,
-    acknowledgementOutput: caseChild.stdio[6]!,
-    supervisor,
-    deadlineAt: performance.now() + 15_000,
-    caseExited: caseExit,
-  });
-  coordinator.start();
-  try {
-    enterDiagnosticStage("CLOSE");
-    const result = await waitForClose(caseChild, 30_000);
-    enterDiagnosticStage("BEGIN_CLOSING");
-    await coordinator.beginClosing();
-    enterDiagnosticStage("SEAL");
-    await coordinator.seal();
-    enterDiagnosticStage("PARSE");
-    const { bootstrapPids, closedBootstrapPids } = JSON.parse(result.stdout.trim()) as {
-      bootstrapPids: number[];
-      closedBootstrapPids: number[];
-    };
-    enterDiagnosticStage("PARENTS");
-    assert.deepEqual(observedParentPids, bootstrapPids.map(() => caseChild.pid));
-    enterDiagnosticStage("RETAINED");
-    assert.deepEqual(retained, bootstrapPids);
-    enterDiagnosticStage("COUNT");
-    assert.equal(bootstrapPids.length, 2);
-    for (let index = 0; index < 2; index += 1) {
-      enterDiagnosticStage(index === 0 ? "READ_0" : "READ_1");
-      const payload = JSON.parse(await readFile(`${markerPrefix}-${index}.json`, "utf8")) as {
-        payloadPid: number;
-      };
-      enterDiagnosticStage(index === 0 ? "PID_0" : "PID_1");
-      assert.equal(payload.payloadPid, bootstrapPids[index]);
-      enterDiagnosticStage(index === 0 ? "CLOSED_0" : "CLOSED_1");
-      assert.equal(closedBootstrapPids[index], payload.payloadPid);
-    }
-    enterDiagnosticStage("BODY_COMPLETE");
-  } catch {
-    throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);
   }
 });
 

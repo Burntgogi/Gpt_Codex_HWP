@@ -11,6 +11,7 @@ import { Worker } from "node:worker_threads";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 import type {
   DocumentEngineExecutionContext,
@@ -139,7 +140,9 @@ test("MCP progress notification rejection yields to request abort", async () => 
 });
 
 test("MCP cancellation reaches the preview exclusive-open boundary", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "hwp-mcp-preview-cancel-"));
+  const directory = await createCanonicalTemporaryDirectory({
+    prefix: "hwp-mcp-preview-cancel-",
+  });
   const outputPath = join(directory, "preview.svg");
   const abort = new AbortController();
   let failureStage = "setup";
