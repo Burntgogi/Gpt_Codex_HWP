@@ -30,7 +30,7 @@ OPF = "http://www.idpf.org/2007/opf/"
 class SafeEditTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="hwpx-safe-edit-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve(strict=True)
         self.source = self.root / "source.hwpx"
         self.image = self.root / "image.png"
         self.source.write_bytes(make_hwpx())
@@ -40,6 +40,7 @@ class SafeEditTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_noop_identity_is_in_memory_and_does_not_write_beside_source(self) -> None:
+        self.assertEqual(self.root, self.root.resolve(strict=True))
         before = sorted(self.root.iterdir())
         temp_paths: list[Path] = []
         real_named_tempfile = tempfile.NamedTemporaryFile
