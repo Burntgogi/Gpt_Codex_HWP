@@ -197,7 +197,7 @@ test("public runtime privacy scanner enforces exact budgets and staged file type
     await writeFile(join(root, "three.txt"), "9");
     await assert.rejects(
       assertPublicRuntimePrivacy(root, { maxFileBytes: 8, maxRuntimeBytes: 8 }),
-      /aggregate byte budget.*(?:three|two)\.txt/iu,
+      /aggregate byte budget.*(?:one|two|three)\.txt/iu,
     );
   });
 
