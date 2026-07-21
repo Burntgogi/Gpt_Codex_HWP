@@ -345,6 +345,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
     }));
+  const runReadWorkerSafetyDiagnostic = options.runReadWorkerSafetyDiagnostic
+    ?? (() => executeSourceOrdinalDiagnostic("read-worker-safety.test.ts", 17, "rw"));
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
     ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -741,6 +743,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
               caseId = candidate.nestedCaseId;
             }
           }
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
+      if (file === "read-worker-safety.test.ts") {
+        let caseId = "read-worker-safety-aggregate";
+        try {
+          const candidate = await runReadWorkerSafetyDiagnostic();
+          if (/^rw(?:0[1-9]|1[0-7])$/u.test(candidate)) caseId = candidate;
         } catch {}
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);

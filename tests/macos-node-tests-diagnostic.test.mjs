@@ -658,6 +658,18 @@ test("macOS Node diagnostic parses the pr07 nested ordinal from bounded TAP", as
   assert.equal(output, "MAC_NODE_TEST_CASE case=pr07s06 status=failed\n");
 });
 
+test("macOS Node diagnostic maps read-worker safety failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "read-worker-safety.test.ts",
+    runReadWorkerSafetyDiagnostic: async () => "rw17",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=rw17 status=failed\n");
+});
+
 test("shared Node diagnostic maps MCP cancellation failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
