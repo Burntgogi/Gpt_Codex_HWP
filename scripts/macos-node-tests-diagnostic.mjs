@@ -336,6 +336,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   const runOutputBudgetAtomicityDiagnostic = options.runOutputBudgetAtomicityDiagnostic
     ?? executeOutputBudgetAtomicityDiagnostic;
   const runPatchDiagnostic = options.runPatchDiagnostic ?? executePatchDiagnostic;
+  const runPublicRuntimePrivacyDiagnostic = options.runPublicRuntimePrivacyDiagnostic
+    ?? (() => executeSourceOrdinalDiagnostic("public-runtime-privacy.test.ts", 15, "pr"));
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
     ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -706,6 +708,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         try {
           const candidate = await runPatchDiagnostic();
           if (/^pa(?:0[1-9]|1[0-9]|2[0-3])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
+      if (file === "public-runtime-privacy.test.ts") {
+        let caseId = "public-runtime-privacy-aggregate";
+        try {
+          const candidate = await runPublicRuntimePrivacyDiagnostic();
+          if (/^pr(?:0[1-9]|1[0-5])$/u.test(candidate)) caseId = candidate;
         } catch {}
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);

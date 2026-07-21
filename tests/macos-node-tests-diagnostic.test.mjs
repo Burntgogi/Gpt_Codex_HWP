@@ -570,6 +570,18 @@ test("Windows source diagnostic maps patch failure to one bounded ordinal", asyn
   assert.equal(output, "WINDOWS_NODE_TEST_CASE case=pa23 status=failed\n");
 });
 
+test("macOS Node diagnostic maps public-runtime privacy failure to one bounded ordinal", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "public-runtime-privacy.test.ts",
+    runPublicRuntimePrivacyDiagnostic: async () => "pr15",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=pr15 status=failed\n");
+});
+
 test("shared Node diagnostic maps MCP cancellation failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
