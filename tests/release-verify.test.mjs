@@ -1418,9 +1418,13 @@ function expectedStageCommands() {
         commands: [
           { tool: "npm", args: documentBenchmarkArgs },
           {
-            tool: "node",
+            tool: "npm",
             args: [
-              "packages/gpt-codex-hwp/benchmarks/document-engine-benchmark.mjs",
+              "--prefix",
+              "packages/gpt-codex-hwp",
+              "run",
+              "benchmark:documents",
+              "--",
               "--validate-large",
               process.env.HWP_BENCH_LARGE_EVIDENCE
                 ?? ".superpowers/benchmarks/large.json",

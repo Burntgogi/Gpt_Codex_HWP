@@ -168,6 +168,13 @@ export function parseBenchmarkArguments(args, options = {}) {
   };
 }
 
+export function resolveLargeBenchmarkEvidencePath(path, options = {}) {
+  if (typeof path !== "string" || path.trim().length === 0) {
+    throw benchmarkError("BENCHMARK_ARGUMENTS_INVALID");
+  }
+  return resolve(options.repositoryRoot ?? REPOSITORY_ROOT, path);
+}
+
 export function validateCaseSizeMiB(sizeMiB) {
   if (!APPROVED_BENCHMARK_SIZES_MIB.includes(sizeMiB)) {
     throw benchmarkError("BENCHMARK_ARGUMENTS_INVALID");
@@ -1457,7 +1464,7 @@ async function main() {
   }
   if (process.argv[2] === "--validate-large") {
     if (process.argv.length !== 4) throw benchmarkError("BENCHMARK_ARGUMENTS_INVALID");
-    await validateLargeBenchmarkEvidence(resolve(process.argv[3]));
+    await validateLargeBenchmarkEvidence(resolveLargeBenchmarkEvidencePath(process.argv[3]));
     process.stdout.write("BENCHMARK_EVIDENCE_VALID\n");
     return;
   }

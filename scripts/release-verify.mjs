@@ -856,8 +856,12 @@ function documentBenchmarkStage(root, env) {
     ?? ".superpowers/benchmarks/large.json";
   return compositeStage("document-benchmark", [
     small,
-    fixedCommand("node", [
-      "packages/gpt-codex-hwp/benchmarks/document-engine-benchmark.mjs",
+    fixedCommand("npm", [
+      "--prefix",
+      "packages/gpt-codex-hwp",
+      "run",
+      "benchmark:documents",
+      "--",
       "--validate-large",
       evidencePath,
     ]),

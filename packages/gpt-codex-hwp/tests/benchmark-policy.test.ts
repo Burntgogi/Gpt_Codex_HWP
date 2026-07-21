@@ -35,6 +35,7 @@ import {
   formatBenchmarkProbeFailure,
   formatBenchmarkProgress,
   parseBenchmarkArguments,
+  resolveLargeBenchmarkEvidencePath,
   runBenchmark,
   runBenchmarkCaseWithTelemetryRetry,
   validateBenchmarkReceipt,
@@ -423,6 +424,16 @@ test("benchmark policy accepts only bounded approved sizes with fixed sequential
     code: "BENCHMARK_SIZE_INVALID",
   });
   assert.equal(validateCaseSizeMiB(10), 10);
+  assert.equal(
+    resolveLargeBenchmarkEvidencePath(".superpowers/benchmarks/release-large.json"),
+    resolve(REPOSITORY_ROOT, ".superpowers/benchmarks/release-large.json"),
+  );
+  for (const value of ["", "   ", null, 42]) {
+    assert.throws(
+      () => resolveLargeBenchmarkEvidencePath(value as string),
+      { code: "BENCHMARK_ARGUMENTS_INVALID" },
+    );
+  }
   assert.throws(() => validateCaseSizeMiB(11), { code: "BENCHMARK_ARGUMENTS_INVALID" });
 });
 
