@@ -36,6 +36,7 @@ import {
   formatBenchmarkProgress,
   parseBenchmarkArguments,
   runBenchmark,
+  runBenchmarkCaseWithTelemetryRetry,
   validateBenchmarkReceipt,
   validateCaseSizeMiB,
   validateLargeBenchmarkEvidence,
@@ -171,7 +172,7 @@ test("Linux real-detect diagnostic emits the safe tuple and rethrows the origina
   ]);
 });
 
-test("POSIX real-detect retry accepts only the exact missing-RSS telemetry gap", async () => {
+test("POSIX real-detect retry accepts only the exact missing-RSS telemetry gap", async (t) => {
   const exact = {
     code: "BENCHMARK_TELEMETRY_UNAVAILABLE",
     telemetryDiagnostic: {
@@ -196,6 +197,42 @@ test("POSIX real-detect retry accepts only the exact missing-RSS telemetry gap",
     ...exact,
     telemetryDiagnostic: { ...exact.telemetryDiagnostic, privatePath: "/private/file" },
   }), false);
+  await t.test("benchmark case uses fresh ownership for the one retry", async () => {
+    const transient = Object.assign(new Error("transient telemetry"), exact);
+    const calls: string[] = [];
+    const receipt = await runBenchmarkCaseWithTelemetryRetry(256, "owned-parent", {
+      platform: "darwin",
+      runCase: async (sizeMiB: number, outputParent: string) => {
+        calls.push(`${sizeMiB}:${outputParent}`);
+        if (calls.length === 1) throw transient;
+        return "fresh-receipt";
+      },
+    });
+    assert.equal(receipt, "fresh-receipt");
+    assert.deepEqual(calls, ["256:owned-parent", "256:owned-parent"]);
+
+    for (const [platform, failure] of [
+      ["win32", transient],
+      ["darwin", Object.assign(new Error("other"), { ...exact, code: "ENGINE_CRASH" })],
+      ["linux", Object.assign(new Error("extra"), {
+        ...exact,
+        telemetryDiagnostic: { ...exact.telemetryDiagnostic, privatePath: "/private/file" },
+      })],
+    ] as const) {
+      let attempts = 0;
+      await assert.rejects(
+        runBenchmarkCaseWithTelemetryRetry(256, "owned-parent", {
+          platform,
+          runCase: async () => {
+            attempts += 1;
+            throw failure;
+          },
+        }),
+        (error: unknown) => error === failure,
+      );
+      assert.equal(attempts, 1);
+    }
+  });
 });
 
 test("hosted platform wrappers return only bounded classifier tuples", async () => {

@@ -450,7 +450,7 @@ export async function runBenchmark({ sizesMiB, outputPath, onReceipt }) {
   const implementationSha256 = await benchmarkImplementationSha256();
   const receipts = [];
   for (const sizeMiB of sizesMiB) {
-    const receipt = await runFreshCase(sizeMiB, dirname(safeOutput));
+    const receipt = await runBenchmarkCaseWithTelemetryRetry(sizeMiB, dirname(safeOutput));
     receipts.push(receipt);
     onReceipt?.(receipt);
   }
@@ -498,6 +498,40 @@ async function assertFreshOutput(path) {
     throw error;
   }
   throw benchmarkError("BENCHMARK_OUTPUT_EXISTS");
+}
+
+export async function runBenchmarkCaseWithTelemetryRetry(
+  sizeMiB,
+  outputParent,
+  dependencies = {},
+) {
+  const runCase = dependencies.runCase ?? runFreshCase;
+  const platform = dependencies.platform ?? process.platform;
+  try {
+    return await runCase(sizeMiB, outputParent);
+  } catch (error) {
+    if ((platform !== "linux" && platform !== "darwin")
+      || !isRetryablePosixBenchmarkTelemetryGap(error)) {
+      throw error;
+    }
+  }
+  return runCase(sizeMiB, outputParent);
+}
+
+function isRetryablePosixBenchmarkTelemetryGap(error) {
+  if (error?.code !== "BENCHMARK_TELEMETRY_UNAVAILABLE") return false;
+  const diagnostic = error.telemetryDiagnostic;
+  if (diagnostic === null || typeof diagnostic !== "object" || Array.isArray(diagnostic)
+    || Object.keys(diagnostic).sort().join(",")
+      !== "framePresent,processGone,rssPresent,stage,status,telemetryEnded") {
+    return false;
+  }
+  return diagnostic.status === "failed"
+    && diagnostic.processGone === true
+    && diagnostic.telemetryEnded === true
+    && diagnostic.framePresent === true
+    && diagnostic.rssPresent === false
+    && diagnostic.stage === "posix-telemetry-sample";
 }
 
 async function validateWrittenEvidence(path, expected) {
