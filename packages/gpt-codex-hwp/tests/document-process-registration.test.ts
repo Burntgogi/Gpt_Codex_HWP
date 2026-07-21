@@ -1586,11 +1586,18 @@ test("document child registration rejects a one-present descriptor pair", async 
     assert.equal(result.stdout, "");
     enterDiagnosticStage("STDERR");
     if (result.stderr !== "") {
-      t.diagnostic(`DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_${classifyDescriptorMismatchStderr(result.stderr)}`);
+      throw new Error(
+        `DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_${classifyDescriptorMismatchStderr(result.stderr)}`,
+      );
     }
     assert.equal(result.stderr, "");
     enterDiagnosticStage("BODY_COMPLETE");
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof Error
+      && /^DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_(?:BAD_DESCRIPTOR|UNHANDLED_ERROR|BROKEN_PIPE|RUNTIME_WARNING|NODE_INTERNAL|OTHER)$/u
+        .test(error.message)) {
+      throw error;
+    }
     throw new Error(`DOCUMENT_DESCRIPTOR_MISMATCH_${diagnosticStage}`);
   }
 });

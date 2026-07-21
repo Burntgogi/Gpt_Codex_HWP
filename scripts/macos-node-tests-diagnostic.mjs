@@ -307,6 +307,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? (options.runFile === undefined ? runDocumentProcessDiagnostic : undefined);
   const runDocumentSequentialDiagnostic = options.runDocumentSequentialDiagnostic
     ?? executeDocumentSequentialDiagnostic;
+  const runDocumentDescriptorMismatchDiagnostic = options.runDocumentDescriptorMismatchDiagnostic
+    ?? executeDocumentDescriptorMismatchDiagnostic;
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
     ?? executeBenchmarkPolicyDiagnostic;
   const runMcpCancellationProgressDiagnostic = options.runMcpCancellationProgressDiagnostic
@@ -484,6 +486,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
               `${receiptPrefix}_DOCUMENT_DESCRIPTOR_MISMATCH_STDERR kind=${descriptorMismatchStderrKind ?? "unclassified"}\n`,
             );
           }
+          let isolatedStatus = "failed";
+          try {
+            const candidate = await runDocumentDescriptorMismatchDiagnostic();
+            if (candidate?.passed === true) isolatedStatus = "passed";
+          } catch {}
+          stdout.write(
+            `${receiptPrefix}_DOCUMENT_DESCRIPTOR_MISMATCH_ISOLATED status=${isolatedStatus}\n`,
+          );
         }
         if (caseId === "dp47") {
           let stage = firstFailureStage ?? "diagnostic-failed";
@@ -697,12 +707,23 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
     onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
-    fixedDiagnostics: [...DOCUMENT_SEQUENTIAL_CODES, ...DOCUMENT_DESCRIPTOR_MISMATCH_CODES],
+    fixedDiagnostics: [
+      ...DOCUMENT_SEQUENTIAL_CODES,
+      ...DOCUMENT_DESCRIPTOR_MISMATCH_CODES,
+      ...DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_CODES,
+    ],
     onFixedDiagnostic: (code) => {
       if (code.startsWith("DOCUMENT_SEQUENTIAL_")) {
         const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length)
           .toLowerCase().replaceAll("_", "-");
         if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+      } else if (code.startsWith("DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_")) {
+        const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_KINDS.has(candidate)) {
+          descriptorMismatchStage = "stderr";
+          descriptorMismatchStderrKind = candidate;
+        }
       } else if (code.startsWith("DOCUMENT_DESCRIPTOR_MISMATCH_")) {
         const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_".length)
           .toLowerCase().replaceAll("_", "-");
@@ -766,6 +787,21 @@ async function executeDocumentSequentialDiagnostic() {
     },
   });
   return { passed, stage };
+}
+
+async function executeDocumentDescriptorMismatchDiagnostic() {
+  let stderrKind;
+  const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    testTimeoutMs: DOCUMENT_PROCESS_TEST_TIMEOUT_MS,
+    testNamePattern: "^document child registration rejects a one-present descriptor pair$",
+    fixedDiagnostics: DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_".length)
+        .toLowerCase().replaceAll("_", "-");
+      if (DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_KINDS.has(candidate)) stderrKind = candidate;
+    },
+  });
+  return { passed, stderrKind };
 }
 
 async function executeBenchmarkPolicyDiagnostic() {
