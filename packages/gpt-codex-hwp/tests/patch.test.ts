@@ -3,12 +3,10 @@ import { createHash } from "node:crypto";
 import {
   access,
   link,
-  mkdtemp,
   readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
@@ -24,6 +22,7 @@ import {
   handleHwpPatchDocument,
 } from "../src/tools/patch.js";
 import { MAX_FILL_VALUES } from "../src/shared/resource-limits.js";
+import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 function details(result: CallToolResult): Record<string, unknown> {
   assert.ok(result.structuredContent);
@@ -42,7 +41,7 @@ async function assertMissing(path: string): Promise<void> {
 }
 
 test("hwp_patch_document patches a real HWPX without mutating the source", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "patched.hwpx");
@@ -94,7 +93,7 @@ test("hwp_patch_document patches a real HWPX without mutating the source", async
 });
 
 test("hwp_patch_document rejects verify false before file access", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-verify-required-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-verify-required-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "missing-source.hwpx");
   const outputPath = join(root, "output.hwpx");
@@ -121,7 +120,7 @@ test("hwp_patch_document rejects verify false before file access", async (t) => 
 });
 
 test("hwp_patch_document requires complete isolated verification metadata", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-verify-stats-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-verify-stats-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const missingStatsOutput = join(root, "missing-stats.hwpx");
@@ -158,7 +157,7 @@ test("hwp_patch_document requires complete isolated verification metadata", asyn
 });
 
 test("hwp_patch_document rejects binary HWP before parsing or patching", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-read-only-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-read-only-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwp");
   const outputPath = join(root, "patched.hwpx");
@@ -193,7 +192,7 @@ test("hwp_patch_document rejects binary HWP before parsing or patching", async (
 });
 
 test("hwp_patch_document rejects a DOCX-like ZIP before patching", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-docx-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-docx-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "misleading.hwpx");
   const outputPath = join(root, "output.hwpx");
@@ -214,7 +213,7 @@ test("hwp_patch_document rejects a DOCX-like ZIP before patching", async (t) => 
 });
 
 test("hwp_patch_document rejects a real partial patch without writing an artifact", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-partial-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-partial-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "partial.hwpx");
@@ -246,7 +245,7 @@ test("hwp_patch_document rejects a real partial patch without writing an artifac
 });
 
 test("hwp_patch_document does not write a typed PATCH_FAILED result", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-failure-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-failure-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   await writeFile(
@@ -276,7 +275,7 @@ test("hwp_patch_document does not write a typed PATCH_FAILED result", async (t) 
 });
 
 test("hwp_fill_form fills a real HWPX form and validates it without mutating the source", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "filled.hwpx");
@@ -324,7 +323,7 @@ test("hwp_fill_form fills a real HWPX form and validates it without mutating the
 });
 
 test("hwp_fill_form rejects total array values above the budget before file access", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-value-limit-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-value-limit-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "missing.hwpx");
   const outputPath = join(root, "output.hwpx");
@@ -349,7 +348,7 @@ test("hwp_fill_form rejects total array values above the budget before file acce
 });
 
 test("hwp_fill_form applies per-field formats and surfaces unmatched labels", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-format-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-format-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "filled.hwpx");
@@ -379,7 +378,7 @@ test("hwp_fill_form applies per-field formats and surfaces unmatched labels", as
 });
 
 test("hwp_fill_form require_unique rejects repeated scalar labels", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-unique-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-unique-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "filled.hwpx");
@@ -406,7 +405,7 @@ test("hwp_fill_form require_unique rejects repeated scalar labels", async (t) =>
 });
 
 test("hwp_fill_form require_unique allows array values for repeated labels", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-array-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-array-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "filled.hwpx");
@@ -441,7 +440,7 @@ test("hwp_fill_form require_unique allows array values for repeated labels", asy
 });
 
 test("hwp_fill_form masks filled values by default from every result channel", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-mask-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-mask-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "filled.hwpx");
@@ -470,7 +469,7 @@ test("hwp_fill_form masks filled values by default from every result channel", a
 });
 
 test("hwp_fill_form rejects an exact encrypted-marker HWPX", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-encrypted-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-encrypted-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "encrypted.hwpx");
   const outputPath = join(root, "filled.hwpx");
@@ -506,7 +505,7 @@ test("hwp_fill_form rejects an exact encrypted-marker HWPX", async (t) => {
 });
 
 test("hwp_fill_form gives actionable preserve guidance for binary HWP", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-binary-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-binary-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwp");
   const outputPath = join(root, "filled.hwpx");
@@ -534,7 +533,7 @@ test("hwp_fill_form gives actionable preserve guidance for binary HWP", async (t
 });
 
 test("hwp_patch_document validates HWPX bytes before writing", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-invalid-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-invalid-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "patched.hwpx");
@@ -580,7 +579,7 @@ test("hwp_patch_document validates HWPX bytes before writing", async (t) => {
 });
 
 test("hwp_patch_document never overwrites its source, aliases, or existing outputs", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-output-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-output-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const source = await validHwpx("원문");
@@ -629,7 +628,7 @@ test("hwp_patch_document never overwrites its source, aliases, or existing outpu
 });
 
 test("hwp_patch_document rejects an exact DRM-protected HWPX", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-patch-protected-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-patch-protected-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "patched.hwpx");
@@ -656,7 +655,7 @@ test("hwp_patch_document rejects an exact DRM-protected HWPX", async (t) => {
 });
 
 test("patch and fill reject exact signed HWPX bytes before mutation", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-signed-mutation-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-signed-mutation-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "signed.hwpx");
   const signed = await JSZip.loadAsync(
@@ -691,7 +690,7 @@ test("patch and fill reject exact signed HWPX bytes before mutation", async (t) 
 });
 
 test("hwp_patch_document returns HWP_READ_ONLY for protected binary HWP before parsing", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-signed-binary-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-signed-binary-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "signed.hwp");
   const outputPath = join(root, "patched.hwpx");
@@ -719,7 +718,7 @@ test("hwp_patch_document returns HWP_READ_ONLY for protected binary HWP before p
 });
 
 test("hwp_fill_form refuses invalid or unreadable generated HWPX before writing", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-verify-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-verify-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   await writeFile(
@@ -785,7 +784,7 @@ test("hwp_fill_form refuses invalid or unreadable generated HWPX before writing"
 });
 
 test("hwp_fill_form does not overwrite an existing destination", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-output-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-output-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const outputPath = join(root, "existing.hwpx");
@@ -807,7 +806,7 @@ test("hwp_fill_form does not overwrite an existing destination", async (t) => {
 });
 
 test("hwp_fill_form masks submitted values from post-fill error results", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-fill-error-mask-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "hwp-fill-error-mask-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const sourcePath = join(root, "form.hwpx");
   const secret = "오류에도-숨길값-77881";
