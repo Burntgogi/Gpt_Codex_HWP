@@ -497,6 +497,66 @@ test("macOS Node diagnostic accepts the current final benchmark ordinal", async 
   assert.equal(output, "MAC_NODE_TEST_CASE case=bp39 status=failed\n");
 });
 
+test("macOS Node diagnostic projects only bounded benchmark aggregate classifications", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    runBenchmarkPolicyDiagnostic: async () => ({
+      caseId: "benchmark-aggregate",
+      completionKind: "test-failure",
+      failureKind: "async-failure",
+      testCodeReason: "async-activity",
+      assertionOrigin: "test-body",
+      runnerFailureKind: "runner-timeout",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_AGGREGATE completion=test-failure\n"
+      + "MAC_BENCHMARK_AGGREGATE_FAILURE kind=async-failure\n"
+      + "MAC_BENCHMARK_AGGREGATE_TEST_CODE reason=async-activity\n"
+      + "MAC_BENCHMARK_AGGREGATE_ASSERTION origin=test-body\n"
+      + "MAC_BENCHMARK_AGGREGATE_RUNNER kind=runner-timeout\n"
+      + "MAC_NODE_TEST_CASE case=benchmark-aggregate status=failed\n",
+  );
+});
+
+test("macOS Node diagnostic parses benchmark aggregate completion from its bounded rerun", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    spawnProcess() {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end([
+          "TAP version 13",
+          "1..39",
+          "# tests 39",
+          "# pass 39",
+          "# fail 0",
+          "# cancelled 0",
+          "# skipped 0",
+          "",
+        ].join("\n"));
+        child.emit("close", 1, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_AGGREGATE completion=nonzero-clean-tap\n"
+      + "MAC_NODE_TEST_CASE case=benchmark-aggregate status=failed\n",
+  );
+});
+
 test("Windows source diagnostic maps patch failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({

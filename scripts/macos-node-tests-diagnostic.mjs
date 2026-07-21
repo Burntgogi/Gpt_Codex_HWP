@@ -320,7 +320,12 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
   const runDocumentDescriptorMismatchDiagnostic = options.runDocumentDescriptorMismatchDiagnostic
     ?? executeDocumentDescriptorMismatchDiagnostic;
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
-    ?? executeBenchmarkPolicyDiagnostic;
+    ?? (() => executeBenchmarkPolicyDiagnostic({
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+    }));
   const runMcpCancellationProgressDiagnostic = options.runMcpCancellationProgressDiagnostic
     ?? (() => executeMcpCancellationProgressDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
@@ -552,11 +557,50 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       }
       if (file === "benchmark-policy.test.ts") {
         let caseId = "aggregate";
+        let assertionOrigin;
+        let completionKind;
+        let failureKind;
+        let runnerFailureKind;
+        let testCodeReason;
         try {
           const candidate = await runBenchmarkPolicyDiagnostic();
-          if (/^bp(?:0[1-9]|[12][0-9]|3[0-9])$/u.test(candidate)) caseId = candidate;
-          else if (candidate === "aggregate") caseId = "benchmark-aggregate";
+          if (typeof candidate === "string") {
+            if (/^bp(?:0[1-9]|[12][0-9]|3[0-9])$/u.test(candidate)) caseId = candidate;
+            else if (candidate === "aggregate") caseId = "benchmark-aggregate";
+          } else if (candidate !== null && typeof candidate === "object") {
+            if (/^bp(?:0[1-9]|[12][0-9]|3[0-9])$/u.test(candidate.caseId)) {
+              caseId = candidate.caseId;
+            } else if (["benchmark-aggregate", "benchmark-rerun-passed"].includes(candidate.caseId)) {
+              caseId = candidate.caseId;
+            }
+            if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
+              .includes(candidate.completionKind)) completionKind = candidate.completionKind;
+            if (["test-timeout", "hook-failure", "test-code", "async-failure", "cancelled", "unknown"]
+              .includes(candidate.failureKind)) failureKind = candidate.failureKind;
+            if (["assertion", "async-activity", "test-failure", "unknown"]
+              .includes(candidate.testCodeReason)) testCodeReason = candidate.testCodeReason;
+            if (["register-root", "test-body", "unknown"].includes(candidate.assertionOrigin)) {
+              assertionOrigin = candidate.assertionOrigin;
+            }
+            if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
+              .includes(candidate.runnerFailureKind)) runnerFailureKind = candidate.runnerFailureKind;
+          }
         } catch {}
+        if (caseId === "benchmark-aggregate" && completionKind !== undefined) {
+          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE completion=${completionKind}\n`);
+        }
+        if (caseId === "benchmark-aggregate" && failureKind !== undefined) {
+          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_FAILURE kind=${failureKind}\n`);
+        }
+        if (caseId === "benchmark-aggregate" && testCodeReason !== undefined) {
+          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_TEST_CODE reason=${testCodeReason}\n`);
+        }
+        if (caseId === "benchmark-aggregate" && assertionOrigin !== undefined) {
+          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_ASSERTION origin=${assertionOrigin}\n`);
+        }
+        if (caseId === "benchmark-aggregate" && runnerFailureKind !== undefined) {
+          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_RUNNER kind=${runnerFailureKind}\n`);
+        }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
         return false;
@@ -828,8 +872,36 @@ async function executeDocumentDescriptorMismatchDiagnostic() {
   return { passed, stderrKind };
 }
 
-async function executeBenchmarkPolicyDiagnostic() {
-  return executeSourceOrdinalDiagnostic("benchmark-policy.test.ts", 39, "bp");
+async function executeBenchmarkPolicyDiagnostic(options = {}) {
+  let assertionOrigin;
+  let completionKind;
+  let failureKind;
+  let ordinal;
+  let runnerFailureKind;
+  let testCodeReason;
+  const passed = await executeBoundedNodeTestFile("benchmark-policy.test.ts", {
+    spawnProcess: options.spawnProcess,
+    terminateTree: options.terminateTree,
+    testTimeoutMs: options.testTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs,
+    maximumTopLevelTests: 39,
+    onCompletionKind: (value) => { completionKind = value; },
+    onFailedTopLevelFailureKind: (value) => { failureKind = value; },
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
+    onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
+    onRunnerFailureKind: (value) => { runnerFailureKind = value; },
+  });
+  return {
+    assertionOrigin,
+    caseId: ordinal === undefined
+      ? passed ? "benchmark-rerun-passed" : "benchmark-aggregate"
+      : `bp${String(ordinal).padStart(2, "0")}`,
+    completionKind,
+    failureKind,
+    runnerFailureKind,
+    testCodeReason,
+  };
 }
 
 async function executeMcpCancellationProgressDiagnostic(options = {}) {
