@@ -582,6 +582,54 @@ test("macOS Node diagnostic maps public-runtime privacy failure to one bounded o
   assert.equal(output, "MAC_NODE_TEST_CASE case=pr15 status=failed\n");
 });
 
+test("macOS Node diagnostic projects one bounded pr07 nested case", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "public-runtime-privacy.test.ts",
+    runPublicRuntimePrivacyDiagnostic: async () => ({
+      caseId: "pr07",
+      nestedCaseId: "pr07s06",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=pr07s06 status=failed\n");
+});
+
+test("macOS Node diagnostic parses the pr07 nested ordinal from bounded TAP", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "public-runtime-privacy.test.ts",
+    spawnProcess() {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end([
+          "TAP version 13",
+          "# Subtest: privacy budgets",
+          "    not ok 6 - nested private name",
+          "    1..8",
+          "not ok 7 - privacy budgets",
+          "1..15",
+          "# tests 82",
+          "# pass 80",
+          "# fail 2",
+          "# cancelled 0",
+          "# skipped 0",
+          "",
+        ].join("\n"));
+        child.emit("close", 1, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "MAC_NODE_TEST_CASE case=pr07s06 status=failed\n");
+});
+
 test("shared Node diagnostic maps MCP cancellation failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({

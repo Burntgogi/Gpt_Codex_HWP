@@ -337,7 +337,12 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? executeOutputBudgetAtomicityDiagnostic;
   const runPatchDiagnostic = options.runPatchDiagnostic ?? executePatchDiagnostic;
   const runPublicRuntimePrivacyDiagnostic = options.runPublicRuntimePrivacyDiagnostic
-    ?? (() => executeSourceOrdinalDiagnostic("public-runtime-privacy.test.ts", 15, "pr"));
+    ?? (() => executePublicRuntimePrivacyDiagnostic({
+      spawnProcess: options.spawnProcess ?? spawn,
+      terminateTree: options.terminateTree ?? terminateTree,
+      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+    }));
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
     ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -717,7 +722,19 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let caseId = "public-runtime-privacy-aggregate";
         try {
           const candidate = await runPublicRuntimePrivacyDiagnostic();
-          if (/^pr(?:0[1-9]|1[0-5])$/u.test(candidate)) caseId = candidate;
+          if (typeof candidate === "string") {
+            if (/^pr(?:0[1-9]|1[0-5])$/u.test(candidate)) caseId = candidate;
+          } else if (candidate !== null && typeof candidate === "object") {
+            if (/^pr(?:0[1-9]|1[0-5])$/u.test(candidate.caseId)) {
+              caseId = candidate.caseId;
+            } else if (["public-runtime-privacy-aggregate", "public-runtime-privacy-rerun-passed"]
+              .includes(candidate.caseId)) {
+              caseId = candidate.caseId;
+            }
+            if (caseId === "pr07" && /^pr07s0[1-8]$/u.test(candidate.nestedCaseId)) {
+              caseId = candidate.nestedCaseId;
+            }
+          }
         } catch {}
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
@@ -1011,6 +1028,30 @@ async function executePatchDiagnostic() {
   return executeSourceOrdinalDiagnostic("patch.test.ts", 23, "pa");
 }
 
+async function executePublicRuntimePrivacyDiagnostic(options = {}) {
+  let ordinal;
+  let nestedOrdinal;
+  const passed = await executeBoundedNodeTestFile("public-runtime-privacy.test.ts", {
+    spawnProcess: options.spawnProcess,
+    terminateTree: options.terminateTree,
+    testTimeoutMs: options.testTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs,
+    maximumTopLevelTests: 15,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    maximumNestedTests: 8,
+    onFailedNestedOrdinal: (value) => { nestedOrdinal = value; },
+  });
+  const caseId = ordinal === undefined
+    ? (passed ? "public-runtime-privacy-rerun-passed" : "public-runtime-privacy-aggregate")
+    : `pr${String(ordinal).padStart(2, "0")}`;
+  return {
+    caseId,
+    nestedCaseId: ordinal === 7 && nestedOrdinal !== undefined
+      ? `pr07s${String(nestedOrdinal).padStart(2, "0")}`
+      : undefined,
+  };
+}
+
 function executeSvgAssetDiagnostic(options) {
   return new Promise((resolveDiagnostic) => {
     let child;
@@ -1170,6 +1211,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
         forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
         forwardFixedDiagnostic(chunks, capturedBytes, options);
         forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
+        forwardFailedNestedOrdinal(chunks, capturedBytes, options);
         forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
         forwardFailedTopLevelTestCodeReason(chunks, capturedBytes, options);
         forwardFailedTopLevelAssertionOrigin(chunks, capturedBytes, options);
@@ -1195,6 +1237,18 @@ function forwardFailedTopLevelOrdinal(chunks, capturedBytes, options) {
   const ordinal = failedTopLevelOrdinal(text, options.maximumTopLevelTests);
   if (ordinal === undefined) return;
   try { options.onFailedTopLevelOrdinal(ordinal); } catch {}
+}
+
+function forwardFailedNestedOrdinal(chunks, capturedBytes, options) {
+  if (typeof options.onFailedNestedOrdinal !== "function"
+    || !Number.isSafeInteger(options.maximumNestedTests)
+    || options.maximumNestedTests < 1 || options.maximumNestedTests > 999) return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes)); }
+  catch { return; }
+  const ordinal = failedNestedOrdinal(text, options.maximumNestedTests);
+  if (ordinal === undefined) return;
+  try { options.onFailedNestedOrdinal(ordinal); } catch {}
 }
 
 function forwardCompletionKind(chunks, capturedBytes, code, signal, options) {
@@ -1296,6 +1350,16 @@ export function failedTopLevelOrdinal(text, maximumTopLevelTests) {
   if (match === null) return undefined;
   const ordinal = Number(match[1]);
   return Number.isSafeInteger(ordinal) && ordinal <= maximumTopLevelTests ? ordinal : undefined;
+}
+
+export function failedNestedOrdinal(text, maximumNestedTests) {
+  if (typeof text !== "string" || !Number.isSafeInteger(maximumNestedTests)
+    || maximumNestedTests < 1 || maximumNestedTests > 999
+    || !/^# fail [1-9][0-9]*$/mu.test(text)) return undefined;
+  const matches = [...text.matchAll(/^ {4}not ok ([1-9][0-9]*) - /gmu)];
+  if (matches.length !== 1) return undefined;
+  const ordinal = Number(matches[0][1]);
+  return Number.isSafeInteger(ordinal) && ordinal <= maximumNestedTests ? ordinal : undefined;
 }
 
 function forwardFixedDiagnostic(chunks, capturedBytes, options) {
