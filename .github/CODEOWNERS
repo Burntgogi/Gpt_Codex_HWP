@@ -1,0 +1,16 @@
+# The owner authors and reviews official repository mutations.
+* @Burntgogi
+
+.github/workflows/ @Burntgogi
+packages/gpt-codex-hwp/release-scripts/ @Burntgogi
+packages/gpt-codex-hwp/vendor/kordoc-core/ @Burntgogi
+packages/gpt-codex-hwp/vendor/kordoc-core/PROVENANCE.json @Burntgogi
+scripts/kordoc-core-runtime.mjs @Burntgogi
+scripts/kordoc-runtime-verifier.mjs @Burntgogi
+scripts/public-content-policy.mjs @Burntgogi
+scripts/scan-public-history.mjs @Burntgogi
+scripts/release-verify.mjs @Burntgogi
+scripts/verify-release-artifacts.mjs @Burntgogi
+scripts/project-runtime.mjs @Burntgogi
+SECURITY.md @Burntgogi
+docs/SECURITY-BOUNDARIES.md @Burntgogi

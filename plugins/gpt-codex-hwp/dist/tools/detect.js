@@ -1,28 +1,37 @@
-import { detectFormat, detectOle2Format, detectZipFormat, } from "kordoc";
 import { z } from "zod";
+import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { readFileBounded } from "../shared/files.js";
 import { toolError, toolSuccess } from "../shared/result.js";
+import { runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_DETECT_FORMAT_TOOL_NAME = "hwp_detect_format";
-export async function handleHwpDetectFormat(input) {
+export async function handleHwpDetectFormat(input, documentEngine = defaultDocumentEngineFacade, context) {
     let filePath;
     try {
         filePath = resolveLocalPath(input.file_path, "file_path");
-        const bytes = await readFileBounded(filePath, "source document");
-        const buffer = toArrayBuffer(bytes);
-        const detected = await refineContainerFormat(buffer);
+        const snapshot = await openDocumentSnapshot(filePath, {
+            workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+                input: {},
+                options: {},
+            }),
+        });
+        const detected = await documentEngine.detect(snapshot, toDocumentEngineExecutionContext(context));
         const details = {
             file_path: filePath,
-            file_size_bytes: bytes.byteLength,
+            file_size_bytes: detected.snapshotMetadata.sizeBytes,
         };
-        if (detected.containerFormat !== undefined) {
-            details.container_format = detected.containerFormat;
+        const container = detected.snapshotMetadata.shallowFormat.container;
+        if (container === "zip" || container === "ole2") {
+            details.container_format = container;
         }
-        if (detected.warning !== undefined) {
-            details.detection_warning = detected.warning;
+        if (detected.payload.format === "unknown" && container !== undefined) {
+            details.detection_warning = container === "zip"
+                ? "The ZIP container is not a supported HWPX document."
+                : "The OLE2 container is not a supported HWP document.";
         }
-        return toolSuccess(`Detected ${detected.format} document format.`, {
-            format: detected.format,
+        return toolSuccess(`Detected ${detected.payload.format} document format.`, {
+            format: detected.payload.format,
             details,
         });
     }
@@ -35,7 +44,7 @@ export async function handleHwpDetectFormat(input) {
         });
     }
 }
-export function registerHwpDetectFormat(server) {
+export function registerHwpDetectFormat(server, documentEngine = defaultDocumentEngineFacade) {
     server.registerTool(HWP_DETECT_FORMAT_TOOL_NAME, {
         title: "Detect HWP document format",
         description: "Detect the exact requested local document format before applying the HWP/HWPX-only read contract.",
@@ -45,46 +54,7 @@ export function registerHwpDetectFormat(server) {
         annotations: {
             readOnlyHint: true,
         },
-    }, handleHwpDetectFormat);
-}
-async function refineContainerFormat(buffer) {
-    const initialFormat = detectFormat(buffer);
-    if (initialFormat === "hwpx") {
-        try {
-            return {
-                format: await detectZipFormat(buffer),
-                containerFormat: "zip",
-            };
-        }
-        catch (error) {
-            return {
-                format: "unknown",
-                containerFormat: "zip",
-                warning: `Could not inspect the ZIP container: ${errorMessage(error)}`,
-            };
-        }
-    }
-    if (initialFormat === "hwp") {
-        try {
-            return {
-                format: detectOle2Format(buffer),
-                containerFormat: "ole2",
-            };
-        }
-        catch (error) {
-            return {
-                format: "unknown",
-                containerFormat: "ole2",
-                warning: `Could not inspect the OLE2 container: ${errorMessage(error)}`,
-            };
-        }
-    }
-    return { format: initialFormat };
-}
-function toArrayBuffer(bytes) {
-    const copy = new Uint8Array(bytes.byteLength);
-    copy.set(bytes);
-    return copy.buffer;
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpDetectFormat(args, documentEngine, context)));
 }
 function safeResolvedPath(path) {
     try {

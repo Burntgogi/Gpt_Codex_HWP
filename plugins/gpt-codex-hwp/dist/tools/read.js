@@ -1,52 +1,45 @@
-import { createHash } from "node:crypto";
-import { lstat, mkdir, open, realpath, stat, } from "node:fs/promises";
-import { extname, join, parse as parsePath, resolve } from "node:path";
-import { parse, } from "kordoc";
+import { lstat, } from "node:fs/promises";
+import { extname, resolve } from "node:path";
 import { z } from "zod";
+import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { readFileBounded } from "../shared/files.js";
+import { authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
 import { MarkdownDeliveryError, planMarkdownDelivery, } from "../shared/markdown-output.js";
-import { writeFilesExclusively } from "../shared/output.js";
-import { inspectExactDocumentProtection } from "../shared/protection.js";
-import { toolError, toolSuccess } from "../shared/result.js";
-import { MAX_MCP_RESPONSE_BYTES, serializedBytes, } from "../shared/resource-limits.js";
-import { detectPreciseDocumentFormat } from "./rhwp-backend.js";
+import { captureExistingOutputDirectoryIdentity, UnsafeOutputPathError, writeFilesExclusively, } from "../shared/output.js";
+import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
+import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_READ_TOOL_NAME = "hwp_read";
-export async function handleHwpRead(input, parseDocument = parse) {
+export async function handleHwpRead(input, documentEngine = defaultDocumentEngineFacade, context) {
     let filePath;
     try {
         filePath = resolveLocalPath(input.file_path, "file_path");
-        const pristineBytes = Uint8Array.from(await readFileBounded(filePath, "source document"));
-        const preciseFormat = await detectPreciseDocumentFormat(exactArrayBuffer(pristineBytes));
-        if (preciseFormat !== "hwp" && preciseFormat !== "hwpx") {
-            return toolError("Only HWP and HWPX documents are supported.", {
-                code: "UNSUPPORTED_FORMAT",
-                file_path: filePath,
-                file_type: preciseFormat,
-                supported_formats: ["hwp", "hwpx"],
-            });
-        }
-        const protection = await inspectExactDocumentProtection(pristineBytes, preciseFormat);
-        if (protection !== undefined) {
-            return toolError(`Could not read the protected document: ${protection.error}`, {
-                code: protection.code,
-                error: protection.error,
-                file_path: filePath,
-                file_type: preciseFormat,
-            });
-        }
-        const parsed = await parseDocument(exactArrayBuffer(pristineBytes), {
-            filePath,
-            pages: input.pages,
+        const parseOptions = {
+            ...(input.pages === undefined ? {} : { pages: input.pages }),
+        };
+        const snapshot = await openDocumentSnapshot(filePath, {
+            workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+                input: {},
+                options: parseOptions,
+            }),
         });
-        if (!parsed.success) {
-            return toolError(`Could not read the document: ${parsed.error}`, {
-                code: parsed.code ?? "PARSE_ERROR",
-                error: parsed.error,
-                file_path: filePath,
-                file_type: parsed.fileType,
-            });
+        if (snapshot.metadata.shallowFormat.candidate === "unknown") {
+            try {
+                await snapshot.verifySourceUnchanged();
+                return toolError("Only HWP and HWPX documents are supported.", {
+                    code: "UNSUPPORTED_FORMAT",
+                    file_path: filePath,
+                    file_type: "unknown",
+                    supported_formats: ["hwp", "hwpx"],
+                });
+            }
+            finally {
+                await snapshot.cleanup();
+            }
         }
+        const engineResult = await documentEngine.parse(snapshot, parseOptions, toDocumentEngineExecutionContext(context));
+        const parsed = engineResult.payload;
         let delivery;
         try {
             delivery = planMarkdownDelivery(parsed.markdown, input.markdown_output_path);
@@ -64,9 +57,9 @@ export async function handleHwpRead(input, parseDocument = parse) {
         }
         const warnings = copyWarnings(parsed.warnings);
         const shouldExtractImages = input.extract_images ?? input.output_dir !== undefined;
-        const assets = shouldExtractImages
-            ? await collectImageAssets(parsed.images ?? [], input.output_dir, filePath, warnings)
-            : [];
+        const plannedAssets = shouldExtractImages
+            ? await planImageAssets(parsed.images ?? [], input.output_dir, filePath, warnings, context)
+            : EMPTY_IMAGE_ASSET_PLAN;
         const metadata = {
             ...(parsed.metadata ?? {}),
             fileType: parsed.fileType,
@@ -81,7 +74,7 @@ export async function handleHwpRead(input, parseDocument = parse) {
             markdown: delivery.inlineMarkdown,
             metadata,
             warnings,
-            assets,
+            assets: plannedAssets.assets,
         };
         if (delivery.outputPath !== undefined) {
             Object.assign(details, {
@@ -90,35 +83,54 @@ export async function handleHwpRead(input, parseDocument = parse) {
                 markdown_characters: delivery.characters,
                 markdown_bytes: delivery.bytes,
                 recommended_chunk_characters: delivery.recommendedChunkCharacters,
-                source_fingerprint: createHash("sha256")
-                    .update(pristineBytes)
-                    .digest("hex"),
+                source_fingerprint: engineResult.snapshotMetadata.sha256,
             });
         }
         const summary = delivery.outputPath === undefined
             ? `Read ${parsed.fileType} document.`
             : `Read ${parsed.fileType} document and saved complete Markdown.`;
-        const successResult = toolSuccess(summary, details);
-        const responseBytes = serializedBytes(successResult);
-        if (responseBytes > MAX_MCP_RESPONSE_BYTES) {
-            return toolError("The complete result is too large for one MCP response. Read a smaller page/section range with pages.", {
-                code: "RESPONSE_TOO_LARGE",
-                file_path: filePath,
-                file_type: parsed.fileType,
-                response_bytes: responseBytes,
-                maximum_response_bytes: MAX_MCP_RESPONSE_BYTES,
-                guidance: "Retry hwp_read with a narrower pages range.",
+        return await commitBudgetedToolSuccess(summary, details, async () => {
+            const files = [
+                ...plannedAssets.files,
+                ...(delivery.outputPath === undefined
+                    ? []
+                    : [{ path: delivery.outputPath, data: parsed.markdown }]),
+            ];
+            if (files.length === 0) {
+                requireToolNotCancelled(context);
+                await engineResult.verifySourceUnchanged();
+                requireToolNotCancelled(context);
+                return;
+            }
+            await writeFilesExclusively(files, {
+                sourcePaths: [filePath],
+                beforeOpen: async () => {
+                    await engineResult.verifySourceUnchanged();
+                    requireToolNotCancelled(context);
+                },
+                ...(plannedAssets.existingDirectoryIdentity === undefined
+                    ? {}
+                    : {
+                        expectedDirectoryIdentities: [
+                            plannedAssets.existingDirectoryIdentity,
+                        ],
+                    }),
             });
-        }
-        if (delivery.outputPath !== undefined) {
-            await writeFilesExclusively([{ path: delivery.outputPath, data: parsed.markdown }], { sourcePaths: [filePath] });
-        }
-        return successResult;
+        });
     }
     catch (error) {
         const message = errorMessage(error);
+        const code = errorCode(error, "READ_ERROR");
+        if (code === "UNSUPPORTED_FORMAT") {
+            return toolError("Only HWP and HWPX documents are supported.", {
+                code,
+                error: message,
+                file_path: safeResolvedPath(input.file_path),
+                supported_formats: ["hwp", "hwpx"],
+            });
+        }
         const details = {
-            code: errorCode(error, "READ_ERROR"),
+            code,
             error: message,
             file_path: safeResolvedPath(input.file_path),
         };
@@ -129,7 +141,7 @@ export async function handleHwpRead(input, parseDocument = parse) {
         return toolError(`Could not read the document: ${message}`, details);
     }
 }
-export function registerHwpRead(server) {
+export function registerHwpRead(server, documentEngine = defaultDocumentEngineFacade) {
     server.registerTool(HWP_READ_TOOL_NAME, {
         title: "Read HWP document",
         description: "Read the exact requested local HWP/HWPX document as Markdown with metadata, warnings, and optional extracted images.",
@@ -158,28 +170,66 @@ export function registerHwpRead(server) {
         annotations: {
             readOnlyHint: false,
         },
-    }, (args) => handleHwpRead(args));
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpRead(args, documentEngine, context)));
 }
 function copyWarnings(warnings) {
     return (warnings ?? []).map((warning) => ({ ...warning }));
 }
-async function collectImageAssets(images, outputDir, sourceFilePath, warnings) {
+const EMPTY_IMAGE_ASSET_PLAN = Object.freeze({
+    assets: Object.freeze([]),
+    files: Object.freeze([]),
+});
+async function planImageAssets(images, outputDir, sourceFilePath, warnings, context) {
     const filenames = uniqueSafeFilenames(images);
     if (outputDir === undefined) {
         warnings.push({
             code: "IMAGES_NOT_WRITTEN",
             message: "extract_images was requested without output_dir; returning image names only, without raw bytes.",
         });
-        return filenames;
+        return { assets: filenames, files: [] };
     }
-    const resolvedOutputDir = resolveLocalPath(outputDir, "output_dir");
-    const resolvedSourceFilePath = resolveLocalPath(sourceFilePath, "file_path");
-    const outputDirectory = await prepareCanonicalOutputDirectory(resolvedOutputDir);
+    requireToolNotCancelled(context);
+    if (images.length === 0)
+        return EMPTY_IMAGE_ASSET_PLAN;
+    const resolvedOutputDir = await authorizeFuturePath(resolveLocalPath(outputDir, "output_dir"));
+    const resolvedSourceFilePath = await authorizeExistingPath(resolveLocalPath(sourceFilePath, "file_path"));
+    let existingDirectoryIdentity;
+    try {
+        existingDirectoryIdentity = await captureExistingOutputDirectoryIdentity(resolvedOutputDir);
+    }
+    catch (error) {
+        if (error instanceof UnsafeOutputPathError) {
+            throw new UnsafeOutputDirectoryError(error.message);
+        }
+        throw error;
+    }
     const paths = [];
+    const files = [];
+    const reserved = new Set();
     for (const [index, image] of images.entries()) {
-        paths.push(await writeImageAssetExclusively(image, filenames[index], outputDirectory, resolvedSourceFilePath));
+        let attempt = 1;
+        while (true) {
+            const filename = filenameForAttempt(filenames[index], attempt);
+            const outputPath = await authorizeFuturePath(resolve(resolvedOutputDir, filename));
+            const key = comparablePath(outputPath);
+            if (key === comparablePath(resolvedSourceFilePath) ||
+                reserved.has(key) || await outputPathExists(outputPath)) {
+                attempt += 1;
+                continue;
+            }
+            reserved.add(key);
+            paths.push(outputPath);
+            files.push({ path: outputPath, data: new Uint8Array(image.bytes) });
+            break;
+        }
     }
-    return paths;
+    return {
+        assets: paths,
+        files,
+        ...(existingDirectoryIdentity === undefined
+            ? {}
+            : { existingDirectoryIdentity }),
+    };
 }
 class UnsafeOutputDirectoryError extends Error {
     code = "UNSAFE_OUTPUT_DIR";
@@ -188,108 +238,15 @@ class UnsafeOutputDirectoryError extends Error {
         this.name = "UnsafeOutputDirectoryError";
     }
 }
-async function prepareCanonicalOutputDirectory(outputDir) {
-    await assertNoLinkedExistingComponents(outputDir);
-    await mkdir(outputDir, { recursive: true });
-    await assertNoLinkedExistingComponents(outputDir);
-    const [canonicalPath, stats] = await Promise.all([
-        realpath(outputDir),
-        stat(outputDir, { bigint: true }),
-    ]);
-    if (!stats.isDirectory()) {
-        throw new UnsafeOutputDirectoryError("output_dir must resolve to a directory.");
+async function outputPathExists(path) {
+    try {
+        await lstat(path);
+        return true;
     }
-    if (comparablePath(canonicalPath) !== comparablePath(outputDir)) {
-        throw new UnsafeOutputDirectoryError("output_dir must be a canonical path without symlinks or junctions.");
-    }
-    return {
-        path: outputDir,
-        realPath: canonicalPath,
-        device: stats.dev,
-        inode: stats.ino,
-    };
-}
-async function assertCanonicalDirectoryIdentity(expected) {
-    await assertNoLinkedExistingComponents(expected.path);
-    const [canonicalPath, stats] = await Promise.all([
-        realpath(expected.path),
-        stat(expected.path, { bigint: true }),
-    ]);
-    if (!stats.isDirectory() ||
-        comparablePath(canonicalPath) !== comparablePath(expected.realPath) ||
-        comparablePath(canonicalPath) !== comparablePath(expected.path) ||
-        stats.dev !== expected.device ||
-        stats.ino !== expected.inode) {
-        throw new UnsafeOutputDirectoryError("output_dir changed or became non-canonical before asset creation.");
-    }
-}
-async function assertNoLinkedExistingComponents(path) {
-    for (const component of absolutePathComponents(path)) {
-        let stats;
-        try {
-            stats = await lstat(component);
-        }
-        catch (error) {
-            if (errorCode(error, "") === "ENOENT") {
-                return;
-            }
-            throw error;
-        }
-        if (stats.isSymbolicLink()) {
-            throw new UnsafeOutputDirectoryError(`output_dir path component is a symlink or junction: ${component}`);
-        }
-    }
-}
-function absolutePathComponents(path) {
-    const root = parsePath(path).root;
-    const components = [root];
-    let current = root;
-    for (const segment of path.slice(root.length).split(/[\\/]+/u)) {
-        if (segment.length === 0) {
-            continue;
-        }
-        current = join(current, segment);
-        components.push(current);
-    }
-    return components;
-}
-async function writeImageAssetExclusively(image, baseFilename, outputDirectory, sourceFilePath) {
-    let attempt = 1;
-    while (true) {
-        const filename = filenameForAttempt(baseFilename, attempt);
-        const outputPath = resolve(outputDirectory.path, filename);
-        if (comparablePath(outputPath) === comparablePath(sourceFilePath)) {
-            attempt += 1;
-            continue;
-        }
-        await assertCanonicalDirectoryIdentity(outputDirectory);
-        let handle;
-        try {
-            handle = await open(outputPath, "wx");
-        }
-        catch (error) {
-            if (errorCode(error, "") === "EEXIST") {
-                attempt += 1;
-                continue;
-            }
-            throw error;
-        }
-        let closed = false;
-        try {
-            await handle.stat({ bigint: true });
-            await handle.writeFile(image.data);
-            await handle.close();
-            closed = true;
-            return outputPath;
-        }
-        catch (error) {
-            if (!closed) {
-                await handle.close().catch(() => undefined);
-            }
-            // Never delete a failed output by pathname: a concurrent replacement
-            // could be removed between any identity check and deletion.
-            throw error;
-        }
+    catch (error) {
+        if (errorCode(error, "") === "ENOENT")
+            return false;
+        throw error;
     }
 }
 function filenameForAttempt(baseFilename, attempt) {
@@ -377,8 +334,4 @@ function errorCode(error, fallback) {
         return error.code;
     }
     return fallback;
-}
-function exactArrayBuffer(bytes) {
-    const copy = Uint8Array.from(bytes);
-    return copy.buffer;
 }

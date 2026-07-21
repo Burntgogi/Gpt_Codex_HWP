@@ -1,16 +1,39 @@
-![Gpt_Codex_HWP](assets/gpt-codex-hwp-banner.png)
+<p align="center">
+  <img src="assets/gpt-codex-hwp-banner.png" alt="Gpt_Codex_HWP 픽셀아트 배너" width="100%">
+</p>
 
-[한국어](README.md) | [English](README.en.md)
+<h1 align="center">Gpt_Codex_HWP</h1>
 
-# Gpt_Codex_HWP
+<p align="center"><strong>Codex에서 한글 HWP를 읽고, 검증 가능한 HWPX를 만드는 로컬 문서 플러그인</strong></p>
+
+<p align="center">
+  <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
+  <img alt="Release v0.2.0" src="https://img.shields.io/badge/release-v0.2.0-5865F2">
+  <img alt="Node.js 22 이상" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
+  <a href="LICENSE"><img alt="Apache-2.0 라이선스" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">한국어</a> ·
+  <a href="README.en.md">English</a> ·
+  <a href="#실제-hwpx-결과">결과 보기</a> ·
+  <a href="#에이전트를-통한-github-설치">빠른 설치</a> ·
+  <a href="#형식-지원">지원 범위</a> ·
+  <a href="#안전">보안</a>
+</p>
 
 ## 개요
 
 Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
 
+## v0.2.0 릴리즈
+
+`v0.2.0`은 공개 소스·보안 경계·재현 가능한 배포물·보호된 GitHub 배포 게이트를 강화합니다. 릴리즈 커밋은 Windows x64, macOS arm64, Linux와 보안 검사를 통과한 뒤 불변 태그로 게시되며 ZIP, SBOM과 provenance를 함께 제공합니다. 개발과 실제 문서 검증은 Windows x64 기반으로 수행했으며, macOS 호환성을 목표로 하지만 실제 Mac 기기의 Codex Desktop·한컴오피스 한글 사용은 아직 검증하지 않았습니다.
+
 ## v0.1.4 릴리즈
 
-`v0.1.4`는 Windows x64 최종 검증을 마친 현재 릴리즈입니다. 주요 변경, 검증 수치, 설치·업그레이드 주의사항은 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있으며 [영문 릴리즈 노트](RELEASE_NOTES.en.md)도 함께 제공합니다. 설치할 때는 움직이는 `main` 대신 `v0.1.4` 태그를 지정하십시오.
+`v0.1.4`는 Windows x64 최종 검증을 마친 이전 안정 릴리즈입니다. 주요 변경과 검증 수치는 [한국어 릴리즈 노트](RELEASE_NOTES.md) 및 [영문 릴리즈 노트](RELEASE_NOTES.en.md)의 릴리즈 이력에서 확인할 수 있습니다. 새 설치에는 움직이는 `main` 대신 `v0.2.0` 태그를 지정하십시오.
 
 ## 기능
 
@@ -20,6 +43,16 @@ Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수
 - HWP/HWPX 형식 감지, Markdown 읽기, 구조/글꼴 참조 검증, SVG 미리보기
 - 보호 문서 거부, 출력 덮어쓰기 방지, 경로/ZIP 순회 방어
 - 대용량 문서를 한 번만 파싱해 UTF-8 Markdown으로 저장한 뒤 안전하게 분할 읽기
+
+## 실제 HWPX 결과
+
+아래 이미지는 README 공개용 합성 Markdown을 `hwp_generate_hwpx`의 `report` 프리셋으로 HWPX에 작성하고, 구조 검증을 통과한 문서를 SVG로 미리 본 뒤 PNG로 렌더링한 결과입니다. 개인정보, 사용자 문서, 외부 문서 내용은 사용하지 않았습니다.
+
+<p align="center">
+  <img src="assets/gpt-codex-hwp-document-example.png" alt="Gpt Codex HWP가 생성한 한글 HWPX 기능 소개 보고서 예시" width="720">
+</p>
+
+<p align="center"><sub>실제 생성 결과 · 1쪽 · 표 1개 · 검증 문제 0개 · 미리보기 경고 0개</sub></p>
 
 ## 형식 지원
 
@@ -57,23 +90,23 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 ## 개발 및 플랫폼 검증 상태
 
-이 프로젝트는 Windows x64 환경을 중심으로 제작하고 실제 검증했습니다. macOS Apple Silicon 호환성을 고려해 런처와 런타임 경로를 구성했지만, 실제 Mac 기기 스모크 테스트는 아직 수행하지 않았습니다. 따라서 macOS Apple Silicon은 호환 대상이지만 현재 검증 완료된 플랫폼은 아닙니다.
+이 프로젝트는 주로 Windows x64에서 개발하고 실제 검증했습니다. macOS Apple Silicon 플러그인 런타임 CI는 구성되어 있지만, 현재 HEAD에 대한 성공 영수증이 확인되기 전에는 이 CI를 통과 또는 검증 완료로 표현하지 않습니다. 실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정은 검증하지 않았습니다. 따라서 macOS는 호환 대상이며 macOS 완전 지원을 주장하지 않습니다.
 
 `v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 릴리즈 노트](RELEASE_NOTES.md#검증-결과)를 참조하십시오.
 
 ## 에이전트를 통한 GitHub 설치
 
-`v0.1.4`는 현재 권장 릴리즈입니다. `v0.1.0`, `v0.1.1`, `v0.1.2`, `v0.1.3`은 과거 릴리스로 유지됩니다. 새 설치는 `v0.1.4` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
+`v0.2.0`은 현재 권장 릴리즈입니다. `v0.1.0`부터 `v0.1.4`까지는 과거 릴리스로 유지됩니다. 새 설치는 `v0.2.0` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
 
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
-> `Burntgogi/Gpt_Codex_HWP`의 `v0.1.4` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 새 작업에서 MCP 도구 9개를 확인해 주세요.
+> `Burntgogi/Gpt_Codex_HWP`의 `v0.2.0` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 설치된 경로에서 `doctor`를 실행한 다음 새 작업에서 MCP 도구 9개를 확인해 주세요.
 
 1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
 2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.1.4 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.0 --json
 ```
 
 반환된 JSON의 `marketplaceName`이 `gpt-codex-hwp-local`인지 확인합니다.
@@ -85,7 +118,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp@gpt-codex-hwp-local`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/mcp.js`가 모두 있어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
+4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp@gpt-codex-hwp-local`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, `dist/mcp.js`가 모두 있어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
 5. 검증한 정확한 경로에서 잠금 파일 기반 운영 의존성을 설치하고 감사합니다. Windows x64에서 `node_modules`는 64 MiB 이하인지 확인합니다.
 
 ```powershell
@@ -95,12 +128,15 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
   npm audit --omit=dev
   if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
+  npm run doctor -- --json
+  if ($LASTEXITCODE -ne 0) { throw "doctor found a required failure" }
 } finally {
   Pop-Location
 }
 ```
 
-6. Codex를 재시작하거나 새 작업을 열고 문서에 나열된 정확히 9개 도구(`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`)를 확인합니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
+6. `doctor`는 진단 전용이며 설치나 복구를 수행하지 않고 MCP 도구가 아닙니다. JSON에는 안전한 상태 코드, 불리언, 버전과 개수만 포함되며 Python·rhwp·고정 테스트 fixture 같은 선택 기능의 부재는 필수 실패와 분리됩니다.
+7. Codex를 재시작하거나 새 작업을 열고 문서에 나열된 정확히 9개 도구(`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`)를 확인합니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
 
 ## 설치 및 마이그레이션
 
@@ -158,6 +194,24 @@ codex plugin remove hwp-korean-docs@hwp-local
 
 ## 안전
 
+취약점은 공개 이슈에 비밀·개인 문서·개인정보를 첨부하지 말고 [SECURITY.md](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/SECURITY.md)의 GitHub 비공개 신고 절차를 이용하십시오. 문서 내용과 격리 수준을 포함한 정확한 신뢰 모델은 [보안 경계](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/docs/SECURITY-BOUNDARIES.md)에 설명되어 있습니다.
+
+### 선택적 문서 루트 제한
+
+`GPT_CODEX_HWP_ALLOWED_ROOTS`를 설정하면 9개 MCP 도구가 사용하는 모든 사용자 입력·출력 경로를 지정한 로컬 디렉터리 안으로 제한할 수 있습니다. 설정하지 않으면 이전 버전과 같이 현재 OS 사용자가 접근할 수 있는 로컬 경로를 사용합니다. 값은 비어 있지 않은 JSON 배열이어야 하며, 각 항목은 이미 존재하는 고유한 절대 디렉터리여야 합니다. 심볼릭 링크나 Windows junction/reparse 별칭 자체는 루트로 사용할 수 없습니다. 아래 값은 정확한 JSON 문자열 예시입니다.
+
+```powershell
+$env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
+```
+
+```bash
+export GPT_CODEX_HWP_ALLOWED_ROOTS='["/Volumes/TeamDocs"]'
+```
+
+빈 배열, 잘못된 JSON, 상대 경로, 중복 루트, 존재하지 않는 루트, 파일 또는 링크 루트가 있으면 MCP 서버가 시작 단계에서 닫힌 상태로 실패합니다. 값은 UTF-8 기준 16,384바이트, 루트 32개, 항목당 4,096자로 제한됩니다. 설정된 경우 원본 HWP/HWPX, Markdown·이미지 입력, 생성·패치·양식·이미지 삽입 HWPX, Markdown·SVG·PNG·미리보기·추출 이미지와 출력 디렉터리 모두 실경로 확인 뒤 같은 정책을 적용합니다. 거부 결과는 `PATH_OUTSIDE_ALLOWED_ROOTS`만 반환하며 설정값이나 거부된 절대 경로를 노출하지 않습니다.
+
+대용량 처리용 내부 스풀은 사용자 루트 설정을 받지 않는 별도의 예측 불가능한 OS 임시 디렉터리에 소유자 전용 권한으로 만들고, 자식 프로세스에는 상속된 핸들만 전달하며 `finally`에서 제거합니다. 따라서 스풀은 사용자 허용 루트의 예외가 아니라 독립된 내부 신뢰 영역입니다. `allowed_roots`는 에이전트의 실수나 경로 이탈을 줄이는 방어선이며, 같은 OS 사용자 권한으로 실행되는 악성 프로세스를 완전히 격리하지는 못합니다. Node.js는 모든 파일시스템에서 Linux `openat2`나 Windows 핸들 상대 경로와 같은 원자적 보장을 이식성 있게 제공하지 않으므로, 높은 위험의 문서는 별도 저권한 계정·VM·컨테이너 같은 OS 격리에서 처리하십시오.
+
 - 입력 경로와 출력 경로는 달라야 하며 기존 출력 파일을 덮어쓰지 않습니다.
 - 서명, 암호화, DRM, 배포용 보호가 감지된 문서는 보호를 우회하지 않고 거부합니다.
 - 경로 별칭, 하드링크, 심볼릭 링크, Windows junction, ZIP 경로 순회를 방어합니다.
@@ -192,9 +246,10 @@ HWPX는 `HANGUL`, `LATIN`, `HANJA`, `JAPANESE`, `OTHER`, `SYMBOL`, `USER` 언어
 ```bash
 npm ci --omit=dev --ignore-scripts
 npm audit --omit=dev
+npm run doctor -- --json
 ```
 
-이 명령은 잠금 파일을 사용해 Sharp를 포함한 런타임 의존성을 현재 OS와 CPU에 맞게 설치합니다. 글꼴 파일은 설치하지 않습니다. Kordoc Core는 HWP/HWPX 작업에 필요한 고정 런타임만 제공하며 PDF, OCR, ONNX, 수식 엔진 선택 의존성을 설치하지 않습니다. 검증된 Windows x64의 `node_modules` 예산은 64 MiB 이하입니다.
+앞의 두 명령은 잠금 파일을 사용해 Sharp를 포함한 런타임 의존성을 현재 OS와 CPU에 맞게 설치하고 감사합니다. 마지막 명령은 설치·복구나 MCP 등록 없이 환경을 진단합니다. 글꼴 파일은 설치하지 않습니다. Kordoc Core는 HWP/HWPX 작업에 필요한 고정 런타임만 제공하며 PDF, OCR, ONNX, 수식 엔진 선택 의존성을 설치하지 않습니다. 검증된 Windows x64의 `node_modules` 예산은 64 MiB 이하입니다.
 
 ## 오픈 소스 감사
 
@@ -207,3 +262,14 @@ Pixelify Sans는 최종 배너의 래스터화된 제목을 제작할 때만 사
 ## 라이선스
 
 Gpt_Codex_HWP 프로젝트는 [Apache-2.0](LICENSE)으로 배포됩니다. 제3자 구성 요소와 제작 입력물은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 기재된 각각의 라이선스를 따릅니다.
+
+## 기여 및 저장소 운영
+
+공개 이슈와 풀 리퀘스트에서의 논의는 환영합니다. 공식 브랜치, 태그,
+릴리스, 벤더 런타임, 생성 런타임의 변경은 저장소 소유자가 검토하고 직접
+작성하며, 의존성 자동화는 이슈를 통한 권고만 수행합니다. 먼저
+[기여 지침](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CONTRIBUTING.md)을 읽고 [아키텍처](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/docs/ARCHITECTURE.md)의
+원본과 생성 런타임 경계 및 [변경 기록](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md)을 확인하십시오.
+자격증명, 개인 문서, 환경 파일, 개인 경로, 미공개 감사 자료는 공개 보고에
+포함하지 않습니다. 보안 문제는 [SECURITY.md](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/SECURITY.md)의 비공개 절차로
+신고합니다.

@@ -1,5 +1,6 @@
 import { DOMParser, XMLSerializer, } from "@xmldom/xmldom";
 import { loadBoundedHwpxZip, } from "./zip-preflight.js";
+import { parsePolicyXml } from "./xml-policy.js";
 export class HwpxFontReferenceError extends Error {
     issues;
     code = "HWPX_FONT_REFERENCE_ERROR";
@@ -22,8 +23,10 @@ const SCRIPT_LANG = [
     ["user", "USER"],
 ];
 export async function inspectHwpxFontReferences(input, loadZip) {
-    const { document } = await loadArchiveAndHeader(input, loadZip);
-    return inspectDocument(document);
+    const { zip, document } = await loadArchiveAndHeader(input, loadZip);
+    const inspection = inspectDocument(document);
+    await inspectCharacterShapeReferences(zip, document, inspection.issues);
+    return inspection;
 }
 export async function normalizeGeneratedFontReferences(input, loadZip) {
     try {
@@ -293,6 +296,35 @@ function inspectDocument(document) {
         }
     }
     return { issues };
+}
+async function inspectCharacterShapeReferences(zip, header, issues) {
+    const ids = new Set(headerCharacterProperties(header)
+        .map((charPr) => charPr.getAttribute("id"))
+        .filter((id) => id !== null && NON_NEGATIVE_INTEGER.test(id)));
+    const sectionNames = Object.keys(zip.files)
+        .filter((name) => /^Contents\/section[0-9]+\.xml$/iu.test(name))
+        .sort((left, right) => left.localeCompare(right, "en-US"));
+    for (const name of sectionNames) {
+        const entry = zip.file(name);
+        if (entry === null)
+            continue;
+        const section = parsePolicyXml(await entry.async("uint8array"), name);
+        const elements = section.getElementsByTagName("*");
+        for (let index = 0; index < elements.length; index += 1) {
+            const element = elements.item(index);
+            if (element === null || !element.hasAttribute("charPrIDRef"))
+                continue;
+            const reference = element.getAttribute("charPrIDRef") ?? "";
+            if (!NON_NEGATIVE_INTEGER.test(reference) || !ids.has(reference)) {
+                issues.push({
+                    code: "CHAR_PR_REFERENCE_INVALID",
+                    path: name,
+                    message: `A document run references missing character shape ID ${reference || "(empty)"}.`,
+                    char_pr_id: reference,
+                });
+            }
+        }
+    }
 }
 function headerCharacterProperties(document) {
     const root = document.documentElement;

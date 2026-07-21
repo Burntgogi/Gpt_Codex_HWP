@@ -1,0 +1,59 @@
+name: Security policy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  security:
+    name: Security policy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+          package-manager-cache: false
+      - name: Assert exact feature head
+        run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_SOURCE_REPOSITORY !== 'Burntgogi/Gpt_Codex_HWP') process.exit(1); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
+      - name: Install source dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Install runtime dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Scan public tree
+        run: npm run security:scan-tree
+      - name: Scan every reachable Git object and identity
+        run: npm run security:scan-history
+      - name: Audit source production dependencies
+        run: npm audit --omit=dev --prefix packages/gpt-codex-hwp
+      - name: Audit runtime production dependencies
+        run: npm audit --omit=dev --prefix plugins/gpt-codex-hwp
+      - name: Verify projected runtime is current
+        run: npm run runtime:check
+      - name: Configure neutral release identity
+        run: |
+          git config --local user.name "Gpt_Codex_HWP contributors"
+          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
+          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
+      - name: Build candidate artifacts
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
+        run: npm run release:artifacts -- --output "$RELEASE_ARTIFACT_DIR"
+      - name: Verify candidate artifacts
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
+        run: npm run verify:release-artifacts -- --artifacts "$RELEASE_ARTIFACT_DIR"
+      - name: Reject generated repository changes
+        run: git diff --exit-code -- .

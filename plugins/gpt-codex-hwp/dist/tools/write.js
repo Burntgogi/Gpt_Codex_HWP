@@ -1,27 +1,20 @@
-import { markdownToHwpx, renderHwpxToSvg, validateHwpx, } from "kordoc";
 import { z } from "zod";
-import { HwpxFontReferenceError, inspectHwpxFontReferences, normalizeGeneratedFontReferences, } from "../shared/hwpx-font-integrity.js";
-import { writeFilesExclusively } from "../shared/output.js";
-import { readFileBounded } from "../shared/files.js";
+import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/document-contract.js";
+import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { inspectExactDocumentProtection } from "../shared/protection.js";
-import { toolError, toolSuccess } from "../shared/result.js";
-import { detectPreciseDocumentFormat } from "./rhwp-backend.js";
+import { commitBudgetedToolSuccess, toolError, toolSuccess, } from "../shared/result.js";
+import { runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_GENERATE_HWPX_TOOL_NAME = "hwp_generate_hwpx";
 export const HWP_VALIDATE_TOOL_NAME = "hwp_validate";
 const MAX_MARKDOWN_INPUT_CHARACTERS = 5_000_000;
-const defaultDependencies = {
-    markdownToHwpx,
-    normalizeGeneratedFontReferences,
-    inspectHwpxFontReferences,
-    validateHwpx,
-    renderHwpxToSvg,
-};
-export async function handleHwpGenerateHwpx(input, dependencyOverrides = {}) {
+export async function handleHwpGenerateHwpx(input, facade = defaultDocumentEngineFacade, context) {
     let outputPath;
     let previewPath;
     try {
         outputPath = resolveLocalPath(input.output_path, "output_path");
+        assertHwpxOutputPath(outputPath);
         previewPath =
             input.preview_svg_path === undefined
                 ? undefined
@@ -40,59 +33,65 @@ export async function handleHwpGenerateHwpx(input, dependencyOverrides = {}) {
                 preview_svg_path: previewPath,
             });
         }
-        const dependencies = { ...defaultDependencies, ...dependencyOverrides };
-        const generationOptions = input.preset === undefined
-            ? undefined
-            : { gongmun: { preset: input.preset } };
-        const rawGenerated = await dependencies.markdownToHwpx(input.markdown, generationOptions);
-        const normalized = await dependencies.normalizeGeneratedFontReferences(rawGenerated);
-        const generated = normalized.bytes;
-        const checked = await dependencies.validateHwpx(generated);
-        const validation = validationDetails(checked);
-        if (!checked.ok) {
-            return toolError("Generated HWPX failed structural validation; no artifact was written.", {
-                code: "HWPX_VALIDATION_FAILED",
+        const generatedResult = await facade.generate(input.markdown, {
+            ...(input.preset === undefined ? {} : { preset: input.preset }),
+            ...(previewPath === undefined ? {} : { renderPreview: true }),
+        }, toDocumentEngineExecutionContext(context));
+        try {
+            const checked = generatedResult.validation;
+            const validation = validationDetails(checked);
+            if (!checked.ok) {
+                return toolError("Generated HWPX failed structural validation; no artifact was written.", {
+                    code: "HWPX_VALIDATION_FAILED",
+                    output_path: outputPath,
+                    validation,
+                });
+            }
+            const preview = previewPath === undefined
+                ? undefined
+                : generatedResult.preview;
+            if (previewPath !== undefined && preview === undefined) {
+                throw protocolError();
+            }
+            const presentedPreview = preview === undefined
+                ? undefined
+                : previewDetails(preview);
+            const fontNormalization = readFontNormalization(generatedResult.resultMetadata);
+            const details = {
                 output_path: outputPath,
                 validation,
+                font_normalization: {
+                    changed: fontNormalization.changed,
+                    changed_reference_count: fontNormalization.changedReferenceCount,
+                },
+            };
+            if (previewPath !== undefined && preview !== undefined) {
+                details.preview_svg_path = previewPath;
+                details.preview = presentedPreview;
+            }
+            return await commitBudgetedToolSuccess("Generated HWPX document.", details, async () => {
+                await generatedResult.writeOutputExclusively(outputPath, {
+                    ...(previewPath === undefined || preview === undefined
+                        ? {}
+                        : {
+                            companionFiles: [{
+                                    path: previewPath,
+                                    data: preview.svg,
+                                }],
+                        }),
+                });
             });
         }
-        const fontInspection = await dependencies.inspectHwpxFontReferences(generated);
-        if (fontInspection.issues.length > 0) {
-            throw new HwpxFontReferenceError("Generated HWPX still has invalid font references after normalization.", fontInspection.issues);
+        finally {
+            await generatedResult.cleanup();
         }
-        const preview = previewPath === undefined
-            ? undefined
-            : await dependencies.renderHwpxToSvg(generated, { reflow: true });
-        const files = [
-            { path: outputPath, data: new Uint8Array(generated) },
-        ];
-        if (previewPath !== undefined && preview !== undefined) {
-            files.push({ path: previewPath, data: preview.svg });
-        }
-        await writeFilesExclusively(files);
-        const details = {
-            output_path: outputPath,
-            validation,
-            font_normalization: {
-                changed: normalized.changed,
-                changed_reference_count: normalized.changed_reference_count,
-            },
-        };
-        if (previewPath !== undefined && preview !== undefined) {
-            details.preview_svg_path = previewPath;
-            details.preview = previewDetails(preview);
-        }
-        return toolSuccess("Generated HWPX document.", details);
     }
     catch (error) {
         const message = errorMessage(error);
-        if (error instanceof HwpxFontReferenceError) {
-            return toolError(`Could not normalize HWPX font references: ${message}`, {
+        if (error instanceof HwpxOutputRequiredError) {
+            return toolError("HWPX output is required.", {
                 code: error.code,
                 error: message,
-                issues: error.issues.map((issue) => ({ ...issue })),
-                output_path: outputPath ?? safeResolvedPath(input.output_path),
-                preview_svg_path: previewPath ?? safeResolvedPath(input.preview_svg_path),
             });
         }
         return toolError(`Could not generate the HWPX document: ${message}`, {
@@ -103,32 +102,37 @@ export async function handleHwpGenerateHwpx(input, dependencyOverrides = {}) {
         });
     }
 }
-export async function handleHwpValidate(input, validateDocument = validateHwpx, inspectFontReferences = inspectHwpxFontReferences) {
+export async function handleHwpValidate(input, facade = defaultDocumentEngineFacade, context) {
     let filePath;
     try {
         filePath = resolveLocalPath(input.file_path, "file_path");
-        const bytes = await readFileBounded(filePath, "source document");
-        const preciseFormat = await detectPreciseDocumentFormat(exactArrayBuffer(bytes));
-        if (preciseFormat === "hwp" || preciseFormat === "hwpx") {
-            const protection = await inspectExactDocumentProtection(bytes, preciseFormat);
-            if (protection !== undefined) {
-                return toolError(`Could not validate the protected document: ${protection.error}`, {
-                    code: protection.code,
-                    error: protection.error,
+        const snapshot = await openDocumentSnapshot(filePath, {
+            workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+                input: {},
+                options: {},
+            }),
+        });
+        if (snapshot.metadata.shallowFormat.candidate === "unknown") {
+            try {
+                await snapshot.verifySourceUnchanged();
+                return toolSuccess("HWPX structure has validation issues.", {
                     file_path: filePath,
-                    format: preciseFormat,
+                    ok: false,
+                    issues: [{
+                            code: "UNSUPPORTED_FORMAT",
+                            message: "The document is not a valid HWPX package.",
+                        }],
+                    entry_count: 1,
                 });
             }
+            finally {
+                await snapshot.cleanup();
+            }
         }
-        const validation = await validateDocument(bytes);
-        const fontIssues = preciseFormat === "hwpx" && validation.ok
-            ? (await inspectFontReferences(bytes)).issues
-            : [];
-        const issues = [
-            ...validation.issues.map((issue) => ({ ...issue })),
-            ...fontIssues.map((issue) => ({ ...issue })),
-        ];
-        const ok = validation.ok && issues.length === 0;
+        const validationResult = await facade.validate(snapshot, {}, toDocumentEngineExecutionContext(context));
+        const validation = validationResult.payload;
+        const issues = validation.issues.map((issue) => ({ ...issue }));
+        const ok = validation.ok;
         return toolSuccess(ok
             ? "HWPX structure is valid."
             : "HWPX structure has validation issues.", {
@@ -147,7 +151,7 @@ export async function handleHwpValidate(input, validateDocument = validateHwpx, 
         });
     }
 }
-export function registerHwpGenerateHwpx(server) {
+export function registerHwpGenerateHwpx(server, facade = defaultDocumentEngineFacade) {
     server.registerTool(HWP_GENERATE_HWPX_TOOL_NAME, {
         title: "Generate HWPX document",
         description: "Generate a new HWPX document from Markdown, optionally applying a Korean public-document preset and producing an SVG preview.",
@@ -178,9 +182,9 @@ export function registerHwpGenerateHwpx(server) {
         annotations: {
             readOnlyHint: false,
         },
-    }, (args) => handleHwpGenerateHwpx(args));
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpGenerateHwpx(args, facade, context)));
 }
-export function registerHwpValidate(server) {
+export function registerHwpValidate(server, facade = defaultDocumentEngineFacade) {
     server.registerTool(HWP_VALIDATE_TOOL_NAME, {
         title: "Validate HWPX structure",
         description: "Validate the ZIP and XML structure of the exact requested local HWPX file.",
@@ -190,7 +194,7 @@ export function registerHwpValidate(server) {
         annotations: {
             readOnlyHint: true,
         },
-    }, (args) => handleHwpValidate(args));
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpValidate(args, facade, context)));
 }
 function validationDetails(validation) {
     return {
@@ -199,15 +203,39 @@ function validationDetails(validation) {
         entry_count: validation.entryCount,
     };
 }
+function readFontNormalization(metadata) {
+    if (isRecord(metadata) && isRecord(metadata.fontNormalization) &&
+        typeof metadata.fontNormalization.changed === "boolean" &&
+        Number.isSafeInteger(metadata.fontNormalization.changedReferenceCount) &&
+        Number(metadata.fontNormalization.changedReferenceCount) >= 0) {
+        return {
+            changed: metadata.fontNormalization.changed,
+            changedReferenceCount: Number(metadata.fontNormalization.changedReferenceCount),
+        };
+    }
+    return { changed: false, changedReferenceCount: 0 };
+}
 function previewDetails(preview) {
+    const metadata = preview.metadata;
+    if (!isRecord(metadata) ||
+        !Number.isSafeInteger(metadata.pageCount) || Number(metadata.pageCount) < 1 ||
+        typeof metadata.width !== "number" || !Number.isFinite(metadata.width) ||
+        metadata.width <= 0 ||
+        typeof metadata.height !== "number" || !Number.isFinite(metadata.height) ||
+        metadata.height <= 0 ||
+        !Array.isArray(metadata.warnings) ||
+        !metadata.warnings.every((warning) => typeof warning === "string") ||
+        !isRecord(metadata.stats)) {
+        throw protocolError();
+    }
     return {
-        page_count: preview.pageCount,
+        page_count: Number(metadata.pageCount),
         dimensions: {
-            width: preview.width,
-            height: preview.height,
+            width: metadata.width,
+            height: metadata.height,
         },
-        warnings: [...preview.warnings],
-        stats: { ...preview.stats },
+        warnings: [...metadata.warnings],
+        stats: { ...metadata.stats },
     };
 }
 function safeResolvedPath(path) {
@@ -233,7 +261,11 @@ function errorCode(error, fallback) {
     }
     return fallback;
 }
-function exactArrayBuffer(bytes) {
-    const copy = Uint8Array.from(bytes);
-    return copy.buffer;
+function protocolError() {
+    const error = new Error("The isolated engine returned an invalid HWPX result.");
+    Object.assign(error, { code: "ENGINE_PROTOCOL_ERROR" });
+    return error;
+}
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }

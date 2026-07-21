@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.png -text
+*.dll -text
+*.hwp -text
+*.hwpx -text
+packages/gpt-codex-hwp/vendor/kordoc-core/** -text -whitespace
+plugins/gpt-codex-hwp/vendor/kordoc-core/** -text -whitespace

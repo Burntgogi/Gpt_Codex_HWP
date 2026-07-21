@@ -13,7 +13,7 @@ export function resolveLocalPath(localPath, label = "path") {
     }
     return resolved;
 }
-class UnsafeWindowsPathError extends Error {
+export class UnsafeWindowsPathError extends Error {
     code;
     constructor(label, reason) {
         super(`${label} uses unsafe Windows path syntax: ${reason}`);

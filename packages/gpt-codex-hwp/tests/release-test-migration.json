@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "revision": "b153a5d28cd4888d4e6701e5aad763d248088812",
+    "path": "plugins/hwp-korean-docs/tests/release-distribution.test.ts",
+    "gitBlob": "67505285ba62755ecbc36664854860aa9b803206",
+    "sizeBytes": 53252,
+    "sha256": "a8ee2a216f6d292189c6147f7e099a568e7c6966f3c7599cb28de4e3dcd94758",
+    "testCount": 31
+  },
+  "retained": [
+    {
+      "invariantId": "release.bilingual-boundary",
+      "legacyOrdinal": 2,
+      "legacyTestName": "bilingual v0.1.4 release documentation states the same release boundary",
+      "suite": "release-metadata.test.ts",
+      "publicTestName": "bilingual release documentation states the same release boundary"
+    },
+    {
+      "invariantId": "kordoc.archive-determinism",
+      "legacyOrdinal": 3,
+      "legacyTestName": "authenticated Kordoc archive generation is deterministic and source maps are excluded",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "authenticated Kordoc archive generation is deterministic and source maps are excluded"
+    },
+    {
+      "invariantId": "kordoc.archive-integrity",
+      "legacyOrdinal": 4,
+      "legacyTestName": "tampered Kordoc archive is rejected before output",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "tampered Kordoc archive is rejected before output"
+    },
+    {
+      "invariantId": "kordoc.tar-regular-files",
+      "legacyOrdinal": 5,
+      "legacyTestName": "authenticated Kordoc archive rejects non-regular tar entries",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "authenticated Kordoc archive rejects non-regular tar entries"
+    },
+    {
+      "invariantId": "kordoc.archive-size-boundary",
+      "legacyOrdinal": 6,
+      "legacyTestName": "authenticated Kordoc archive size guard accepts its boundary and rejects plus one",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "authenticated Kordoc archive size guard accepts its boundary and rejects plus one"
+    },
+    {
+      "invariantId": "kordoc.tar-structural-corruption",
+      "legacyOrdinal": 7,
+      "legacyTestName": "authenticated Kordoc tar parser rejects checksum, paths, duplicates, types, and termination corruption",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "authenticated Kordoc tar parser rejects checksum, paths, duplicates, types, and termination corruption"
+    },
+    {
+      "invariantId": "kordoc.tar-resource-boundaries",
+      "legacyOrdinal": 8,
+      "legacyTestName": "authenticated Kordoc tar parser enforces exact configurable resource boundaries",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "authenticated Kordoc tar parser enforces exact configurable resource boundaries"
+    },
+    {
+      "invariantId": "kordoc.provenance-source-map",
+      "legacyOrdinal": 9,
+      "legacyTestName": "committed Kordoc verifier rejects a provenance-blessed source map",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "committed Kordoc verifier rejects a provenance-blessed source map"
+    },
+    {
+      "invariantId": "kordoc.compact-dependency-exclusions",
+      "legacyOrdinal": 10,
+      "legacyTestName": "the compact dependency graph excludes unused Kordoc format engines",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "the compact dependency graph excludes unused Kordoc format engines"
+    },
+    {
+      "invariantId": "kordoc.compact-lock-fail-closed",
+      "legacyOrdinal": 11,
+      "legacyTestName": "nested excluded package records make compact lock validation fail closed",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "nested excluded package records make compact lock validation fail closed"
+    },
+    {
+      "invariantId": "kordoc.committed-provenance",
+      "legacyOrdinal": 12,
+      "legacyTestName": "the committed Kordoc Core runtime matches its provenance",
+      "suite": "kordoc-core-runtime.test.ts",
+      "publicTestName": "the committed Kordoc Core runtime matches its provenance"
+    },
+    {
+      "invariantId": "release.production-metadata",
+      "legacyOrdinal": 13,
+      "legacyTestName": "the production metadata declares the v0.1.4 release",
+      "suite": "release-metadata.test.ts",
+      "publicTestName": "production metadata derives the current release from the root record"
+    },
+    {
+      "invariantId": "runtime.public-allowlist",
+      "legacyOrdinal": 16,
+      "legacyTestName": "public runtime builder stages only branded executable files",
+      "suite": "runtime-projection.test.ts",
+      "publicTestName": "public runtime projection stages only branded executable files"
+    },
+    {
+      "invariantId": "privacy.projection-rejects-sensitive-content",
+      "legacyOrdinal": 17,
+      "legacyTestName": "distribution vendor privacy rejects personal paths and secrets in both runtimes",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy rejects personal paths and secrets before projection",
+      "scopeChange": "The removed legacy builder branch is retired; the retained check covers the only supported public projection privacy boundary."
+    },
+    {
+      "invariantId": "privacy.redacted-placeholder",
+      "legacyOrdinal": 18,
+      "legacyTestName": "public runtime privacy accepts a redacted credential placeholder in both builders",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy accepts a redacted credential placeholder",
+      "scopeChange": "The removed legacy builder branch is retired; placeholder acceptance remains covered for the supported public projection."
+    },
+    {
+      "invariantId": "privacy.pattern-coverage",
+      "legacyOrdinal": 19,
+      "legacyTestName": "public runtime privacy scanner covers key, credential, and home-path variants",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy scanner covers key, credential, and home-path variants"
+    },
+    {
+      "invariantId": "privacy.budgets-and-entry-types",
+      "legacyOrdinal": 20,
+      "legacyTestName": "public runtime privacy scanner enforces exact budgets and staged file types",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy scanner enforces exact budgets and staged file types"
+    },
+    {
+      "invariantId": "privacy.environment-assignment",
+      "legacyOrdinal": 21,
+      "legacyTestName": "public runtime privacy scanner rejects literal environment assignments",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy scanner rejects literal environment assignments"
+    },
+    {
+      "invariantId": "privacy.url-path-context",
+      "legacyOrdinal": 22,
+      "legacyTestName": "public runtime privacy scanner distinguishes URLs from filesystem paths",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy scanner distinguishes URLs from filesystem paths"
+    },
+    {
+      "invariantId": "privacy.posix-context",
+      "legacyOrdinal": 23,
+      "legacyTestName": "public runtime privacy scanner classifies POSIX candidates by context",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy scanner classifies POSIX candidates by context"
+    },
+    {
+      "invariantId": "privacy.override-maxima",
+      "legacyOrdinal": 24,
+      "legacyTestName": "public runtime privacy scanner bounds limit override maxima",
+      "suite": "public-runtime-privacy.test.ts",
+      "publicTestName": "public runtime privacy scanner bounds limit override maxima"
+    },
+    {
+      "invariantId": "runtime.owned-stage-cleanup",
+      "legacyOrdinal": 25,
+      "legacyTestName": "owned output cleanup removes failed stages and permits both builders to retry",
+      "suite": "runtime-projection.test.ts",
+      "publicTestName": "owned projection cleanup removes a failed stage and permits retry",
+      "scopeChange": "The removed legacy builder branch is retired; cleanup and retry remain enforced for the supported public projection."
+    },
+    {
+      "invariantId": "runtime.unowned-output-preservation",
+      "legacyOrdinal": 26,
+      "legacyTestName": "pre-existing output is never removed by either builder",
+      "suite": "runtime-projection.test.ts",
+      "publicTestName": "pre-existing unowned projection evidence is never removed",
+      "scopeChange": "The removed legacy builder branch is retired; the atomic projection now replaces its owned live directory while preserving every unowned stage or backup collision."
+    },
+    {
+      "invariantId": "release.hwp-readonly-large-read-policy",
+      "legacyOrdinal": 27,
+      "legacyTestName": "the staged runtime documents HWP read-only and context-safe large reads",
+      "suite": "release-metadata.test.ts",
+      "publicTestName": "the staged runtime documents HWP read-only and context-safe large reads"
+    },
+    {
+      "invariantId": "release.historical-removal-selector",
+      "legacyOrdinal": 28,
+      "legacyTestName": "the staged runtime preserves the historical plugin removal selector",
+      "suite": "release-metadata.test.ts",
+      "publicTestName": "the staged runtime preserves the historical plugin removal selector"
+    },
+    {
+      "invariantId": "release.pixelify-notice",
+      "legacyOrdinal": 29,
+      "legacyTestName": "the staged runtime retains the Pixelify Sans production-input notice",
+      "suite": "release-metadata.test.ts",
+      "publicTestName": "the staged runtime retains the Pixelify Sans production-input notice"
+    },
+    {
+      "invariantId": "release.agent-branding",
+      "legacyOrdinal": 30,
+      "legacyTestName": "the staged runtime retains the agent branding metadata",
+      "suite": "release-metadata.test.ts",
+      "publicTestName": "the staged runtime retains the agent branding metadata"
+    },
+    {
+      "invariantId": "release.agent-installation",
+      "legacyOrdinal": 31,
+      "legacyTestName": "the staged runtime documents secure agent-assisted GitHub installation",
+      "suite": "release-metadata.test.ts",
+      "publicTestName": "the staged runtime documents secure agent-assisted GitHub installation"
+    }
+  ],
+  "retired": [
+    {
+      "invariantId": "release.generated-tree-untracked",
+      "legacyOrdinal": 1,
+      "legacyTestName": "source repository keeps generated release directories untracked",
+      "reason": "The former machine-local generated release tree no longer exists; the committed deterministic plugin projection is the supported architecture."
+    },
+    {
+      "invariantId": "release.local-cache-collision",
+      "legacyOrdinal": 14,
+      "legacyTestName": "the current plugin cache-buster has no historical release collision",
+      "reason": "The former machine-local release-directory collision probe is superseded by root metadata and the later immutable release identity and tag gate."
+    },
+    {
+      "invariantId": "runtime.legacy-dual-tree-allowlist",
+      "legacyOrdinal": 15,
+      "legacyTestName": "distribution vendor builder separates development source from the runtime allowlist",
+      "reason": "The former dual-tree development packager was removed; the single deterministic public projection retains the runtime allowlist invariant."
+    }
+  ]
+}

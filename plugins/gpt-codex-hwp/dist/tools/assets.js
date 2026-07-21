@@ -1,26 +1,20 @@
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstat, mkdtemp, readFile, rm, stat, writeFile, } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { lstat, stat, } from "node:fs/promises";
 import { DOMParser } from "@xmldom/xmldom";
-import JSZip from "jszip";
-import { detectFormat, detectZipFormat, parse, placeSealHwpx, renderHwpxToSvg, scanSectionXml, validateHwpx, } from "kordoc";
 import sharp from "sharp";
 import { z } from "zod";
-import { OutputConflictError, PathAliasError, UnsafeOutputPathError, writeFilesExclusively, } from "../shared/output.js";
-import { MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES, readFileBounded, } from "../shared/files.js";
+import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { openDocumentSnapshot, } from "../shared/document-snapshot.js";
+import { OutputConflictError, PathAliasError, writeFilesExclusively, } from "../shared/output.js";
+import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/document-contract.js";
+import { MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES, } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { inspectExactDocumentProtection } from "../shared/protection.js";
-import { toolError, toolSuccess } from "../shared/result.js";
-import { loadBoundedHwpxZip, } from "../shared/zip-preflight.js";
+import { authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
+import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
+import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 export const HWP_CREATE_SVG_ASSET_TOOL_NAME = "hwp_create_svg_asset";
 export const HWP_INSERT_IMAGE_TOOL_NAME = "hwp_insert_image";
 const MAX_SVG_BYTES = 1_000_000;
 const MAX_SVG_DIMENSION = 4_096;
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGE_DIMENSION = 10_000;
 const MAX_IMAGE_PIXELS = 40_000_000;
 const MAX_ANCHOR_CHARACTERS = 10_000;
 const PNG_MAGIC = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -34,14 +28,7 @@ const defaultSvgDependencies = {
         .png({ compressionLevel: 9, adaptiveFiltering: false })
         .toBuffer(),
 };
-const defaultImageDependencies = {
-    parseDocument: parse,
-    placeSeal: placeSealHwpx,
-    validateDocument: validateHwpx,
-    renderDocument: renderHwpxToSvg,
-    loadZip: async (bytes) => await JSZip.loadAsync(bytes),
-};
-export async function handleHwpCreateSvgAsset(input, dependencyOverrides = {}) {
+export async function handleHwpCreateSvgAsset(input, dependencyOverrides = {}, context) {
     let svgPath;
     let pngPath;
     try {
@@ -58,35 +45,40 @@ export async function handleHwpCreateSvgAsset(input, dependencyOverrides = {}) {
         if (pngPath !== undefined) {
             await preflightOutputPath(pngPath, []);
             await preflightOutputPath(svgPath, []);
+            let png;
+            let pngRenderError;
             try {
-                const png = await dependencies.renderSvgToPng(svg);
+                png = await dependencies.renderSvgToPng(svg);
                 assertPngBytes(png);
-                await writeFilesExclusively([
-                    { path: svgPath, data: svg },
-                    { path: pngPath, data: png },
-                ]);
-                return toolSuccess("Created standalone SVG and PNG assets.", {
+            }
+            catch (error) {
+                pngRenderError = error;
+            }
+            if (png !== undefined) {
+                return await commitBudgetedToolSuccess("Created standalone SVG and PNG assets.", {
                     svg_path: svgPath,
                     png_path: pngPath,
                     warnings: [],
+                }, async () => {
+                    await writeFilesExclusively([
+                        { path: svgPath, data: svg },
+                        { path: pngPath, data: png },
+                    ], { beforeOpen: async () => requireToolNotCancelled(context) });
                 });
             }
-            catch (error) {
-                if (isOutputSafetyError(error)) {
-                    throw error;
-                }
-                await preflightOutputPath(pngPath, []);
-                await writeFilesExclusively([{ path: svgPath, data: svg }]);
-                return toolSuccess("Created the SVG asset; PNG rendering was skipped.", {
-                    svg_path: svgPath,
-                    warnings: [`PNG rendering failed: ${errorMessage(error)}`],
-                });
-            }
+            await preflightOutputPath(pngPath, []);
+            return await commitBudgetedToolSuccess("Created the SVG asset; PNG rendering was skipped.", {
+                svg_path: svgPath,
+                warnings: [`PNG rendering failed: ${errorMessage(pngRenderError)}`],
+            }, async () => {
+                await writeFilesExclusively([{ path: svgPath, data: svg }], { beforeOpen: async () => requireToolNotCancelled(context) });
+            });
         }
-        await writeFilesExclusively([{ path: svgPath, data: svg }]);
-        return toolSuccess("Created standalone SVG asset.", {
+        return await commitBudgetedToolSuccess("Created standalone SVG asset.", {
             svg_path: svgPath,
             warnings: [],
+        }, async () => {
+            await writeFilesExclusively([{ path: svgPath, data: svg }], { beforeOpen: async () => requireToolNotCancelled(context) });
         });
     }
     catch (error) {
@@ -99,17 +91,15 @@ export async function handleHwpCreateSvgAsset(input, dependencyOverrides = {}) {
         });
     }
 }
-export async function handleHwpInsertImage(input, dependencyOverrides = {}) {
+export async function handleHwpInsertImage(input, facade = defaultDocumentEngineFacade, context) {
     let filePath;
     let imagePath;
     let outputPath;
-    let workDirectory;
-    let workDirectoryIdentity;
     try {
-        const dependencies = { ...defaultImageDependencies, ...dependencyOverrides };
         filePath = resolveLocalPath(input.file_path, "file_path");
         imagePath = resolveLocalPath(input.image_path, "image_path");
         outputPath = resolveLocalPath(input.output_path, "output_path");
+        assertHwpxOutputPath(outputPath);
         if (input.anchor_text.trim().length === 0) {
             throw new AssetError("ANCHOR_REQUIRED", "anchor_text must not be empty.");
         }
@@ -122,135 +112,72 @@ export async function handleHwpInsertImage(input, dependencyOverrides = {}) {
         if (input.size_mm !== undefined && (!Number.isFinite(input.size_mm) || input.size_mm < 1 || input.size_mm > 200)) {
             throw new AssetError("INVALID_IMAGE_SIZE", "size_mm must be between 1 and 200.");
         }
-        const [sourceBytes, originalImageBytes] = await Promise.all([
-            readFileBounded(filePath, "source document"),
-            readFileBounded(imagePath, "source image", MAX_IMAGE_FILE_BYTES),
-        ]);
-        const sourceHash = sha256(sourceBytes);
-        await preflightOutputPath(outputPath, [filePath, imagePath]);
-        const sourceBuffer = exactArrayBuffer(sourceBytes);
-        await assertEditableHwpx(sourceBuffer);
-        const zip = await loadBoundedHwpxZip(sourceBytes, dependencies.loadZip);
-        const protection = await inspectExactDocumentProtection(sourceBytes, "hwpx");
-        if (protection !== undefined) {
-            throw new AssetError(protection.code, protection.error);
-        }
-        workDirectory = await mkdtemp(join(tmpdir(), "hwp-image-insert-"));
-        workDirectoryIdentity = await fileSystemIdentity(workDirectory);
-        const sourceSnapshotPath = join(workDirectory, "source-snapshot.hwpx");
-        await writeFile(sourceSnapshotPath, sourceBytes, { flag: "wx" });
-        const sourceValidation = await dependencies.validateDocument(sourceBuffer);
-        if (!sourceValidation.ok) {
-            throw new AssetError("SOURCE_HWPX_INVALID", "Source HWPX failed structural validation and was not edited.", validationDetails(sourceValidation));
-        }
-        const preflight = await dependencies.parseDocument(sourceBuffer);
-        if (!preflight.success) {
-            throw new AssetError(preflight.code ?? "PARSE_ERROR", preflight.error);
-        }
-        const anchor = await selectAnchor(zip, input.anchor_text, input.anchor_occurrence);
-        const normalized = await normalizeImage(originalImageBytes);
         const mode = input.mode ?? "after-paragraph";
-        const normalizedImagePath = join(workDirectory, "normalized.png");
-        const candidatePath = join(workDirectory, "candidate.hwpx");
-        await writeFile(normalizedImagePath, normalized.bytes, { flag: "wx" });
-        let candidate;
-        let imageEntry;
-        let changedSectionEntry;
-        let placement;
-        const warnings = [];
-        if (mode === "seal-anchor") {
-            const placed = await dependencies.placeSeal(sourceBuffer, [{
-                    anchor: input.anchor_text,
-                    occurrence: anchor.occurrence,
-                    image: normalized.bytes,
-                    ext: "png",
-                    sizeMm: input.size_mm,
-                }]);
-            const firstPlacement = placed.placed[0];
-            if (firstPlacement === undefined) {
-                throw new AssetError("IMAGE_INSERTION_FAILED", "Kordoc returned no seal placement.");
-            }
-            candidate = new Uint8Array(placed.buffer);
-            imageEntry = firstPlacement.entry;
-            placement = { ...firstPlacement };
-            warnings.push(...(firstPlacement.warnings ?? []));
-            await writeFile(candidatePath, candidate, { flag: "wx" });
-        }
-        else if (mode === "after-paragraph") {
-            const script = helperScriptPath("insert_image.py");
-            const args = [
-                sourceSnapshotPath,
-                candidatePath,
-                "--image",
-                normalizedImagePath,
-                "--anchor-text",
-                input.anchor_text,
-                "--occurrence",
-                String(anchor.occurrence),
-            ];
-            if (input.size_mm !== undefined) {
-                args.push("--width-mm", String(input.size_mm));
-            }
-            const inserted = await runPython(script, args);
-            const metadata = parseHelperJson(inserted.stdout);
-            if (metadata.ok !== true || typeof metadata.image_entry !== "string") {
-                throw new AssetError("IMAGE_INSERTION_FAILED", "Image helper returned incomplete metadata.");
-            }
-            imageEntry = metadata.image_entry;
-            if (!Number.isSafeInteger(metadata.section_index) || Number(metadata.section_index) < 0) {
-                throw new AssetError("IMAGE_INSERTION_FAILED", "Image helper returned an invalid section index.");
-            }
-            changedSectionEntry = `Contents/section${String(metadata.section_index)}.xml`;
-            if (Array.isArray(metadata.warnings)) {
-                warnings.push(...metadata.warnings.filter((value) => typeof value === "string"));
-            }
-            candidate = await readFile(candidatePath);
-        }
-        else {
+        if (mode !== "after-paragraph" && mode !== "seal-anchor") {
             throw new AssetError("INVALID_IMAGE_MODE", `Unsupported image insertion mode: ${String(mode)}`);
         }
-        if (mode === "after-paragraph") {
-            await runVerifier(candidatePath, sourceSnapshotPath, {
-                changed: ["Contents/content.hpf", changedSectionEntry],
-                added: [imageEntry],
+        await preflightOutputPath(outputPath, [filePath, imagePath]);
+        const [documentSnapshot, imageSnapshot] = await openImageInsertionSnapshots(filePath, imagePath);
+        if (documentSnapshot.metadata.shallowFormat.candidate !== "hwpx") {
+            await Promise.allSettled([
+                documentSnapshot.verifySourceUnchanged(),
+                imageSnapshot.verifySourceUnchanged(),
+            ]);
+            await Promise.allSettled([
+                documentSnapshot.cleanup(),
+                imageSnapshot.cleanup(),
+            ]);
+            throw new AssetError("UNSUPPORTED_IMAGE_DOCUMENT_FORMAT", "Image insertion supports only a valid HWPX package.");
+        }
+        let inserted;
+        try {
+            inserted = await facade.insertImage(documentSnapshot, imageSnapshot, input.anchor_text, {
+                mode,
+                ...(input.size_mm === undefined ? {} : { sizeMm: input.size_mm }),
+                ...(input.anchor_occurrence === undefined
+                    ? {}
+                    : { anchorOccurrence: input.anchor_occurrence }),
+            }, toDocumentEngineExecutionContext(context));
+        }
+        catch (error) {
+            await Promise.allSettled([
+                documentSnapshot.cleanup(),
+                imageSnapshot.cleanup(),
+            ]);
+            throw error;
+        }
+        try {
+            const metadata = readImageInsertionMetadata(inserted.resultMetadata, mode);
+            if (!inserted.validation.ok) {
+                throw new AssetError("HWPX_VALIDATION_FAILED", "Inserted HWPX failed structural validation.", validationDetails(inserted.validation));
+            }
+            return await commitBudgetedToolSuccess("Inserted a PNG image into a structurally validated HWPX document.", {
+                output_path: outputPath,
+                mode,
+                image_entry: metadata.imageEntry,
+                ...(metadata.placement === undefined
+                    ? {}
+                    : { placement: metadata.placement }),
+                warnings: metadata.warnings,
+                validation: validationDetails(inserted.validation),
+            }, async () => {
+                await inserted.writeOutputExclusively(outputPath, {
+                    sourcePaths: [filePath, imagePath],
+                });
             });
         }
-        else {
-            await runVerifier(candidatePath);
+        finally {
+            await inserted.cleanup();
         }
-        const validation = await dependencies.validateDocument(candidate);
-        if (!validation.ok) {
-            throw new AssetError("HWPX_VALIDATION_FAILED", "Inserted HWPX failed structural validation.", validation);
-        }
-        const reparsed = await dependencies.parseDocument(exactArrayBuffer(candidate));
-        if (!reparsed.success) {
-            throw new AssetError(reparsed.code ?? "PARSE_ERROR", reparsed.error);
-        }
-        const beforeImages = countImages(preflight.blocks);
-        const afterImages = countImages(reparsed.blocks);
-        if (afterImages !== beforeImages + 1) {
-            throw new AssetError("IMAGE_COUNT_MISMATCH", `Expected one inserted image, but image count changed from ${beforeImages} to ${afterImages}.`);
-        }
-        const preview = await dependencies.renderDocument(candidate, { reflow: true });
-        if (preview.svg.trim().length === 0) {
-            throw new AssetError("PREVIEW_VALIDATION_FAILED", "Inserted HWPX rendered an empty SVG preview.");
-        }
-        warnings.push(...preview.warnings);
-        if (sha256(await readFileBounded(filePath, "source document")) !== sourceHash) {
-            throw new AssetError("SOURCE_CHANGED", "The source document changed during image insertion.");
-        }
-        await writeFilesExclusively([{ path: outputPath, data: candidate }], { sourcePaths: [filePath, imagePath] });
-        return toolSuccess("Inserted a PNG image into a structurally validated HWPX document.", {
-            output_path: outputPath,
-            mode,
-            image_entry: imageEntry,
-            ...(placement === undefined ? {} : { placement }),
-            warnings,
-            validation: validationDetails(validation),
-        });
     }
     catch (error) {
         const message = errorMessage(error);
+        if (error instanceof HwpxOutputRequiredError) {
+            return toolError("HWPX output is required.", {
+                code: error.code,
+                error: message,
+            });
+        }
         const extra = error instanceof AssetError && error.details !== undefined
             ? { details: error.details }
             : {};
@@ -263,13 +190,22 @@ export async function handleHwpInsertImage(input, dependencyOverrides = {}) {
             ...extra,
         });
     }
-    finally {
-        if (workDirectory !== undefined && workDirectoryIdentity !== undefined) {
-            await removeOwnedTemporaryDirectory(workDirectory, workDirectoryIdentity).catch(() => undefined);
-        }
+}
+export async function openImageInsertionSnapshots(documentPath, imagePath, opener = openDocumentSnapshot) {
+    const documentSnapshot = await opener(documentPath, { workerInputMaxBytes: 0 });
+    try {
+        const imageSnapshot = await opener(imagePath, {
+            workerInputMaxBytes: 0,
+            maximumBytes: MAX_IMAGE_FILE_BYTES,
+        });
+        return [documentSnapshot, imageSnapshot];
+    }
+    catch (error) {
+        await documentSnapshot.cleanup();
+        throw error;
     }
 }
-export function registerHwpCreateSvgAsset(server) {
+export function registerHwpCreateSvgAsset(server, dependencyOverrides = {}) {
     server.registerTool(HWP_CREATE_SVG_ASSET_TOOL_NAME, {
         title: "Create a safe SVG visual asset",
         description: "Create a standalone SVG from sanitized inline SVG or a documented JSON shape specification, with an optional PNG rendering.",
@@ -283,9 +219,9 @@ export function registerHwpCreateSvgAsset(server) {
             output_png_path: z.string().min(1).optional(),
         },
         annotations: { readOnlyHint: false },
-    }, (args) => handleHwpCreateSvgAsset(args));
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpCreateSvgAsset(args, dependencyOverrides, context)));
 }
-export function registerHwpInsertImage(server) {
+export function registerHwpInsertImage(server, facade = defaultDocumentEngineFacade) {
     server.registerTool(HWP_INSERT_IMAGE_TOOL_NAME, {
         title: "Insert an image into HWPX",
         description: "Normalize a local image to PNG and insert it into a new, structurally validated HWPX after an anchor paragraph or as a seal overlay.",
@@ -299,121 +235,7 @@ export function registerHwpInsertImage(server) {
             anchor_occurrence: z.number().int().nonnegative().optional(),
         },
         annotations: { readOnlyHint: false },
-    }, (args) => handleHwpInsertImage(args));
-}
-async function normalizeImage(input) {
-    if (input.byteLength === 0 || input.byteLength > MAX_IMAGE_BYTES) {
-        throw new AssetError("INVALID_IMAGE", `Image input must be between 1 and ${MAX_IMAGE_BYTES} bytes.`);
-    }
-    let source = input;
-    const prefix = input.subarray(0, Math.min(input.byteLength, MAX_SVG_BYTES + 1));
-    if ((prefix[0] === 0xff && prefix[1] === 0xfe) ||
-        (prefix[0] === 0xfe && prefix[1] === 0xff) ||
-        (prefix[0] === 0x00 && prefix[1] === 0x3c) ||
-        (prefix[0] === 0x3c && prefix[1] === 0x00)) {
-        throw new AssetError("UNSAFE_SVG", "UTF-16 XML/SVG image input is not supported safely.");
-    }
-    const decoded = Buffer.from(input).toString("utf8").replace(/^\uFEFF/u, "");
-    if (decoded.trimStart().startsWith("<")) {
-        source = Buffer.from(sanitizeInlineSvg(decoded));
-    }
-    try {
-        const image = sharp(source, { failOn: "error", limitInputPixels: MAX_IMAGE_PIXELS });
-        const metadata = await image.metadata();
-        const width = metadata.width ?? 0;
-        const height = metadata.height ?? 0;
-        if (width < 1 ||
-            height < 1 ||
-            width > MAX_IMAGE_DIMENSION ||
-            height > MAX_IMAGE_DIMENSION ||
-            width * height > MAX_IMAGE_PIXELS ||
-            (metadata.pages ?? 1) !== 1) {
-            throw new Error("unsafe image dimensions or animation");
-        }
-        const rendered = await image
-            .rotate()
-            .png({ compressionLevel: 9, adaptiveFiltering: false, palette: false })
-            .toBuffer({ resolveWithObject: true });
-        if (rendered.data.byteLength > MAX_IMAGE_BYTES) {
-            throw new Error("normalized PNG exceeds the size limit");
-        }
-        assertPngBytes(rendered.data);
-        return {
-            bytes: rendered.data,
-            width: rendered.info.width,
-            height: rendered.info.height,
-        };
-    }
-    catch (error) {
-        if (error instanceof AssetError)
-            throw error;
-        throw new AssetError("INVALID_IMAGE", `Image could not be decoded safely: ${errorMessage(error)}`);
-    }
-}
-async function assertEditableHwpx(buffer) {
-    try {
-        if (detectFormat(buffer) !== "hwpx" || (await detectZipFormat(buffer)) !== "hwpx") {
-            throw new Error("not an HWPX package");
-        }
-    }
-    catch (error) {
-        throw new AssetError("UNSUPPORTED_IMAGE_DOCUMENT_FORMAT", `Image insertion supports only a valid HWPX package: ${errorMessage(error)}`);
-    }
-}
-async function selectAnchor(zip, anchorText, requestedOccurrence) {
-    const sectionNames = Object.keys(zip.files)
-        .filter((name) => /(?:^|\/)section\d+\.xml$/iu.test(name))
-        .sort((a, b) => sectionNumber(a) - sectionNumber(b));
-    let matchCount = 0;
-    for (const [index, name] of sectionNames.entries()) {
-        const xml = await zip.file(name).async("text");
-        const scan = scanSectionXml(xml, index);
-        const paragraphs = eligibleParagraphs(scan.bodyParagraphs, scan.tables);
-        for (const paragraph of paragraphs) {
-            let from = 0;
-            while (from <= paragraph.text.length) {
-                const found = paragraph.text.indexOf(anchorText, from);
-                if (found < 0)
-                    break;
-                if (requestedOccurrence === matchCount) {
-                    return { occurrence: matchCount };
-                }
-                matchCount += 1;
-                if (requestedOccurrence === undefined && matchCount > 1) {
-                    throw new AssetError("AMBIGUOUS_ANCHOR", "Anchor text occurs more than once; set anchor_occurrence to a 0-based occurrence.", { anchor_count_at_least: 2 });
-                }
-                from = found + Math.max(1, anchorText.length);
-            }
-        }
-    }
-    if (matchCount === 0) {
-        throw new AssetError("ANCHOR_NOT_FOUND", `Anchor text was not found: ${anchorText}`);
-    }
-    const occurrence = requestedOccurrence ?? 0;
-    if (occurrence >= matchCount) {
-        throw new AssetError("ANCHOR_NOT_FOUND", `anchor_occurrence ${occurrence} is outside 0..${matchCount - 1}.`, { anchor_count: matchCount });
-    }
-    return { occurrence };
-}
-function eligibleParagraphs(body, tables) {
-    const paragraphs = [...body];
-    const walk = (nestedTables) => {
-        for (const table of nestedTables) {
-            for (const row of table.rows) {
-                for (const cell of row) {
-                    paragraphs.push(...cell.paragraphs);
-                    walk(cell.tables);
-                }
-            }
-        }
-    };
-    walk(tables);
-    const byStart = new Map();
-    for (const paragraph of paragraphs) {
-        if (paragraph.kind !== "excluded")
-            byStart.set(paragraph.start, paragraph);
-    }
-    return [...byStart.values()].sort((a, b) => a.start - b.start);
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpInsertImage(args, facade, context)));
 }
 function buildSafeSvg(input) {
     if (Buffer.byteLength(input, "utf8") > MAX_SVG_BYTES) {
@@ -666,122 +488,71 @@ function assertSafeDimensions(width, height) {
     }
 }
 async function preflightOutputPath(outputPath, sourcePaths) {
-    const comparableOutput = comparablePath(outputPath);
-    if (sourcePaths.some((source) => comparablePath(source) === comparableOutput)) {
+    const authorizedOutput = await authorizeFuturePath(outputPath);
+    const authorizedSources = await Promise.all(sourcePaths.map((source) => authorizeExistingPath(source)));
+    const comparableOutput = comparablePath(authorizedOutput);
+    if (authorizedSources.some((source) => comparablePath(source) === comparableOutput)) {
         throw new PathAliasError("A source path and output path must be different.");
     }
     let outputLink;
     try {
-        outputLink = await lstat(outputPath);
+        outputLink = await lstat(authorizedOutput);
     }
     catch (error) {
         if (errorCode(error, "") === "ENOENT")
             return;
         throw error;
     }
-    for (const sourcePath of sourcePaths) {
+    for (const sourcePath of authorizedSources) {
         const [source, output] = await Promise.all([
             stat(sourcePath, { bigint: true }),
-            stat(outputPath, { bigint: true }).catch(() => undefined),
+            stat(authorizedOutput, { bigint: true }).catch(() => undefined),
         ]);
         if (output !== undefined && source.dev === output.dev && source.ino === output.ino) {
             throw new PathAliasError(`Output path aliases a source file: ${sourcePath}`);
         }
     }
     void outputLink;
-    throw new OutputConflictError(outputPath);
-}
-async function runVerifier(editedPath, originalPath, allowlist = {
-    changed: [],
-    added: [],
-}) {
-    const script = helperScriptPath("verify.py");
-    const args = [editedPath];
-    if (originalPath !== undefined) {
-        args.push("--orig", originalPath);
-    }
-    for (const entry of allowlist.changed) {
-        args.push("--allow-changed", entry);
-    }
-    for (const entry of allowlist.added) {
-        args.push("--allow-added", entry);
-    }
-    await runPython(script, args);
-}
-function helperScriptPath(name) {
-    return fileURLToPath(new URL(`../../scripts/hwpx-safe-edit/${name}`, import.meta.url));
-}
-export function pythonCommandCandidates(platform = process.platform) {
-    return platform === "win32"
-        ? [
-            { command: "python", argsPrefix: ["-X", "utf8"] },
-            { command: "py", argsPrefix: ["-3", "-X", "utf8"] },
-        ]
-        : [
-            { command: "python3", argsPrefix: ["-X", "utf8"] },
-            { command: "python", argsPrefix: ["-X", "utf8"] },
-        ];
-}
-export async function runPython(script, args, platform = process.platform, execute = execFilePromise) {
-    for (const candidate of pythonCommandCandidates(platform)) {
-        try {
-            return await execute(candidate.command, [...candidate.argsPrefix, script, ...args], script);
-        }
-        catch (error) {
-            if (errorCode(error, "") !== "ENOENT") {
-                throw helperFailure(error);
-            }
-        }
-    }
-    throw new AssetError("PYTHON_NOT_FOUND", "Python 3.10 or newer was not found on PATH.");
-}
-function execFilePromise(command, args, script) {
-    return new Promise((resolvePromise, rejectPromise) => {
-        execFile(command, args, {
-            cwd: dirname(script),
-            windowsHide: true,
-            shell: false,
-            timeout: 20_000,
-            maxBuffer: 1_000_000,
-            encoding: "utf8",
-            env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
-        }, (error, stdout, stderr) => {
-            if (error !== null) {
-                Object.assign(error, { stdout, stderr });
-                rejectPromise(error);
-            }
-            else {
-                resolvePromise({ stdout, stderr });
-            }
-        });
-    });
-}
-function helperFailure(error) {
-    const stderr = typeof error === "object" && error !== null && "stderr" in error && typeof error.stderr === "string"
-        ? error.stderr.trim()
-        : "";
-    const failure = new AssetError("HWPX_SAFE_EDIT_FAILED", stderr.length > 0 ? stderr : errorMessage(error));
-    return failure;
-}
-function parseHelperJson(stdout) {
-    const lines = stdout.trim().split(/\r?\n/u).filter(Boolean);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-        try {
-            const parsed = JSON.parse(lines[index]);
-            if (isRecord(parsed))
-                return parsed;
-        }
-        catch {
-            // Keep scanning in case the helper emitted diagnostics before JSON.
-        }
-    }
-    throw new AssetError("HWPX_SAFE_EDIT_FAILED", "Image helper did not return JSON metadata.");
+    throw new OutputConflictError(authorizedOutput);
 }
 function validationDetails(validation) {
     return {
         ok: validation.ok,
         issues: validation.issues.map((issue) => ({ ...issue })),
         entry_count: validation.entryCount,
+    };
+}
+function readImageInsertionMetadata(value, expectedMode) {
+    if (!isRecord(value) || value.operation !== "insertImage" ||
+        value.mode !== expectedMode) {
+        throw new AssetError("ENGINE_PROTOCOL_ERROR", "The isolated image engine returned invalid result metadata.");
+    }
+    if (expectedMode === "seal-anchor") {
+        if (!Array.isArray(value.placed) || value.placed.length === 0 ||
+            !isRecord(value.placed[0])) {
+            throw new AssetError("ENGINE_PROTOCOL_ERROR", "The isolated image engine returned invalid placement metadata.");
+        }
+        const placement = value.placed[0];
+        if (typeof placement.entry !== "string" ||
+            !Array.isArray(placement.warnings) ||
+            !placement.warnings.every((warning) => typeof warning === "string")) {
+            throw new AssetError("ENGINE_PROTOCOL_ERROR", "The isolated image engine returned invalid placement metadata.");
+        }
+        return {
+            imageEntry: placement.entry,
+            warnings: [...placement.warnings],
+            placement: { ...placement },
+        };
+    }
+    if (!isRecord(value.placement) ||
+        typeof value.placement.imageEntry !== "string" ||
+        !Array.isArray(value.placement.warnings) ||
+        !value.placement.warnings.every((warning) => typeof warning === "string")) {
+        throw new AssetError("ENGINE_PROTOCOL_ERROR", "The isolated image engine returned invalid placement metadata.");
+    }
+    return {
+        imageEntry: value.placement.imageEntry,
+        warnings: [...value.placement.warnings],
     };
 }
 function assertPngBytes(bytes) {
@@ -834,35 +605,6 @@ function escapeXml(value) {
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function exactArrayBuffer(bytes) {
-    const copy = new Uint8Array(bytes.byteLength);
-    copy.set(bytes);
-    return copy.buffer;
-}
-function countImages(blocks) {
-    let count = 0;
-    for (const block of blocks) {
-        if (block.type === "image")
-            count += 1;
-        if (block.children !== undefined)
-            count += countImages(block.children);
-        if (block.table !== undefined) {
-            for (const row of block.table.cells) {
-                for (const cell of row) {
-                    if (cell.blocks !== undefined)
-                        count += countImages(cell.blocks);
-                }
-            }
-        }
-    }
-    return count;
-}
-function sectionNumber(path) {
-    return Number(path.match(/section(\d+)\.xml$/iu)?.[1] ?? 0);
-}
-function sha256(bytes) {
-    return createHash("sha256").update(bytes).digest("hex");
-}
 function comparablePath(path) {
     return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
 }
@@ -873,36 +615,6 @@ function safeResolvedPath(value) {
     catch {
         return undefined;
     }
-}
-function isOutputSafetyError(error) {
-    return error instanceof OutputConflictError ||
-        error instanceof PathAliasError ||
-        error instanceof UnsafeOutputPathError;
-}
-async function fileSystemIdentity(path) {
-    const stats = await lstat(path, { bigint: true });
-    if (!stats.isDirectory() || stats.isSymbolicLink()) {
-        throw new UnsafeOutputPathError(`Temporary workspace is not an owned directory: ${path}`);
-    }
-    return { device: stats.dev, inode: stats.ino };
-}
-async function removeOwnedTemporaryDirectory(path, identity) {
-    let current;
-    try {
-        current = await lstat(path, { bigint: true });
-    }
-    catch (error) {
-        if (errorCode(error, "") === "ENOENT")
-            return;
-        throw error;
-    }
-    if (!current.isDirectory() ||
-        current.isSymbolicLink() ||
-        current.dev !== identity.device ||
-        current.ino !== identity.inode) {
-        return;
-    }
-    await rm(path, { recursive: true, force: true });
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "repository": {
+    "owner": "Burntgogi",
+    "name": "Gpt_Codex_HWP",
+    "defaultBranch": "main"
+  },
+  "features": {
+    "issues": true,
+    "privateVulnerabilityReporting": true,
+    "vulnerabilityAlerts": true,
+    "secretScanning": "enabled",
+    "secretScanningPushProtection": "enabled",
+    "automatedDependabotSecurityUpdates": false
+  },
+  "actions": {
+    "enabled": true,
+    "defaultWorkflowPermissions": "read",
+    "canApprovePullRequestReviews": false,
+    "allowedActions": "selected",
+    "githubOwnedAllowed": true,
+    "verifiedCreatorAllowed": false,
+    "requireFullSha": true,
+    "patternsAllowed": [
+      "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ]
+  },
+  "mainProtection": {
+    "pullRequestOnly": true,
+    "requiredApprovingReviewCount": 0,
+    "dismissStaleReviews": true,
+    "enforceAdmins": true,
+    "requiredLinearHistory": true,
+    "requiredConversationResolution": true,
+    "allowForcePushes": false,
+    "allowDeletions": false,
+    "requiredStatusChecks": [
+      "Windows x64",
+      "Linux lifecycle",
+      "macOS arm64",
+      "Security policy"
+    ]
+  },
+  "tagRuleset": {
+    "name": "immutable-version-tags",
+    "legacyNames": [
+      "Protect version release tags"
+    ],
+    "enforcement": "active",
+    "include": [
+      "refs/tags/v*"
+    ],
+    "exclude": [],
+    "bypassActors": [],
+    "blockUpdate": true,
+    "blockDeletion": true,
+    "blockNonFastForward": true
+  },
+  "collaborators": {
+    "owner": "Burntgogi",
+    "nonOwnerMaximumPermission": "read",
+    "unexpectedWriteIsBlocker": true
+  },
+  "deployKeys": {
+    "maximumPermission": "read",
+    "unexpectedWriteIsBlocker": true
+  }
+}

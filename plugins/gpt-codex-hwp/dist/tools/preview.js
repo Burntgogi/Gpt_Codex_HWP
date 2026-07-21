@@ -1,21 +1,13 @@
-import { parse, renderHwpxToSvg, } from "kordoc";
 import { z } from "zod";
-import { writeFilesExclusively } from "../shared/output.js";
-import { readFileBounded } from "../shared/files.js";
+import { defaultDocumentEngineFacade, prepareDocumentRenderOutput, } from "../shared/document-engine.js";
+import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
-import { inspectExactDocumentProtection } from "../shared/protection.js";
-import { toolError, toolSuccess } from "../shared/result.js";
-import { MAX_HIGHLIGHT_TERMS, MAX_PREVIEW_SVG_BYTES, assertHighlightBudget, assertUtf8Budget, } from "../shared/resource-limits.js";
-import { detectPreciseDocumentFormat, inspectRhwpPreflightProtection, loadRhwpBackend, } from "./rhwp-backend.js";
+import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
+import { runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
+import { MAX_HIGHLIGHT_TERMS, assertHighlightBudget, } from "../shared/resource-limits.js";
+import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_RENDER_PREVIEW_TOOL_NAME = "hwp_render_preview";
-const defaultPreviewDependencies = {
-    renderDocument: renderHwpxToSvg,
-    detectDocumentFormat: detectPreciseDocumentFormat,
-    inspectExactProtection: inspectExactDocumentProtection,
-    parseDocument: parse,
-    loadRhwpBackend,
-};
-export async function handleHwpRenderPreview(input, dependencyOverrides = {}) {
+export async function handleHwpRenderPreview(input, documentEngine = defaultDocumentEngineFacade, context) {
     let filePath;
     let outputPath;
     try {
@@ -24,236 +16,114 @@ export async function handleHwpRenderPreview(input, dependencyOverrides = {}) {
         }
         filePath = resolveLocalPath(input.file_path, "file_path");
         outputPath = resolveLocalPath(input.output_svg_path, "output_svg_path");
-        // The source is fully read before any output directory or file is created.
-        const pristineBytes = Uint8Array.from(await readFileBounded(filePath, "source document"));
-        const dependencies = {
-            ...defaultPreviewDependencies,
-            ...(typeof dependencyOverrides === "function"
-                ? { renderDocument: dependencyOverrides }
-                : dependencyOverrides),
+        const renderOptions = {
+            ...(input.reflow === undefined ? {} : { reflow: input.reflow }),
+            ...(input.highlight === undefined
+                ? {}
+                : { highlights: [...input.highlight] }),
         };
-        const options = {};
-        if (input.reflow !== undefined) {
-            options.reflow = input.reflow;
-        }
-        if (input.highlight !== undefined) {
-            options.highlights = [...input.highlight];
-        }
-        const format = await dependencies.detectDocumentFormat(exactArrayBuffer(pristineBytes));
-        if (format !== "hwp" && format !== "hwpx") {
-            return toolError(`Preview supports only precise HWP or HWPX input (detected: ${format}).`, {
-                code: "UNSUPPORTED_PREVIEW_FORMAT",
-                file_path: filePath,
-                output_svg_path: outputPath,
-                format,
-            });
-        }
-        const exactProtection = await dependencies.inspectExactProtection(Uint8Array.from(pristineBytes), format);
-        if (exactProtection !== undefined) {
-            return toolError(`The document is not eligible for preview: ${exactProtection.error}`, {
-                code: exactProtection.code,
-                error: exactProtection.error,
-                file_path: filePath,
-                output_svg_path: outputPath,
-                format,
-            });
-        }
-        let rendered;
-        try {
-            rendered = await dependencies.renderDocument(Uint8Array.from(pristineBytes), options);
-        }
-        catch (primaryError) {
-            return await renderWithRhwpFallback({
-                filePath,
-                outputPath,
-                bytes: pristineBytes,
-                format,
-                primaryError,
-                reflow: input.reflow,
-                highlights: input.highlight,
-            }, dependencies);
-        }
-        assertUtf8Budget(rendered.svg, MAX_PREVIEW_SVG_BYTES, "SVG preview", "PREVIEW_TOO_LARGE");
-        await writeFilesExclusively([{ path: outputPath, data: rendered.svg }], { sourcePaths: [filePath] });
-        return toolSuccess("Rendered HWPX SVG preview.", {
-            output_svg_path: outputPath,
-            page_count: rendered.pageCount,
-            dimensions: {
-                width: rendered.width,
-                height: rendered.height,
-            },
-            warnings: [...rendered.warnings],
-            stats: { ...rendered.stats },
+        const snapshot = await openDocumentSnapshot(filePath, {
+            workerInputMaxBytes: maxWorkerSnapshotBytesForRequest({
+                input: {},
+                options: renderOptions,
+            }),
         });
+        if (snapshot.metadata.shallowFormat.candidate === "unknown") {
+            try {
+                await snapshot.verifySourceUnchanged();
+                return toolError("Preview supports only precise HWP or HWPX input (detected: unknown).", {
+                    code: "UNSUPPORTED_PREVIEW_FORMAT",
+                    file_path: filePath,
+                    output_svg_path: outputPath,
+                    format: "unknown",
+                });
+            }
+            finally {
+                await snapshot.cleanup();
+            }
+        }
+        const rendered = await documentEngine.render(snapshot, renderOptions, toDocumentEngineExecutionContext(context));
+        const prepared = await prepareDocumentRenderOutput(rendered, {
+            ...(context === undefined ? {} : { signal: context.signal }),
+        });
+        try {
+            const metadata = safeRecord(prepared.metadata);
+            let summary;
+            let details;
+            if (metadata?.backend === "rhwp") {
+                const warnings = [
+                    "rhwp uses a Unicode-width heuristic in Node; font metrics and line wrapping may differ from Hancom.",
+                    "This SVG is a preview only; Hancom GUI visual fidelity has not been verified.",
+                ];
+                if (input.reflow !== undefined) {
+                    warnings.push("The rhwp backend does not apply the Kordoc reflow option.");
+                }
+                if ((input.highlight?.length ?? 0) > 0) {
+                    warnings.push("The rhwp backend does not apply requested text highlights.");
+                }
+                summary = "Rendered an SVG preview with the optional rhwp backend.";
+                details = {
+                    output_svg_path: outputPath,
+                    backend: "rhwp",
+                    ...(typeof metadata.version === "string"
+                        ? { backend_version: metadata.version }
+                        : {}),
+                    ...(safePositiveInteger(metadata.pageCount) === undefined
+                        ? {}
+                        : { page_count: safePositiveInteger(metadata.pageCount) }),
+                    degraded_font_metrics: true,
+                    warnings,
+                };
+            }
+            else {
+                summary = "Rendered HWPX SVG preview.";
+                details = {
+                    output_svg_path: outputPath,
+                    ...(safePositiveInteger(metadata?.pageCount) === undefined
+                        ? {}
+                        : { page_count: safePositiveInteger(metadata?.pageCount) }),
+                    ...(safeDimensions(metadata) === undefined
+                        ? {}
+                        : { dimensions: safeDimensions(metadata) }),
+                    warnings: safeStringArray(metadata?.warnings),
+                    stats: safeRecord(metadata?.stats) ?? {},
+                };
+            }
+            return await commitBudgetedToolSuccess(summary, details, async () => {
+                await prepared.writeExclusively(outputPath, {
+                    sourcePaths: [filePath],
+                    ...(context === undefined ? {} : { signal: context.signal }),
+                });
+            });
+        }
+        finally {
+            await prepared.cleanup();
+        }
     }
     catch (error) {
         const message = errorMessage(error);
+        const code = errorCode(error, "HWPX_PREVIEW_ERROR");
+        if (code === "UNSUPPORTED_FORMAT") {
+            return toolError("Preview supports only precise HWP or HWPX input (detected: unknown).", {
+                code: "UNSUPPORTED_PREVIEW_FORMAT",
+                error: message,
+                file_path: filePath ?? safeResolvedPath(input.file_path),
+                output_svg_path: outputPath ?? safeResolvedPath(input.output_svg_path),
+                format: "unknown",
+            });
+        }
         return toolError(`Could not render the HWPX preview: ${message}`, {
-            code: errorCode(error, "HWPX_PREVIEW_ERROR"),
+            code,
             error: message,
             file_path: filePath ?? safeResolvedPath(input.file_path),
             output_svg_path: outputPath ?? safeResolvedPath(input.output_svg_path),
         });
     }
 }
-async function renderWithRhwpFallback(input, dependencies) {
-    const primaryMessage = errorMessage(input.primaryError);
-    const primaryCode = errorCode(input.primaryError, "HWPX_PREVIEW_ERROR");
-    // Deliberately omit filePath so encrypted/DRM/distribution checks are made
-    // against the exact in-memory bytes rather than a path shortcut.
-    const preflight = await dependencies.parseDocument(exactArrayBuffer(input.bytes));
-    if (!preflight.success) {
-        return toolError(`The document is not eligible for rhwp preview fallback: ${preflight.error}`, {
-            code: preflight.code ?? "PARSE_ERROR",
-            error: preflight.error,
-            file_path: input.filePath,
-            output_svg_path: input.outputPath,
-            format: input.format,
-            primary_error: { code: primaryCode, message: primaryMessage },
-        });
-    }
-    const protection = inspectRhwpPreflightProtection(preflight);
-    if (protection !== undefined) {
-        return toolError(`The document is not eligible for rhwp preview fallback: ${protection.error}`, {
-            code: protection.code,
-            error: protection.error,
-            file_path: input.filePath,
-            output_svg_path: input.outputPath,
-            format: input.format,
-            primary_error: { code: primaryCode, message: primaryMessage },
-        });
-    }
-    const loaded = await dependencies.loadRhwpBackend();
-    if (!loaded.available) {
-        return primaryPreviewFailure(input, primaryCode, primaryMessage, {
-            code: "MISSING_RHWP_BACKEND",
-            reason: loaded.reason,
-        });
-    }
-    try {
-        let candidate;
-        let document;
-        try {
-            document = loaded.backend.createDocument(Uint8Array.from(input.bytes));
-            const pageCount = document.pageCount();
-            if (!Number.isSafeInteger(pageCount) || pageCount <= 0) {
-                throw new Error("rhwp fallback returned no valid pages.");
-            }
-            const svg = document.renderPageSvg(0);
-            if (typeof svg !== "string" || !/^\s*<svg\b/iu.test(svg)) {
-                throw new Error("rhwp fallback returned an empty or invalid SVG preview.");
-            }
-            const warnings = [
-                "rhwp fallback uses a Unicode-width heuristic in Node; font metrics and line wrapping may differ from Hancom.",
-                "This SVG is a preview only; Hancom GUI visual fidelity has not been verified.",
-            ];
-            if (input.reflow !== undefined) {
-                warnings.push("The rhwp fallback does not apply the Kordoc reflow option.");
-            }
-            if ((input.highlights?.length ?? 0) > 0) {
-                warnings.push("The rhwp fallback does not apply requested text highlights.");
-            }
-            candidate = {
-                svg,
-                pageCount,
-                dimensions: parseSvgDimensions(svg),
-                warnings,
-            };
-        }
-        finally {
-            if (document !== undefined) {
-                releasePreviewDocument(document);
-            }
-        }
-        if (candidate === undefined) {
-            throw new Error("rhwp fallback produced no SVG candidate.");
-        }
-        assertUtf8Budget(candidate.svg, MAX_PREVIEW_SVG_BYTES, "SVG preview", "PREVIEW_TOO_LARGE");
-        // Commit only after WASM cleanup succeeds so a cleanup error cannot leave
-        // an artifact behind while MCP reports failure.
-        await writeFilesExclusively([{ path: input.outputPath, data: candidate.svg }], { sourcePaths: [input.filePath] });
-        return toolSuccess("Rendered an SVG preview with the optional rhwp fallback.", {
-            output_svg_path: input.outputPath,
-            backend: "rhwp",
-            backend_version: loaded.backend.version,
-            page_count: candidate.pageCount,
-            ...(candidate.dimensions === undefined
-                ? {}
-                : { dimensions: candidate.dimensions }),
-            degraded_font_metrics: true,
-            primary_error: { code: primaryCode, message: primaryMessage },
-            warnings: candidate.warnings,
-        });
-    }
-    catch (error) {
-        const fallbackMessage = errorMessage(error);
-        return toolError(`Kordoc preview failed, and the rhwp fallback also failed: ${fallbackMessage}`, {
-            code: errorCode(error, "RHWP_PREVIEW_FALLBACK_FAILED"),
-            error: fallbackMessage,
-            file_path: input.filePath,
-            output_svg_path: input.outputPath,
-            format: input.format,
-            primary_error: { code: primaryCode, message: primaryMessage },
-            fallback: {
-                code: "RHWP_PREVIEW_FALLBACK_FAILED",
-                reason: fallbackMessage,
-            },
-        });
-    }
-}
-function releasePreviewDocument(document) {
-    try {
-        document.free();
-    }
-    catch (error) {
-        const wrapped = new Error(`Could not free the rhwp preview document: ${errorMessage(error)}`);
-        wrapped.code = "RHWP_BACKEND_CLEANUP_FAILED";
-        throw wrapped;
-    }
-}
-function primaryPreviewFailure(input, primaryCode, primaryMessage, fallback) {
-    return toolError(`Could not render the HWPX preview: ${primaryMessage}`, {
-        code: primaryCode,
-        error: primaryMessage,
-        file_path: input.filePath,
-        output_svg_path: input.outputPath,
-        primary_error: { code: primaryCode, message: primaryMessage },
-        fallback,
-    });
-}
-function parseSvgDimensions(svg) {
-    const rootTag = /<svg\b[^>]*>/iu.exec(svg.slice(0, 4096))?.[0];
-    if (rootTag === undefined)
-        return undefined;
-    const width = numericSvgAttribute(rootTag, "width");
-    const height = numericSvgAttribute(rootTag, "height");
-    if (width !== undefined && height !== undefined) {
-        return { width, height };
-    }
-    const viewBox = /\bviewBox\s*=\s*["']\s*[-+0-9.eE]+[ ,]+[-+0-9.eE]+[ ,]+([-+0-9.eE]+)[ ,]+([-+0-9.eE]+)\s*["']/iu.exec(rootTag);
-    const viewWidth = Number(viewBox?.[1]);
-    const viewHeight = Number(viewBox?.[2]);
-    return positiveFinite(viewWidth) && positiveFinite(viewHeight)
-        ? { width: viewWidth, height: viewHeight }
-        : undefined;
-}
-function numericSvgAttribute(rootTag, attribute) {
-    const match = new RegExp(`\\b${attribute}\\s*=\\s*["']\\s*([-+0-9.eE]+)(?:px)?\\s*["']`, "iu").exec(rootTag);
-    const value = Number(match?.[1]);
-    return positiveFinite(value) ? value : undefined;
-}
-function positiveFinite(value) {
-    return Number.isFinite(value) && value > 0 && value <= 10_000_000;
-}
-function exactArrayBuffer(bytes) {
-    const copy = new Uint8Array(bytes.byteLength);
-    copy.set(bytes);
-    return copy.buffer;
-}
-export function registerHwpRenderPreview(server) {
+export function registerHwpRenderPreview(server, documentEngine = defaultDocumentEngineFacade) {
     server.registerTool(HWP_RENDER_PREVIEW_TOOL_NAME, {
         title: "Render HWP/HWPX SVG preview",
-        description: "Render the exact requested HWPX file with Kordoc, or fall back to optional rhwp for precise HWP/HWPX input, writing a new local SVG without returning its payload through MCP.",
+        description: "Render the exact requested HWP/HWPX file in an isolated engine, writing a new local SVG without returning its payload through MCP.",
         inputSchema: {
             file_path: z.string().min(1).describe("Local HWP or HWPX path to render."),
             output_svg_path: z
@@ -273,7 +143,30 @@ export function registerHwpRenderPreview(server) {
         annotations: {
             readOnlyHint: false,
         },
-    }, (args) => handleHwpRenderPreview(args));
+    }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpRenderPreview(args, documentEngine, context)));
+}
+function safeRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+        ? value
+        : undefined;
+}
+function safePositiveInteger(value) {
+    return Number.isSafeInteger(value) && Number(value) > 0
+        ? Number(value)
+        : undefined;
+}
+function safeDimensions(metadata) {
+    const width = metadata?.width;
+    const height = metadata?.height;
+    return typeof width === "number" && Number.isFinite(width) && width > 0 &&
+        typeof height === "number" && Number.isFinite(height) && height > 0
+        ? { width, height }
+        : undefined;
+}
+function safeStringArray(value) {
+    return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+        ? [...value]
+        : [];
 }
 function safeResolvedPath(path) {
     try {
