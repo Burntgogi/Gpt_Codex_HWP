@@ -200,54 +200,73 @@ test("both CI jobs bind full release receipts to the exact feature head and uplo
   assert.equal(countMatches(workflow, /platform-receipts\.mjs checksum/gu), 2);
 });
 
-test("macOS CI keeps hosted compatibility diagnostics manual and runs POSIX controls once before the release gate", async () => {
+test("CI runs bounded platform diagnostics only after the matching release gate fails", async () => {
   const workflow = await readFile(WORKFLOW_PATH, "utf8");
-  const compatibilityDiagnostic = await readFile(
+  const macosDiagnostic = await readFile(
     join(ROOT, "scripts", "macos-node-tests-diagnostic.mjs"),
+    "utf8",
+  );
+  const windowsDiagnostic = await readFile(
+    join(ROOT, "scripts", "windows-node-tests-diagnostic.mjs"),
     "utf8",
   );
   const windows = jobSection(workflow, "windows", "macos");
   const macos = jobSection(workflow, "macos", "linux");
   const linux = jobSection(workflow, "linux");
-  const command = "node scripts/macos-posix-controls.mjs";
+  const macosControlCommand = "node scripts/macos-posix-controls.mjs";
+  const windowsDiagnosticCommand = "node scripts/windows-node-tests-diagnostic.mjs";
+  const macosDiagnosticCommand = "node scripts/macos-node-tests-diagnostic.mjs";
 
   assert.match(
-    compatibilityDiagnostic,
+    macosDiagnostic,
     /export async function runMacNodeTestsDiagnostic/u,
   );
-  assert.doesNotMatch(macos, /macos-node-tests-diagnostic/iu);
+  assert.match(
+    windowsDiagnostic,
+    /export async function runWindowsNodeTestsDiagnostic/u,
+  );
   assert.match(
     macos,
     /^      - name: Run safe macOS POSIX controls\r?\n        run: node scripts\/macos-posix-controls\.mjs$/mu,
   );
-  assert.equal(countMatches(workflow, /node scripts\/macos-posix-controls\.mjs/gu), 1);
-  assert.doesNotMatch(windows, /macos-posix-controls/iu);
-  assert.doesNotMatch(linux, /macos-posix-controls/iu);
-  assert.doesNotMatch(macos, /continue-on-error|if:\s*\$\{\{\s*always\(\)/u);
-
-  const largeEvidence = macos.indexOf("benchmark:documents -- --sizes 100,256,512");
-  const diagnostic = macos.indexOf(command);
-  const releaseGate = macos.indexOf("node scripts/platform-receipts.mjs create");
-  assert.equal(
-    largeEvidence >= 0 && largeEvidence < diagnostic && diagnostic < releaseGate,
-    true,
-    "the diagnostic follows fresh evidence and cannot replace the authoritative release gate",
-  );
-});
-
-test("Windows CI isolates repository and source Node tests before the authoritative release gate", async () => {
-  const workflow = await readFile(WORKFLOW_PATH, "utf8");
-  const windows = jobSection(workflow, "windows", "macos");
-  const command = "node scripts/windows-node-tests-diagnostic.mjs";
   assert.match(
     windows,
-    /^      - name: Isolate Windows Node test compatibility\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
+    /^      - name: Run full release gate and create platform receipt\r?\n        id: windows_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed Windows Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
   );
+  assert.match(
+    macos,
+    /^      - name: Run full release gate and create platform receipt\r?\n        id: macos_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed macOS Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.macos_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/macos-node-tests-diagnostic\.mjs$/mu,
+  );
+  assert.equal(countMatches(workflow, /node scripts\/macos-posix-controls\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/windows-node-tests-diagnostic\.mjs/gu), 1);
-  assert.doesNotMatch(windows, /continue-on-error|if:\s*\$\{\{\s*always\(\)/u);
+  assert.equal(countMatches(workflow, /node scripts\/macos-node-tests-diagnostic\.mjs/gu), 1);
+  assert.doesNotMatch(windows, /macos-posix-controls/iu);
+  assert.doesNotMatch(linux, /macos-posix-controls/iu);
+  assert.doesNotMatch(windows, /macos-node-tests-diagnostic/iu);
+  assert.doesNotMatch(macos, /windows-node-tests-diagnostic/iu);
+  assert.doesNotMatch(`${windows}\n${macos}`, /if:\s*\$\{\{\s*always\(\)/u);
+
+  const largeEvidence = macos.indexOf("benchmark:documents -- --sizes 100,256,512");
+  const macosControl = macos.indexOf(macosControlCommand);
+  const macosReleaseGate = macos.indexOf("node scripts/platform-receipts.mjs create");
+  const macosForensicDiagnostic = macos.indexOf(macosDiagnosticCommand);
+  const macosReceiptVerification = macos.indexOf("node scripts/platform-receipts.mjs verify");
   assert.equal(
-    windows.indexOf(command) < windows.indexOf("node scripts/platform-receipts.mjs create"),
+    largeEvidence >= 0 && largeEvidence < macosControl && macosControl < macosReleaseGate
+      && macosReleaseGate < macosForensicDiagnostic
+      && macosForensicDiagnostic < macosReceiptVerification,
     true,
+    "macOS controls precede the release gate and forensic diagnostics follow its failure boundary",
+  );
+
+  const windowsReleaseGate = windows.indexOf("node scripts/platform-receipts.mjs create");
+  const windowsForensicDiagnostic = windows.indexOf(windowsDiagnosticCommand);
+  const windowsReceiptVerification = windows.indexOf("node scripts/platform-receipts.mjs verify");
+  assert.equal(
+    windowsReleaseGate >= 0 && windowsReleaseGate < windowsForensicDiagnostic
+      && windowsForensicDiagnostic < windowsReceiptVerification,
+    true,
+    "Windows forensic diagnostics follow the release-gate failure boundary",
   );
 });
 

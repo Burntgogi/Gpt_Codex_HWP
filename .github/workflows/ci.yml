@@ -52,11 +52,14 @@ jobs:
         run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor
       - name: Generate fresh large-document evidence
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
-      - name: Isolate Windows Node test compatibility
+      - name: Run full release gate and create platform receipt
+        id: windows_release_gate
+        run: node scripts/platform-receipts.mjs create
+      - name: Diagnose failed Windows Node release gate
+        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
+        continue-on-error: true
         timeout-minutes: 30
         run: node scripts/windows-node-tests-diagnostic.mjs
-      - name: Run full release gate and create platform receipt
-        run: node scripts/platform-receipts.mjs create
       - name: Independently verify platform receipt
         run: node scripts/platform-receipts.mjs verify
       - name: Checksum platform receipt
@@ -119,7 +122,13 @@ jobs:
       - name: Run safe macOS POSIX controls
         run: node scripts/macos-posix-controls.mjs
       - name: Run full release gate and create platform receipt
+        id: macos_release_gate
         run: node scripts/platform-receipts.mjs create
+      - name: Diagnose failed macOS Node release gate
+        if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 30
+        run: node scripts/macos-node-tests-diagnostic.mjs
       - name: Independently verify platform receipt
         run: node scripts/platform-receipts.mjs verify
       - name: Checksum platform receipt
