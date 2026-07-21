@@ -552,7 +552,7 @@ test("macOS Node diagnostic parses the running-child stage from the bounded MCP 
         child.stdout.end([
           "TAP version 13",
           "not ok 10 - supervised child cancellation",
-          "# MCP_RUNNING_CHILD_STAGE_SIGNAL",
+          "# MCP_RUNNING_CHILD_STAGE_REQUEST_REJECTED_BEFORE_START",
           "  failureType: 'testCodeFailure'",
           "  code: 'ERR_ASSERTION'",
           "# tests 13",
@@ -572,7 +572,8 @@ test("macOS Node diagnostic parses the running-child stage from the bounded MCP 
   assert.equal(passed, false);
   assert.equal(
     output,
-    "MAC_MCP_RUNNING_CHILD stage=signal\nMAC_NODE_TEST_CASE case=mp10 status=failed\n",
+    "MAC_MCP_RUNNING_CHILD stage=request-rejected-before-start\n"
+      + "MAC_NODE_TEST_CASE case=mp10 status=failed\n",
   );
 });
 

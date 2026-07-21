@@ -240,8 +240,10 @@ const MCP_PREVIEW_CANCELLATION_CODES = Object.freeze(
     `MCP_PREVIEW_CANCELLATION_FAILURE_${stage.toUpperCase().replaceAll("-", "_")}`),
 );
 const MCP_RUNNING_CHILD_STAGES = new Set([
-  "setup", "first-start", "abort-rejection", "signal", "recovery", "reuse",
-  "lifecycle", "connection-cleanup", "fixture-cleanup", "cleanup-complete",
+  "setup", "isolation-ready", "connection-ready", "request-issued",
+  "request-rejected-before-start", "request-resolved-before-start", "start-timeout",
+  "first-start", "abort-rejection", "signal", "recovery", "reuse", "lifecycle",
+  "connection-cleanup", "fixture-cleanup", "cleanup-complete",
 ]);
 const MCP_RUNNING_CHILD_CODES = Object.freeze(
   [...MCP_RUNNING_CHILD_STAGES].map((stage) =>

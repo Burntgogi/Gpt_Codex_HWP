@@ -404,11 +404,13 @@ for (const engine of ["worker", "supervised child"] as const) {
       resolveStarted = resolve;
     });
     const isolated = isolatedCancellationFacade(engine, () => resolveStarted());
+    enterRunningChildStage("ISOLATION_READY");
     const facade = facadeWithDetect(async (snapshot, context) => {
       observedSignal = context?.signal;
       return isolated.facade.detect(snapshot, context);
     });
     const connection = await connectDetectServer(facade);
+    enterRunningChildStage("CONNECTION_READY");
     const abort = new AbortController();
     let bodyCompleted = false;
 
@@ -421,17 +423,33 @@ for (const engine of ["worker", "supervised child"] as const) {
         undefined,
         { signal: abort.signal, timeout: 5_000 },
       );
-      await Promise.race([
-        started,
-        running.then(
-          (result) => Promise.reject(new Error(
+      enterRunningChildStage("REQUEST_ISSUED");
+      let firstStartObserved = false;
+      let startTimer: NodeJS.Timeout | undefined;
+      const earlySettlement = running.then(
+        (result) => {
+          if (!firstStartObserved) enterRunningChildStage("REQUEST_RESOLVED_BEFORE_START");
+          return Promise.reject(new Error(
             `engine settled before start: ${JSON.stringify(result)}`,
-          )),
-          (error: unknown) => Promise.reject(error),
-        ),
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(() => reject(new Error("engine did not start")), 2_500)),
-      ]);
+          ));
+        },
+        (error: unknown) => {
+          if (!firstStartObserved) enterRunningChildStage("REQUEST_REJECTED_BEFORE_START");
+          return Promise.reject(error);
+        },
+      );
+      const startDeadline = new Promise<never>((_resolve, reject) => {
+        startTimer = setTimeout(() => {
+          if (!firstStartObserved) enterRunningChildStage("START_TIMEOUT");
+          reject(new Error("engine did not start"));
+        }, 2_500);
+      });
+      try {
+        await Promise.race([started, earlySettlement, startDeadline]);
+        firstStartObserved = true;
+      } finally {
+        if (startTimer !== undefined) clearTimeout(startTimer);
+      }
       enterRunningChildStage("FIRST_START");
       abort.abort();
       await assert.rejects(running, /abort/iu);
