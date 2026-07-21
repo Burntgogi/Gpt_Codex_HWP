@@ -277,6 +277,25 @@ class SafeEditTests(unittest.TestCase):
         self.assertTrue(any("duplicate href" in issue for issue in issues), issues)
 
     def test_direct_helper_rejects_signed_and_encrypted_package_markers(self) -> None:
+        baseline = self.source.stat()
+        ctime_shift = mock.Mock(
+            st_dev=baseline.st_dev,
+            st_ino=baseline.st_ino,
+            st_size=baseline.st_size,
+            st_mtime_ns=baseline.st_mtime_ns,
+            st_ctime_ns=baseline.st_ctime_ns + 1,
+        )
+        mtime_shift = mock.Mock(
+            st_dev=baseline.st_dev,
+            st_ino=baseline.st_ino,
+            st_size=baseline.st_size,
+            st_mtime_ns=baseline.st_mtime_ns + 1,
+            st_ctime_ns=baseline.st_ctime_ns,
+        )
+        self.assertTrue(I.same_file_snapshot(baseline, ctime_shift, platform="nt"))
+        self.assertFalse(I.same_file_snapshot(baseline, ctime_shift, platform="posix"))
+        self.assertFalse(I.same_file_snapshot(baseline, mtime_shift, platform="nt"))
+
         for name, entries, expected_code in (
             (
                 "signed",

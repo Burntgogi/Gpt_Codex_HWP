@@ -745,13 +745,23 @@ def read_stable_bounded_path(
         os.close(descriptor)
 
 
-def same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
-    return (
+def same_file_snapshot(
+    left: os.stat_result,
+    right: os.stat_result,
+    *,
+    platform: str | None = None,
+) -> bool:
+    platform_name = os.name if platform is None else platform
+    if platform_name not in {"nt", "posix"}:
+        return False
+    stable_identity_and_content = (
         left.st_dev == right.st_dev
         and left.st_ino == right.st_ino
         and left.st_size == right.st_size
         and left.st_mtime_ns == right.st_mtime_ns
-        and left.st_ctime_ns == right.st_ctime_ns
+    )
+    return stable_identity_and_content and (
+        platform_name == "nt" or left.st_ctime_ns == right.st_ctime_ns
     )
 
 
