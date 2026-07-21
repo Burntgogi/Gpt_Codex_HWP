@@ -138,24 +138,38 @@ test("MCP progress notification rejection yields to request abort", async () => 
   assert.equal(handlerCalls, 0);
 });
 
-test("MCP cancellation reaches the preview exclusive-open boundary", async () => {
+test("MCP cancellation reaches the preview exclusive-open boundary", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "hwp-mcp-preview-cancel-"));
   const outputPath = join(directory, "preview.svg");
   const abort = new AbortController();
+  let failureStage = "setup";
   try {
+    failureStage = "rejection";
     await assert.rejects(
       writeDocumentRenderResultExclusively({
         payload: { svg: "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>" },
         async verifySourceUnchanged() {},
       }, outputPath, {
         signal: abort.signal,
-        beforeOpen: async () => abort.abort(),
+        beforeOpen: async () => {
+          failureStage = "cancellation";
+          abort.abort();
+        },
       }),
       (error: unknown) => errorCode(error) === "REQUEST_CANCELLED",
     );
+    failureStage = "output-absence";
     await assert.rejects(access(outputPath));
+  } catch (error: unknown) {
+    t.diagnostic(`MCP_PREVIEW_CANCELLATION_FAILURE_${failureStage.toUpperCase().replaceAll("-", "_")}`);
+    throw error;
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    try {
+      await rm(directory, { recursive: true, force: true });
+    } catch (error: unknown) {
+      t.diagnostic("MCP_PREVIEW_CANCELLATION_FAILURE_CLEANUP");
+      throw error;
+    }
   }
 });
 

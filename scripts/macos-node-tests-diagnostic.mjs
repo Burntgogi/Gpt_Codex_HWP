@@ -213,6 +213,13 @@ const DOCUMENT_SEQUENTIAL_PROGRESS_CODES = Object.freeze(
   [...DOCUMENT_SEQUENTIAL_STAGES].map((stage) =>
     `DOCUMENT_SEQUENTIAL_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
 );
+const MCP_PREVIEW_CANCELLATION_STAGES = new Set([
+  "setup", "rejection", "cancellation", "output-absence", "cleanup",
+]);
+const MCP_PREVIEW_CANCELLATION_CODES = Object.freeze(
+  [...MCP_PREVIEW_CANCELLATION_STAGES].map((stage) =>
+    `MCP_PREVIEW_CANCELLATION_FAILURE_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -480,11 +487,24 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       }
       if (file === "mcp-cancellation-progress.test.ts") {
         let caseId = "aggregate";
+        let stage;
         try {
           const candidate = await runMcpCancellationProgressDiagnostic();
-          if (/^mp(?:0[1-9]|1[0-3])$/u.test(candidate)) caseId = candidate;
-          else if (candidate === "aggregate") caseId = "mcp-cancellation-aggregate";
+          if (typeof candidate === "string") {
+            if (/^mp(?:0[1-9]|1[0-3])$/u.test(candidate)) caseId = candidate;
+            else if (candidate === "aggregate") caseId = "mcp-cancellation-aggregate";
+          } else if (candidate !== null && typeof candidate === "object") {
+            if (/^mp(?:0[1-9]|1[0-3])$/u.test(candidate.caseId)) caseId = candidate.caseId;
+            else if (candidate.caseId === "mcp-cancellation-aggregate"
+              || candidate.caseId === "mcp-cancellation-rerun-passed") {
+              caseId = candidate.caseId;
+            }
+            if (MCP_PREVIEW_CANCELLATION_STAGES.has(candidate.stage)) stage = candidate.stage;
+          }
         } catch {}
+        if (caseId === "mp03" && stage !== undefined) {
+          stdout.write(`${receiptPrefix}_MCP_PREVIEW_CANCELLATION stage=${stage}\n`);
+        }
         stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
         setExitCode(1);
         return false;
@@ -618,7 +638,24 @@ async function executeBenchmarkPolicyDiagnostic() {
 }
 
 async function executeMcpCancellationProgressDiagnostic() {
-  return executeSourceOrdinalDiagnostic("mcp-cancellation-progress.test.ts", 13, "mp");
+  let ordinal;
+  let stage;
+  const passed = await executeBoundedNodeTestFile("mcp-cancellation-progress.test.ts", {
+    maximumTopLevelTests: 13,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    fixedDiagnostics: MCP_PREVIEW_CANCELLATION_CODES,
+    onFixedDiagnostic: (code) => {
+      const candidate = code.slice("MCP_PREVIEW_CANCELLATION_FAILURE_".length)
+        .toLowerCase().replaceAll("_", "-");
+      if (MCP_PREVIEW_CANCELLATION_STAGES.has(candidate)) stage = candidate;
+    },
+  });
+  return {
+    caseId: ordinal === undefined
+      ? passed ? "mcp-cancellation-rerun-passed" : "mcp-cancellation-aggregate"
+      : `mp${String(ordinal).padStart(2, "0")}`,
+    stage,
+  };
 }
 
 async function executeKordocCoreDiagnostic() {

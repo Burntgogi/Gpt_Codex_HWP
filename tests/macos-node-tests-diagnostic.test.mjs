@@ -377,6 +377,43 @@ test("shared Node diagnostic maps MCP cancellation failure to one bounded ordina
   assert.equal(output, "WINDOWS_NODE_TEST_CASE case=mp10 status=failed\n");
 });
 
+test("shared Node diagnostic emits one allowlisted preview cancellation failure stage", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "mcp-cancellation-progress.test.ts",
+    runMcpCancellationProgressDiagnostic: async () => ({
+      caseId: "mp03",
+      stage: "output-absence",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "WINDOWS_MCP_PREVIEW_CANCELLATION stage=output-absence\n"
+      + "WINDOWS_NODE_TEST_CASE case=mp03 status=failed\n",
+  );
+});
+
+test("shared Node diagnostic redacts an unknown preview cancellation failure stage", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "mcp-cancellation-progress.test.ts",
+    runMcpCancellationProgressDiagnostic: async () => ({
+      caseId: "mp03",
+      stage: "private/runner/secret",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_NODE_TEST_CASE case=mp03 status=failed\n");
+  assert.doesNotMatch(output, /private|runner|secret|[\\/]/u);
+});
+
 test("shared Node diagnostic maps Kordoc Core source failure to one bounded ordinal", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({

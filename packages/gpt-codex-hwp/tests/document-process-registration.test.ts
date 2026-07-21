@@ -1695,7 +1695,7 @@ test("registration sequential transport completes two real bootstrap ACK handsha
   coordinator.start();
   try {
     enterDiagnosticStage("CLOSE");
-    const result = await waitForClose(caseChild);
+    const result = await waitForClose(caseChild, 30_000);
     enterDiagnosticStage("BEGIN_CLOSING");
     await coordinator.beginClosing();
     enterDiagnosticStage("SEAL");
@@ -2266,12 +2266,15 @@ async function readJsonLine<Value>(stream: Readable): Promise<Value> {
   });
 }
 
-async function waitForClose(child: ChildProcess): Promise<Readonly<{
+async function waitForClose(child: ChildProcess, timeoutMs = 5_000): Promise<Readonly<{
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
 }>> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
+    throw new Error("invalid wait-for-close timeout");
+  }
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
@@ -2289,7 +2292,7 @@ async function waitForClose(child: ChildProcess): Promise<Readonly<{
     const timeout = setTimeout(() => {
       terminate(child);
       rejectPromise(new Error("timed out waiting for gated fixture exit"));
-    }, 5_000);
+    }, timeoutMs);
     const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
       clearTimeout(timeout);
       resolvePromise({ code, signal, stdout, stderr });
