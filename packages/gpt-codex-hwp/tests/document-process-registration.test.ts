@@ -1570,12 +1570,26 @@ test("document child registration rejects a one-present descriptor pair", async 
   const markerPath = join(temporaryRoot, "marker.json");
   const child = spawnGatedFixture(markerPath, "fd8-only", "registration-only");
   t.after(() => terminate(child));
-
-  const result = await waitForClose(child);
-  await assert.rejects(access(markerPath), { code: "ENOENT" });
-  assert.notEqual(result.code, 0);
-  assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "");
+  let diagnosticStage = "CLOSE";
+  const enterDiagnosticStage = (stage: string): void => {
+    diagnosticStage = stage;
+    t.diagnostic(`DOCUMENT_DESCRIPTOR_MISMATCH_STAGE_${stage}`);
+  };
+  try {
+    enterDiagnosticStage("CLOSE");
+    const result = await waitForClose(child);
+    enterDiagnosticStage("OUTPUT_ABSENCE");
+    await assert.rejects(access(markerPath), { code: "ENOENT" });
+    enterDiagnosticStage("EXIT_CODE");
+    assert.notEqual(result.code, 0);
+    enterDiagnosticStage("STDOUT");
+    assert.equal(result.stdout, "");
+    enterDiagnosticStage("STDERR");
+    assert.equal(result.stderr, "");
+    enterDiagnosticStage("BODY_COMPLETE");
+  } catch {
+    throw new Error(`DOCUMENT_DESCRIPTOR_MISMATCH_${diagnosticStage}`);
+  }
 });
 
 test("registration descriptor ownership produces clean EOF after case and bootstrap exit", { timeout: 15_000 }, async (t) => {

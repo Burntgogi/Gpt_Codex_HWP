@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   access,
   mkdir,
-  mkdtemp,
   open,
   readFile,
   rename,
@@ -10,7 +9,6 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -43,7 +41,9 @@ import {
 import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
 
 test("defense-in-depth: hwp_read budgets oversized facade details before image and Markdown destinations", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-read-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-read-",
+  });
   const sourcePath = join(root, "source.hwpx");
   const outputDir = join(root, "images");
   const markdownPath = join(root, "document.md");
@@ -81,7 +81,9 @@ test("defense-in-depth: hwp_read budgets oversized facade details before image a
 });
 
 test("hwp_read does not create an empty image directory", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-empty-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-empty-",
+  });
   const sourcePath = join(root, "source.hwpx");
   const outputDir = join(root, "images");
   await writeFile(sourcePath, Buffer.from(await markdownToHwpx("# No images")));
@@ -137,7 +139,9 @@ test("hwp_read rechecks source identity after response budgeting and before comm
 });
 
 test("a replaced planned image directory fails with OUTPUT_CONFLICT and no suffix reselection", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-race-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-race-",
+  });
   const outputDir = join(root, "images");
   const displacedDir = join(root, "images-displaced");
   const plannedPath = join(outputDir, "seal.png");
@@ -172,7 +176,9 @@ test("a replaced planned image directory fails with OUTPUT_CONFLICT and no suffi
 test("exclusive writers recheck parent identity after open and before payload bytes", async (t) => {
   for (const kind of ["files", "range", "range-and-files"] as const) {
     await t.test(kind, async () => {
-      const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-parent-swap-${kind}-`));
+      const root = await createCanonicalTemporaryDirectory({
+        prefix: `gpt-codex-hwp-parent-swap-${kind}-`,
+      });
       const outputDir = join(root, "output");
       const outputPath = join(outputDir, "document.bin");
       const companionPath = join(outputDir, "preview.txt");
@@ -236,7 +242,9 @@ test("exclusive writers recheck parent identity after open and before payload by
 test("exclusive writers reject unused expected directory identities before output creation", async (t) => {
   for (const kind of ["files", "range", "range-and-files"] as const) {
     await t.test(kind, async () => {
-      const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-unused-identity-${kind}-`));
+      const root = await createCanonicalTemporaryDirectory({
+        prefix: `gpt-codex-hwp-unused-identity-${kind}-`,
+      });
       const unusedDir = join(root, "unused");
       const outputDir = join(root, "must-not-be-created");
       const outputPath = join(outputDir, "document.bin");
@@ -278,7 +286,9 @@ test("exclusive writers reject unused expected directory identities before outpu
 });
 
 test("render preparation validates metadata without creating the destination", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-prepare-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-prepare-",
+  });
   const outputPath = join(root, "preview.svg");
   const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>ok</text></svg>';
   try {
@@ -298,7 +308,9 @@ test("render preparation validates metadata without creating the destination", a
 });
 
 test("defense-in-depth: hwp_render_preview rejects oversized facade details before creating SVG output", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-preview-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-preview-",
+  });
   const sourcePath = join(root, "source.hwpx");
   const outputPath = join(root, "preview.svg");
   await writeFile(sourcePath, Buffer.from(await markdownToHwpx("# Preview")));
@@ -342,7 +354,9 @@ test("defense-in-depth: hwp_render_preview rejects oversized facade details befo
 });
 
 test("defense-in-depth: hwp_generate_hwpx rejects oversized facade preview details before writing outputs", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-generate-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-generate-",
+  });
   const outputPath = join(root, "generated.hwpx");
   const previewPath = join(root, "generated.svg");
   let writes = 0;
@@ -513,7 +527,9 @@ test("defense-in-depth: hwp_insert_image rejects oversized facade warnings befor
 });
 
 test("defense-in-depth: hwp_create_svg_asset budgets an oversized PNG fallback warning before writing SVG", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-svg-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-svg-",
+  });
   const svgPath = join(root, "asset.svg");
   const pngPath = join(root, "asset.png");
   try {
@@ -605,7 +621,9 @@ test("protocol accepts exact-schema metadata below the one-MiB aggregate ceiling
 });
 
 test("hwp_read commits image and Markdown for protocol-valid near-ceiling metadata", async () => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-output-budget-near-limit-"));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-budget-near-limit-",
+  });
   const sourcePath = join(root, "source.hwpx");
   const outputDir = join(root, "images");
   const markdownPath = join(root, "document.md");
@@ -686,7 +704,9 @@ async function mutationFixture(label: string): Promise<{
   readonly outputPath: string;
   cleanup(): Promise<void>;
 }> {
-  const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-output-budget-${label}-`));
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: `gpt-codex-hwp-output-budget-${label}-`,
+  });
   const sourcePath = join(root, "source.hwpx");
   await writeFile(sourcePath, Buffer.from(await markdownToHwpx(`# ${label}`)));
   return {

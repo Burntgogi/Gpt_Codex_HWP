@@ -261,19 +261,19 @@ test("macOS Node diagnostic maps document registration failure to one bounded or
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file) => file !== "document-process-registration.test.ts",
-    runDocumentProcessDiagnostic: async () => "dp51",
+    runDocumentProcessDiagnostic: async () => "dp53",
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=dp51 status=failed\n");
+  assert.equal(output, "MAC_NODE_TEST_CASE case=dp53 status=failed\n");
 });
 
 test("macOS Node diagnostic emits a bounded sequential-registration stage", async () => {
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file) => file !== "document-process-registration.test.ts",
-    runDocumentProcessDiagnostic: async () => "dp45",
+    runDocumentProcessDiagnostic: async () => "dp47",
     runDocumentSequentialDiagnostic: async () => "begin-closing",
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
@@ -281,8 +281,28 @@ test("macOS Node diagnostic emits a bounded sequential-registration stage", asyn
   assert.equal(passed, false);
   assert.equal(
     output,
-    "MAC_DOCUMENT_SEQUENTIAL stage=begin-closing\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
+    "MAC_DOCUMENT_SEQUENTIAL stage=begin-closing\nMAC_NODE_TEST_CASE case=dp47 status=failed\n",
   );
+});
+
+test("macOS Node diagnostic keeps the real dp45 descriptor stage separate", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "document-process-registration.test.ts",
+    runDocumentProcessDiagnostic: async () => ({
+      caseId: "dp45",
+      descriptorMismatchStage: "stderr",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_DOCUMENT_DESCRIPTOR_MISMATCH stage=stderr\n"
+      + "MAC_NODE_TEST_CASE case=dp45 status=failed\n",
+  );
+  assert.doesNotMatch(output, /DOCUMENT_SEQUENTIAL/u);
 });
 
 test("macOS Node diagnostic isolates a sequential failure after cleanup completes", async () => {
@@ -291,7 +311,7 @@ test("macOS Node diagnostic isolates a sequential failure after cleanup complete
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file) => file !== "document-process-registration.test.ts",
     runDocumentProcessDiagnostic: async () => ({
-      caseId: "dp45",
+      caseId: "dp47",
       failureKind: "test-timeout",
       testCodeReason: "async-activity",
       assertionOrigin: "register-root",
@@ -313,7 +333,7 @@ test("macOS Node diagnostic isolates a sequential failure after cleanup complete
       + "MAC_DOCUMENT_SEQUENTIAL_FAILURE kind=test-timeout\n"
       + "MAC_DOCUMENT_SEQUENTIAL_TEST_CODE reason=async-activity\n"
       + "MAC_DOCUMENT_SEQUENTIAL_ASSERTION origin=register-root\n"
-      + "MAC_NODE_TEST_CASE case=dp45 status=failed\n",
+      + "MAC_NODE_TEST_CASE case=dp47 status=failed\n",
   );
 });
 
@@ -364,7 +384,7 @@ test("macOS Node diagnostic preserves the first document-registration receipt wi
   let reruns = 0;
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async () => true,
-    runDocumentFile: async () => ({ passed: false, caseId: "dp45", stage: "closed-1" }),
+    runDocumentFile: async () => ({ passed: false, caseId: "dp47", stage: "closed-1" }),
     runDocumentProcessDiagnostic: async () => {
       reruns += 1;
       return { passed: true, caseId: "document-rerun-passed" };
@@ -376,7 +396,7 @@ test("macOS Node diagnostic preserves the first document-registration receipt wi
   assert.equal(reruns, 0);
   assert.equal(
     output,
-    "MAC_DOCUMENT_SEQUENTIAL stage=closed-1\nMAC_NODE_TEST_CASE case=dp45 status=failed\n",
+    "MAC_DOCUMENT_SEQUENTIAL stage=closed-1\nMAC_NODE_TEST_CASE case=dp47 status=failed\n",
   );
 });
 

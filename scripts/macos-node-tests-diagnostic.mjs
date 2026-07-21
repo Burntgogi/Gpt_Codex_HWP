@@ -213,6 +213,17 @@ const DOCUMENT_SEQUENTIAL_PROGRESS_CODES = Object.freeze(
   [...DOCUMENT_SEQUENTIAL_STAGES].map((stage) =>
     `DOCUMENT_SEQUENTIAL_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
 );
+const DOCUMENT_DESCRIPTOR_MISMATCH_STAGES = new Set([
+  "close", "output-absence", "exit-code", "stdout", "stderr", "body-complete",
+]);
+const DOCUMENT_DESCRIPTOR_MISMATCH_CODES = Object.freeze(
+  [...DOCUMENT_DESCRIPTOR_MISMATCH_STAGES].map((stage) =>
+    `DOCUMENT_DESCRIPTOR_MISMATCH_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
+const DOCUMENT_DESCRIPTOR_MISMATCH_PROGRESS_CODES = Object.freeze(
+  [...DOCUMENT_DESCRIPTOR_MISMATCH_STAGES].map((stage) =>
+    `DOCUMENT_DESCRIPTOR_MISMATCH_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
+);
 const MCP_PREVIEW_CANCELLATION_STAGES = new Set([
   "setup", "rejection", "cancellation", "output-absence", "cleanup",
 ]);
@@ -412,19 +423,23 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let runnerFailureKind;
         let testCodeReason;
         let assertionOrigin;
+        let descriptorMismatchStage;
         let firstFailureStage;
         try {
           const candidate = documentReceipt ?? await runDocumentProcessDiagnostic();
           if (typeof candidate === "string"
-            && /^dp(?:0[1-9]|[1-4][0-9]|5[01])$/u.test(candidate)) {
+            && /^dp(?:0[1-9]|[1-4][0-9]|5[0-3])$/u.test(candidate)) {
             caseId = candidate;
           } else if (candidate !== null && typeof candidate === "object") {
-            if (/^(?:dp(?:0[1-9]|[1-4][0-9]|5[01])|document-(?:aggregate|rerun-passed))$/u
+            if (/^(?:dp(?:0[1-9]|[1-4][0-9]|5[0-3])|document-(?:aggregate|rerun-passed))$/u
               .test(candidate.caseId)) {
               caseId = candidate.caseId;
             }
             if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate.stage)) {
               firstFailureStage = candidate.stage;
+            }
+            if (DOCUMENT_DESCRIPTOR_MISMATCH_STAGES.has(candidate.descriptorMismatchStage)) {
+              descriptorMismatchStage = candidate.descriptorMismatchStage;
             }
             if (["test-timeout", "hook-failure", "test-code", "async-failure", "cancelled", "unknown"]
               .includes(candidate.failureKind)) {
@@ -448,6 +463,11 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           }
         } catch {}
         if (caseId === "dp45") {
+          stdout.write(
+            `${receiptPrefix}_DOCUMENT_DESCRIPTOR_MISMATCH stage=${descriptorMismatchStage ?? "diagnostic-failed"}\n`,
+          );
+        }
+        if (caseId === "dp47") {
           let stage = firstFailureStage ?? "diagnostic-failed";
           let isolatedStatus;
           if (firstFailureStage === undefined || firstFailureStage === "cleanup-complete") {
@@ -635,28 +655,45 @@ async function executeDocumentProcessDiagnostic(options = {}) {
   let stage;
   let testCodeReason;
   let assertionOrigin;
+  let descriptorMismatchStage;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
     testTimeoutMs: options.testTimeoutMs,
     closeTimeoutMs: options.closeTimeoutMs,
-    maximumTopLevelTests: 51,
+    maximumTopLevelTests: 53,
     onCompletionKind: (value) => { completionKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     onFailedTopLevelFailureKind: (value) => { failureKind = value; },
     onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
     onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
-    fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
+    fixedDiagnostics: [...DOCUMENT_SEQUENTIAL_CODES, ...DOCUMENT_DESCRIPTOR_MISMATCH_CODES],
     onFixedDiagnostic: (code) => {
-      const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length).toLowerCase().replaceAll("_", "-");
-      if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+      if (code.startsWith("DOCUMENT_SEQUENTIAL_")) {
+        const candidate = code.slice("DOCUMENT_SEQUENTIAL_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+      } else if (code.startsWith("DOCUMENT_DESCRIPTOR_MISMATCH_")) {
+        const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (DOCUMENT_DESCRIPTOR_MISMATCH_STAGES.has(candidate)) descriptorMismatchStage = candidate;
+      }
     },
-    fixedProgressDiagnostics: DOCUMENT_SEQUENTIAL_PROGRESS_CODES,
+    fixedProgressDiagnostics: [
+      ...DOCUMENT_SEQUENTIAL_PROGRESS_CODES,
+      ...DOCUMENT_DESCRIPTOR_MISMATCH_PROGRESS_CODES,
+    ],
     onFixedProgressDiagnostic: (code) => {
-      const candidate = code.slice("DOCUMENT_SEQUENTIAL_STAGE_".length)
-        .toLowerCase().replaceAll("_", "-");
-      if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+      if (code.startsWith("DOCUMENT_SEQUENTIAL_STAGE_")) {
+        const candidate = code.slice("DOCUMENT_SEQUENTIAL_STAGE_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (DOCUMENT_SEQUENTIAL_STAGES.has(candidate)) stage = candidate;
+      } else if (code.startsWith("DOCUMENT_DESCRIPTOR_MISMATCH_STAGE_")) {
+        const candidate = code.slice("DOCUMENT_DESCRIPTOR_MISMATCH_STAGE_".length)
+          .toLowerCase().replaceAll("_", "-");
+        if (DOCUMENT_DESCRIPTOR_MISMATCH_STAGES.has(candidate)) descriptorMismatchStage = candidate;
+      }
     },
   });
   return {
@@ -670,6 +707,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
     stage,
     testCodeReason,
     assertionOrigin,
+    descriptorMismatchStage,
   };
 }
 
