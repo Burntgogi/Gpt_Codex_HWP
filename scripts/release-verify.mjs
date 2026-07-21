@@ -84,6 +84,10 @@ export async function runReleaseVerification(options = {}) {
     maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
     expectedSourceIdentity: beforeIdentity,
   }));
+  const diagnosticObserver = options.diagnosticObserver;
+  if (diagnosticObserver !== undefined && typeof diagnosticObserver !== "function") {
+    throw releaseError("RELEASE_VERIFY_DIAGNOSTIC_OBSERVER_INVALID");
+  }
 
   const stages = [];
   for (const stage of releaseStageDefinitions(root)) {
@@ -102,6 +106,16 @@ export async function runReleaseVerification(options = {}) {
     }
     stages.push(Object.freeze({ name: stage.name, status, elapsedMs }));
     if (status !== "passed") {
+      const diagnostic = stage.name === "document-benchmark"
+        ? normalizedDocumentBenchmarkDiagnostic(outcome?.diagnostic)
+        : undefined;
+      if (diagnostic !== undefined && diagnosticObserver !== undefined) {
+        try {
+          diagnosticObserver(diagnostic);
+        } catch {
+          // Diagnostics are best-effort and must not affect the release decision.
+        }
+      }
       await observeFinalSourceIdentity(collectSourceIdentity, root);
       return releaseReceipt({
         status: "failed",
@@ -212,7 +226,9 @@ export async function runStageCommand(stage, options = {}) {
   let result;
   for (let index = 0; index < invocations.length; index += 1) {
     const remainingTimeoutMs = Math.ceil(timeoutMs - (performance.now() - started));
-    if (remainingTimeoutMs <= 0) return Object.freeze({ status: "failed" });
+    if (remainingTimeoutMs <= 0) {
+      return failedStageOutcome(stage.name, index, undefined);
+    }
     result = await executeCommand({
       ...invocations[index],
       cwd,
@@ -220,13 +236,76 @@ export async function runStageCommand(stage, options = {}) {
       timeoutMs: remainingTimeoutMs,
       maxOutputBytes,
       outputBudget,
-      captureOutput: evidence !== undefined && index === invocations.length - 1,
+      captureOutput: stage.name === "document-benchmark"
+        || (evidence !== undefined && index === invocations.length - 1),
     });
-    if (result.status !== "passed") return Object.freeze({ status: "failed" });
+    if (result.status !== "passed") return failedStageOutcome(stage.name, index, result);
   }
   const passed = result.status === "passed"
     && (evidence === undefined || hasRequiredNodeTestSummary(result, evidence));
   return Object.freeze({ status: passed ? "passed" : "failed" });
+}
+
+function failedStageOutcome(stageName, commandIndex, result) {
+  if (stageName !== "document-benchmark") return Object.freeze({ status: "failed" });
+  const diagnostic = Object.freeze({
+    kind: "document-benchmark",
+    command: commandIndex + 1,
+    receipt: selectDocumentBenchmarkFailureReceipt(result),
+  });
+  return Object.freeze({ status: "failed", diagnostic });
+}
+
+function selectDocumentBenchmarkFailureReceipt(result) {
+  const lines = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`
+    .split(/\r?\n/u)
+    .map((line) => line.trim());
+  const patterns = [
+    /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u,
+    /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u,
+    /^BENCHMARK_CASE_FAILURE phase=(?:facade|snapshot|detect|probe|unknown) engineCode=[A-Z_]+ stage=[a-zA-Z0-9-]+$/u,
+    /^BENCHMARK_PROBE_FAILURE engineCode=[A-Z_]+$/u,
+    /^BENCHMARK_CASE requestedMiB=10 status=failed(?: errorCode=[A-Z_]+)?$/u,
+    /^BENCHMARK_[A-Z_]+(?: stage=[a-z0-9-]+)?$/u,
+  ];
+  for (const pattern of patterns) {
+    const match = lines.findLast((line) => pattern.test(line));
+    if (match !== undefined) return match;
+  }
+  return "BENCHMARK_DIAGNOSTIC_UNAVAILABLE";
+}
+
+function normalizedDocumentBenchmarkDiagnostic(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "command,kind,receipt"
+    || value.kind !== "document-benchmark"
+    || ![1, 2].includes(value.command)
+    || typeof value.receipt !== "string"
+    || !isSafeDocumentBenchmarkReceipt(value.receipt)) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: "document-benchmark",
+    command: value.command,
+    receipt: value.receipt,
+  });
+}
+
+function isSafeDocumentBenchmarkReceipt(value) {
+  return value === "BENCHMARK_DIAGNOSTIC_UNAVAILABLE"
+    || /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u.test(value)
+    || /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u.test(value)
+    || /^BENCHMARK_CASE_FAILURE phase=(?:facade|snapshot|detect|probe|unknown) engineCode=[A-Z_]+ stage=[a-zA-Z0-9-]+$/u.test(value)
+    || /^BENCHMARK_PROBE_FAILURE engineCode=[A-Z_]+$/u.test(value)
+    || /^BENCHMARK_CASE requestedMiB=10 status=failed(?: errorCode=[A-Z_]+)?$/u.test(value)
+    || /^BENCHMARK_[A-Z_]+(?: stage=[a-z0-9-]+)?$/u.test(value);
+}
+
+export function formatDocumentBenchmarkDiagnostic(value) {
+  const diagnostic = normalizedDocumentBenchmarkDiagnostic(value);
+  return diagnostic === undefined
+    ? undefined
+    : `DOCUMENT_BENCHMARK_FIRST_FAILURE command=${diagnostic.command} ${diagnostic.receipt}`;
 }
 
 export async function runReleaseArtifactsStage(stage, options = {}) {

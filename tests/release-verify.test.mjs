@@ -865,6 +865,62 @@ test("stage command execution is fail-closed and never returns process output", 
   assert.equal(JSON.stringify(failed).includes("PRIVATE_"), false);
 });
 
+test("document benchmark stage preserves only the first bounded failure receipt", async () => {
+  const result = await runStageCommand(
+    nodeStage(
+      "document-benchmark",
+      [
+        'process.stdout.write("PRIVATE/path/document.hwpx\\n")',
+        'process.stdout.write("BENCHMARK_CASE_FAILURE phase=detect engineCode=ENGINE_INIT_FAILED stage=startup\\n")',
+        'process.stderr.write("BENCHMARK_TERMINATION_FAILED stage=windows-termination-scan-exhausted\\n")',
+        "process.exit(7)",
+      ].join(";"),
+    ),
+    { timeoutMs: 2_000, maxOutputBytes: 1_024 },
+  );
+
+  assert.deepEqual(result, {
+    status: "failed",
+    diagnostic: {
+      kind: "document-benchmark",
+      command: 1,
+      receipt: "BENCHMARK_TERMINATION_FAILED stage=windows-termination-scan-exhausted",
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
+});
+
+test("release verification reports a bounded document benchmark diagnostic out of band", async () => {
+  const diagnostics = [];
+  const receipt = await runReleaseVerification({
+    root: ROOT,
+    platform: "test-platform",
+    arch: "test-arch",
+    versions: VERSIONS,
+    resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+    collectSourceIdentity: collectStableSourceIdentity,
+    diagnosticObserver: (value) => { diagnostics.push(value); },
+    runStage: async (stage) => stage.name === "document-benchmark"
+      ? {
+          status: "failed",
+          diagnostic: {
+            kind: "document-benchmark",
+            command: 2,
+            receipt: "BENCHMARK_EVIDENCE_INVALID",
+          },
+        }
+      : passedReleaseStage(stage),
+  });
+
+  assert.equal(receipt.status, "failed");
+  assert.deepEqual(diagnostics, [{
+    kind: "document-benchmark",
+    command: 2,
+    receipt: "BENCHMARK_EVIDENCE_INVALID",
+  }]);
+  assert.equal(JSON.stringify(receipt).includes("diagnostic"), false);
+});
+
 test("composite stage commands execute sequentially", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-sequence-"));
   t.after(async () => rm(root, { recursive: true, force: true }));

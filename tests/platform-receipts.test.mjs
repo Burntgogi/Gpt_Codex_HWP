@@ -722,6 +722,45 @@ test("platform receipt CLI reports only the allowlisted failed release stage", a
   }
 });
 
+test("platform receipt CLI emits only a validated first document benchmark failure", async () => {
+  let stdout = "";
+  let stderr = "";
+  let exitCode;
+
+  const result = await runPlatformReceiptCli({
+    args: ["create"],
+    env: { EXPECTED_HEAD_SHA: EXPECTED.commit },
+    root: process.cwd(),
+    stdout: { write: (value) => { stdout += value; } },
+    stderr: { write: (value) => { stderr += value; } },
+    setExitCode: (value) => { exitCode = value; },
+    collectExpectation: async () => EXPECTED,
+    runVerification: async (options) => {
+      options.diagnosticObserver({
+        kind: "document-benchmark",
+        command: 1,
+        receipt: "PRIVATE/path/document.hwpx",
+      });
+      options.diagnosticObserver({
+        kind: "document-benchmark",
+        command: 1,
+        receipt: "BENCHMARK_TERMINATION_FAILED stage=windows-termination-scan-exhausted",
+      });
+      return failedReleaseReceipt("document-benchmark");
+    },
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(stdout, "");
+  assert.equal(
+    stderr,
+    "DOCUMENT_BENCHMARK_FIRST_FAILURE command=1 BENCHMARK_TERMINATION_FAILED stage=windows-termination-scan-exhausted\n"
+      + "PLATFORM_RECEIPT_RELEASE_INVALID stage=document-benchmark\n",
+  );
+  assert.doesNotMatch(stderr, /PRIVATE|\.hwpx|[\\/]/u);
+  assert.equal(exitCode, 1);
+});
+
 test("platform receipt CLI rejects an authentic failed-stage error replayed from an earlier call", async () => {
   let captured;
   try {

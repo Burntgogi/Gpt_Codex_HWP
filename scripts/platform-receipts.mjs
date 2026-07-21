@@ -5,7 +5,11 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 
-import { REQUIRED_RELEASE_STAGES, runReleaseVerification } from "./release-verify.mjs";
+import {
+  formatDocumentBenchmarkDiagnostic,
+  REQUIRED_RELEASE_STAGES,
+  runReleaseVerification,
+} from "./release-verify.mjs";
 import {
   noReplaceGitArguments,
   releaseSubprocessEnvironment,
@@ -230,12 +234,19 @@ export async function createPlatformReceipt(options = {}) {
   const arch = options.arch ?? process.arch;
   const runVerification = options.runVerification ?? runReleaseVerification;
   const collectExpectation = options.collectExpectation ?? collectPlatformExpectation;
-  if (typeof runVerification !== "function" || typeof collectExpectation !== "function") {
+  const diagnosticObserver = options.diagnosticObserver;
+  if (typeof runVerification !== "function" || typeof collectExpectation !== "function"
+    || (diagnosticObserver !== undefined && typeof diagnosticObserver !== "function")) {
     throw receiptError("PLATFORM_RECEIPT_OPTIONS_INVALID");
   }
 
   const before = await collectExpectation({ root, expectedCommit, platform, arch });
-  const releaseReceipt = await runVerification({ root, platform, arch });
+  const releaseReceipt = await runVerification({
+    root,
+    platform,
+    arch,
+    ...(diagnosticObserver === undefined ? {} : { diagnosticObserver }),
+  });
   const after = await collectExpectation({ root, expectedCommit, platform, arch });
   if (!sameExpectation(before, after)) throw receiptError("PLATFORM_RECEIPT_SOURCE_CHANGED");
   let receipt;
@@ -1031,6 +1042,10 @@ export async function runPlatformReceiptCli(options = {}) {
     if (args[0] === "create") {
       result = await createPlatformReceipt({
         ...common,
+        diagnosticObserver: (value) => {
+          const line = formatDocumentBenchmarkDiagnostic(value);
+          if (line !== undefined) stderr.write(`${line}\n`);
+        },
         ...(options.runVerification === undefined
           ? {}
           : { runVerification: options.runVerification }),
