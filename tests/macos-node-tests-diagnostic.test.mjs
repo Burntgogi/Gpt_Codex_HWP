@@ -331,6 +331,33 @@ test("macOS Node diagnostic distinguishes a passing document-registration rerun"
   );
 });
 
+test("Windows source diagnostic reports only an allowlisted output-budget case", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "output-budget-atomicity.test.ts",
+    runOutputBudgetAtomicityDiagnostic: async () => "ob05",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_NODE_TEST_CASE case=ob05 status=failed\n");
+});
+
+test("output-budget diagnostic rejects a non-allowlisted case identifier", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "output-budget-atomicity.test.ts",
+    runOutputBudgetAtomicityDiagnostic: async () => "ob16/private-path",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_NODE_TEST_CASE case=output-budget-aggregate status=failed\n");
+  assert.doesNotMatch(output, /private-path/u);
+});
+
 test("macOS Node diagnostic preserves the first document-registration receipt without rerunning", async () => {
   let output = "";
   let reruns = 0;

@@ -1717,8 +1717,16 @@ test("registration sequential transport completes two real bootstrap ACK handsha
       throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);
     }
   } finally {
-    terminate(caseChild);
-    await rm(temporaryRoot, { recursive: true, force: true });
+    try {
+      enterDiagnosticStage("TERMINATE_BEGIN");
+      terminate(caseChild);
+      enterDiagnosticStage("TERMINATE_COMPLETE");
+      enterDiagnosticStage("CLEANUP_BEGIN");
+      await rm(temporaryRoot, { recursive: true, force: true });
+      enterDiagnosticStage("CLEANUP_COMPLETE");
+    } catch {
+      throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);
+    }
   }
 });
 

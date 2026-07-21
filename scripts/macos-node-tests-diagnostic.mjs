@@ -292,6 +292,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? executeBenchmarkPolicyDiagnostic;
   const runMcpCancellationProgressDiagnostic = options.runMcpCancellationProgressDiagnostic
     ?? executeMcpCancellationProgressDiagnostic;
+  const runOutputBudgetAtomicityDiagnostic = options.runOutputBudgetAtomicityDiagnostic
+    ?? executeOutputBudgetAtomicityDiagnostic;
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
     ?? executeKordocCoreDiagnostic;
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
@@ -562,6 +564,16 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         setExitCode(1);
         return false;
       }
+      if (file === "output-budget-atomicity.test.ts") {
+        let caseId = "output-budget-aggregate";
+        try {
+          const candidate = await runOutputBudgetAtomicityDiagnostic();
+          if (/^ob(?:0[1-9]|1[0-5])$/u.test(candidate)) caseId = candidate;
+        } catch {}
+        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        setExitCode(1);
+        return false;
+      }
       stdout.write(`${receiptPrefix}_NODE_TEST_FILE file=${file} status=failed\n`);
       setExitCode(1);
       return false;
@@ -738,6 +750,10 @@ async function executeSourceOrdinalDiagnostic(file, maximum, prefix) {
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
   });
   return ordinal === undefined ? "aggregate" : `${prefix}${String(ordinal).padStart(2, "0")}`;
+}
+
+async function executeOutputBudgetAtomicityDiagnostic() {
+  return executeSourceOrdinalDiagnostic("output-budget-atomicity.test.ts", 15, "ob");
 }
 
 function executeSvgAssetDiagnostic(options) {
