@@ -30,7 +30,7 @@ test("hosted Python diagnostic emits one bounded ordinal for the first isolated 
 
   assert.equal(passed, false);
   assert.deepEqual(calls, CASE_IDS.slice(0, 8));
-  assert.equal(output, "MAC_PYTHON_TEST_CASE case=py08 status=failed\n");
+  assert.equal(output, "HOSTED_PYTHON_TEST_CASE case=py08 status=failed\n");
   assert.equal(exitCode, 1);
 });
 
@@ -46,7 +46,7 @@ test("hosted Python diagnostic redacts discovery and aggregate failures", async 
       setExitCode() {},
     });
     assert.equal(passed, false);
-    assert.equal(output, "MAC_PYTHON_TEST_CASE case=python-aggregate status=failed\n");
+    assert.equal(output, "HOSTED_PYTHON_TEST_CASE case=python-aggregate status=failed\n");
     assert.doesNotMatch(output, /PRIVATE|credential-marker|\.hwpx|[\\/]/u);
   }
 });
@@ -66,7 +66,7 @@ test("hosted Python diagnostic emits one all-pass receipt without isolated rerun
 
   assert.equal(passed, true);
   assert.equal(isolatedCalls, 0);
-  assert.equal(output, "MAC_PYTHON_TESTS status=passed tests=20\n");
+  assert.equal(output, "HOSTED_PYTHON_TESTS status=passed tests=20\n");
   assert.equal(exitCode, 0);
 });
 
@@ -81,5 +81,5 @@ test("hosted Python diagnostic reports an aggregate when only the full suite fai
   });
 
   assert.equal(passed, false);
-  assert.equal(output, "MAC_PYTHON_TEST_CASE case=python-aggregate status=failed\n");
+  assert.equal(output, "HOSTED_PYTHON_TEST_CASE case=python-aggregate status=failed\n");
 });

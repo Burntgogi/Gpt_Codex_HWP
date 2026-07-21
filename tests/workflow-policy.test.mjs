@@ -242,7 +242,7 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   );
   assert.match(
     windows,
-    /^      - name: Run full release gate and create platform receipt\r?\n        id: windows_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed document benchmark\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 10\r?\n        run: npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output \.superpowers\/benchmarks\/diagnostic-10\.json\r?\n      - name: Diagnose failed large-evidence validation\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 5\r?\n        run: npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --validate-large \.superpowers\/benchmarks\/release-large\.json\r?\n      - name: Diagnose failed Windows Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
+    /^      - name: Run full release gate and create platform receipt\r?\n        id: windows_release_gate\r?\n        run: node scripts\/platform-receipts\.mjs create\r?\n      - name: Diagnose failed document benchmark\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 10\r?\n        run: npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output \.superpowers\/benchmarks\/diagnostic-10\.json\r?\n      - name: Diagnose failed large-evidence validation\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 5\r?\n        run: npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --validate-large \.superpowers\/benchmarks\/release-large\.json\r?\n      - name: Diagnose failed Windows Python release gate\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 15\r?\n        run: node scripts\/python-tests-diagnostic\.mjs\r?\n      - name: Diagnose failed Windows Node release gate\r?\n        if: \$\{\{ failure\(\) && steps\.windows_release_gate\.outcome == 'failure' \}\}\r?\n        continue-on-error: true\r?\n        timeout-minutes: 30\r?\n        run: node scripts\/windows-node-tests-diagnostic\.mjs$/mu,
   );
   assert.match(
     macos,
@@ -251,14 +251,13 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   assert.equal(countMatches(workflow, /node scripts\/macos-posix-controls\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/windows-node-tests-diagnostic\.mjs/gu), 1);
   assert.equal(countMatches(workflow, /node scripts\/macos-node-tests-diagnostic\.mjs/gu), 1);
-  assert.equal(countMatches(workflow, /node scripts\/python-tests-diagnostic\.mjs/gu), 1);
+  assert.equal(countMatches(workflow, /node scripts\/python-tests-diagnostic\.mjs/gu), 2);
   assert.equal(countMatches(workflow, /--output \.superpowers\/benchmarks\/diagnostic-10\.json/gu), 2);
   assert.equal(countMatches(workflow, /--validate-large \.superpowers\/benchmarks\/release-large\.json/gu), 2);
   assert.equal(workflow.split(largeEvidenceDiagnosticCommand).length - 1, 2);
   assert.doesNotMatch(windows, /macos-posix-controls/iu);
   assert.doesNotMatch(linux, /macos-posix-controls/iu);
   assert.doesNotMatch(windows, /macos-node-tests-diagnostic/iu);
-  assert.doesNotMatch(windows, /python-tests-diagnostic/iu);
   assert.doesNotMatch(macos, /windows-node-tests-diagnostic/iu);
   assert.doesNotMatch(`${windows}\n${macos}`, /if:\s*\$\{\{\s*always\(\)/u);
 
@@ -282,10 +281,12 @@ test("CI runs bounded platform diagnostics only after the matching release gate 
   );
 
   const windowsReleaseGate = windows.indexOf("node scripts/platform-receipts.mjs create");
+  const windowsPythonDiagnostic = windows.indexOf(pythonDiagnosticCommand);
   const windowsForensicDiagnostic = windows.indexOf(windowsDiagnosticCommand);
   const windowsReceiptVerification = windows.indexOf("node scripts/platform-receipts.mjs verify");
   assert.equal(
-    windowsReleaseGate >= 0 && windowsReleaseGate < windowsForensicDiagnostic
+    windowsReleaseGate >= 0 && windowsReleaseGate < windowsPythonDiagnostic
+      && windowsPythonDiagnostic < windowsForensicDiagnostic
       && windowsForensicDiagnostic < windowsReceiptVerification,
     true,
     "Windows forensic diagnostics follow the release-gate failure boundary",

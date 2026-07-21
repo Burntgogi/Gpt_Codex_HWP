@@ -47,7 +47,7 @@ export async function runHostedPythonTestsDiagnostic(options = {}) {
     fullSuitePassed = false;
   }
   if (fullSuitePassed) {
-    stdout.write(`MAC_PYTHON_TESTS status=passed tests=${EXPECTED_TEST_COUNT}\n`);
+    stdout.write(`HOSTED_PYTHON_TESTS status=passed tests=${EXPECTED_TEST_COUNT}\n`);
     setExitCode(0);
     return true;
   }
@@ -61,7 +61,7 @@ export async function runHostedPythonTestsDiagnostic(options = {}) {
     }
     if (!passed) {
       const ordinal = String(index + 1).padStart(2, "0");
-      stdout.write(`MAC_PYTHON_TEST_CASE case=py${ordinal} status=failed\n`);
+      stdout.write(`HOSTED_PYTHON_TEST_CASE case=py${ordinal} status=failed\n`);
       setExitCode(1);
       return false;
     }
@@ -126,7 +126,7 @@ function boundedTimeout(value) {
 }
 
 function failAggregate(stdout, setExitCode) {
-  stdout.write("MAC_PYTHON_TEST_CASE case=python-aggregate status=failed\n");
+  stdout.write("HOSTED_PYTHON_TEST_CASE case=python-aggregate status=failed\n");
   setExitCode(1);
   return false;
 }

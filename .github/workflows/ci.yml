@@ -65,6 +65,11 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/release-large.json
+      - name: Diagnose failed Windows Python release gate
+        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: node scripts/python-tests-diagnostic.mjs
       - name: Diagnose failed Windows Node release gate
         if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
         continue-on-error: true
