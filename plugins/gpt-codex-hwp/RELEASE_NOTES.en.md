@@ -27,16 +27,6 @@ v0.2.1 treats HWP as a safe read-only input format and writes every new or edite
 - The README example HWPX was generated from privacy-safe synthetic Markdown and verified as one page with one table, zero structural issues, and zero preview warnings.
 - The new HWPX result PNG is pinned by exact size and SHA-256 in the public-content policy so an unapproved binary replacement fails closed. The original title banner keeps its existing pinned policy.
 
-## README Design References
-
-GitHub repository search on 2026-07-22 found no repository with at least one million stars, so the introduction patterns of the actual five most-starred repositories were reviewed instead. No original copy or imagery was reused.
-
-- [codecrafters-io/build-your-own-x](https://github.com/codecrafters-io/build-your-own-x): a full-width banner that owns the first screen
-- [sindresorhus/awesome](https://github.com/sindresorhus/awesome): centered brand identity and concise navigation
-- [freeCodeCamp/freeCodeCamp](https://github.com/freeCodeCamp/freeCodeCamp): trust status surfaced through badges
-- [public-apis/public-apis](https://github.com/public-apis/public-apis): purpose and usage paths exposed immediately
-- [EbookFoundation/free-programming-books](https://github.com/EbookFoundation/free-programming-books): clear separation of language, license, and contribution routes
-
 ## Public tools
 
 `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`

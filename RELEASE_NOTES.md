@@ -27,16 +27,6 @@ v0.2.1은 HWP를 안전한 읽기 전용 입력 형식으로 사용하고 모든
 - README 예시 HWPX는 개인정보 없는 합성 Markdown으로 생성했으며 1쪽, 표 1개, 구조 검증 문제 0개, 미리보기 경고 0개를 확인했습니다.
 - 새 HWPX 결과 PNG는 공개 콘텐츠 정책에 크기와 SHA-256을 고정해 승인되지 않은 바이너리 교체를 차단합니다. 기존 타이틀 배너도 종전의 고정 정책을 그대로 적용합니다.
 
-## README 디자인 참고
-
-2026-07-22 GitHub 저장소 검색에는 스타 100만 개 이상인 저장소가 없었으므로, 실제 스타 상위 5개 저장소의 인트로 패턴을 검토했습니다. 원본 문구나 이미지는 복사하지 않았습니다.
-
-- [codecrafters-io/build-your-own-x](https://github.com/codecrafters-io/build-your-own-x): 첫 화면을 지배하는 가로형 배너
-- [sindresorhus/awesome](https://github.com/sindresorhus/awesome): 중앙 정렬 브랜드 정체성과 짧은 탐색 링크
-- [freeCodeCamp/freeCodeCamp](https://github.com/freeCodeCamp/freeCodeCamp): 신뢰 상태를 빠르게 보여 주는 배지
-- [public-apis/public-apis](https://github.com/public-apis/public-apis): 목적과 사용 경로를 앞부분에서 바로 제시하는 구성
-- [EbookFoundation/free-programming-books](https://github.com/EbookFoundation/free-programming-books): 언어·라이선스·기여 경로를 명확히 나누는 정보 구조
-
 ## 공개 도구
 
 `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`
