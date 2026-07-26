@@ -18,10 +18,15 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.release_ref }}-${{ inputs.expected_release_sha }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build verified v${{ inputs.release_version }} candidate
     runs-on: windows-2025
+    timeout-minutes: 240
     permissions:
       contents: read
     env:
@@ -54,14 +59,44 @@ jobs:
           git config --local user.name "Gpt_Codex_HWP contributors"
           git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
           git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
-      - name: Generate fresh sequential large-document evidence
+      - name: Generate and validate release 100 MiB evidence
+        id: large
+        timeout-minutes: 30
         env:
           HWP_BENCH_LARGE: "1"
-        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
+        run: |
+          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/release-supported-100.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/release-supported-100.json
+      - name: Diagnose failed release 10 MiB probe
+        if: ${{ !cancelled() && steps.large.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/release-diagnostic-10.json
+      - name: Diagnose failed release supported evidence
+        if: ${{ !cancelled() && steps.large.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/release-supported-100.json
+      - name: Classify failed Windows release platform boundary
+        if: ${{ !cancelled() && steps.large.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        if: ${{ !cancelled() && steps.large.outcome == 'failure' }}
+        with:
+          name: release-preflight-diagnostics-${{ inputs.release_version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .superpowers/benchmarks/release-supported-100.json
+            .superpowers/benchmarks/release-diagnostic-10.json
+          if-no-files-found: error
+          retention-days: 3
+          include-hidden-files: true
       - name: Run the complete fail-closed release gate
         env:
           HWP_BENCH_REQUIRE_LARGE: "1"
-          HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
+          HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-supported-100.json"
         run: npm run release:verify
       - name: Build checksummed candidate outputs
         env:

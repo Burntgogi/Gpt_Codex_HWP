@@ -186,7 +186,7 @@ For an existing HWPX, read it first and call `hwp_patch_document` with Markdown 
 
 ## Large-document reading
 
-The source-file hard ceiling is 512 MiB; stricter format-engine limits may apply. This outer safety limit does not guarantee that every 512 MiB document can be parsed. Kordoc 3.18.1 currently caps total HWP/HWPX decompression at 100 MiB and HWPX packages at 500 entries.
+Valid source documents up to and including 100 MiB are in the CI-verified support envelope, subject to malformed-archive rejection, decompression and resource policies, and the optional allowed-root policy. Documents over 100 MiB through the 512 MiB safety ceiling are best-effort and carry no compatibility guarantee; files over 512 MiB are rejected. Kordoc 3.18.1 currently caps total HWP/HWPX decompression at 100 MiB and HWPX packages at 500 entries, so a stricter engine limit may apply first.
 
 Inline Markdown defaults to 64,000 JavaScript string characters. For larger results, pass a new `.md` path as `markdown_output_path`. The plugin parses the source once, saves complete UTF-8 Markdown up to 256 MiB without overwriting, and returns a 64,000-character preview with total size, source fingerprint, and recommended chunk size. Codex can then read the derived Markdown in roughly 64,000-character chunks without reparsing the HWP/HWPX source.
 
@@ -230,7 +230,7 @@ The plugin does not bundle font files, embed them in HWPX, or install system fon
 ## Known Limitations
 
 - Classic HWP is read-only; all generated and edited documents are written as HWPX.
-- The 512 MiB source ceiling remains subject to stricter engine limits, including Kordoc 3.18.1's 100 MiB decompression and 500-entry HWPX limits.
+- Valid source documents are CI-verified through 100 MiB; documents over 100 MiB through 512 MiB are non-guaranteed best-effort, and files over 512 MiB are rejected. Malformed-archive, decompression, resource, and allowed-root policies still apply, including Kordoc 3.18.1's 100 MiB decompression and 500-entry HWPX limits.
 - Inline Markdown is capped at 64,000 characters, derived Markdown at 256 MiB, and the final serialized MCP result at 8 MiB.
 - Kordoc or rhwp previews may not match Hancom GUI output pixel-for-pixel.
 - The rhwp preview fallback may render only the first page and use approximate Node-side font widths.

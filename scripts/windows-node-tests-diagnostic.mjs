@@ -5,6 +5,7 @@ import {
   executeBoundedNodeTestFile,
   runMacNodeTestsDiagnostic,
 } from "./macos-node-tests-diagnostic.mjs";
+import { parseNodeTestProfileArguments } from "./node-test-profiles.mjs";
 
 const REPOSITORY_TEST_FILES = Object.freeze([
   "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
@@ -145,6 +146,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const runRuntimeProjectionDiagnostic = options.runRuntimeProjectionDiagnostic
     ?? executeRuntimeProjectionDiagnostic;
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
+  const profile = options.profile ?? "full";
 
   for (const file of REPOSITORY_TEST_FILES) {
     let passed = false;
@@ -292,6 +294,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
   try {
     return await runSourceDiagnostic({
       receiptPrefix: "WINDOWS",
+      profile,
       stdout,
       setExitCode,
     });
@@ -408,5 +411,11 @@ async function executeRuntimeProjectionDiagnostic() {
 
 const entryPoint = process.argv[1];
 if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
-  await runWindowsNodeTestsDiagnostic();
+  let profile;
+  try { profile = parseNodeTestProfileArguments(process.argv.slice(2)); }
+  catch {
+    process.stderr.write("Invalid Node test profile.\n");
+    process.exitCode = 1;
+  }
+  if (profile !== undefined) await runWindowsNodeTestsDiagnostic({ profile });
 }

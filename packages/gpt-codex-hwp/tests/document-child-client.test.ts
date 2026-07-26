@@ -1078,6 +1078,8 @@ test("typed termination registered POSIX authority binds stable group identity b
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
   });
   assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL"]);
 });
@@ -1117,6 +1119,8 @@ test("typed termination registered POSIX authority rejects wrong leader parent a
     gone: false,
     proof: "unverified",
     reason: "identity",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 1,
   });
   assert.equal(signals, 0);
 });
@@ -1130,9 +1134,26 @@ test("typed termination registered POSIX authority maps ESRCH EPERM and other er
     startOrder: 20,
   });
   for (const [code, expected] of [
-    ["ESRCH", { gone: true, proof: "registered-groups-empty" }],
-    ["EPERM", { gone: false, proof: "unverified", reason: "permission" }],
-    ["EACCES", { gone: false, proof: "unverified", reason: "termination" }],
+    ["ESRCH", {
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 0,
+    }],
+    ["EPERM", {
+      gone: false,
+      proof: "unverified",
+      reason: "permission",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 1,
+    }],
+    ["EACCES", {
+      gone: false,
+      proof: "unverified",
+      reason: "termination",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 1,
+    }],
   ] as const) {
     const supervisor = createRegisteredPosixProcessGroupSupervisor({
       inspectIdentity: async () => identity,
@@ -2920,13 +2941,23 @@ test("POSIX telemetry initialize cannot delay registered readiness or terminatio
   if (receipt === TELEMETRY_STALLED) {
     assert.fail("telemetry initialization delayed registered group termination");
   }
-  assert.deepEqual(receipt, { gone: true, proof: "registered-groups-empty" });
+  assert.deepEqual(receipt, {
+    gone: true,
+    proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
+  });
   assert.equal(await supervisor.processTreeTelemetryReady, false);
   assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL", 0]);
   assert.equal(scheduled, 0);
   assert.deepEqual(
     await supervisor.terminate(),
-    { gone: true, proof: "registered-groups-empty" },
+    {
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 0,
+    },
   );
   assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL", 0]);
 });
@@ -2976,7 +3007,12 @@ test("POSIX telemetry sample cannot delay registered termination or expose pendi
     await termination;
     assert.fail("in-flight telemetry sample delayed registered group termination");
   }
-  assert.deepEqual(receipt, { gone: true, proof: "registered-groups-empty" });
+  assert.deepEqual(receipt, {
+    gone: true,
+    proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
+  });
   assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL", 0]);
   assert.equal(supervisor.processTreeRss?.(), undefined);
   assert.equal(cleared, 1);
@@ -3012,7 +3048,12 @@ for (const lateOutcome of ["resolve", "reject"] as const) {
     }
     assert.deepEqual(
       await supervisor.terminate(),
-      { gone: true, proof: "registered-groups-empty" },
+      {
+        gone: true,
+        proof: "registered-groups-empty",
+        registeredIdentityCount: 1,
+        remainingIdentityCount: 0,
+      },
     );
     assert.equal(await supervisor.processTreeTelemetryReady, false);
     if (lateOutcome === "resolve") initialize.resolve();
@@ -3059,7 +3100,12 @@ test("POSIX telemetry failure stays unavailable without delaying registered auth
     assert.equal(supervisor.processTreeRss?.(), undefined);
     assert.deepEqual(
       await supervisor.terminate(),
-      { gone: true, proof: "registered-groups-empty" },
+      {
+        gone: true,
+        proof: "registered-groups-empty",
+        registeredIdentityCount: 1,
+        remainingIdentityCount: 0,
+      },
     );
   }
 });
@@ -3090,7 +3136,12 @@ test("POSIX telemetry scheduler failure keeps readiness and RSS unavailable", as
     assert.equal(cleared, failurePoint === "unref" ? 1 : 0);
     assert.deepEqual(
       await supervisor.terminate(),
-      { gone: true, proof: "registered-groups-empty" },
+      {
+        gone: true,
+        proof: "registered-groups-empty",
+        registeredIdentityCount: 1,
+        remainingIdentityCount: 0,
+      },
     );
   }
 });
@@ -3123,7 +3174,12 @@ test("POSIX telemetry freezes only a complete active RSS receipt at stop", async
   assert.deepEqual(supervisor.processTreeRss?.(), expected);
   assert.deepEqual(
     await supervisor.terminate(),
-    { gone: true, proof: "registered-groups-empty" },
+    {
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 0,
+    },
   );
   assert.deepEqual(supervisor.processTreeRss?.(), expected);
   assert.equal(cleared, 1);
@@ -3198,6 +3254,8 @@ test("POSIX benchmark telemetry roots preserve baseline and require a covering p
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
   });
   assert.deepEqual(supervisor.processTreeRss?.(), { baselineBytes: 31, peakBytes: 96 });
   supervisor.finishProcessTreeTelemetry!();
@@ -3298,6 +3356,8 @@ test("POSIX benchmark telemetry finalizer never freezes an uncovered registered-
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
   });
   supervisor.finishProcessTreeTelemetry!();
   assert.equal(supervisor.processTreeRss?.(), undefined);

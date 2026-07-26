@@ -13,7 +13,7 @@
     "cfb": "1.2.2",
     "jszip": "3.10.1",
     "kordoc": "file:vendor/kordoc-core",
-    "sharp": "0.34.5",
+    "sharp": "0.35.3",
     "zod": "3.25.76"
   },
   "engines": {
@@ -23,7 +23,8 @@
     "@rhwp/core": "0.7.17"
   },
   "overrides": {
-    "@hono/node-server": "2.0.11"
+    "@hono/node-server": "2.0.11",
+    "fast-uri": "3.1.4"
   },
   "license": "Apache-2.0"
 }

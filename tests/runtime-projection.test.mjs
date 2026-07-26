@@ -18,7 +18,11 @@ import { dirname, extname, join, relative } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { buildRuntime, compareRuntime } from "../scripts/project-runtime.mjs";
+import {
+  buildRuntime,
+  compareRuntime,
+  projectSharpWasmCpuConstraint,
+} from "../scripts/project-runtime.mjs";
 import { verifyKordocCoreRuntime } from "../scripts/kordoc-core-runtime.mjs";
 import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 import { releaseSubprocessEnvironment } from "../scripts/release-subprocess-environment.mjs";
@@ -46,7 +50,9 @@ const ROOT_DOCUMENTS = [
   "THIRD_PARTY_NOTICES.md",
 ];
 const PYTHON_RUNTIME_FILES = ["hwpxlib.py", "insert_image.py", "verify.py"];
-const READ_ONLY_RUNTIME_FILES = ["scripts/kordoc-runtime-verifier.mjs"];
+const READ_ONLY_RUNTIME_FILES = [
+  "scripts/kordoc-runtime-verifier.mjs",
+];
 const GENERATED_FILES = [
   ".codex-plugin/plugin.json",
   ".mcp.json",
@@ -80,6 +86,137 @@ before(async () => {
 
 after(async () => {
   if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+});
+
+test("Sharp WASM constraint is projected only into the generated runtime lock", async () => {
+  const sourcePath = join(SOURCE, "package-lock.json");
+  const sourceBytesBefore = await readFile(sourcePath);
+  const sourceLock = JSON.parse(sourceBytesBefore);
+  const runtimeLock = JSON.parse(await readFile(join(actualRoot, "package-lock.json"), "utf8"));
+
+  assert.equal(Object.hasOwn(sourceLock.packages["node_modules/@img/sharp-wasm32"], "cpu"), false);
+  assert.deepEqual(runtimeLock.packages["node_modules/@img/sharp-wasm32"].cpu, ["wasm32"]);
+  assert.equal(
+    createHash("sha256").update(await readFile(sourcePath)).digest("hex"),
+    createHash("sha256").update(sourceBytesBefore).digest("hex"),
+  );
+  assert.equal(Object.hasOwn(runtimeLock.packages["node_modules/@emnapi/runtime"], "cpu"), false);
+  assert.equal(Object.hasOwn(runtimeLock.packages["node_modules/tslib"], "cpu"), false);
+});
+
+test("Sharp WASM projection validates the exact source graph before mutation", async () => {
+  const sourceLock = JSON.parse(await readFile(join(SOURCE, "package-lock.json"), "utf8"));
+  const mutations = [
+    ["missing root", (lock) => { delete lock.packages[""]; }],
+    ["root Sharp spec", (lock) => { lock.packages[""].dependencies.sharp = "^0.35.3"; }],
+    ["Sharp version", (lock) => { lock.packages["node_modules/sharp"].version = "0.35.2"; }],
+    ["Sharp FreeBSD edge", (lock) => { delete lock.packages["node_modules/sharp"].optionalDependencies["@img/sharp-freebsd-wasm32"]; }],
+    ["Sharp WebContainer edge", (lock) => { lock.packages["node_modules/sharp"].optionalDependencies["@img/sharp-webcontainers-wasm32"] = "0.35.2"; }],
+    ["missing FreeBSD parent", (lock) => { delete lock.packages["node_modules/@img/sharp-freebsd-wasm32"]; }],
+    ["FreeBSD parent optional marker", (lock) => { lock.packages["node_modules/@img/sharp-freebsd-wasm32"].optional = false; }],
+    ["FreeBSD parent edge", (lock) => { delete lock.packages["node_modules/@img/sharp-freebsd-wasm32"].dependencies["@img/sharp-wasm32"]; }],
+    ["FreeBSD parent platform", (lock) => { lock.packages["node_modules/@img/sharp-freebsd-wasm32"].os = ["linux"]; }],
+    ["FreeBSD parent cpu", (lock) => { lock.packages["node_modules/@img/sharp-freebsd-wasm32"].cpu = ["wasm32"]; }],
+    ["WebContainer parent platform", (lock) => { delete lock.packages["node_modules/@img/sharp-webcontainers-wasm32"].cpu; }],
+    ["WASM version", (lock) => { lock.packages["node_modules/@img/sharp-wasm32"].version = "0.35.2"; }],
+    ["preexisting WASM cpu", (lock) => { lock.packages["node_modules/@img/sharp-wasm32"].cpu = ["wasm32"]; }],
+    ["WASM runtime edge", (lock) => { lock.packages["node_modules/@img/sharp-wasm32"].dependencies["@emnapi/runtime"] = "^1.11.0"; }],
+    ["emnapi optional marker", (lock) => { lock.packages["node_modules/@emnapi/runtime"].optional = false; }],
+    ["emnapi tslib edge", (lock) => { delete lock.packages["node_modules/@emnapi/runtime"].dependencies.tslib; }],
+    ["tslib optional marker", (lock) => { delete lock.packages["node_modules/tslib"].optional; }],
+    ["unexpected WASM reverse parent", (lock) => { lock.packages["node_modules/zod"].dependencies = { "@img/sharp-wasm32": "0.35.3" }; }],
+    ["unexpected emnapi reverse parent", (lock) => { lock.packages["node_modules/zod"].optionalDependencies = { "@emnapi/runtime": "^1.11.1" }; }],
+    ["unexpected tslib reverse parent", (lock) => { lock.packages["node_modules/zod"].dependencies = { tslib: "^2.4.0" }; }],
+  ];
+
+  for (const [label, mutate] of mutations) {
+    const candidate = structuredClone(sourceLock);
+    mutate(candidate);
+    const before = JSON.stringify(candidate);
+    assert.throws(() => projectSharpWasmCpuConstraint(candidate), /Sharp WASM source lock graph/u, label);
+    assert.equal(JSON.stringify(candidate), before, `${label} mutated source input`);
+  }
+
+  const before = JSON.stringify(sourceLock);
+  const projected = projectSharpWasmCpuConstraint(sourceLock);
+  assert.equal(JSON.stringify(sourceLock), before);
+  assert.notEqual(projected, sourceLock);
+  assert.deepEqual(projected.packages["node_modules/@img/sharp-wasm32"].cpu, ["wasm32"]);
+});
+
+for (const [target, specifier] of [
+  ["@img/sharp-wasm32", "0.35.3"],
+  ["@emnapi/runtime", "^1.11.1"],
+  ["tslib", "^2.4.0"],
+]) {
+  test(`Sharp WASM projection rejects an unexpected peer reverse parent of ${target}`, async () => {
+    const sourceLock = JSON.parse(await readFile(join(SOURCE, "package-lock.json"), "utf8"));
+    const candidate = structuredClone(sourceLock);
+    candidate.packages["node_modules/zod"].peerDependencies = { [target]: specifier };
+    const before = JSON.stringify(candidate);
+
+    assert.throws(
+      () => projectSharpWasmCpuConstraint(candidate),
+      /Sharp WASM source lock graph/u,
+    );
+    assert.equal(JSON.stringify(candidate), before);
+  });
+}
+
+test("Sharp WASM projection rejects an unexpected devDependency reverse parent", async () => {
+  const sourceLock = JSON.parse(await readFile(join(SOURCE, "package-lock.json"), "utf8"));
+  const candidate = structuredClone(sourceLock);
+  candidate.packages["node_modules/zod"].devDependencies = {
+    "@emnapi/runtime": "^1.11.1",
+  };
+  const before = JSON.stringify(candidate);
+
+  assert.throws(
+    () => projectSharpWasmCpuConstraint(candidate),
+    /Sharp WASM source lock graph/u,
+  );
+  assert.equal(JSON.stringify(candidate), before);
+});
+
+for (const [field, malformed] of [
+  ["dependencies", null],
+  ["optionalDependencies", []],
+  ["devDependencies", "not a dependency map"],
+  ["peerDependencies", true],
+]) {
+  test(`Sharp WASM projection rejects a malformed present ${field} map`, async () => {
+    const sourceLock = JSON.parse(await readFile(join(SOURCE, "package-lock.json"), "utf8"));
+    const candidate = structuredClone(sourceLock);
+    candidate.packages["node_modules/zod"][field] = malformed;
+    const before = JSON.stringify(candidate);
+
+    assert.throws(
+      () => projectSharpWasmCpuConstraint(candidate),
+      /Sharp WASM source lock graph/u,
+    );
+    assert.equal(JSON.stringify(candidate), before);
+  });
+}
+
+test("peer-parent Sharp graph fails projection without promoted partial output", async () => {
+  const lockPath = join(SOURCE, "package-lock.json");
+  const original = await readFile(lockPath, "utf8");
+  const lock = JSON.parse(original);
+  lock.packages["node_modules/zod"].peerDependencies = {
+    "@emnapi/runtime": "^1.11.1",
+  };
+  const output = join(temporaryRoot, "invalid-sharp-graph-output");
+  try {
+    await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
+    await assert.rejects(
+      buildRuntime({ root: ROOT, outputRoot: output }),
+      /Sharp WASM source lock graph/u,
+    );
+    await assert.rejects(lstat(output), { code: "ENOENT" });
+  } finally {
+    await writeFile(lockPath, original, "utf8");
+  }
+  assert.equal(await readFile(lockPath, "utf8"), original);
 });
 
 test("runtime compiler receives an explicit validated scrubbed subprocess environment", async () => {

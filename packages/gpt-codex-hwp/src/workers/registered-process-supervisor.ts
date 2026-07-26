@@ -1,3 +1,8 @@
+type RegisteredIdentityCounts = Readonly<{
+  registeredIdentityCount: number;
+  remainingIdentityCount: number;
+}>;
+
 export type ProcessTreeTerminationReceipt =
   | Readonly<{
       gone: true;
@@ -13,7 +18,27 @@ export type ProcessTreeTerminationReceipt =
         | "permission"
         | "deadline"
         | "termination";
-    }>;
+    }>
+  | (Readonly<{
+      gone: true;
+      proof: "registered-groups-empty";
+    }> & RegisteredIdentityCounts)
+  | (Readonly<{
+      gone: false;
+      proof: "unverified";
+      reason:
+        | "registration"
+        | "identity"
+        | "channel"
+        | "permission"
+        | "deadline"
+        | "termination";
+    }> & RegisteredIdentityCounts);
+
+export type RegisteredProcessGroupTerminationReceipt = Extract<
+  ProcessTreeTerminationReceipt,
+  RegisteredIdentityCounts
+>;
 
 export interface RegisteredProcessGroupIdentity {
   readonly pid: number;
@@ -33,6 +58,11 @@ export interface RegisteredProcessGroupSupervisor {
     baselineBytes: number;
     peakBytes: number;
   }> | undefined;
+}
+
+export interface RegisteredPosixProcessGroupSupervisor
+  extends RegisteredProcessGroupSupervisor {
+  terminate(): Promise<RegisteredProcessGroupTerminationReceipt>;
 }
 
 export type UnverifiedTerminationReason = Extract<
@@ -57,11 +87,11 @@ export interface RegisteredPosixProcessGroupDependencies {
 }
 
 const DEFAULT_TERMINATION_GRACE_MS = 100;
-const MAX_REGISTERED_PROCESS_GROUPS = 16;
+export const MAX_REGISTERED_PROCESS_GROUPS = 16;
 
 export function createRegisteredPosixProcessGroupSupervisor(
   dependencies: RegisteredPosixProcessGroupDependencies,
-): RegisteredProcessGroupSupervisor {
+): RegisteredPosixProcessGroupSupervisor {
   const signalGroup = dependencies.signalGroup ?? ((processGroupId, signal) => {
     process.kill(-processGroupId, signal);
   });
@@ -75,9 +105,9 @@ export function createRegisteredPosixProcessGroupSupervisor(
   let registryGeneration = 0;
   let verifiedReceipt: Readonly<{
     generation: number;
-    receipt: ProcessTreeTerminationReceipt;
+    receipt: RegisteredProcessGroupTerminationReceipt;
   }> | undefined;
-  let activeTermination: Promise<ProcessTreeTerminationReceipt> | undefined;
+  let activeTermination: Promise<RegisteredProcessGroupTerminationReceipt> | undefined;
 
   return {
     processTreeRss: dependencies.processTreeRss,
@@ -118,7 +148,7 @@ export function createRegisteredPosixProcessGroupSupervisor(
         pendingPids.delete(pid);
       }
     },
-    terminate(): Promise<ProcessTreeTerminationReceipt> {
+    terminate(): Promise<RegisteredProcessGroupTerminationReceipt> {
       if (pendingPids.size === 0 &&
         verifiedReceipt?.generation === registryGeneration &&
         verifiedReceipt.receipt.gone === true) {
@@ -148,12 +178,55 @@ export function createRegisteredPosixProcessGroupSupervisor(
   };
 }
 
+type TypeContract<Condition extends true> = Condition;
+type ExactType<Left, Right> = [Left] extends [Right]
+  ? [Right] extends [Left]
+    ? true
+    : false
+  : false;
+type GenericSupervisorTerminationContract = TypeContract<ExactType<
+  Awaited<ReturnType<RegisteredProcessGroupSupervisor["terminate"]>>,
+  ProcessTreeTerminationReceipt
+>>;
+type ConcretePosixSupervisorFactoryContract = TypeContract<ExactType<
+  ReturnType<typeof createRegisteredPosixProcessGroupSupervisor>,
+  RegisteredPosixProcessGroupSupervisor
+>>;
+type ConcretePosixSupervisorTerminationContract = TypeContract<ExactType<
+  Awaited<ReturnType<
+    ReturnType<typeof createRegisteredPosixProcessGroupSupervisor>["terminate"]
+  >>,
+  RegisteredProcessGroupTerminationReceipt
+>>;
+
 export function normalizeProcessTreeTerminationReceipt(
   value: unknown,
   invalidReason: UnverifiedTerminationReason = "termination",
 ): ProcessTreeTerminationReceipt {
   if (!isPlainRecord(value)) return unverifiedTermination(invalidReason);
   const keys = Object.keys(value).sort().join(",");
+  if (keys === "gone,proof,registeredIdentityCount,remainingIdentityCount"
+    && value.gone === true && value.proof === "registered-groups-empty"
+    && validRegisteredIdentityCounts(value, true)) {
+    return Object.freeze({
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: value.registeredIdentityCount,
+      remainingIdentityCount: value.remainingIdentityCount,
+    });
+  }
+  if (keys === "gone,proof,reason,registeredIdentityCount,remainingIdentityCount"
+    && value.gone === false && value.proof === "unverified"
+    && isUnverifiedReason(value.reason)
+    && validRegisteredIdentityCounts(value, false)) {
+    return Object.freeze({
+      gone: false,
+      proof: "unverified",
+      reason: value.reason,
+      registeredIdentityCount: value.registeredIdentityCount,
+      remainingIdentityCount: value.remainingIdentityCount,
+    });
+  }
   if (keys === "gone,proof" && value.gone === true &&
     (value.proof === "windows-job-empty" || value.proof === "registered-groups-empty")) {
     return Object.freeze({ gone: true, proof: value.proof });
@@ -179,8 +252,10 @@ async function terminateRegisteredGroups(
   delay: NonNullable<RegisteredPosixProcessGroupDependencies["delay"]>,
   terminationGraceMs: number,
   generationCurrent: () => boolean,
-): Promise<ProcessTreeTerminationReceipt> {
-  if (registered.length === 0) return unverifiedTermination("registration");
+): Promise<RegisteredProcessGroupTerminationReceipt> {
+  if (registered.length === 0) {
+    return countedTermination(unverifiedTermination("registration"), 0, 0);
+  }
   const unresolved = new Map(
     registered
       .filter((identity) => !provenAbsent.has(processIdentityKey(identity)))
@@ -228,13 +303,43 @@ async function terminateRegisteredGroups(
     }
 
     if (unresolved.size === 0) {
-      return generationCurrent()
-        ? Object.freeze({ gone: true, proof: "registered-groups-empty" })
-        : unverifiedTermination("registration");
+      return countedTermination(
+        generationCurrent()
+          ? Object.freeze({ gone: true, proof: "registered-groups-empty" })
+          : unverifiedTermination("registration"),
+        registered.length,
+        0,
+      );
     }
   }
-  if (!generationCurrent()) return unverifiedTermination("registration");
-  return unverifiedTermination(failure ?? "deadline");
+  return countedTermination(
+    !generationCurrent()
+      ? unverifiedTermination("registration")
+      : unverifiedTermination(failure ?? "deadline"),
+    registered.length,
+    unresolved.size,
+  );
+}
+
+function countedTermination(
+  receipt: ProcessTreeTerminationReceipt,
+  registeredIdentityCount: number,
+  remainingIdentityCount: number,
+): RegisteredProcessGroupTerminationReceipt {
+  return receipt.gone
+    ? Object.freeze({
+        gone: true,
+        proof: "registered-groups-empty",
+        registeredIdentityCount,
+        remainingIdentityCount,
+      })
+    : Object.freeze({
+        gone: false,
+        proof: "unverified",
+        reason: receipt.reason,
+        registeredIdentityCount,
+        remainingIdentityCount,
+      });
 }
 
 function signalRegisteredGroup(
@@ -322,4 +427,18 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function isUnverifiedReason(value: unknown): value is UnverifiedTerminationReason {
   return value === "registration" || value === "identity" || value === "channel" ||
     value === "permission" || value === "deadline" || value === "termination";
+}
+
+function validRegisteredIdentityCounts(
+  value: Record<string, unknown>,
+  requireRegisteredIdentity: boolean,
+): value is Record<string, unknown> & RegisteredIdentityCounts {
+  const registered = value.registeredIdentityCount;
+  const remaining = value.remainingIdentityCount;
+  return Number.isSafeInteger(registered) && Number.isSafeInteger(remaining)
+    && (registered as number) >= (requireRegisteredIdentity ? 1 : 0)
+    && (remaining as number) >= 0
+    && (remaining as number) <= (registered as number)
+    && (registered as number) <= MAX_REGISTERED_PROCESS_GROUPS
+    && (!requireRegisteredIdentity || remaining === 0);
 }

@@ -101,12 +101,24 @@ Thank you to SheetJS LLC and the js-cfb contributors for the compound-file imple
 
 Thank you to Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso, and all JSZip contributors for the ZIP implementation.
 
+## fast-uri
+
+- Repository: <https://github.com/fastify/fast-uri>
+- Version: `3.1.4` (`v3.1.4`)
+- Copyright: `Copyright (c) 2011-2021, Gary Court`; `Copyright (c) 2021-present The Fastify team`
+- License: BSD-3-Clause
+- Registry integrity: `sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw==`
+- Use in this project: URI parsing used transitively by the JSON schema validator in the runtime dependency graph.
+
+Thank you to the Fastify team and fast-uri contributors for the URI implementation.
+
 ## Sharp
 
 - Repository: <https://github.com/lovell/sharp>
-- Version: `0.34.5` (`v0.34.5`)
-- Copyright: the upstream `v0.34.5` `LICENSE` contains no project-specific copyright notice; its official `package.json` names Lovell Fuller as author
+- Version: `0.35.3` (`v0.35.3`)
+- Copyright: the upstream `v0.35.3` `LICENSE` contains no project-specific copyright notice; its official `package.json` names Lovell Fuller as author
 - License: Apache-2.0
+- Registry integrity: `sha512-ej0zVHuZGHCiABXcNxeYhpRnPNPAcvbG8RMdBAhDAxLKkCRVSpK3Iyu7qbqw3JMzoj0REeM6f3tJLtVwl0023Q==`
 - Use in this project: bounded SVG rasterization, PNG metadata validation, and safe image conversion before HWPX insertion.
 
 Thank you to Lovell Fuller and the Sharp contributors for the cross-platform image-processing runtime.

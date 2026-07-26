@@ -7,19 +7,21 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows:
     name: Windows x64
     runs-on: windows-2025
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       EXPECTED_SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       HWP_REQUIRE_RHWP: "1"
-      HWP_BENCH_LARGE: "1"
-      HWP_BENCH_REQUIRE_LARGE: "1"
-      HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -37,71 +39,58 @@ jobs:
         run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
       - name: Assert exact feature head
         run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_SOURCE_REPOSITORY !== 'Burntgogi/Gpt_Codex_HWP') process.exit(1); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
-      - name: Configure neutral release identity
-        run: |
-          git config --local user.name "Gpt_Codex_HWP contributors"
-          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
-          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
       - name: Fresh source dependency install
-        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Fresh runtime dependency install
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Build Windows diagnostic prerequisite
-        run: npm --prefix packages/gpt-codex-hwp run build
-      - name: Classify hosted Windows supervisor boundary
-        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor
-      - name: Generate fresh large-document evidence
-        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
-      - name: Run full release gate and create platform receipt
-        id: windows_release_gate
-        run: node scripts/platform-receipts.mjs create
-      - name: Diagnose failed document benchmark
-        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
-        continue-on-error: true
         timeout-minutes: 10
-        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/diagnostic-10.json
-      - name: Diagnose failed large-evidence validation
-        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
-        continue-on-error: true
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Build source package
+        timeout-minutes: 10
+        run: npm --prefix packages/gpt-codex-hwp run build
+      - name: Verify generated runtime projection
         timeout-minutes: 5
-        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/release-large.json
-      - name: Diagnose failed Windows Python release gate
-        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
+        run: npm run runtime:check
+      - name: Fresh runtime production install
+        timeout-minutes: 10
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Verify bounded installed runtime smoke
+        timeout-minutes: 10
+        run: npm run verify:runtime-smoke
+      - name: Classify hosted Windows supervisor boundary
+        timeout-minutes: 10
+        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor
+      - name: Run Windows PR Node profile
+        id: windows_node
+        timeout-minutes: 30
+        run: npm --prefix packages/gpt-codex-hwp run test:pr
+      - name: Run Windows Python tests
+        id: windows_python
+        timeout-minutes: 15
+        run: npm run test:python
+      - name: Run 10 MiB document smoke
+        timeout-minutes: 15
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/pr-10.json
+      - name: Reject generated repository changes
+        run: git diff --exit-code -- .
+      - name: Diagnose failed Windows Node PR tests
+        if: ${{ failure() && steps.windows_node.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 30
+        run: node scripts/windows-node-tests-diagnostic.mjs --profile=pr
+      - name: Diagnose failed Windows Python tests
+        if: ${{ failure() && steps.windows_python.outcome == 'failure' }}
         continue-on-error: true
         timeout-minutes: 15
         run: node scripts/python-tests-diagnostic.mjs
-      - name: Diagnose failed Windows Node release gate
-        if: ${{ failure() && steps.windows_release_gate.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 30
-        run: node scripts/windows-node-tests-diagnostic.mjs
-      - name: Independently verify platform receipt
-        run: node scripts/platform-receipts.mjs verify
-      - name: Checksum platform receipt
-        run: node scripts/platform-receipts.mjs checksum
-      - name: Reject generated repository changes
-        run: git diff --exit-code -- .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: gpt-codex-hwp-windows-x64-platform-receipt
-          path: |
-            release-receipts/platform-receipt.json
-            release-receipts/platform-receipt.sha256
-          if-no-files-found: error
-          retention-days: 7
 
   macos:
     name: macOS arm64
     runs-on: macos-15
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       EXPECTED_SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       HWP_REQUIRE_RHWP: "1"
-      HWP_BENCH_LARGE: "1"
-      HWP_BENCH_REQUIRE_LARGE: "1"
-      HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/release-large.json"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -119,64 +108,52 @@ jobs:
         run: node -e "if (process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
       - name: Assert exact feature head
         run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_SOURCE_REPOSITORY !== 'Burntgogi/Gpt_Codex_HWP') process.exit(1); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
-      - name: Configure neutral release identity
-        run: |
-          git config --local user.name "Gpt_Codex_HWP contributors"
-          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
-          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
       - name: Fresh source dependency install
-        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Fresh runtime dependency install
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Build macOS diagnostic prerequisite
-        run: npm --prefix packages/gpt-codex-hwp run build
-      - name: Classify hosted macOS worker boundaries
-        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker
-      - name: Generate fresh large-document evidence
-        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/release-large.json
-      - name: Run safe macOS POSIX controls
-        run: node scripts/macos-posix-controls.mjs
-      - name: Run full release gate and create platform receipt
-        id: macos_release_gate
-        run: node scripts/platform-receipts.mjs create
-      - name: Diagnose failed document benchmark
-        if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
-        continue-on-error: true
         timeout-minutes: 10
-        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/diagnostic-10.json
-      - name: Diagnose failed large-evidence validation
-        if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
-        continue-on-error: true
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Build source package
+        timeout-minutes: 10
+        run: npm --prefix packages/gpt-codex-hwp run build
+      - name: Verify generated runtime projection
         timeout-minutes: 5
-        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/release-large.json
-      - name: Diagnose failed macOS Node release gate
-        if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
+        run: npm run runtime:check
+      - name: Fresh runtime production install
+        timeout-minutes: 10
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
+      - name: Verify bounded installed runtime smoke
+        timeout-minutes: 10
+        run: npm run verify:runtime-smoke
+      - name: Classify hosted macOS worker boundaries
+        timeout-minutes: 10
+        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker
+      - name: Run macOS PR Node profile
+        id: macos_node
+        timeout-minutes: 30
+        run: npm --prefix packages/gpt-codex-hwp run test:pr:macos
+      - name: Run macOS Python tests
+        id: macos_python
+        timeout-minutes: 15
+        run: npm run test:python
+      - name: Run 10 MiB document smoke
+        timeout-minutes: 15
+        run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/pr-10.json
+      - name: Reject generated repository changes
+        run: git diff --exit-code -- .
+      - name: Diagnose failed macOS Node PR tests
+        if: ${{ failure() && steps.macos_node.outcome == 'failure' }}
         continue-on-error: true
         timeout-minutes: 30
-        run: node scripts/macos-node-tests-diagnostic.mjs
-      - name: Diagnose failed macOS Python release gate
-        if: ${{ failure() && steps.macos_release_gate.outcome == 'failure' }}
+        run: node scripts/macos-node-tests-diagnostic.mjs --profile=pr-macos
+      - name: Diagnose failed macOS Python tests
+        if: ${{ failure() && steps.macos_python.outcome == 'failure' }}
         continue-on-error: true
         timeout-minutes: 15
         run: node scripts/python-tests-diagnostic.mjs
-      - name: Independently verify platform receipt
-        run: node scripts/platform-receipts.mjs verify
-      - name: Checksum platform receipt
-        run: node scripts/platform-receipts.mjs checksum
-      - name: Reject generated repository changes
-        run: git diff --exit-code -- .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: gpt-codex-hwp-macos-arm64-platform-receipt
-          path: |
-            release-receipts/platform-receipt.json
-            release-receipts/platform-receipt.sha256
-          if-no-files-found: error
-          retention-days: 7
 
   linux:
     name: Linux lifecycle
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
     env:
@@ -196,8 +173,11 @@ jobs:
       - name: Assert exact feature head
         run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
       - name: Fresh source dependency install
+        timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Build package
+        timeout-minutes: 10
         run: npm --prefix packages/gpt-codex-hwp run build
       - name: Run bounded lifecycle focused tests
+        timeout-minutes: 20
         run: npm --prefix packages/gpt-codex-hwp run test:focused -- tests/document-process-registration.test.ts tests/document-child-client.test.ts tests/benchmark-policy.test.ts

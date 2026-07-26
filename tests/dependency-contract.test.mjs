@@ -35,7 +35,7 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   cfb: "1.2.2",
   jszip: "3.10.1",
   kordoc: LOCAL_KORDOC_SPECIFIER,
-  sharp: "0.34.5",
+  sharp: "0.35.3",
   zod: "3.25.76",
 });
 const EXPECTED_OPTIONAL_DEPENDENCIES = Object.freeze({ "@rhwp/core": "0.7.17" });
@@ -44,7 +44,10 @@ const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
   tsx: "4.23.1",
   typescript: "5.9.3",
 });
-const EXPECTED_OVERRIDES = Object.freeze({ "@hono/node-server": "2.0.11" });
+const EXPECTED_OVERRIDES = Object.freeze({
+  "@hono/node-server": "2.0.11",
+  "fast-uri": "3.1.4",
+});
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
   "hwp_detect_format",
@@ -79,6 +82,10 @@ test("dependency contract pins exact direct source and runtime metadata", async 
     rootPackage.scripts?.["verify:source-dependencies"],
     "node scripts/verify-installed-dependencies.mjs --source-only",
   );
+  assert.equal(
+    rootPackage.scripts?.["test:policy"],
+    "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",
+  );
 });
 
 test("dependency contract resolves the patched Hono Node adapter in both locks", async () => {
@@ -91,6 +98,44 @@ test("dependency contract resolves the patched Hono Node adapter in both locks",
       "https://registry.npmjs.org/@hono/node-server/-/node-server-2.0.11.tgz",
       label,
     );
+  }
+});
+
+test("dependency contract resolves patched production dependencies and projects an equivalent graph", async () => {
+  const locks = new Map();
+  for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
+    const lock = await readJson(join(root, "package-lock.json"));
+    locks.set(label, lock);
+    assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.3", label);
+    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.4", label);
+  }
+
+  assert.deepEqual(
+    productionDependencyGraph(locks.get("runtime")),
+    productionDependencyGraph(locks.get("source")),
+  );
+  assert.equal(
+    Object.hasOwn(locks.get("source").packages["node_modules/@img/sharp-wasm32"], "cpu"),
+    false,
+  );
+  assert.deepEqual(
+    locks.get("runtime").packages["node_modules/@img/sharp-wasm32"].cpu,
+    ["wasm32"],
+  );
+  for (const path of ["node_modules/@emnapi/runtime", "node_modules/tslib"]) {
+    assert.equal(Object.hasOwn(locks.get("runtime").packages[path], "cpu"), false, path);
+  }
+});
+
+test("public installation guidance has one npm-ci step and no normalizer", async () => {
+  for (const path of [
+    join(ROOT, "README.md"),
+    join(ROOT, "README.en.md"),
+    join(SOURCE, "skills", "gpt-codex-hwp", "SKILL.md"),
+  ]) {
+    const content = await readFile(path, "utf8");
+    assert.doesNotMatch(content, /normalize-sharp-optional-tree|normaliz(?:e|ation).*Sharp/iu, path);
+    assert.match(content, /npm ci --omit=dev --ignore-scripts/u, path);
   }
 });
 
@@ -235,4 +280,22 @@ async function readJson(path) {
 
 function comparePaths(left, right) {
   return left.localeCompare(right, "en");
+}
+
+function productionDependencyGraph(lock) {
+  return Object.entries(lock.packages ?? {})
+    .filter(([path, record]) => path !== "" && record?.dev !== true)
+    .map(([path, record]) => ({
+      name: packageNameFromLockPath(path),
+      version: record?.version ?? null,
+      integrity: record?.integrity ?? null,
+    }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right), "en"));
+}
+
+function packageNameFromLockPath(path) {
+  const segments = path.split("/");
+  const packageStart = segments.lastIndexOf("node_modules") + 1;
+  if (segments[packageStart]?.startsWith("@")) return `${segments[packageStart]}/${segments[packageStart + 1]}`;
+  return segments[packageStart] ?? path;
 }

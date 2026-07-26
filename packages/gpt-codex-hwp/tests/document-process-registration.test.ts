@@ -232,6 +232,8 @@ test("registered process registration retains sixteen exact groups and proves on
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 16,
+    remainingIdentityCount: 0,
   });
   assert.deepEqual(
     signals,
@@ -303,6 +305,8 @@ test("registered process termination cleans every retained group after a partial
     gone: false,
     proof: "unverified",
     reason: "permission",
+    registeredIdentityCount: 3,
+    remainingIdentityCount: 1,
   });
   assert.deepEqual(events, [
     "1:SIGTERM:5200", "1:SIGTERM:5201", "1:SIGTERM:5202", "1:wait",
@@ -314,6 +318,8 @@ test("registered process termination cleans every retained group after a partial
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 3,
+    remainingIdentityCount: 0,
   });
   assert.deepEqual(events.slice(-3), ["2:SIGTERM:5201", "2:wait", "2:0:5201"]);
 });
@@ -338,6 +344,8 @@ test("registered process termination permits normal reparenting after exact iden
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
   });
   assert.deepEqual(signals, ["SIGTERM", 0]);
 });
@@ -365,6 +373,8 @@ test("registered process termination never signals a root with drifted stable id
         gone: false,
         proof: "unverified",
         reason: "identity",
+        registeredIdentityCount: 1,
+        remainingIdentityCount: 1,
       });
       assert.deepEqual(signals, []);
     });
@@ -425,10 +435,14 @@ test("registered process proof is invalidated when registry generation changes d
     gone: false,
     proof: "unverified",
     reason: "registration",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
   });
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 2,
+    remainingIdentityCount: 0,
   });
 });
 
@@ -460,12 +474,16 @@ test("registered process proof stays unverified while a reserved registration is
     gone: false,
     proof: "unverified",
     reason: "registration",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
   });
   releaseSecondInspection.resolve();
   await registering;
   assert.deepEqual(await supervisor.terminate(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 2,
+    remainingIdentityCount: 0,
   });
 });
 
@@ -2014,6 +2032,8 @@ test("post-snapshot registration race rejects a reparented bootstrap before payl
   assert.deepEqual(await coordinator.terminateRegisteredGroups(), {
     gone: true,
     proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
   });
   await assert.rejects(access(payloadMarkerPath), { code: "ENOENT" });
   const pids = (await readFile(pidLogPath, "utf8"))

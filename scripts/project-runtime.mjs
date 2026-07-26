@@ -42,7 +42,9 @@ const ROOT_DOCUMENTS = Object.freeze([
   "THIRD_PARTY_NOTICES.md",
 ]);
 const PYTHON_RUNTIME_FILES = Object.freeze(["hwpxlib.py", "insert_image.py", "verify.py"]);
-const READ_ONLY_RUNTIME_FILES = Object.freeze(["kordoc-runtime-verifier.mjs"]);
+const READ_ONLY_RUNTIME_FILES = Object.freeze([
+  "kordoc-runtime-verifier.mjs",
+]);
 const SKILL_ICONS = Object.freeze(["gpt-codex-hwp-icon-64.png", "gpt-codex-hwp-icon.png"]);
 const FORBIDDEN_SEGMENTS = new Set([
   ".superpowers",
@@ -68,6 +70,10 @@ const FORBIDDEN_EXTENSIONS = new Set([
   ".p12", ".pem", ".pfx",
 ]);
 const SWAP_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
+const SHARP_VERSION = "0.35.3";
+const SHARP_FREEBSD_WASM = "@img/sharp-freebsd-wasm32";
+const SHARP_WEBCONTAINERS_WASM = "@img/sharp-webcontainers-wasm32";
+const SHARP_WASM = "@img/sharp-wasm32";
 
 export async function buildRuntime({
   root,
@@ -325,10 +331,7 @@ function renderRuntimePackage(metadata, license, sourcePackage) {
 }
 
 function renderRuntimeLock(metadata, license, sourceLock) {
-  const lock = structuredClone(sourceLock);
-  if (!lock.packages || typeof lock.packages[""] !== "object" || lock.packages[""] === null) {
-    throw runtimeBuildError("Source package-lock.json has no root package record");
-  }
+  const lock = projectSharpWasmCpuConstraint(sourceLock);
   lock.name = metadata.productId;
   lock.version = metadata.version;
   lock.packages[""].name = metadata.productId;
@@ -336,6 +339,159 @@ function renderRuntimeLock(metadata, license, sourceLock) {
   lock.packages[""].license = license;
   delete lock.packages[""].devDependencies;
   return lock;
+}
+
+export function projectSharpWasmCpuConstraint(sourceLock) {
+  const packages = requireSharpLockPackages(sourceLock);
+  const root = requireSharpLockRecord(packages, "");
+  const sharp = requireSharpLockRecord(packages, "node_modules/sharp");
+  const freebsd = requireSharpLockRecord(packages, `node_modules/${SHARP_FREEBSD_WASM}`);
+  const webcontainers = requireSharpLockRecord(
+    packages,
+    `node_modules/${SHARP_WEBCONTAINERS_WASM}`,
+  );
+  const wasm = requireSharpLockRecord(packages, `node_modules/${SHARP_WASM}`);
+  const emnapi = requireSharpLockRecord(packages, "node_modules/@emnapi/runtime");
+  const tslib = requireSharpLockRecord(packages, "node_modules/tslib");
+
+  requireExactSharpEdge(root, "dependencies", "sharp", SHARP_VERSION);
+  requireExactSharpVersion(sharp, SHARP_VERSION);
+  requireExactSharpEdge(sharp, "optionalDependencies", SHARP_FREEBSD_WASM, SHARP_VERSION);
+  requireExactSharpEdge(
+    sharp,
+    "optionalDependencies",
+    SHARP_WEBCONTAINERS_WASM,
+    SHARP_VERSION,
+  );
+
+  requireExactSharpOptionalRecord(freebsd, SHARP_VERSION);
+  requireExactSharpArray(freebsd.os, ["freebsd"]);
+  requireAbsentSharpMetadata(freebsd, "cpu");
+  requireAbsentSharpMetadata(freebsd, "libc");
+  requireExactSharpDependencies(freebsd, { [SHARP_WASM]: SHARP_VERSION });
+
+  requireExactSharpOptionalRecord(webcontainers, SHARP_VERSION);
+  requireExactSharpArray(webcontainers.cpu, ["wasm32"]);
+  requireAbsentSharpMetadata(webcontainers, "os");
+  requireAbsentSharpMetadata(webcontainers, "libc");
+  requireExactSharpDependencies(webcontainers, { [SHARP_WASM]: SHARP_VERSION });
+
+  requireExactSharpOptionalRecord(wasm, SHARP_VERSION);
+  requireAbsentSharpMetadata(wasm, "cpu");
+  requireAbsentSharpMetadata(wasm, "os");
+  requireAbsentSharpMetadata(wasm, "libc");
+  requireExactSharpDependencies(wasm, { "@emnapi/runtime": "^1.11.1" });
+
+  requireSharpOptionalRecord(emnapi);
+  requireAbsentSharpMetadata(emnapi, "cpu");
+  requireExactSharpDependencies(emnapi, { tslib: "^2.4.0" });
+
+  requireSharpOptionalRecord(tslib);
+  requireAbsentSharpMetadata(tslib, "cpu");
+
+  requireExactReverseParents(packages, "sharp", [
+    ["", "dependencies", SHARP_VERSION],
+  ]);
+  requireExactReverseParents(packages, SHARP_FREEBSD_WASM, [
+    ["node_modules/sharp", "optionalDependencies", SHARP_VERSION],
+  ]);
+  requireExactReverseParents(packages, SHARP_WEBCONTAINERS_WASM, [
+    ["node_modules/sharp", "optionalDependencies", SHARP_VERSION],
+  ]);
+  requireExactReverseParents(packages, SHARP_WASM, [
+    [`node_modules/${SHARP_FREEBSD_WASM}`, "dependencies", SHARP_VERSION],
+    [`node_modules/${SHARP_WEBCONTAINERS_WASM}`, "dependencies", SHARP_VERSION],
+  ]);
+  requireExactReverseParents(packages, "@emnapi/runtime", [
+    [`node_modules/${SHARP_WASM}`, "dependencies", "^1.11.1"],
+  ]);
+  requireExactReverseParents(packages, "tslib", [
+    ["node_modules/@emnapi/runtime", "dependencies", "^2.4.0"],
+  ]);
+
+  const projected = structuredClone(sourceLock);
+  projected.packages[`node_modules/${SHARP_WASM}`].cpu = ["wasm32"];
+  return projected;
+}
+
+function requireSharpLockPackages(lock) {
+  if (!isPlainRecord(lock) || !isPlainRecord(lock.packages)) throw sharpLockGraphError();
+  return lock.packages;
+}
+
+function requireSharpLockRecord(packages, path) {
+  const record = packages[path];
+  if (!isPlainRecord(record)) throw sharpLockGraphError();
+  return record;
+}
+
+function requireExactSharpVersion(record, version) {
+  if (record.version !== version) throw sharpLockGraphError();
+}
+
+function requireExactSharpOptionalRecord(record, version) {
+  requireExactSharpVersion(record, version);
+  requireSharpOptionalRecord(record);
+}
+
+function requireSharpOptionalRecord(record) {
+  if (record.optional !== true) throw sharpLockGraphError();
+}
+
+function requireExactSharpEdge(record, field, name, specifier) {
+  if (!isPlainRecord(record[field]) || record[field][name] !== specifier) {
+    throw sharpLockGraphError();
+  }
+}
+
+function requireExactSharpDependencies(record, expected) {
+  if (!isPlainRecord(record.dependencies)
+    || JSON.stringify(record.dependencies) !== JSON.stringify(expected)) {
+    throw sharpLockGraphError();
+  }
+}
+
+function requireExactSharpArray(actual, expected) {
+  if (!Array.isArray(actual) || JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw sharpLockGraphError();
+  }
+}
+
+function requireAbsentSharpMetadata(record, field) {
+  if (Object.hasOwn(record, field)) throw sharpLockGraphError();
+}
+
+function requireExactReverseParents(packages, target, expected) {
+  const actual = [];
+  for (const [path, record] of Object.entries(packages)) {
+    if (!isPlainRecord(record)) throw sharpLockGraphError();
+    for (const field of [
+      "dependencies",
+      "optionalDependencies",
+      "devDependencies",
+      "peerDependencies",
+    ]) {
+      if (!Object.hasOwn(record, field)) continue;
+      if (!isPlainRecord(record[field])) throw sharpLockGraphError();
+      if (Object.hasOwn(record[field], target)) {
+        actual.push([path, field, record[field][target]]);
+      }
+    }
+  }
+  const serialized = (entries) => entries
+    .map((entry) => JSON.stringify(entry))
+    .sort(comparePaths);
+  if (JSON.stringify(serialized(actual)) !== JSON.stringify(serialized(expected))) {
+    throw sharpLockGraphError();
+  }
+}
+
+function isPlainRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sharpLockGraphError() {
+  return runtimeBuildError("Sharp WASM source lock graph is unsupported");
 }
 
 async function assertRuntimeContract(runtimeRoot, metadata, runtimePackage) {

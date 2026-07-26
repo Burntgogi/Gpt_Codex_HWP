@@ -17,9 +17,16 @@ import {
 import { finalizeVerifiedWindowsSupervisor } from "../src/workers/document-child-client.js";
 import { createDocumentWorkerClient } from "../src/workers/document-worker-client.js";
 import {
+  createRegisteredPosixProcessGroupSupervisor,
+  normalizeProcessTreeTerminationReceipt,
+} from "../src/workers/registered-process-supervisor.js";
+import {
   APPROVED_BENCHMARK_SIZES_MIB,
   BENCHMARK_CONCURRENCY,
   BENCHMARK_RECEIPT_SCHEMA_VERSION,
+  LOCAL_EXPERIMENTAL_BENCHMARK_SIZES_MIB,
+  PR_SMOKE_BENCHMARK_SIZES_MIB,
+  VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB,
   assertIgnoredBenchmarkOutput,
   assertCaseProcessGone,
   benchmarkImplementationInputPaths,
@@ -374,23 +381,37 @@ test("hosted platform wrappers return only bounded classifier tuples", async () 
   });
 });
 
-test("hosted platform classifiers run after build and before the hard benchmark gate", async () => {
+test("hosted platform classifiers run after build and before the PR profile and 10 MiB smoke", async () => {
   const workflow = await readFile(CI_WORKFLOW, "utf8");
-  const windowsBuild = workflow.indexOf("name: Build Windows diagnostic prerequisite");
-  const windowsDiagnostic = workflow.indexOf("name: Classify hosted Windows supervisor boundary");
-  const windowsBenchmark = workflow.indexOf("name: Generate fresh large-document evidence");
-  const macBuild = workflow.indexOf("name: Build macOS diagnostic prerequisite", windowsBenchmark);
-  const macDiagnostic = workflow.indexOf("name: Classify hosted macOS worker boundaries", windowsBenchmark);
-  const macBenchmark = workflow.indexOf(
-    "name: Generate fresh large-document evidence",
-    windowsBenchmark + 1,
+  const windowsStart = workflow.indexOf("\n  windows:\n");
+  const macosStart = workflow.indexOf("\n  macos:\n");
+  const linuxStart = workflow.indexOf("\n  linux:\n");
+  assert.ok(windowsStart >= 0 && windowsStart < macosStart && macosStart < linuxStart);
+
+  const windows = workflow.slice(windowsStart, macosStart);
+  const macos = workflow.slice(macosStart, linuxStart);
+  const windowsBuild = windows.indexOf("name: Build source package");
+  const windowsDiagnostic = windows.indexOf("name: Classify hosted Windows supervisor boundary");
+  const windowsProfile = windows.indexOf("name: Run Windows PR Node profile");
+  const windowsSmoke = windows.indexOf("name: Run 10 MiB document smoke");
+  const macBuild = macos.indexOf("name: Build source package");
+  const macDiagnostic = macos.indexOf("name: Classify hosted macOS worker boundaries");
+  const macProfile = macos.indexOf("name: Run macOS PR Node profile");
+  const macSmoke = macos.indexOf("name: Run 10 MiB document smoke");
+  assert.ok(
+    windowsBuild >= 0
+      && windowsBuild < windowsDiagnostic
+      && windowsDiagnostic < windowsProfile
+      && windowsProfile < windowsSmoke,
   );
-  assert.ok(windowsBuild >= 0 && windowsBuild < windowsDiagnostic);
-  assert.ok(windowsDiagnostic < windowsBenchmark);
-  assert.ok(macBuild >= 0 && macBuild < macDiagnostic);
-  assert.ok(macDiagnostic < macBenchmark);
-  assert.match(workflow, /run: npm --prefix packages\/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor/u);
-  assert.match(workflow, /run: npm --prefix packages\/gpt-codex-hwp run diagnose:hosted -- --mac-worker/u);
+  assert.ok(
+    macBuild >= 0
+      && macBuild < macDiagnostic
+      && macDiagnostic < macProfile
+      && macProfile < macSmoke,
+  );
+  assert.match(windows, /run: npm --prefix packages\/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor/u);
+  assert.match(macos, /run: npm --prefix packages\/gpt-codex-hwp run diagnose:hosted -- --mac-worker/u);
 });
 
 test("hosted macOS worker classifier never coerces a missing result observation to success", async () => {
@@ -399,7 +420,16 @@ test("hosted macOS worker classifier never coerces a missing result observation 
 });
 
 test("benchmark policy accepts only bounded approved sizes with fixed sequential execution", () => {
+  assert.deepEqual(PR_SMOKE_BENCHMARK_SIZES_MIB, [10]);
+  assert.deepEqual(VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB, [100]);
+  assert.deepEqual(LOCAL_EXPERIMENTAL_BENCHMARK_SIZES_MIB, [256, 512]);
   assert.deepEqual(APPROVED_BENCHMARK_SIZES_MIB, [10, 100, 256, 512]);
+  for (const role of [
+    PR_SMOKE_BENCHMARK_SIZES_MIB,
+    VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB,
+    LOCAL_EXPERIMENTAL_BENCHMARK_SIZES_MIB,
+    APPROVED_BENCHMARK_SIZES_MIB,
+  ]) assert.equal(Object.isFrozen(role), true);
   assert.equal(BENCHMARK_CONCURRENCY, 1);
   assert.deepEqual(
     parseBenchmarkArguments([
@@ -424,6 +454,24 @@ test("benchmark policy accepts only bounded approved sizes with fixed sequential
     code: "BENCHMARK_SIZE_INVALID",
   });
   assert.equal(validateCaseSizeMiB(10), 10);
+  assert.deepEqual(
+    parseBenchmarkArguments([
+      "--sizes",
+      "256,512",
+      "--output",
+      ".superpowers/benchmarks/experimental.json",
+    ], { env: { HWP_BENCH_LARGE: "1" } }).sizesMiB,
+    [256, 512],
+  );
+  assert.throws(
+    () => parseBenchmarkArguments([
+      "--sizes",
+      "256,512",
+      "--output",
+      ".superpowers/benchmarks/experimental.json",
+    ], { env: {} }),
+    { code: "BENCHMARK_LARGE_DISABLED" },
+  );
   assert.equal(
     resolveLargeBenchmarkEvidencePath(".superpowers/benchmarks/release-large.json"),
     resolve(REPOSITORY_ROOT, ".superpowers/benchmarks/release-large.json"),
@@ -667,6 +715,31 @@ test("benchmark policy does not confuse verified tree termination with delayed h
 
 test("benchmark policy bounds synthetic child-tree stress and verifies every identity gone", async (t) => {
   const descendantCount = 24;
+  const registeredIdentity = Object.freeze({
+    pid: 7_016,
+    parentPid: 7_000,
+    processGroupId: 7_016,
+    identity: "opaque-test-identity",
+    startOrder: 16,
+  });
+  let identityPresent = true;
+  const identitySupervisor = createRegisteredPosixProcessGroupSupervisor({
+    inspectIdentity: async () => identityPresent ? registeredIdentity : undefined,
+    signalGroup: (_processGroupId, signal) => {
+      if (signal === "SIGTERM") identityPresent = false;
+      if (signal === 0 && !identityPresent) {
+        throw Object.assign(new Error("absent"), { code: "ESRCH" });
+      }
+    },
+    delay: async () => {},
+  });
+  await identitySupervisor.registerRoot(registeredIdentity.pid, registeredIdentity.parentPid);
+  assert.deepEqual(await identitySupervisor.terminate(), {
+    gone: true,
+    proof: "registered-groups-empty",
+    registeredIdentityCount: 1,
+    remainingIdentityCount: 0,
+  });
   const fixture = join(
     REPOSITORY_ROOT,
     ".superpowers",
@@ -690,9 +763,101 @@ test("benchmark policy bounds synthetic child-tree stress and verifies every ide
     env: process.env,
     controlFrame: { bounded: true },
   });
+  const benchmarkModule = await import("../benchmarks/document-engine-benchmark.mjs");
+  assert.equal(typeof benchmarkModule.formatBenchmarkProcessTreeProgress, "function");
+  assert.equal(typeof benchmarkModule.combineBenchmarkProcessTreeIdentityCounts, "function");
+  assert.deepEqual(benchmarkModule.combineBenchmarkProcessTreeIdentityCounts(
+    {
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 0,
+    },
+    {
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: 2,
+      remainingIdentityCount: 0,
+    },
+    2,
+  ), { registeredIdentityCount: 3, remainingIdentityCount: 0 });
+  assert.deepEqual(benchmarkModule.combineBenchmarkProcessTreeIdentityCounts(
+    {
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 0,
+    },
+    { gone: true, proof: "registered-groups-empty" },
+    0,
+  ), { registeredIdentityCount: 1, remainingIdentityCount: 0 });
+  assert.deepEqual(benchmarkModule.combineBenchmarkProcessTreeIdentityCounts(
+    {
+      gone: true,
+      proof: "registered-groups-empty",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 0,
+    },
+    { gone: true, proof: "registered-groups-empty" },
+    2,
+  ), { registeredIdentityCount: null, remainingIdentityCount: null });
+  assert.deepEqual(benchmarkModule.combineBenchmarkProcessTreeIdentityCounts(
+    {
+      gone: false,
+      proof: "unverified",
+      reason: "deadline",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 1,
+    },
+    {
+      gone: false,
+      proof: "unverified",
+      reason: "deadline",
+      registeredIdentityCount: 2,
+      remainingIdentityCount: 1,
+    },
+    2,
+  ), { registeredIdentityCount: 3, remainingIdentityCount: 2 });
+  const processTreeProgress = benchmarkModule.formatBenchmarkProcessTreeProgress({
+    diagnosticStage: result.diagnosticStage,
+    rootCleanup: result.rootCleanup,
+    processGroupCleanup: result.processGroupCleanup,
+    registeredIdentityCount: result.registeredIdentityCount,
+    remainingIdentityCount: result.remainingIdentityCount,
+  });
+  t.diagnostic(processTreeProgress);
+  assert.equal(
+    processTreeProgress,
+    `BENCHMARK_PROCESS_TREE diagnosticStage=finalizer rootCleanup=gone processGroupCleanup=gone registeredIdentityCount=${process.platform === "win32" ? "unavailable" : "1"} remainingIdentityCount=${process.platform === "win32" ? "unavailable" : "0"}`,
+  );
+  assert.throws(() => benchmarkModule.formatBenchmarkProcessTreeProgress({
+    diagnosticStage: result.diagnosticStage,
+    rootCleanup: result.rootCleanup,
+    processGroupCleanup: result.processGroupCleanup,
+    registeredIdentityCount: result.registeredIdentityCount,
+    remainingIdentityCount: result.remainingIdentityCount,
+    privatePath: "/fixture/opaque/document.hwpx",
+  }), { code: "BENCHMARK_RECEIPT_INVALID" });
+  assert.throws(() => benchmarkModule.formatBenchmarkProcessTreeProgress({
+    diagnosticStage: result.diagnosticStage,
+    rootCleanup: result.rootCleanup,
+    processGroupCleanup: result.processGroupCleanup,
+    registeredIdentityCount: 33,
+    remainingIdentityCount: 0,
+  }), { code: "BENCHMARK_RECEIPT_INVALID" });
   const pids = JSON.parse(result.stdout) as number[];
   assert.equal(result.processGone, true);
   assert.equal(result.diagnosticStage, "finalizer");
+  assert.equal(result.rootCleanup, "gone");
+  assert.equal(result.processGroupCleanup, "gone");
+  assert.equal(
+    result.registeredIdentityCount,
+    process.platform === "win32" ? null : 1,
+  );
+  assert.equal(
+    result.remainingIdentityCount,
+    process.platform === "win32" ? null : 0,
+  );
   assert.notEqual(result.caseMetrics, null);
   assert.equal(result.status, "failed");
   assert.equal(pids.length, descendantCount);
@@ -824,6 +989,29 @@ test("benchmark registration proof rejects a truthy forged successful receipt ob
 });
 
 test("benchmark registration proof rejects an extra-key receipt with the expected proof literal", async () => {
+  const validCountedReceipt = Object.freeze({
+    gone: true,
+    proof: "registered-groups-empty",
+    registeredIdentityCount: 16,
+    remainingIdentityCount: 0,
+  });
+  assert.deepEqual(
+    normalizeProcessTreeTerminationReceipt(validCountedReceipt),
+    validCountedReceipt,
+  );
+  for (const invalid of [
+    { ...validCountedReceipt, registeredIdentityCount: -1 },
+    { ...validCountedReceipt, registeredIdentityCount: 17 },
+    { ...validCountedReceipt, remainingIdentityCount: -1 },
+    { ...validCountedReceipt, remainingIdentityCount: 17 },
+    { ...validCountedReceipt, registeredIdentityCount: 1, remainingIdentityCount: 2 },
+  ]) {
+    assert.deepEqual(normalizeProcessTreeTerminationReceipt(invalid), {
+      gone: false,
+      proof: "unverified",
+      reason: "termination",
+    });
+  }
   const expectedProof = process.platform === "win32"
     ? "windows-job-empty"
     : "registered-groups-empty";
@@ -1249,14 +1437,18 @@ test("benchmark implementation digest covers build config, asset copy, and vendo
   }
 });
 
-test("benchmark policy requires fresh exact sequential large evidence", async (t) => {
+test("release evidence requires exactly one fresh passed 100 MiB receipt", async (t) => {
   const root = join(REPOSITORY_ROOT, ".superpowers", "benchmarks");
   await mkdir(root, { recursive: true });
-  const evidencePath = join(root, `policy-large-${process.pid}.json`);
+  const evidencePath = join(root, `policy-supported-100-${process.pid}.json`);
+  const missingPath = join(root, `policy-supported-100-missing-${process.pid}.json`);
   t.after(() => rm(evidencePath, { force: true }));
   const now = Date.now();
   const implementationSha256 = await benchmarkImplementationSha256();
-  const receipt = (requestedMiB: number) => ({
+  const receipt = (
+    requestedMiB: number,
+    status: "passed" | "resource-refused" | "failed" = "passed",
+  ) => ({
     schemaVersion: BENCHMARK_RECEIPT_SCHEMA_VERSION,
     platform: "win32",
     arch: "x64",
@@ -1264,64 +1456,97 @@ test("benchmark policy requires fresh exact sequential large evidence", async (t
     requestedMiB,
     actualBytes: requestedMiB * 1024 * 1024 - 32,
     operation: "detectFormat",
+    executionMode: requestedMiB === 10 ? "transferable-worker" : "supervised-child",
+    status,
+    dispatchStarted: status === "passed",
+    elapsedMs: 125,
+    peakRssDeltaBytes: 4096,
+    copiedBytes: status === "passed" ? requestedMiB * 1024 * 1024 - 32 : 0,
+    responseBytes: status === "passed" ? 128 : 0,
+    errorCode: status === "passed"
+      ? null
+      : status === "resource-refused" ? "ENGINE_RESOURCE_LIMIT" : "ENGINE_CRASH",
+    sourceSha256: "b".repeat(64),
+    outputSha256: null,
+  });
+  const evidence = (receipts: ReturnType<typeof receipt>[], overrides = {}) => ({
+    schemaVersion: BENCHMARK_RECEIPT_SCHEMA_VERSION,
+    generatedAt: new Date(now).toISOString(),
+    concurrency: 1,
+    implementationSha256,
+    receipts,
+    ...overrides,
+  });
+  const writeEvidence = async (value: ReturnType<typeof evidence> | string) => {
+    await writeFile(
+      evidencePath,
+      typeof value === "string" ? value : `${JSON.stringify(value)}\n`,
+      "utf8",
+    );
+  };
+
+  await writeEvidence(evidence([receipt(100)]));
+  assert.deepEqual(
+    (await validateLargeBenchmarkEvidence(evidencePath, { now, maxAgeMs: 60_000 }))
+      .receipts.map((entry: { requestedMiB: number }) => entry.requestedMiB),
+    [100],
+  );
+
+  await assert.rejects(
+    validateLargeBenchmarkEvidence(missingPath, { now, maxAgeMs: 60_000 }),
+    { code: "BENCHMARK_EVIDENCE_INVALID" },
+  );
+  for (const invalid of [
+    "",
+    evidence([]),
+    evidence([receipt(100), receipt(100)]),
+    evidence([receipt(10), receipt(100)]),
+    evidence([receipt(256)]),
+    evidence([receipt(512)]),
+    evidence([receipt(100), receipt(256)]),
+    evidence([receipt(100), receipt(512)]),
+    evidence([receipt(100, "resource-refused")]),
+    evidence([receipt(100, "failed")]),
+    evidence([receipt(100)], { implementationSha256: "0".repeat(64) }),
+    evidence([receipt(100)], { generatedAt: new Date(now + 1).toISOString() }),
+    evidence([receipt(100)], { generatedAt: new Date(now - 60_001).toISOString() }),
+  ]) {
+    await writeEvidence(invalid);
+    await assert.rejects(
+      validateLargeBenchmarkEvidence(evidencePath, { now, maxAgeMs: 60_000 }),
+      { code: "BENCHMARK_EVIDENCE_INVALID" },
+    );
+  }
+
+  await writeEvidence(evidence([receipt(100)]));
+  await assert.rejects(
+    validateLargeBenchmarkEvidence(evidencePath, { now: now + 60_001, maxAgeMs: 60_000 }),
+    { code: "BENCHMARK_EVIDENCE_INVALID" },
+  );
+});
+
+test("experimental 256 and 512 MiB receipts remain schema-valid diagnostics", () => {
+  const receipt = (requestedMiB: 256 | 512, status: "resource-refused" | "failed") => ({
+    schemaVersion: BENCHMARK_RECEIPT_SCHEMA_VERSION,
+    platform: "linux",
+    arch: "x64",
+    runtime: "node-v22.17.0",
+    requestedMiB,
+    actualBytes: requestedMiB * 1024 * 1024 - 32,
+    operation: "detectFormat",
     executionMode: "supervised-child",
-    status: "resource-refused",
+    status,
     dispatchStarted: false,
     elapsedMs: 125,
     peakRssDeltaBytes: 4096,
     copiedBytes: 0,
     responseBytes: 0,
-    errorCode: "ENGINE_RESOURCE_LIMIT",
+    errorCode: status === "resource-refused" ? "ENGINE_RESOURCE_LIMIT" : "ENGINE_CRASH",
     sourceSha256: "b".repeat(64),
     outputSha256: null,
   });
-  await writeFile(evidencePath, `${JSON.stringify({
-    schemaVersion: BENCHMARK_RECEIPT_SCHEMA_VERSION,
-    generatedAt: new Date(now).toISOString(),
-    concurrency: 1,
-    implementationSha256,
-    receipts: [receipt(100), receipt(256), receipt(512)],
-  })}\n`, "utf8");
-  assert.deepEqual(
-    (await validateLargeBenchmarkEvidence(evidencePath, { now, maxAgeMs: 60_000 }))
-      .receipts.map((entry: { requestedMiB: number }) => entry.requestedMiB),
-    [100, 256, 512],
-  );
-  await assert.rejects(
-    validateLargeBenchmarkEvidence(evidencePath, { now: now + 60_001, maxAgeMs: 60_000 }),
-    { code: "BENCHMARK_EVIDENCE_INVALID" },
-  );
-
-  const staleImplementation = JSON.parse(await readFile(evidencePath, "utf8"));
-  staleImplementation.implementationSha256 = "0".repeat(64);
-  await writeFile(evidencePath, `${JSON.stringify(staleImplementation)}\n`, "utf8");
-  await assert.rejects(
-    validateLargeBenchmarkEvidence(evidencePath, { now, maxAgeMs: 60_000 }),
-    { code: "BENCHMARK_EVIDENCE_INVALID" },
-  );
-  staleImplementation.implementationSha256 = implementationSha256;
-  await writeFile(evidencePath, `${JSON.stringify(staleImplementation)}\n`, "utf8");
-
-  const mixedHost = JSON.parse(await readFile(evidencePath, "utf8"));
-  mixedHost.receipts[1].arch = "arm64";
-  await writeFile(evidencePath, `${JSON.stringify(mixedHost)}\n`, "utf8");
-  await assert.rejects(
-    validateLargeBenchmarkEvidence(evidencePath, { now, maxAgeMs: 60_000 }),
-    { code: "BENCHMARK_EVIDENCE_INVALID" },
-  );
-
-  mixedHost.receipts[1].arch = "x64";
-  mixedHost.generatedAt = [
-    "Thu, 16 Jul 2026 00:00:00 GMT (C:",
-    "\\",
-    "Users",
-    "\\alice)",
-  ].join("");
-  await writeFile(evidencePath, `${JSON.stringify(mixedHost)}\n`, "utf8");
-  await assert.rejects(
-    validateLargeBenchmarkEvidence(evidencePath, { now, maxAgeMs: 60_000 }),
-    { code: "BENCHMARK_EVIDENCE_INVALID" },
-  );
+  assert.equal(validateBenchmarkReceipt(receipt(256, "resource-refused")).requestedMiB, 256);
+  assert.equal(validateBenchmarkReceipt(receipt(512, "failed")).requestedMiB, 512);
 });
 
 test("benchmark policy makes bounded document evidence a default release stage", () => {

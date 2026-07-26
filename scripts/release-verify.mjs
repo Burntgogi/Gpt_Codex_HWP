@@ -51,6 +51,10 @@ export async function runReleaseVerification(options = {}) {
     throw releaseError("RELEASE_VERIFY_OPTIONS_INVALID");
   }
   const root = requiredRoot(options.root ?? PROJECT_ROOT);
+  const environment = options.environment ?? process.env;
+  if (environment === null || typeof environment !== "object" || Array.isArray(environment)) {
+    throw releaseError("RELEASE_VERIFY_ENVIRONMENT_INVALID");
+  }
   const platform = safeIdentity(options.platform ?? process.platform, "platform");
   const arch = safeIdentity(options.arch ?? process.arch, "arch");
   const versions = options.versions === undefined
@@ -90,7 +94,7 @@ export async function runReleaseVerification(options = {}) {
   }
 
   const stages = [];
-  for (const stage of releaseStageDefinitions(root)) {
+  for (const stage of releaseStageDefinitions(root, environment)) {
     const started = safeNow(now);
     let outcome;
     try {
@@ -745,7 +749,7 @@ async function withinDeadline(promise, deadlineAt, clock) {
   }
 }
 
-function releaseStageDefinitions(root) {
+function releaseStageDefinitions(root, environment) {
   const requiredRhwp = Object.freeze({ HWP_REQUIRE_RHWP: "1" });
   const none = Object.freeze({});
   const realHwpEvidence = nodeTestEvidence(
@@ -822,7 +826,7 @@ function releaseStageDefinitions(root) {
       "tests/public-runtime-privacy.test.ts",
     ], root, none),
     npmStage("runtime-diff", ["run", "runtime:check"], root, none),
-    documentBenchmarkStage(root, none),
+    documentBenchmarkStage(root, none, environment),
     Object.freeze({
       name: "release-artifacts",
       kind: "release-artifacts",
@@ -837,7 +841,7 @@ function releaseStageDefinitions(root) {
   return Object.freeze(stages);
 }
 
-function documentBenchmarkStage(root, env) {
+function documentBenchmarkStage(root, env, environment) {
   const small = fixedCommand("npm", [
     "--prefix",
     "packages/gpt-codex-hwp",
@@ -849,11 +853,13 @@ function documentBenchmarkStage(root, env) {
     "--output",
     `.superpowers/benchmarks/release-10m-${process.pid}.json`,
   ]);
-  if (process.env.HWP_BENCH_REQUIRE_LARGE !== "1") {
+  if (!Object.hasOwn(environment, "HWP_BENCH_REQUIRE_LARGE")
+    || environment.HWP_BENCH_REQUIRE_LARGE !== "1") {
     return npmStage("document-benchmark", small.args, root, env);
   }
-  const evidencePath = process.env.HWP_BENCH_LARGE_EVIDENCE
-    ?? ".superpowers/benchmarks/large.json";
+  const evidencePath = Object.hasOwn(environment, "HWP_BENCH_LARGE_EVIDENCE")
+    ? environment.HWP_BENCH_LARGE_EVIDENCE
+    : ".superpowers/benchmarks/supported-100.json";
   return compositeStage("document-benchmark", [
     small,
     fixedCommand("npm", [

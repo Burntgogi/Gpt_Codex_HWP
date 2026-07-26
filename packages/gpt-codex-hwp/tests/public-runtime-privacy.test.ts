@@ -505,10 +505,12 @@ async function createProjectionFixture(fixtureRoot: string, fixtureSource: strin
     "package.json",
   ]) await copyFile(join(REPOSITORY_ROOT, name), join(fixtureRoot, name));
   await mkdir(join(fixtureRoot, "scripts"));
-  await copyFile(
-    join(REPOSITORY_ROOT, "scripts", "kordoc-runtime-verifier.mjs"),
-    join(fixtureRoot, "scripts", "kordoc-runtime-verifier.mjs"),
-  );
+  for (const name of ["kordoc-runtime-verifier.mjs"]) {
+    await copyFile(
+      join(REPOSITORY_ROOT, "scripts", name),
+      join(fixtureRoot, "scripts", name),
+    );
+  }
 
   for (const name of [
     ".npmrc",
