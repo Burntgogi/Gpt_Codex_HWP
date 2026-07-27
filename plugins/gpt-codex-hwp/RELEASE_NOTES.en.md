@@ -24,6 +24,60 @@ Installed-runtime smoke tests previously stalled for 60 seconds on GitHub hosted
 - A failed release 100 MiB preflight now runs only bounded diagnostics and prevents artifact construction and attestation.
 - HWP remains detection/read/preview only, and every generated or edited result remains HWPX.
 
+## Changes from v0.2.1
+
+| Area | v0.2.1 | v0.2.2 | Effect |
+| --- | --- | --- | --- |
+| Release goal | Established the public-source, security, and reproducible-release system | Stabilizes platform CI and reduces verification resource use | Improves operational confidence without changing the document API |
+| HWP/HWPX policy | HWP read-only and HWPX write | Unchanged | Existing document workflows remain compatible |
+| Public MCP tools | Nine | Nine, unchanged | No extra MCP server or tool increases resident resource use |
+| Verification document sizes | Ordinary Windows and macOS PR jobs each ran 100, 256, and 512 MiB | Ordinary PR jobs run 10 MiB per desktop platform; Compatibility and Release own 100 MiB | Greatly reduces routine large-document generation and processing |
+| Support statement | A 512 MiB outer ceiling and engine limits existed, but the CI-backed envelope was unclear | At most 100 MiB is CI-verified; over 100 through 512 MiB is non-guaranteed best effort | Aligns the support statement with evidence |
+| Platform verification | Full verification responsibilities overlapped across PR and release gates | Windows, macOS, Linux, and Security PR gates are separated from post-merge Compatibility | Removes duplicate work and makes failures easier to locate |
+| Hosted initialization | A Windows/macOS temporary-path alias could stall installed-runtime smoke | Reuses the ownership-verified canonical root for allowed and output paths | Removes the cause of the 60-second initialization stall |
+| Failure diagnostics | Limited failure classification | Records only an allowlisted lifecycle boundary and bounded stderr byte count | Diagnoses failures without user paths, PIDs, or document content |
+| Process termination | Focused on whether termination completed | Validates a receipt containing registered and remaining process counts | Fails closed against accumulated child processes |
+| Stale CI | An older run could continue after a new commit | Cancels superseded runs for the same PR | Reduces unnecessary hosted-runner use |
+
+## Resource-reduction design and measured effect
+
+This patch reduces resources by separating verification ownership and running
+heavy work once at the appropriate gate, rather than removing MCP functionality.
+
+| Measurement | v0.2.1 baseline | v0.2.2 candidate | Change |
+| --- | ---: | ---: | ---: |
+| Synthetic large-document volume in an ordinary PR | 1,736 MiB: 100+256+512 MiB on both Windows and macOS | 20 MiB: 10 MiB on both Windows and macOS | 1,716 MiB, about 98.8% less |
+| Required platform CI wall time | 14m 22s | 8m 55s | 5m 27s, about 37.9% less |
+| Aggregate platform runner time | 20m 17s | 13m 56s | 6m 21s, about 31.3% less |
+| Windows x64 job | 14m 18s | 8m 51s | About 38.1% less |
+| macOS arm64 job | 5m 12s | 4m 12s | About 19.2% less |
+| Linux lifecycle job | 47s | 53s | 6s longer; small absolute difference |
+| Security policy job | 36s | 28s | About 22.2% less |
+| Windows x64 production `node_modules` | 46,536,901 bytes (44.38 MiB) | 46,273,924 bytes (44.13 MiB) | 262,977 bytes, about 0.6% less |
+
+CI timings are calculated from the actual job start and completion timestamps of
+passing v0.2.1 run `29861590295` and v0.2.2 candidate run `30250809345`.
+Security compares runs `29861590517` and `30250809321`. Installation size was
+measured after installing each tag on Windows x64 with the same
+`npm ci --omit=dev --ignore-scripts` command and summing regular-file sizes.
+Timing varies with GitHub runner load, so this two-run comparison is evidence for
+the change, not a universal performance guarantee.
+
+Ordinary PRs no longer generate 256 or 512 MiB cases and verify only the 10 MiB
+transport path. Post-merge Compatibility and immutable release verification own
+the full 100 MiB receipt; 256 and 512 MiB remain explicit local experiments.
+New commits cancel superseded runs for the same PR, and a failed release preflight
+stops before artifacts are constructed.
+
+The Node runtime was not broadly rewritten and the nine-tool surface was not
+reduced. Its production installation is about 44.13 MiB, within the 64 MiB
+budget, but only about 0.6% smaller than v0.2.1. The primary benefit is therefore
+lower CI work and lower residual-process risk rather than a large installation
+footprint reduction. The latest installed-runtime smoke completed all nine MCP
+tools with `stderrBytes=0` and `remainingDescendants=0`. This proves that no
+tracked child remained after that run; there is not yet a controlled long-session
+RSS comparison supporting a percentage claim for Codex memory reduction.
+
 ## Public tools
 
 `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`
