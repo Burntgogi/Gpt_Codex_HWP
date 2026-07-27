@@ -7,10 +7,15 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   security:
     name: Security policy
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
     env:
@@ -28,32 +33,17 @@ jobs:
           package-manager-cache: false
       - name: Assert exact feature head
         run: node -e "const { execFileSync } = require('node:child_process'); if (process.env.EXPECTED_SOURCE_REPOSITORY !== 'Burntgogi/Gpt_Codex_HWP') process.exit(1); if (process.env.EXPECTED_HEAD_SHA !== execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim()) process.exit(1)"
-      - name: Install source dependencies without lifecycle scripts
-        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Install runtime dependencies without lifecycle scripts
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Scan public tree
         run: npm run security:scan-tree
       - name: Scan every reachable Git object and identity
         run: npm run security:scan-history
-      - name: Audit source production dependencies
-        run: npm audit --omit=dev --prefix packages/gpt-codex-hwp
-      - name: Audit runtime production dependencies
-        run: npm audit --omit=dev --prefix plugins/gpt-codex-hwp
+      - name: Install source dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Verify projected runtime is current
         run: npm run runtime:check
-      - name: Configure neutral release identity
-        run: |
-          git config --local user.name "Gpt_Codex_HWP contributors"
-          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
-          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
-      - name: Build candidate artifacts
-        env:
-          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
-        run: npm run release:artifacts -- --output "$RELEASE_ARTIFACT_DIR"
-      - name: Verify candidate artifacts
-        env:
-          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
-        run: npm run verify:release-artifacts -- --artifacts "$RELEASE_ARTIFACT_DIR"
+      - name: Audit source production dependencies
+        run: npm audit --omit=dev --prefix packages/gpt-codex-hwp
+      - name: Verify workflow, repository, and dependency policies
+        run: npm run test:policy
       - name: Reject generated repository changes
         run: git diff --exit-code -- .

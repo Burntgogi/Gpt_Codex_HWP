@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
-  <img alt="Release v0.2.1" src="https://img.shields.io/badge/release-v0.2.1-5865F2">
+  <img alt="Candidate v0.2.2" src="https://img.shields.io/badge/candidate-v0.2.2-E67E22">
   <img alt="Node.js 22 이상" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
   <a href="LICENSE"><img alt="Apache-2.0 라이선스" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -27,13 +27,13 @@
 
 Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
 
-## v0.2.1 릴리즈
+## v0.2.2 릴리즈 후보
 
-`v0.2.1`은 공개 소스·보안 경계·재현 가능한 배포물·보호된 GitHub 배포 게이트를 강화하고, MCP SDK의 전이 의존성인 Hono Node 어댑터를 보안 수정판 2.0.11로 고정합니다. 릴리즈 커밋은 Windows x64, macOS arm64, Linux와 보안 검사를 통과한 뒤 불변 태그로 게시되며 ZIP, SBOM과 provenance를 함께 제공합니다. 개발과 실제 문서 검증은 Windows x64 기반으로 수행했으며, macOS 호환성을 목표로 하지만 실제 Mac 기기의 Codex Desktop·한컴오피스 한글 사용은 아직 검증하지 않았습니다.
+`v0.2.2`는 Windows x64·macOS arm64·Linux의 검증 책임을 분리하고, 100 MiB를 CI 검증 문서 범위로 고정합니다. GitHub hosted runner의 임시 경로 별칭 때문에 설치 런타임 초기화가 중단되던 문제를 정규 경로 재사용으로 해결했으며, 원시 오류·경로·PID를 공개하지 않는 제한 진단을 추가했습니다. 개발과 실제 문서 검증은 Windows x64 기반으로 수행했으며, macOS Apple Silicon은 hosted runner 호환성만 확인했고 실제 Mac 기기의 Codex Desktop·한컴오피스 한글 사용은 아직 검증하지 않았습니다.
 
-## v0.1.4 릴리즈
+## 이전 릴리즈
 
-`v0.1.4`는 Windows x64 최종 검증을 마친 이전 안정 릴리즈입니다. 주요 변경과 검증 수치는 [한국어 릴리즈 노트](RELEASE_NOTES.md) 및 [영문 릴리즈 노트](RELEASE_NOTES.en.md)의 릴리즈 이력에서 확인할 수 있습니다. 새 설치에는 움직이는 `main` 대신 `v0.2.1` 태그를 지정하십시오.
+`v0.2.1`은 보안 수정된 Hono Node 어댑터와 재현 가능한 ZIP·SBOM·provenance 배포 게이트를 도입한 이전 안정 릴리즈입니다. 자세한 이력은 [CHANGELOG](CHANGELOG.md)와 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있습니다.
 
 ## 기능
 
@@ -96,11 +96,11 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 ## 에이전트를 통한 GitHub 설치
 
-`v0.2.1`은 현재 권장 릴리즈입니다. `v0.1.0`부터 `v0.1.4`까지는 과거 릴리스로 유지됩니다. `v0.2.0` 태그는 보안 권고 확인 후 게시 전에 철회된 후보이며 GitHub Release로 배포되지 않았습니다. 새 설치는 `v0.2.1` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
+`v0.2.1`은 현재 권장 릴리즈이며 `v0.2.2`는 배포 전 후보입니다. `v0.1.0`부터 `v0.1.4`까지는 과거 릴리스로 유지됩니다. `v0.2.0` 태그는 보안 권고 확인 후 게시 전에 철회된 후보이며 GitHub Release로 배포되지 않았습니다. v0.2.2가 정식 게시되기 전 새 설치는 `v0.2.1` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
 
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
-> `Burntgogi/Gpt_Codex_HWP`의 `v0.2.1` 릴리스를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 설치된 경로에서 `doctor`를 실행한 다음 새 작업에서 MCP 도구 9개를 확인해 주세요.
+> `Burntgogi/Gpt_Codex_HWP`의 최신 공개 릴리스 `v0.2.1`을 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 잠금 파일로 운영 의존성을 설치하고, 설치된 경로에서 `doctor`를 실행한 다음 새 작업에서 MCP 도구 9개를 확인해 주세요.
 
 1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
 2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
@@ -186,7 +186,7 @@ codex plugin remove hwp-korean-docs@hwp-local
 
 ## 대용량 문서 읽기
 
-원본 문서의 하드 상한은 512 MiB입니다. 이는 외곽 안전 한도이며 모든 512 MiB 문서의 파싱 성공을 보장하지 않습니다. Kordoc 3.18.1은 현재 HWP/HWPX 전체 압축 해제량을 100 MiB, HWPX 항목 수를 500개로 제한하므로 더 엄격한 엔진 한도가 먼저 적용될 수 있습니다.
+형식과 구조가 유효한 원본 문서 중 100 MiB 이하 파일은 CI 검증 지원 범위입니다. 다만 비정상·손상 아카이브, 압축 해제 및 자원 정책, 선택적 허용 루트 정책에 따라 크기와 무관하게 거부될 수 있습니다. 100 MiB 초과 512 MiB 이하 문서는 최선 노력(best-effort) 범위로 호환성을 보장하지 않으며, 512 MiB 초과 파일은 거부합니다. Kordoc 3.18.1은 현재 HWP/HWPX 전체 압축 해제량을 100 MiB, HWPX 항목 수를 500개로 제한하므로 더 엄격한 엔진 한도가 먼저 적용될 수 있습니다.
 
 일반 `hwp_read`는 JavaScript 문자열 길이 기준 Markdown 64,000자까지 인라인으로 반환합니다. 더 큰 결과에는 기존 파일이 아닌 새 `.md` 경로를 `markdown_output_path`로 지정하십시오. 플러그인은 원본을 한 번만 파싱하고 전체 UTF-8 Markdown을 최대 256 MiB까지 저장하며, 응답에는 처음 64,000자와 전체 크기·원본 지문·권장 분할 크기를 반환합니다. 이후 Codex는 파생 Markdown을 약 64,000자 단위로 읽으므로 원본 문서를 반복 파싱하지 않습니다.
 
@@ -230,7 +230,7 @@ HWPX는 `HANGUL`, `LATIN`, `HANJA`, `JAPANESE`, `OTHER`, `SYMBOL`, `USER` 언어
 ## 알려진 제한
 
 - 바이너리 HWP는 읽기 전용이며 생성·수정·변환 출력은 모두 HWPX로 작성합니다.
-- 원본 문서 상한은 512 MiB지만 Kordoc 3.18.1의 100 MiB 압축 해제량과 HWPX 500개 항목 제한 등 더 엄격한 엔진 한도가 적용될 수 있습니다.
+- 유효한 원본 문서는 100 MiB 이하까지 CI 검증 범위이며, 100 MiB 초과 512 MiB 이하는 비보장 best-effort, 512 MiB 초과는 거부됩니다. 비정상 아카이브, 압축 해제·자원·허용 루트 정책과 Kordoc 3.18.1의 100 MiB 압축 해제량 및 HWPX 500개 항목 제한은 별도로 적용됩니다.
 - 인라인 Markdown은 64,000자, 파생 Markdown 파일은 256 MiB, 최종 직렬화 MCP 결과는 8 MiB로 제한합니다.
 - Kordoc 또는 rhwp 미리보기는 한컴 GUI와 픽셀 단위로 동일하지 않을 수 있습니다.
 - rhwp 미리보기 폴백은 첫 페이지만 렌더링하고 Node 환경의 근사 글꼴 폭을 사용할 수 있습니다.

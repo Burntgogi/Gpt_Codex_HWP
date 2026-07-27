@@ -2,6 +2,13 @@ import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  assertRegisteredExactSkipPattern,
+  parseNodeTestProfileArguments,
+  resolveNodeTestProfile,
+  SOURCE_NODE_TEST_FILES,
+} from "./node-test-profiles.mjs";
+
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_ROOT = resolve(PROJECT_ROOT, "packages/gpt-codex-hwp");
 const MAX_CAPTURE_BYTES = 512 * 1024;
@@ -10,24 +17,9 @@ const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DOCUMENT_PROCESS_TEST_TIMEOUT_MS = 300_000;
 const DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS = 300_000;
-const TEST_FILES = Object.freeze([
-  "allowed-roots.test.ts", "assets.test.ts", "benchmark-policy.test.ts",
-  "bounded-frame.test.ts", "build-assets.test.ts", "compact-runtime.test.ts",
-  "doctor-command-runner.test.ts", "doctor.test.ts", "document-child-client.test.ts",
-  "document-contract.test.ts", "document-mutation-preflight.test.ts",
-  "document-process-registration.test.ts", "document-protocol.test.ts",
-  "document-snapshot.test.ts", "document-worker-client.test.ts",
-  "document-worker-operations.test.ts", "files.test.ts", "font-integrity.test.ts",
-  "hwp-fixture-integrity.test.ts", "hwp-fixture.test.ts", "hwp-plugin.test.ts",
-  "hwpx-anchor.test.ts", "kordoc-core-runtime.test.ts", "markdown-output.test.ts",
-  "mcp-cancellation-progress.test.ts", "mcp-smoke.test.ts",
-  "output-budget-atomicity.test.ts", "patch.test.ts", "paths.test.ts",
-  "protection.test.ts", "public-runtime-privacy.test.ts", "read-worker-safety.test.ts",
-  "release-artifacts.test.ts", "release-metadata.test.ts", "result.test.ts",
-  "rhwp-backend.test.ts", "runtime-projection.test.ts", "tools.test.ts",
-  "validation-regressions.test.ts", "windows-hosted-diagnostic.test.ts",
-  "write-worker-safety.test.ts",
-]);
+const MAX_BENCHMARK_DIAGNOSTIC_RECEIPT_BYTES = 384;
+const MAX_BENCHMARK_REGISTERED_IDENTITIES = 32;
+const TEST_FILES = SOURCE_NODE_TEST_FILES;
 const KORDOC_CORE_OUTER_STAGES = new Set([
   "setup", "first-build", "second-build", "generated-assertions",
   "package-assertions", "layout-assertions", "provenance-assertions",
@@ -137,6 +129,7 @@ const COMPACT_RUNTIME_CASES = Object.freeze([
 ].map((pattern, index) => Object.freeze({
   id: `cr${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+  testName: pattern,
   allowAllSkipped: index === 12,
 })));
 const DOCTOR_CASES = Object.freeze([
@@ -249,16 +242,68 @@ const MCP_RUNNING_CHILD_CODES = Object.freeze(
   [...MCP_RUNNING_CHILD_STAGES].map((stage) =>
     `MCP_RUNNING_CHILD_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
 );
+const BENCHMARK_DIAGNOSTIC_STAGES = new Set([
+  "ready-mode-1", "ready-mode-2", "error-startup", "error-baseline-rss",
+  "error-sampling", "error-termination", "error-rss-receipt", "finalizer", "channel",
+  "windows-startup", "windows-baseline-rss", "windows-sampling", "windows-termination",
+  "windows-termination-discovery-or-rss-unavailable",
+  "windows-termination-retained-handle-unavailable", "windows-termination-scan-exhausted",
+  "windows-rss-receipt", "windows-finalizer", "windows-channel", "posix-root-authority",
+  "posix-telemetry-initialize", "posix-telemetry-sample",
+]);
+const NODE_COMPLETION_KINDS = new Set([
+  "passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary",
+  "child-signal",
+]);
+const NODE_FAILURE_KINDS = new Set([
+  "test-timeout", "hook-failure", "test-code", "async-failure", "cancelled", "unknown",
+]);
+const NODE_TEST_CODE_REASONS = new Set([
+  "assertion", "async-activity", "test-failure", "unknown",
+]);
+const NODE_ASSERTION_ORIGINS = new Set(["register-root", "test-body", "unknown"]);
+const NODE_RUNNER_FAILURE_KINDS = new Set([
+  "spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk",
+  "capture-limit", "runner-timeout", "unknown",
+]);
 
 export async function runMacNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
-  const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
+  const actualSetExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const receiptPrefix = options.receiptPrefix === "WINDOWS" ? "WINDOWS" : "MAC";
+  const emitProfileReceipt = options.profile !== undefined || options.emitProfileReceipt === true;
+  const requestedProfile = options.profile ?? "full";
+  let profilePlan;
+  try {
+    profilePlan = await resolveNodeTestProfile(requestedProfile);
+  } catch {
+    if (emitProfileReceipt) {
+      stdout.write(
+        `${receiptPrefix}_NODE_TEST_PROFILE profile=invalid executedFileCount=0 deferredCaseCount=0 failed=1\n`,
+      );
+    }
+    actualSetExitCode(1);
+    return false;
+  }
+  let executedFileCount = 0;
+  const onTestFileSpawn = () => { executedFileCount += 1; };
+  let profileReceiptWritten = false;
+  const setExitCode = (code) => {
+    if (emitProfileReceipt && !profileReceiptWritten) {
+      profileReceiptWritten = true;
+      stdout.write(
+        `${receiptPrefix}_NODE_TEST_PROFILE profile=${profilePlan.name} executedFileCount=${executedFileCount} deferredCaseCount=${profilePlan.deferredCaseCount} failed=${code === 0 ? 0 : 1}\n`,
+      );
+    }
+    actualSetExitCode(code);
+  };
   const runFile = options.runFile ?? ((file, fileOptions) => executeTestFile(file, {
     spawnProcess: options.spawnProcess ?? spawn,
     terminateTree: options.terminateTree ?? terminateTree,
     testTimeoutMs: fileOptions.testTimeoutMs,
     closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+    testSkipPattern: fileOptions.testSkipPattern,
+    onSpawn: onTestFileSpawn,
   }));
   const runAllowedRootsCase = options.runAllowedRootsCase ?? ((record) => executeTestFile(
     "allowed-roots.test.ts",
@@ -269,6 +314,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testNamePattern: record.pattern,
       allowAllSkipped: record.allowAllSkipped,
+      onSpawn: onTestFileSpawn,
     },
   ));
   const runAssetsCase = options.runAssetsCase ?? ((record) => executeTestFile(
@@ -280,6 +326,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testNamePattern: record.pattern,
       allowAllSkipped: record.allowAllSkipped,
+      onSpawn: onTestFileSpawn,
     },
   ));
   const runCompactRuntimeCase = options.runCompactRuntimeCase ?? ((record) => executeTestFile(
@@ -291,6 +338,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testNamePattern: record.pattern,
       allowAllSkipped: record.allowAllSkipped,
+      onSpawn: onTestFileSpawn,
     },
   ));
   const runDoctorCase = options.runDoctorCase ?? ((record) => executeTestFile(
@@ -302,29 +350,33 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testNamePattern: record.pattern,
       allowAllSkipped: record.allowAllSkipped,
+      onSpawn: onTestFileSpawn,
     },
   ));
   const runDoctorOrphanDiagnostic = options.runDoctorOrphanDiagnostic
-    ?? executeDoctorOrphanDiagnostic;
+    ?? (() => executeDoctorOrphanDiagnostic({ onSpawn: onTestFileSpawn }));
   const runDocumentProcessDiagnostic = options.runDocumentProcessDiagnostic
     ?? (() => executeDocumentProcessDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
       terminateTree: options.terminateTree ?? terminateTree,
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DOCUMENT_PROCESS_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      onSpawn: onTestFileSpawn,
     }));
   const runDocumentFile = options.runDocumentFile
     ?? (options.runFile === undefined ? runDocumentProcessDiagnostic : undefined);
   const runDocumentSequentialDiagnostic = options.runDocumentSequentialDiagnostic
-    ?? executeDocumentSequentialDiagnostic;
+    ?? (() => executeDocumentSequentialDiagnostic({ onSpawn: onTestFileSpawn }));
   const runDocumentDescriptorMismatchDiagnostic = options.runDocumentDescriptorMismatchDiagnostic
-    ?? executeDocumentDescriptorMismatchDiagnostic;
+    ?? (() => executeDocumentDescriptorMismatchDiagnostic({ onSpawn: onTestFileSpawn }));
   const runBenchmarkPolicyDiagnostic = options.runBenchmarkPolicyDiagnostic
-    ?? (() => executeBenchmarkPolicyDiagnostic({
+    ?? ((fileOptions = {}) => executeBenchmarkPolicyDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
       terminateTree: options.terminateTree ?? terminateTree,
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      testSkipPattern: fileOptions.testSkipPattern,
+      onSpawn: onTestFileSpawn,
     }));
   const runBenchmarkFile = options.runBenchmarkFile
     ?? (options.runFile === undefined ? runBenchmarkPolicyDiagnostic : undefined);
@@ -334,34 +386,46 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       terminateTree: options.terminateTree ?? terminateTree,
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      onSpawn: onTestFileSpawn,
     }));
   const runOutputBudgetAtomicityDiagnostic = options.runOutputBudgetAtomicityDiagnostic
-    ?? executeOutputBudgetAtomicityDiagnostic;
-  const runPatchDiagnostic = options.runPatchDiagnostic ?? executePatchDiagnostic;
+    ?? (() => executeOutputBudgetAtomicityDiagnostic({ onSpawn: onTestFileSpawn }));
+  const runPatchDiagnostic = options.runPatchDiagnostic
+    ?? (() => executePatchDiagnostic({ onSpawn: onTestFileSpawn }));
   const runPublicRuntimePrivacyDiagnostic = options.runPublicRuntimePrivacyDiagnostic
     ?? (() => executePublicRuntimePrivacyDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
       terminateTree: options.terminateTree ?? terminateTree,
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      onSpawn: onTestFileSpawn,
     }));
   const runReadWorkerSafetyDiagnostic = options.runReadWorkerSafetyDiagnostic
-    ?? (() => executeSourceOrdinalDiagnostic("read-worker-safety.test.ts", 17, "rw"));
+    ?? (() => executeSourceOrdinalDiagnostic(
+      "read-worker-safety.test.ts", 17, "rw", { onSpawn: onTestFileSpawn },
+    ));
   const runWriteWorkerSafetyDiagnostic = options.runWriteWorkerSafetyDiagnostic
-    ?? (() => executeSourceOrdinalDiagnostic("write-worker-safety.test.ts", 10, "ww"));
+    ?? (() => executeSourceOrdinalDiagnostic(
+      "write-worker-safety.test.ts", 10, "ww", { onSpawn: onTestFileSpawn },
+    ));
   const runKordocCoreDiagnostic = options.runKordocCoreDiagnostic
-    ?? executeKordocCoreDiagnostic;
+    ?? (() => executeKordocCoreDiagnostic({ onSpawn: onTestFileSpawn }));
   const runAssetsRenderDiagnostic = options.runAssetsRenderDiagnostic
     ?? (() => executeSvgAssetDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
       terminateTree: options.terminateTree ?? terminateTree,
       testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
+      onSpawn: onTestFileSpawn,
     }));
   const runCompactRuntimeDiagnostic = options.runCompactRuntimeDiagnostic
     ?? executeCompactRuntimeDiagnostic;
 
-  for (const file of TEST_FILES) {
+  const compactRuntimeCases = COMPACT_RUNTIME_CASES.filter((record) => !profilePlan.isDeferred(
+    "compact-runtime.test.ts",
+    record.testName,
+  ));
+  for (const file of profilePlan.testFiles) {
     let passed = false;
     let benchmarkReceipt;
     let documentReceipt;
@@ -371,16 +435,26 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
         : DEFAULT_TEST_TIMEOUT_MS,
     );
+    const testSkipPattern = profilePlan.skipPatternFor(file);
     try {
       if (file === "benchmark-policy.test.ts" && typeof runBenchmarkFile === "function") {
-        benchmarkReceipt = await runBenchmarkFile();
+        benchmarkReceipt = await runBenchmarkFile({
+          testSkipPattern,
+          profile: profilePlan.name,
+          onSpawn: onTestFileSpawn,
+        });
         passed = benchmarkReceipt?.passed === true;
       } else if (file === "document-process-registration.test.ts"
         && typeof runDocumentFile === "function") {
         documentReceipt = await runDocumentFile();
         passed = documentReceipt?.passed === true;
       } else {
-        passed = await runFile(file, { testTimeoutMs }) === true;
+        passed = await runFile(file, {
+          testTimeoutMs,
+          testSkipPattern,
+          profile: profilePlan.name,
+          onSpawn: onTestFileSpawn,
+        }) === true;
       }
     } catch { passed = false; }
     if (!passed) {
@@ -421,7 +495,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         return false;
       }
       if (file === "compact-runtime.test.ts") {
-        for (const record of COMPACT_RUNTIME_CASES) {
+        for (const record of compactRuntimeCases) {
           let casePassed = false;
           try { casePassed = await runCompactRuntimeCase(record) === true; } catch { casePassed = false; }
           if (!casePassed) {
@@ -579,8 +653,17 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         let failureKind;
         let runnerFailureKind;
         let testCodeReason;
+        let diagnosticStage;
+        let rootCleanup;
+        let processGroupCleanup;
+        let registeredIdentityCount;
+        let remainingIdentityCount;
         try {
-          const candidate = benchmarkReceipt ?? await runBenchmarkPolicyDiagnostic();
+          const candidate = benchmarkReceipt ?? await runBenchmarkPolicyDiagnostic({
+            testSkipPattern,
+            profile: profilePlan.name,
+            onSpawn: onTestFileSpawn,
+          });
           if (typeof candidate === "string") {
             if (/^bp(?:0[1-9]|[12][0-9]|3[0-9])$/u.test(candidate)) caseId = candidate;
             else if (candidate === "aggregate") caseId = "benchmark-aggregate";
@@ -601,24 +684,38 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
             }
             if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
               .includes(candidate.runnerFailureKind)) runnerFailureKind = candidate.runnerFailureKind;
+            if (BENCHMARK_DIAGNOSTIC_STAGES.has(candidate.diagnosticStage)) {
+              diagnosticStage = candidate.diagnosticStage;
+            }
+            if (["gone", "unverified"].includes(candidate.rootCleanup)) {
+              rootCleanup = candidate.rootCleanup;
+            }
+            if (["gone", "unverified"].includes(candidate.processGroupCleanup)) {
+              processGroupCleanup = candidate.processGroupCleanup;
+            }
+            if (validBenchmarkIdentityCounts(
+              candidate.registeredIdentityCount,
+              candidate.remainingIdentityCount,
+            )) {
+              registeredIdentityCount = candidate.registeredIdentityCount;
+              remainingIdentityCount = candidate.remainingIdentityCount;
+            }
           }
         } catch {}
-        if (caseId === "benchmark-aggregate" && completionKind !== undefined) {
-          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE completion=${completionKind}\n`);
-        }
-        if (caseId === "benchmark-aggregate" && failureKind !== undefined) {
-          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_FAILURE kind=${failureKind}\n`);
-        }
-        if (caseId === "benchmark-aggregate" && testCodeReason !== undefined) {
-          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_TEST_CODE reason=${testCodeReason}\n`);
-        }
-        if (caseId === "benchmark-aggregate" && assertionOrigin !== undefined) {
-          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_ASSERTION origin=${assertionOrigin}\n`);
-        }
-        if (caseId === "benchmark-aggregate" && runnerFailureKind !== undefined) {
-          stdout.write(`${receiptPrefix}_BENCHMARK_AGGREGATE_RUNNER kind=${runnerFailureKind}\n`);
-        }
-        stdout.write(`${receiptPrefix}_NODE_TEST_CASE case=${caseId} status=failed\n`);
+        stdout.write(`${formatBenchmarkDiagnosticReceipt({
+          receiptPrefix,
+          caseId,
+          failureKind,
+          completionKind,
+          diagnosticStage,
+          assertionOrigin,
+          rootCleanup,
+          processGroupCleanup,
+          registeredIdentityCount,
+          remainingIdentityCount,
+          testCodeReason,
+          runnerFailureKind,
+        })}\n`);
         setExitCode(1);
         return false;
       }
@@ -775,7 +872,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       return false;
     }
   }
-  stdout.write(`${receiptPrefix}_NODE_TEST_FILES status=passed files=${TEST_FILES.length}\n`);
+  stdout.write(`${receiptPrefix}_NODE_TEST_FILES status=passed files=${profilePlan.testFiles.length}\n`);
   setExitCode(0);
   return true;
 }
@@ -799,9 +896,10 @@ async function executeCompactRuntimeDiagnostic() {
   }
 }
 
-async function executeDoctorOrphanDiagnostic() {
+async function executeDoctorOrphanDiagnostic(options = {}) {
   let stage = "diagnostic-failed";
   await executeBoundedNodeTestFile("doctor.test.ts", {
+    onSpawn: options.onSpawn,
     testNamePattern: DOCTOR_CASES[18].pattern,
     fixedDiagnostics: DOCTOR_ORPHAN_CODES,
     onFixedDiagnostic: (code) => {
@@ -823,6 +921,7 @@ async function executeDocumentProcessDiagnostic(options = {}) {
   let descriptorMismatchStage;
   let descriptorMismatchStderrKind;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    onSpawn: options.onSpawn,
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
     testTimeoutMs: options.testTimeoutMs,
@@ -896,9 +995,10 @@ async function executeDocumentProcessDiagnostic(options = {}) {
   };
 }
 
-async function executeDocumentSequentialDiagnostic() {
+async function executeDocumentSequentialDiagnostic(options = {}) {
   let stage = "diagnostic-failed";
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    onSpawn: options.onSpawn,
     testTimeoutMs: DOCUMENT_PROCESS_TEST_TIMEOUT_MS,
     testNamePattern: "^registration sequential transport completes two real bootstrap ACK handshakes without multiplexing$",
     fixedDiagnostics: DOCUMENT_SEQUENTIAL_CODES,
@@ -916,9 +1016,10 @@ async function executeDocumentSequentialDiagnostic() {
   return { passed, stage };
 }
 
-async function executeDocumentDescriptorMismatchDiagnostic() {
+async function executeDocumentDescriptorMismatchDiagnostic(options = {}) {
   let stderrKind;
   const passed = await executeBoundedNodeTestFile("document-process-registration.test.ts", {
+    onSpawn: options.onSpawn,
     testTimeoutMs: DOCUMENT_PROCESS_TEST_TIMEOUT_MS,
     testNamePattern: "^document child registration rejects an inert acknowledgement peer$",
     fixedDiagnostics: DOCUMENT_DESCRIPTOR_MISMATCH_STDERR_CODES,
@@ -938,11 +1039,14 @@ async function executeBenchmarkPolicyDiagnostic(options = {}) {
   let ordinal;
   let runnerFailureKind;
   let testCodeReason;
+  let processTreeProgress;
   const passed = await executeBoundedNodeTestFile("benchmark-policy.test.ts", {
+    onSpawn: options.onSpawn,
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
     testTimeoutMs: options.testTimeoutMs,
     closeTimeoutMs: options.closeTimeoutMs,
+    testSkipPattern: options.testSkipPattern,
     maximumTopLevelTests: 39,
     onCompletionKind: (value) => { completionKind = value; },
     onFailedTopLevelFailureKind: (value) => { failureKind = value; },
@@ -950,6 +1054,7 @@ async function executeBenchmarkPolicyDiagnostic(options = {}) {
     onFailedTopLevelTestCodeReason: (value) => { testCodeReason = value; },
     onFailedTopLevelAssertionOrigin: (value) => { assertionOrigin = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
+    onBenchmarkProcessTreeProgress: (value) => { processTreeProgress = value; },
   });
   return {
     assertionOrigin,
@@ -961,6 +1066,7 @@ async function executeBenchmarkPolicyDiagnostic(options = {}) {
     failureKind,
     runnerFailureKind,
     testCodeReason,
+    ...(processTreeProgress ?? {}),
   };
 }
 
@@ -974,6 +1080,7 @@ async function executeMcpCancellationProgressDiagnostic(options = {}) {
   let runningChildStage;
   let testCodeReason;
   const passed = await executeBoundedNodeTestFile("mcp-cancellation-progress.test.ts", {
+    onSpawn: options.onSpawn,
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
     testTimeoutMs: options.testTimeoutMs,
@@ -1015,10 +1122,11 @@ async function executeMcpCancellationProgressDiagnostic(options = {}) {
   };
 }
 
-async function executeKordocCoreDiagnostic() {
+async function executeKordocCoreDiagnostic(options = {}) {
   let ordinal;
   let stage;
   await executeBoundedNodeTestFile("kordoc-core-runtime.test.ts", {
+    onSpawn: options.onSpawn,
     maximumTopLevelTests: 10,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     fixedProgressDiagnostics: KORDOC_CORE_PROGRESS_CODES,
@@ -1042,27 +1150,29 @@ async function executeKordocCoreDiagnostic() {
   };
 }
 
-async function executeSourceOrdinalDiagnostic(file, maximum, prefix) {
+async function executeSourceOrdinalDiagnostic(file, maximum, prefix, options = {}) {
   let ordinal;
   await executeBoundedNodeTestFile(file, {
+    onSpawn: options.onSpawn,
     maximumTopLevelTests: maximum,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
   });
   return ordinal === undefined ? "aggregate" : `${prefix}${String(ordinal).padStart(2, "0")}`;
 }
 
-async function executeOutputBudgetAtomicityDiagnostic() {
-  return executeSourceOrdinalDiagnostic("output-budget-atomicity.test.ts", 15, "ob");
+async function executeOutputBudgetAtomicityDiagnostic(options = {}) {
+  return executeSourceOrdinalDiagnostic("output-budget-atomicity.test.ts", 15, "ob", options);
 }
 
-async function executePatchDiagnostic() {
-  return executeSourceOrdinalDiagnostic("patch.test.ts", 23, "pa");
+async function executePatchDiagnostic(options = {}) {
+  return executeSourceOrdinalDiagnostic("patch.test.ts", 23, "pa", options);
 }
 
 async function executePublicRuntimePrivacyDiagnostic(options = {}) {
   let ordinal;
   let nestedOrdinal;
   const passed = await executeBoundedNodeTestFile("public-runtime-privacy.test.ts", {
+    onSpawn: options.onSpawn,
     spawnProcess: options.spawnProcess,
     terminateTree: options.terminateTree,
     testTimeoutMs: options.testTimeoutMs,
@@ -1204,6 +1314,10 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       if (options.testNamePattern !== undefined) {
         args.push(`--test-name-pattern=${options.testNamePattern}`);
       }
+      if (options.testSkipPattern !== undefined) {
+        assertRegisteredExactSkipPattern(options.testSkipPattern, file);
+        args.push(`--test-skip-pattern=${options.testSkipPattern}`);
+      }
       args.push(`tests/${file}`);
       child = spawnProcess(process.execPath, args, {
         cwd: repository ? PROJECT_ROOT : PACKAGE_ROOT,
@@ -1217,6 +1331,9 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       finish(false);
       return;
     }
+    child.once("spawn", () => {
+      try { options.onSpawn?.(); } catch {}
+    });
     if (child.stdout === null || child.stdout === undefined || !("on" in child.stdout)) {
       stopUnverified("missing-stdout");
       return;
@@ -1241,6 +1358,7 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       } else {
         forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
         forwardFixedDiagnostic(chunks, capturedBytes, options);
+        forwardBenchmarkProcessTreeProgress(chunks, capturedBytes, options);
         forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
         forwardFailedNestedOrdinal(chunks, capturedBytes, options);
         forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
@@ -1368,9 +1486,55 @@ export function failedTopLevelAssertionOrigin(text) {
     || !/^# fail [1-9][0-9]*$/mu.test(text)
     || !/^  failureType: 'testCodeFailure'$/mu.test(text)
     || !/^  code: 'ERR_ASSERTION'$/mu.test(text)) return undefined;
-  if (/^ {4,8}(?:at )?Object\.registerRoot \(/mu.test(text)) return "register-root";
-  if (/^ {4,8}(?:at )?TestContext\.<anonymous> \(/mu.test(text)) return "test-body";
+  const candidates = [
+    ["register-root", text.search(/^ {4,8}(?:at )?Object\.registerRoot \(/mu)],
+    ["test-body", text.search(/^ {4,8}(?:at )?TestContext\.<anonymous> \(/mu)],
+  ].filter(([, index]) => index >= 0).sort((left, right) => left[1] - right[1]);
+  if (candidates.length > 0) return candidates[0][0];
   return "unknown";
+}
+
+export function formatBenchmarkDiagnosticReceipt(value) {
+  const receiptPrefix = value?.receiptPrefix === "WINDOWS" ? "WINDOWS" : "MAC";
+  const caseId = /^(?:bp(?:0[1-9]|[12][0-9]|3[0-9])|benchmark-(?:aggregate|rerun-passed))$/u
+    .test(value?.caseId) ? value.caseId : "benchmark-aggregate";
+  const failureKind = NODE_FAILURE_KINDS.has(value?.failureKind) ? value.failureKind : "unknown";
+  const completionKind = NODE_COMPLETION_KINDS.has(value?.completionKind)
+    ? value.completionKind : "unknown";
+  const diagnosticStage = BENCHMARK_DIAGNOSTIC_STAGES.has(value?.diagnosticStage)
+    ? value.diagnosticStage : "unknown";
+  const assertionOrigin = NODE_ASSERTION_ORIGINS.has(value?.assertionOrigin)
+    ? value.assertionOrigin : "unknown";
+  const rootCleanup = ["gone", "unverified"].includes(value?.rootCleanup)
+    ? value.rootCleanup : "unknown";
+  const processGroupCleanup = ["gone", "unverified"].includes(value?.processGroupCleanup)
+    ? value.processGroupCleanup : "unknown";
+  const countsAvailable = validBenchmarkIdentityCounts(
+    value?.registeredIdentityCount,
+    value?.remainingIdentityCount,
+  );
+  const registeredIdentityCount = countsAvailable ? value.registeredIdentityCount : "unavailable";
+  const remainingIdentityCount = countsAvailable ? value.remainingIdentityCount : "unavailable";
+  const testCodeReason = NODE_TEST_CODE_REASONS.has(value?.testCodeReason)
+    ? value.testCodeReason : "unknown";
+  const runnerFailureKind = NODE_RUNNER_FAILURE_KINDS.has(value?.runnerFailureKind)
+    ? value.runnerFailureKind : "unknown";
+  const required = `${receiptPrefix}_BENCHMARK_RECEIPT caseId=${caseId} status=failed`
+    + ` failureKind=${failureKind} completionKind=${completionKind}`
+    + ` diagnosticStage=${diagnosticStage} assertionOrigin=${assertionOrigin}`
+    + ` rootCleanup=${rootCleanup} processGroupCleanup=${processGroupCleanup}`
+    + ` registeredIdentityCount=${registeredIdentityCount}`
+    + ` remainingIdentityCount=${remainingIdentityCount}`;
+  const complete = `${required} testCodeReason=${testCodeReason}`
+    + ` runnerFailureKind=${runnerFailureKind} truncated=false`;
+  if (Buffer.byteLength(complete) <= MAX_BENCHMARK_DIAGNOSTIC_RECEIPT_BYTES) return complete;
+  return `${required} truncated=true`;
+}
+
+function validBenchmarkIdentityCounts(registered, remaining) {
+  return Number.isSafeInteger(registered) && Number.isSafeInteger(remaining)
+    && registered >= 0 && remaining >= 0 && remaining <= registered
+    && registered <= MAX_BENCHMARK_REGISTERED_IDENTITIES;
 }
 
 export function failedTopLevelOrdinal(text, maximumTopLevelTests) {
@@ -1427,6 +1591,36 @@ function forwardFixedProgressDiagnostic(chunks, capturedBytes, options) {
   try { options.onFixedProgressDiagnostic(observed); } catch {}
 }
 
+function forwardBenchmarkProcessTreeProgress(chunks, capturedBytes, options) {
+  if (typeof options.onBenchmarkProcessTreeProgress !== "function") return;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
+  catch { return; }
+  const lines = text.split(/\r?\n/u).filter((line) =>
+    line.startsWith("# BENCHMARK_PROCESS_TREE "));
+  if (lines.length !== 1) return;
+  const match = /^# BENCHMARK_PROCESS_TREE diagnosticStage=([a-z0-9-]+) rootCleanup=(gone|unverified|unknown) processGroupCleanup=(gone|unverified|unknown) registeredIdentityCount=(unavailable|[0-9]{1,2}) remainingIdentityCount=(unavailable|[0-9]{1,2})$/u.exec(lines[0]);
+  if (match === null || !(BENCHMARK_DIAGNOSTIC_STAGES.has(match[1]) || match[1] === "unknown")) {
+    return;
+  }
+  const unavailable = match[4] === "unavailable" && match[5] === "unavailable";
+  const registeredIdentityCount = unavailable ? null : Number(match[4]);
+  const remainingIdentityCount = unavailable ? null : Number(match[5]);
+  if (!unavailable && !validBenchmarkIdentityCounts(
+    registeredIdentityCount,
+    remainingIdentityCount,
+  )) return;
+  try {
+    options.onBenchmarkProcessTreeProgress(Object.freeze({
+      diagnosticStage: match[1],
+      rootCleanup: match[2],
+      processGroupCleanup: match[3],
+      registeredIdentityCount,
+      remainingIdentityCount,
+    }));
+  } catch {}
+}
+
 function validTapReceipt(chunks, capturedBytes, allowAllSkipped = false) {
   if (capturedBytes < 1 || capturedBytes > MAX_CAPTURE_BYTES) return false;
   let text;
@@ -1460,5 +1654,11 @@ function boundedTimeout(value, fallback, maximum = 120_000) {
 
 const entryPoint = process.argv[1];
 if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
-  await runMacNodeTestsDiagnostic();
+  let profile;
+  try { profile = parseNodeTestProfileArguments(process.argv.slice(2)); }
+  catch {
+    process.stderr.write("Invalid Node test profile.\n");
+    process.exitCode = 1;
+  }
+  if (profile !== undefined) await runMacNodeTestsDiagnostic({ profile });
 }

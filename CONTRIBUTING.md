@@ -49,9 +49,73 @@ npm run release:artifacts
 npm run release:verify
 ```
 
-The larger 100/256/512 MiB benchmark is opt-in and must run sequentially as
-described in [Development](docs/DEVELOPMENT.md). It is not an ordinary pull-request
-check.
+Pull requests use the 10 MiB smoke case. The weekly and manually dispatched
+`Compatibility` workflow requires one fresh, passed 100 MiB receipt on each
+platform path. Immutable release verification generates and validates the same
+single passed 100 MiB evidence before the complete release gate, artifact
+verification, checksums, and attestation. The 256 and 512 MiB cases are
+explicit local experiments only and must run sequentially as described in
+[Development](docs/DEVELOPMENT.md). The
+synthetic benchmark exercises the size-handling, isolation, cleanup, and
+recovery path; it does not prove every document format or MCP operation at the
+requested size.
+
+Valid documents up to and including 100 MiB are in the CI-verified support
+envelope, subject to malformed-archive rejection, decompression and resource
+policies, and allowed-root policy. Documents over 100 MiB through the 512 MiB
+safety ceiling are best-effort and carry no compatibility guarantee. Files over
+512 MiB are rejected.
+
+## CI verification ownership
+
+The protected pull-request checks keep the stable names `Windows x64`,
+`macOS arm64`, `Linux lifecycle`, and `Security policy`. The two desktop
+platform jobs are intentionally fast PR gates. In order, each installs source
+dependencies, builds, checks the generated runtime projection, performs a fresh
+production-only runtime install, runs the bounded installed-runtime smoke,
+classifies the hosted platform boundary, runs its PR Node profile, runs the
+Python suite, and executes exactly the 10 MiB document smoke. Windows uses
+`test:pr` and therefore retains the `bp16` child-tree case; macOS uses
+`test:pr:macos` and defers that hosted-runner-sensitive stress case.
+
+`Linux lifecycle` retains the bounded registration, document-child, and
+benchmark-policy suite. `Security policy` separately owns repository and
+dependency policy. The scheduled/manual compatibility workflow now owns the
+deferred full verification:
+
+- Windows x64 and macOS arm64 generate and validate the 100 MiB evidence before
+  creating one platform receipt. That receipt already runs the full Node and
+  Python suites, the temporary installed-runtime/nine-tool gate, and `bp16`, so
+  the workflow does not duplicate a full test or `bp16` command. The source
+  install is sufficient; the nine-tool gate builds and installs its own
+  temporary runtime.
+- Linux x64 has no platform-receipt implementation, so it runs the full Node
+  profile, Python suite, and generate-plus-validate 100 MiB benchmark once each.
+- Required validation steps retain their original `steps.*.outcome` while
+  bounded diagnostics run after matching failures. The final
+  `compatibility-gate.mjs` accepts only all-`success` outcomes; diagnostics can
+  never turn a failed validation green.
+- Benchmark JSON, platform receipts, and fixed bounded diagnostic output are
+  retained for three days. User documents, runtime trees, dependencies, and raw
+  test output are not uploaded.
+
+The optional `run_bp16_stability` dispatch input creates 20 independent
+`macos-15` jobs, each running the exact `bp16` case once. Enable it only after
+production process-cleanup semantics change. Scheduled runs never enable it,
+and receipt, profile, documentation, or workflow-only changes do not justify
+it. The 256 and 512 MiB experiments remain outside every hosted compatibility
+or release gate.
+
+If release 100 MiB preflight fails, the failed job still runs one 10 MiB probe,
+the supported-evidence validator, and the Windows hosted-boundary classifier.
+Those bounded diagnostics cannot restore success, and candidate construction or
+attestation does not run. Duplicate manual verification for the same immutable
+tag and SHA is serialized without cancelling an execution that already started.
+
+PR concurrency is scoped by workflow plus PR number or ref. Compatibility
+concurrency additionally includes the event name: a newer scheduled run may
+cancel an older scheduled run on the same ref, while manual compatibility,
+push, release, and dependency work remain separate.
 
 ## Source and generated runtime
 

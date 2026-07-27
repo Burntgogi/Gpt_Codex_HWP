@@ -333,3 +333,19 @@ test("Windows Node diagnostic converts a source diagnostic exception to one fixe
   );
   assert.doesNotMatch(output, /private diagnostic failure/u);
 });
+
+test("Windows Node diagnostic passes the selected PR profile to the source rerun", async () => {
+  let sourceOptions;
+  const passed = await runWindowsNodeTestsDiagnostic({
+    profile: "pr",
+    runRepositoryFile: async () => true,
+    runSourceDiagnostic: async (options) => {
+      sourceOptions = options;
+      return true;
+    },
+    stdout: { write() {} },
+    setExitCode() {},
+  });
+  assert.equal(passed, true);
+  assert.equal(sourceOptions.profile, "pr");
+});

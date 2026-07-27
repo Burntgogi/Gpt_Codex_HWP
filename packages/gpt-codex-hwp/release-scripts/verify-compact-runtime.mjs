@@ -910,11 +910,19 @@ export async function verifyCompactRuntime({
     onDiagnosticStage("public-runtime-measure");
     const publicRuntimeBytes = await measureTree(runtimeRoot);
     onDiagnosticStage("lockfile");
-    const lock = JSON.parse(await readFile(join(runtimeRoot, "package-lock.json"), "utf8"));
+    const packageLockPath = join(runtimeRoot, "package-lock.json");
+    const lock = JSON.parse(await readFile(packageLockPath, "utf8"));
     assertCompactLockfile(lock);
+    const packageLockSha256BeforeNpmCi = await sha256Bytes(packageLockPath);
     const allowedBinLinks = expectedCompactBinLinks(lock, runtimeRoot);
     onDiagnosticStage("npm-ci");
     await runNpm(["ci", "--omit=dev", "--ignore-scripts"], runtimeRoot);
+    const packageLockSha256AfterNpmCi = await sha256Bytes(packageLockPath);
+    if (packageLockSha256AfterNpmCi !== packageLockSha256BeforeNpmCi) {
+      throw new Error("COMPACT_RUNTIME_LOCK_CHANGED: npm ci changed package-lock.json.");
+    }
+    onDiagnosticStage("sharp-selection");
+    const sharpSelection = await assertSharpRuntimeSelection(runtimeRoot);
     onDiagnosticStage("npm-ls");
     const npmLsRun = await runNpm(
       ["ls", "--omit=dev", "--all", "--json"],
@@ -998,6 +1006,9 @@ export async function verifyCompactRuntime({
       provenance,
       npmLs,
       audit,
+      packageLockSha256BeforeNpmCi,
+      packageLockSha256AfterNpmCi,
+      sharpSelection,
       serverVersion: mcp.version,
       toolNames: mcp.tools,
       mcpReadOnlySmokes: mcp.readOnlyToolSmokes,
@@ -1022,6 +1033,63 @@ export async function verifyCompactRuntime({
   report.cleanup = true;
   onDiagnosticStage("passed");
   return report;
+}
+
+async function sha256Bytes(path) {
+  return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function assertSharpRuntimeSelection(runtimeRoot) {
+  const orphanPackagesAbsent = ["@img/sharp-wasm32", "@emnapi/runtime", "tslib"];
+  for (const packageName of orphanPackagesAbsent) {
+    const packagePath = join(runtimeRoot, "node_modules", ...packageName.split("/"));
+    try {
+      await lstat(packagePath);
+      throw new Error("COMPACT_SHARP_SELECTION_INVALID: unreachable Sharp WASM package was installed.");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+
+  await assertInstalledPackage(runtimeRoot, "sharp", "0.35.3");
+  const nativeCandidates = sharpNativeCandidates();
+  const installedCandidates = [];
+  for (const packageName of nativeCandidates) {
+    try {
+      await assertInstalledPackage(runtimeRoot, packageName, "0.35.3");
+      installedCandidates.push(packageName);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  if (installedCandidates.length !== 1) {
+    throw new Error("COMPACT_SHARP_SELECTION_INVALID: expected exactly one native Sharp package.");
+  }
+  return Object.freeze({
+    nativePackage: installedCandidates[0],
+    orphanPackagesAbsent: Object.freeze(orphanPackagesAbsent),
+  });
+}
+
+function sharpNativeCandidates() {
+  if (process.platform === "win32" && process.arch === "x64") return ["@img/sharp-win32-x64"];
+  if (process.platform === "darwin" && process.arch === "arm64") return ["@img/sharp-darwin-arm64"];
+  if (process.platform === "linux" && process.arch === "x64") {
+    return ["@img/sharp-linux-x64", "@img/sharp-linuxmusl-x64"];
+  }
+  throw new Error("COMPACT_SHARP_SELECTION_UNSUPPORTED: unsupported runtime platform.");
+}
+
+async function assertInstalledPackage(runtimeRoot, packageName, version) {
+  const packageRoot = join(runtimeRoot, "node_modules", ...packageName.split("/"));
+  const metadata = await lstat(packageRoot);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error("COMPACT_SHARP_SELECTION_INVALID: installed Sharp package is not a directory.");
+  }
+  const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+  if (manifest.name !== packageName || manifest.version !== version) {
+    throw new Error("COMPACT_SHARP_SELECTION_INVALID: installed Sharp package identity is invalid.");
+  }
 }
 
 async function main() {

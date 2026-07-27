@@ -29,6 +29,11 @@ test("macOS Node diagnostic classifies assertion origins without exposing stack 
 
   assert.equal(failedTopLevelAssertionOrigin(registrationCallback), "register-root");
   assert.equal(failedTopLevelAssertionOrigin(testBody), "test-body");
+  assert.equal(failedTopLevelAssertionOrigin([
+    ...testBody.split("\n").slice(0, -1),
+    "      Object.registerRoot (/fixture/opaque/document-process-registration.test.ts:1:1)",
+    "# fail 1",
+  ].join("\n")), "test-body");
   assert.equal(failedTopLevelAssertionOrigin("not ok 1 - malformed\n# fail 1"), undefined);
 });
 
@@ -482,7 +487,14 @@ test("macOS Node diagnostic maps benchmark failure to one bounded ordinal", asyn
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=bp17 status=failed\n");
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_RECEIPT caseId=bp17 status=failed failureKind=unknown"
+      + " completionKind=unknown diagnosticStage=unknown assertionOrigin=unknown"
+      + " rootCleanup=unknown processGroupCleanup=unknown"
+      + " registeredIdentityCount=unavailable remainingIdentityCount=unavailable"
+      + " testCodeReason=unknown runnerFailureKind=unknown truncated=false\n",
+  );
 });
 
 test("macOS Node diagnostic accepts the current final benchmark ordinal", async () => {
@@ -494,7 +506,133 @@ test("macOS Node diagnostic accepts the current final benchmark ordinal", async 
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(output, "MAC_NODE_TEST_CASE case=bp39 status=failed\n");
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_RECEIPT caseId=bp39 status=failed failureKind=unknown"
+      + " completionKind=unknown diagnosticStage=unknown assertionOrigin=unknown"
+      + " rootCleanup=unknown processGroupCleanup=unknown"
+      + " registeredIdentityCount=unavailable remainingIdentityCount=unavailable"
+      + " testCodeReason=unknown runnerFailureKind=unknown truncated=false\n",
+  );
+});
+
+test("macOS Node diagnostic emits one complete bp16 process-tree receipt", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    runBenchmarkPolicyDiagnostic: async () => ({
+      caseId: "bp16",
+      completionKind: "test-failure",
+      failureKind: "test-code",
+      assertionOrigin: "test-body",
+      diagnosticStage: "finalizer",
+      rootCleanup: "gone",
+      processGroupCleanup: "gone",
+      registeredIdentityCount: 1,
+      remainingIdentityCount: 0,
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_RECEIPT caseId=bp16 status=failed failureKind=test-code"
+      + " completionKind=test-failure diagnosticStage=finalizer assertionOrigin=test-body"
+      + " rootCleanup=gone processGroupCleanup=gone registeredIdentityCount=1"
+      + " remainingIdentityCount=0 testCodeReason=unknown runnerFailureKind=unknown"
+      + " truncated=false\n",
+  );
+});
+
+test("macOS Node diagnostic parses the strict bp16 process-tree progress tuple", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    spawnProcess() {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end([
+          "TAP version 13",
+          "not ok 16 - PRIVATE_DOCUMENT_CONTENT /fixture/opaque/source.hwpx",
+          "  failureType: 'testCodeFailure'",
+          "  code: 'ERR_ASSERTION'",
+          "  stack: |-",
+          "      TestContext.<anonymous> (/fixture/opaque/benchmark-policy.test.ts:1:1)",
+          `# ${["AWS", "_SECRET_ACCESS_KEY=private"].join("")}`,
+          "  error: 'raw stderr document body'",
+          "# BENCHMARK_PROCESS_TREE diagnosticStage=finalizer rootCleanup=gone processGroupCleanup=gone registeredIdentityCount=1 remainingIdentityCount=0",
+          "1..39",
+          "# tests 39",
+          "# pass 38",
+          "# fail 1",
+          "# cancelled 0",
+          "# skipped 0",
+          "",
+        ].join("\n"));
+        child.emit("close", 1, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_RECEIPT caseId=bp16 status=failed failureKind=test-code"
+      + " completionKind=test-failure diagnosticStage=finalizer assertionOrigin=test-body"
+      + " rootCleanup=gone processGroupCleanup=gone registeredIdentityCount=1"
+      + " remainingIdentityCount=0 testCodeReason=assertion runnerFailureKind=unknown"
+      + " truncated=false\n",
+  );
+  assert.doesNotMatch(
+    output,
+    /fixture|opaque|private|benchmark-policy|AWS_SECRET_ACCESS_KEY|document body|[\\/]/u,
+  );
+});
+
+test("macOS Node diagnostic rejects forged or ambiguous process-tree progress tuples", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    spawnProcess() {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end([
+          "TAP version 13",
+          "not ok 16 - synthetic child-tree stress",
+          "  failureType: 'testCodeFailure'",
+          "  code: 'ERR_ASSERTION'",
+          "# BENCHMARK_PROCESS_TREE diagnosticStage=finalizer rootCleanup=gone processGroupCleanup=gone registeredIdentityCount=1 remainingIdentityCount=0",
+          "# BENCHMARK_PROCESS_TREE diagnosticStage=finalizer rootCleanup=gone processGroupCleanup=gone registeredIdentityCount=1 remainingIdentityCount=0 privatePath=/fixture/opaque",
+          "1..39",
+          "# tests 39",
+          "# pass 38",
+          "# fail 1",
+          "# cancelled 0",
+          "# skipped 0",
+          "",
+        ].join("\n"));
+        child.emit("close", 1, null);
+      });
+      return child;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_RECEIPT caseId=bp16 status=failed failureKind=test-code"
+      + " completionKind=test-failure diagnosticStage=unknown assertionOrigin=unknown"
+      + " rootCleanup=unknown processGroupCleanup=unknown"
+      + " registeredIdentityCount=unavailable remainingIdentityCount=unavailable"
+      + " testCodeReason=assertion runnerFailureKind=unknown truncated=false\n",
+  );
+  assert.doesNotMatch(output, /fixture|opaque|private|privatePath|[\\/]/u);
 });
 
 test("macOS Node diagnostic preserves the first classified benchmark receipt", async () => {
@@ -519,9 +657,11 @@ test("macOS Node diagnostic preserves the first classified benchmark receipt", a
   assert.equal(fallbackRuns, 0);
   assert.equal(
     output,
-    "MAC_BENCHMARK_AGGREGATE completion=invalid-summary\n"
-      + "MAC_BENCHMARK_AGGREGATE_RUNNER kind=capture-limit\n"
-      + "MAC_NODE_TEST_CASE case=benchmark-aggregate status=failed\n",
+    "MAC_BENCHMARK_RECEIPT caseId=benchmark-aggregate status=failed failureKind=unknown"
+      + " completionKind=invalid-summary diagnosticStage=unknown assertionOrigin=unknown"
+      + " rootCleanup=unknown processGroupCleanup=unknown"
+      + " registeredIdentityCount=unavailable remainingIdentityCount=unavailable"
+      + " testCodeReason=unknown runnerFailureKind=capture-limit truncated=false\n",
   );
 });
 
@@ -543,13 +683,44 @@ test("macOS Node diagnostic projects only bounded benchmark aggregate classifica
   assert.equal(passed, false);
   assert.equal(
     output,
-    "MAC_BENCHMARK_AGGREGATE completion=test-failure\n"
-      + "MAC_BENCHMARK_AGGREGATE_FAILURE kind=async-failure\n"
-      + "MAC_BENCHMARK_AGGREGATE_TEST_CODE reason=async-activity\n"
-      + "MAC_BENCHMARK_AGGREGATE_ASSERTION origin=test-body\n"
-      + "MAC_BENCHMARK_AGGREGATE_RUNNER kind=runner-timeout\n"
-      + "MAC_NODE_TEST_CASE case=benchmark-aggregate status=failed\n",
+    "MAC_BENCHMARK_RECEIPT caseId=benchmark-aggregate status=failed"
+      + " failureKind=async-failure completionKind=test-failure diagnosticStage=unknown"
+      + " assertionOrigin=test-body rootCleanup=unknown processGroupCleanup=unknown"
+      + " registeredIdentityCount=unavailable remainingIdentityCount=unavailable"
+      + " testCodeReason=async-activity runnerFailureKind=runner-timeout truncated=false\n",
   );
+});
+
+test("macOS Node diagnostic truncates only optional benchmark classifications at its byte cap", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file) => file !== "benchmark-policy.test.ts",
+    runBenchmarkPolicyDiagnostic: async () => ({
+      caseId: "benchmark-aggregate",
+      completionKind: "nonzero-clean-tap",
+      failureKind: "async-failure",
+      testCodeReason: "async-activity",
+      assertionOrigin: "register-root",
+      runnerFailureKind: "runner-timeout",
+      diagnosticStage: "windows-termination-discovery-or-rss-unavailable",
+      rootCleanup: "unverified",
+      processGroupCleanup: "unverified",
+    }),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_BENCHMARK_RECEIPT caseId=benchmark-aggregate status=failed"
+      + " failureKind=async-failure completionKind=nonzero-clean-tap"
+      + " diagnosticStage=windows-termination-discovery-or-rss-unavailable"
+      + " assertionOrigin=register-root rootCleanup=unverified"
+      + " processGroupCleanup=unverified registeredIdentityCount=unavailable"
+      + " remainingIdentityCount=unavailable truncated=true\n",
+  );
+  assert.ok(Buffer.byteLength(output.trimEnd()) <= 384);
+  assert.equal(output.split("\n").length, 2);
 });
 
 test("macOS Node diagnostic parses benchmark aggregate completion from its bounded rerun", async () => {
@@ -580,8 +751,11 @@ test("macOS Node diagnostic parses benchmark aggregate completion from its bound
   assert.equal(passed, false);
   assert.equal(
     output,
-    "MAC_BENCHMARK_AGGREGATE completion=nonzero-clean-tap\n"
-      + "MAC_NODE_TEST_CASE case=benchmark-aggregate status=failed\n",
+    "MAC_BENCHMARK_RECEIPT caseId=benchmark-aggregate status=failed failureKind=unknown"
+      + " completionKind=nonzero-clean-tap diagnosticStage=unknown assertionOrigin=unknown"
+      + " rootCleanup=unknown processGroupCleanup=unknown"
+      + " registeredIdentityCount=unavailable remainingIdentityCount=unavailable"
+      + " testCodeReason=unknown runnerFailureKind=unknown truncated=false\n",
   );
 });
 
@@ -1218,4 +1392,111 @@ test("macOS Node diagnostic rejects all-skipped TAP for a non-capability case", 
   assert.equal(passed, false);
   assert.equal(call, 2);
   assert.equal(output, "MAC_NODE_TEST_CASE case=ar01 status=failed\n");
+});
+
+test("macOS PR profile keeps exact skips on initial and forensic runs", async () => {
+  const initialOptions = new Map();
+  let forensicOptions;
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    profile: "pr-macos",
+    runFile: async (file, options) => {
+      options.onSpawn();
+      initialOptions.set(file, options);
+      return file !== "benchmark-policy.test.ts";
+    },
+    runBenchmarkPolicyDiagnostic: async (options) => {
+      forensicOptions = options;
+      return { passed: false, caseId: "bp01" };
+    },
+    stdout: { write(value) { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  const expected = "^benchmark policy bounds synthetic child-tree stress and verifies every identity gone$";
+  assert.equal(initialOptions.get("benchmark-policy.test.ts").testSkipPattern, expected);
+  assert.equal(forensicOptions.testSkipPattern, expected);
+  assert.match(output, /profile=pr-macos executedFileCount=3 deferredCaseCount=2 failed=1/u);
+});
+
+test("profile preflight failure emits only a fixed invalid profile receipt", async () => {
+  let output = "";
+  const passed = await runMacNodeTestsDiagnostic({
+    profile: "pr\nFORGED_RECEIPT status=passed",
+    stdout: { write(value) { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "MAC_NODE_TEST_PROFILE profile=invalid executedFileCount=0 deferredCaseCount=0 failed=1\n",
+  );
+});
+
+test("profile receipt counts initial and forensic test-file spawn events", async () => {
+  let output = "";
+  let attempts = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    profile: "full",
+    spawnProcess() {
+      attempts += 1;
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        child.emit("spawn");
+        child.stdout.end("TAP version 13\n1..18\n# tests 18\n# pass 17\n# fail 1\n# cancelled 0\n# skipped 0\n");
+        child.emit("close", 1, null);
+      });
+      return child;
+    },
+    stdout: { write(value) { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(attempts, 2);
+  assert.match(output, /profile=full executedFileCount=2 deferredCaseCount=0 failed=1/u);
+});
+
+test("profile receipt does not count synchronous spawn failures", async () => {
+  let output = "";
+  let attempts = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    profile: "full",
+    spawnProcess() {
+      attempts += 1;
+      throw new Error("private synchronous spawn failure");
+    },
+    stdout: { write(value) { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(attempts, 2);
+  assert.match(output, /profile=full executedFileCount=0 deferredCaseCount=0 failed=1/u);
+  assert.doesNotMatch(output, /private synchronous spawn failure/u);
+});
+
+test("profile receipt does not count asynchronous spawn failures", async () => {
+  let output = "";
+  let attempts = 0;
+  const passed = await runMacNodeTestsDiagnostic({
+    profile: "full",
+    spawnProcess() {
+      attempts += 1;
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.emit("error", new Error("private spawn failure"));
+        child.emit("close", null, null);
+      });
+      return child;
+    },
+    terminateTree: async () => true,
+    stdout: { write(value) { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(attempts, 2);
+  assert.match(output, /profile=full executedFileCount=0 deferredCaseCount=0 failed=1/u);
+  assert.doesNotMatch(output, /private spawn failure/u);
 });

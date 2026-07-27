@@ -347,6 +347,60 @@ test("release verification runs the exact required stage contract in order", asy
     Number.isInteger(stage.elapsedMs) && stage.elapsedMs >= 0));
 });
 
+test("release benchmark evidence path is isolated to the supplied environment", async () => {
+  const benchmarkStage = async (environment) => {
+    const calls = [];
+    const receipt = await runReleaseVerification({
+      root: ROOT,
+      platform: "test-platform",
+      arch: "test-arch",
+      versions: VERSIONS,
+      environment,
+      resolveFixture: async () => ({ sha256: FIXTURE_SHA256 }),
+      collectSourceIdentity: collectStableSourceIdentity,
+      runStage: async (stage) => {
+        calls.push(stage);
+        return passedReleaseStage(stage);
+      },
+    });
+    assert.equal(receipt.status, "passed");
+    return calls.find((stage) => stage.name === "document-benchmark");
+  };
+
+  const fallback = await benchmarkStage({ HWP_BENCH_REQUIRE_LARGE: "1" });
+  assert.equal(
+    fallback.commands[1].args.at(-1),
+    ".superpowers/benchmarks/supported-100.json",
+  );
+
+  const overridden = await benchmarkStage({
+    HWP_BENCH_REQUIRE_LARGE: "1",
+    HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/custom-supported-100.json",
+  });
+  assert.equal(
+    overridden.commands[1].args.at(-1),
+    ".superpowers/benchmarks/custom-supported-100.json",
+  );
+
+  const disabled = await benchmarkStage({
+    HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/must-not-leak.json",
+  });
+  assert.equal(disabled.commands, undefined);
+  assert.deepEqual(disabled.args.slice(-4), [
+    "--sizes",
+    "10",
+    "--output",
+    `.superpowers/benchmarks/release-10m-${process.pid}.json`,
+  ]);
+
+  const inherited = Object.create({
+    HWP_BENCH_REQUIRE_LARGE: "1",
+    HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/inherited.json",
+  });
+  const inheritedStage = await benchmarkStage(inherited);
+  assert.equal(inheritedStage.commands, undefined);
+});
+
 test("release stages install source dependencies and keep temp nine-tools as runtime authority", async () => {
   const calls = [];
   await runReleaseVerification({
@@ -1427,7 +1481,7 @@ function expectedStageCommands() {
               "--",
               "--validate-large",
               process.env.HWP_BENCH_LARGE_EVIDENCE
-                ?? ".superpowers/benchmarks/large.json",
+                ?? ".superpowers/benchmarks/supported-100.json",
             ],
           },
         ],

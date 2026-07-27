@@ -1,6 +1,6 @@
 {
   "name": "gpt-codex-hwp-repository",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -12,7 +12,7 @@
     "developerName": "Gpt_Codex_HWP contributors",
     "marketplaceName": "gpt-codex-hwp-local",
     "legacyUninstallSelector": "hwp-korean-docs@hwp-local",
-    "codexBuildId": "20260722040551"
+    "codexBuildId": "20260727172424"
   },
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",
@@ -32,7 +32,9 @@
     "verify:compact-runtime": "node packages/gpt-codex-hwp/release-scripts/verify-compact-runtime.mjs",
     "verify:dependencies": "node scripts/verify-installed-dependencies.mjs",
     "verify:source-dependencies": "node scripts/verify-installed-dependencies.mjs --source-only",
+    "verify:runtime-smoke": "node scripts/installed-runtime-smoke.mjs",
     "test:repository": "node --test tests/*.test.mjs",
+    "test:policy": "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
     "test": "npm run test:repository && npm run test:source",
     "test:python": "npm --prefix packages/gpt-codex-hwp run test:python"

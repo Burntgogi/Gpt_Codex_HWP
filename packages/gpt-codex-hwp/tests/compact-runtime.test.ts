@@ -1431,6 +1431,14 @@ test("installed runtime gate is serialized in normal npm test", async () => {
   assert.doesNotMatch(packageJson.scripts.test, /verify:compact-runtime/u);
 });
 
+test("installed runtime runs npm ci immediately before strict npm ls without a normalizer", async () => {
+  const verifier = await readFile(join(SOURCE_ROOT, "release-scripts", "verify-compact-runtime.mjs"), "utf8");
+  const ci = verifier.indexOf('runNpm(["ci", "--omit=dev", "--ignore-scripts"], runtimeRoot)');
+  const npmLs = verifier.indexOf('["ls", "--omit=dev", "--all", "--json"]');
+  assert.ok(ci >= 0 && ci < npmLs);
+  assert.doesNotMatch(verifier, /normalizeSharpOptionalTree|sharp-optional-tree/u);
+});
+
 test("installed runtime skill metadata omits the HML claim", async () => {
   const skill = await readFile(join(SOURCE_ROOT, "skills", "gpt-codex-hwp", "SKILL.md"), "utf8");
   const frontmatter = skill.split("---", 3)[1] ?? "";
@@ -1463,6 +1471,15 @@ test("installed runtime verifies provenance, npm ls, and all nine tools", { time
   assert.equal(report.stderrBytes, 0);
   assert.equal(report.provenance.status, "passed");
   assert.equal(report.npmLs.status, "passed");
+  assert.equal(report.packageLockSha256BeforeNpmCi, report.packageLockSha256AfterNpmCi);
+  assert.deepEqual(report.sharpSelection.orphanPackagesAbsent, [
+    "@img/sharp-wasm32",
+    "@emnapi/runtime",
+    "tslib",
+  ]);
+  if (process.platform === "win32" && process.arch === "x64") {
+    assert.equal(report.sharpSelection.nativePackage, "@img/sharp-win32-x64");
+  }
   assert.equal(report.sourceSha256, sampleBefore);
   assert.equal(
     createHash("sha256").update(await readFile(fixture.path)).digest("hex"),

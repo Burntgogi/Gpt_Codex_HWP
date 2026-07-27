@@ -21,13 +21,22 @@ import { generatePaddedHwpx } from "./generate-padded-hwpx.mjs";
 import { createProcessRegistrationCoordinator } from "../src/workers/document-process-registration.ts";
 import {
   createRegisteredPosixProcessGroupSupervisor,
+  MAX_REGISTERED_PROCESS_GROUPS,
   normalizeProcessTreeTerminationReceipt,
   unverifiedTermination,
 } from "../src/workers/registered-process-supervisor.ts";
 
-export const APPROVED_BENCHMARK_SIZES_MIB = Object.freeze([10, 100, 256, 512]);
+export const PR_SMOKE_BENCHMARK_SIZES_MIB = Object.freeze([10]);
+export const VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB = Object.freeze([100]);
+export const LOCAL_EXPERIMENTAL_BENCHMARK_SIZES_MIB = Object.freeze([256, 512]);
+export const APPROVED_BENCHMARK_SIZES_MIB = Object.freeze([
+  ...PR_SMOKE_BENCHMARK_SIZES_MIB,
+  ...VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB,
+  ...LOCAL_EXPERIMENTAL_BENCHMARK_SIZES_MIB,
+]);
 export const BENCHMARK_CONCURRENCY = 1;
 export const BENCHMARK_RECEIPT_SCHEMA_VERSION = 2;
+export const MAX_BENCHMARK_REGISTERED_IDENTITIES = MAX_REGISTERED_PROCESS_GROUPS * 2;
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, "..", "..");
@@ -372,7 +381,7 @@ export async function validateLargeBenchmarkEvidence(path, options = {}) {
     || evidenceStatus.mtimeMs > now + 1_000
     || Math.abs(evidenceStatus.mtimeMs - generatedAt) > 60_000
     || !Array.isArray(evidence.receipts)
-    || evidence.receipts.length !== 3) {
+    || evidence.receipts.length !== VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB.length) {
     throw benchmarkError("BENCHMARK_EVIDENCE_INVALID");
   }
   if (!hash(evidence.implementationSha256)
@@ -380,11 +389,8 @@ export async function validateLargeBenchmarkEvidence(path, options = {}) {
     throw benchmarkError("BENCHMARK_EVIDENCE_INVALID");
   }
   const receipts = evidence.receipts.map(validateBenchmarkReceipt);
-  const host = receipts[0];
-  if (receipts.map((receipt) => receipt.requestedMiB).join(",") !== "100,256,512"
-    || receipts.some((receipt) => receipt.status === "failed")
-    || receipts.some((receipt) => receipt.platform !== host.platform
-      || receipt.arch !== host.arch || receipt.runtime !== host.runtime)) {
+  if (receipts[0].requestedMiB !== VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB[0]
+    || receipts[0].status !== "passed") {
     throw benchmarkError("BENCHMARK_EVIDENCE_INVALID");
   }
   return evidence;
@@ -400,6 +406,34 @@ export function formatBenchmarkProgress(receipt) {
     ? ` errorCode=${receipt.errorCode}`
     : "";
   return `BENCHMARK_CASE requestedMiB=${receipt.requestedMiB} status=${receipt.status}${errorCode}`;
+}
+
+export function formatBenchmarkProcessTreeProgress(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",")
+      !== "diagnosticStage,processGroupCleanup,registeredIdentityCount,remainingIdentityCount,rootCleanup"
+    || !(SAFE_BENCHMARK_DIAGNOSTIC_STAGES.has(value.diagnosticStage)
+      || value.diagnosticStage === "unknown")
+    || !["gone", "unverified", "unknown"].includes(value.rootCleanup)
+    || !["gone", "unverified", "unknown"].includes(value.processGroupCleanup)) {
+    throw benchmarkError("BENCHMARK_RECEIPT_INVALID");
+  }
+  const countsUnavailable = value.registeredIdentityCount === null
+    && value.remainingIdentityCount === null;
+  const countsValid = Number.isSafeInteger(value.registeredIdentityCount)
+    && Number.isSafeInteger(value.remainingIdentityCount)
+    && value.registeredIdentityCount >= 0
+    && value.remainingIdentityCount >= 0
+    && value.remainingIdentityCount <= value.registeredIdentityCount
+    && value.registeredIdentityCount <= MAX_BENCHMARK_REGISTERED_IDENTITIES;
+  if (!countsUnavailable && !countsValid) {
+    throw benchmarkError("BENCHMARK_RECEIPT_INVALID");
+  }
+  const registered = countsValid ? value.registeredIdentityCount : "unavailable";
+  const remaining = countsValid ? value.remainingIdentityCount : "unavailable";
+  return `BENCHMARK_PROCESS_TREE diagnosticStage=${value.diagnosticStage}`
+    + ` rootCleanup=${value.rootCleanup} processGroupCleanup=${value.processGroupCleanup}`
+    + ` registeredIdentityCount=${registered} remainingIdentityCount=${remaining}`;
 }
 
 export async function createOwnedBenchmarkCase(outputParent) {
@@ -681,12 +715,19 @@ export async function executeBounded(
     let telemetryEnded = false;
     let registrationCoordinator;
     let coordinatorSetup;
+    let nestedRegisteredIdentityCount = 0;
     let diagnosticStage = "channel";
     let resolveTelemetryEnd;
     const telemetryEnd = new Promise((resolveEnd) => {
       resolveTelemetryEnd = resolveEnd;
     });
-    const finish = (status, processGone = true, mergedMetrics = null, telemetryDiagnostic) => {
+    const finish = (
+      status,
+      processGone = true,
+      mergedMetrics = null,
+      telemetryDiagnostic,
+      processTreeDiagnostic,
+    ) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -696,6 +737,10 @@ export async function executeBounded(
         stderr,
         processGone,
         diagnosticStage,
+        rootCleanup: processTreeDiagnostic?.rootCleanup ?? "unknown",
+        processGroupCleanup: processTreeDiagnostic?.processGroupCleanup ?? "unknown",
+        registeredIdentityCount: processTreeDiagnostic?.registeredIdentityCount ?? null,
+        remainingIdentityCount: processTreeDiagnostic?.remainingIdentityCount ?? null,
         elapsedMs: Math.max(1, Math.round(performance.now() - started)),
         caseMetrics: mergedMetrics,
         ...(telemetryDiagnostic === undefined ? {} : { telemetryDiagnostic }),
@@ -734,6 +779,7 @@ export async function executeBounded(
         const nestedWithTelemetry = {
           async registerRoot(pid, expectedParentPid) {
             const identity = await nestedAuthority.registerRoot(pid, expectedParentPid);
+            nestedRegisteredIdentityCount += 1;
             caseSupervisor.registerProcessTreeTelemetryRoot(identity);
             return identity;
           },
@@ -758,6 +804,7 @@ export async function executeBounded(
           child,
           supervisor,
           ensureRegistrationCoordinator,
+          () => nestedRegisteredIdentityCount,
         );
         await Promise.race([
           telemetryEnd,
@@ -806,6 +853,12 @@ export async function executeBounded(
                 stage: diagnosticStage,
               })
             : undefined,
+          Object.freeze({
+            rootCleanup: termination.rootCleanup,
+            processGroupCleanup: termination.processGroupCleanup,
+            registeredIdentityCount: termination.registeredIdentityCount,
+            remainingIdentityCount: termination.remainingIdentityCount,
+          }),
         );
       })();
       return stopping;
@@ -911,14 +964,29 @@ async function terminateCaseProcessTree(
   child,
   supervisorPromise,
   ensureRegistrationCoordinator,
+  readNestedRegisteredIdentityCount,
 ) {
-  if (child.pid === undefined) return { gone: true };
+  if (child.pid === undefined) {
+    return {
+      gone: true,
+      rootCleanup: "unknown",
+      processGroupCleanup: "unknown",
+      registeredIdentityCount: null,
+      remainingIdentityCount: null,
+    };
+  }
   let supervisor;
   try {
     supervisor = await supervisorPromise;
   } catch {
     await genericProcessTreeCleanup(child.pid);
-    return { gone: false };
+    return {
+      gone: false,
+      rootCleanup: "unknown",
+      processGroupCleanup: "unknown",
+      registeredIdentityCount: null,
+      remainingIdentityCount: null,
+    };
   }
 
   let coordinator;
@@ -982,10 +1050,75 @@ async function terminateCaseProcessTree(
       : "registered-groups-empty");
   const nestedGone = nestedReceipt.gone === true
     && nestedReceipt.proof === "registered-groups-empty";
+  const identityCounts = combineBenchmarkProcessTreeIdentityCounts(
+    rootReceipt,
+    nestedReceipt,
+    readNestedRegisteredIdentityCount(),
+  );
   return {
     gone: rootGone && coordinatorReady && registrationDrained && nestedGone,
     processTreeRss,
+    rootCleanup: rootGone ? "gone" : "unverified",
+    processGroupCleanup: nestedGone ? "gone" : "unverified",
+    ...identityCounts,
   };
+}
+
+export function combineBenchmarkProcessTreeIdentityCounts(
+  rootReceipt,
+  nestedReceipt,
+  nestedObservedRegisteredIdentityCount,
+) {
+  const unavailable = Object.freeze({
+    registeredIdentityCount: null,
+    remainingIdentityCount: null,
+  });
+  const rootCounts = countedIdentityReceipt(rootReceipt);
+  if (rootCounts === undefined
+    || !Number.isSafeInteger(nestedObservedRegisteredIdentityCount)
+    || nestedObservedRegisteredIdentityCount < 0
+    || nestedObservedRegisteredIdentityCount > MAX_REGISTERED_PROCESS_GROUPS) {
+    return unavailable;
+  }
+  let nestedCounts = countedIdentityReceipt(nestedReceipt);
+  if (nestedCounts === undefined
+    && nestedObservedRegisteredIdentityCount === 0
+    && isExactRegisteredGroupsEmptyReceipt(nestedReceipt)) {
+    nestedCounts = { registeredIdentityCount: 0, remainingIdentityCount: 0 };
+  }
+  if (nestedCounts === undefined
+    || nestedCounts.registeredIdentityCount !== nestedObservedRegisteredIdentityCount) {
+    return unavailable;
+  }
+  const registeredIdentityCount = rootCounts.registeredIdentityCount
+    + nestedCounts.registeredIdentityCount;
+  const remainingIdentityCount = rootCounts.remainingIdentityCount
+    + nestedCounts.remainingIdentityCount;
+  if (!Number.isSafeInteger(registeredIdentityCount)
+    || !Number.isSafeInteger(remainingIdentityCount)
+    || registeredIdentityCount < 0
+    || remainingIdentityCount < 0
+    || remainingIdentityCount > registeredIdentityCount
+    || registeredIdentityCount > MAX_BENCHMARK_REGISTERED_IDENTITIES) {
+    return unavailable;
+  }
+  return Object.freeze({ registeredIdentityCount, remainingIdentityCount });
+}
+
+function countedIdentityReceipt(receipt) {
+  const normalized = normalizeProcessTreeTerminationReceipt(receipt);
+  if (!Object.hasOwn(normalized, "registeredIdentityCount")
+    || !Object.hasOwn(normalized, "remainingIdentityCount")) return undefined;
+  return {
+    registeredIdentityCount: normalized.registeredIdentityCount,
+    remainingIdentityCount: normalized.remainingIdentityCount,
+  };
+}
+
+function isExactRegisteredGroupsEmptyReceipt(receipt) {
+  return receipt !== null && typeof receipt === "object" && !Array.isArray(receipt)
+    && Object.keys(receipt).sort().join(",") === "gone,proof"
+    && receipt.gone === true && receipt.proof === "registered-groups-empty";
 }
 
 async function terminateAuthority(supervisor, expectedProof, pid) {

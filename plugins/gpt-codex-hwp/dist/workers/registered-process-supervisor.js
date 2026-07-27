@@ -1,5 +1,5 @@
 const DEFAULT_TERMINATION_GRACE_MS = 100;
-const MAX_REGISTERED_PROCESS_GROUPS = 16;
+export const MAX_REGISTERED_PROCESS_GROUPS = 16;
 export function createRegisteredPosixProcessGroupSupervisor(dependencies) {
     const signalGroup = dependencies.signalGroup ?? ((processGroupId, signal) => {
         process.kill(-processGroupId, signal);
@@ -75,6 +75,28 @@ export function normalizeProcessTreeTerminationReceipt(value, invalidReason = "t
     if (!isPlainRecord(value))
         return unverifiedTermination(invalidReason);
     const keys = Object.keys(value).sort().join(",");
+    if (keys === "gone,proof,registeredIdentityCount,remainingIdentityCount"
+        && value.gone === true && value.proof === "registered-groups-empty"
+        && validRegisteredIdentityCounts(value, true)) {
+        return Object.freeze({
+            gone: true,
+            proof: "registered-groups-empty",
+            registeredIdentityCount: value.registeredIdentityCount,
+            remainingIdentityCount: value.remainingIdentityCount,
+        });
+    }
+    if (keys === "gone,proof,reason,registeredIdentityCount,remainingIdentityCount"
+        && value.gone === false && value.proof === "unverified"
+        && isUnverifiedReason(value.reason)
+        && validRegisteredIdentityCounts(value, false)) {
+        return Object.freeze({
+            gone: false,
+            proof: "unverified",
+            reason: value.reason,
+            registeredIdentityCount: value.registeredIdentityCount,
+            remainingIdentityCount: value.remainingIdentityCount,
+        });
+    }
     if (keys === "gone,proof" && value.gone === true &&
         (value.proof === "windows-job-empty" || value.proof === "registered-groups-empty")) {
         return Object.freeze({ gone: true, proof: value.proof });
@@ -89,8 +111,9 @@ export function unverifiedTermination(reason) {
     return Object.freeze({ gone: false, proof: "unverified", reason });
 }
 async function terminateRegisteredGroups(registered, provenAbsent, inspectIdentity, signalGroup, delay, terminationGraceMs, generationCurrent) {
-    if (registered.length === 0)
-        return unverifiedTermination("registration");
+    if (registered.length === 0) {
+        return countedTermination(unverifiedTermination("registration"), 0, 0);
+    }
     const unresolved = new Map(registered
         .filter((identity) => !provenAbsent.has(processIdentityKey(identity)))
         .map((identity) => [identity.pid, identity]));
@@ -139,14 +162,30 @@ async function terminateRegisteredGroups(registered, provenAbsent, inspectIdenti
             }
         }
         if (unresolved.size === 0) {
-            return generationCurrent()
+            return countedTermination(generationCurrent()
                 ? Object.freeze({ gone: true, proof: "registered-groups-empty" })
-                : unverifiedTermination("registration");
+                : unverifiedTermination("registration"), registered.length, 0);
         }
     }
-    if (!generationCurrent())
-        return unverifiedTermination("registration");
-    return unverifiedTermination(failure ?? "deadline");
+    return countedTermination(!generationCurrent()
+        ? unverifiedTermination("registration")
+        : unverifiedTermination(failure ?? "deadline"), registered.length, unresolved.size);
+}
+function countedTermination(receipt, registeredIdentityCount, remainingIdentityCount) {
+    return receipt.gone
+        ? Object.freeze({
+            gone: true,
+            proof: "registered-groups-empty",
+            registeredIdentityCount,
+            remainingIdentityCount,
+        })
+        : Object.freeze({
+            gone: false,
+            proof: "unverified",
+            reason: receipt.reason,
+            registeredIdentityCount,
+            remainingIdentityCount,
+        });
 }
 function signalRegisteredGroup(processGroupId, signal, signalGroup) {
     try {
@@ -216,4 +255,14 @@ function isPlainRecord(value) {
 function isUnverifiedReason(value) {
     return value === "registration" || value === "identity" || value === "channel" ||
         value === "permission" || value === "deadline" || value === "termination";
+}
+function validRegisteredIdentityCounts(value, requireRegisteredIdentity) {
+    const registered = value.registeredIdentityCount;
+    const remaining = value.remainingIdentityCount;
+    return Number.isSafeInteger(registered) && Number.isSafeInteger(remaining)
+        && registered >= (requireRegisteredIdentity ? 1 : 0)
+        && remaining >= 0
+        && remaining <= registered
+        && registered <= MAX_REGISTERED_PROCESS_GROUPS
+        && (!requireRegisteredIdentity || remaining === 0);
 }

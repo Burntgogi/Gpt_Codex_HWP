@@ -32,10 +32,12 @@ and [Contributing](../CONTRIBUTING.md).
 ## Document benchmark modes
 
 The bounded document benchmark is engineering evidence for the production
-isolation policy. It is not an MCP tool and does not promise that every file at
-the 512 MiB source ceiling can be processed successfully.
+size-handling and isolation policy. It is not an MCP tool. Its synthetic HWPX
+fixture exercises transport, `detectFormat`, process cleanup, and a normal
+recovery probe; it does not prove that every document format or every MCP
+operation succeeds at the requested size.
 
-The ordinary local, CI, and release check runs only the 10 MiB case:
+The ordinary pull-request smoke runs only the 10 MiB case:
 
 ```powershell
 npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/10m.json
@@ -47,23 +49,145 @@ only below a Git-ignored directory and records sizes, timings, bounded resource
 measurements, status codes, and hashes. It never records document content,
 values, anchors, user paths, temporary paths, or raw errors.
 
-Provisioned hosts can collect the larger cases sequentially:
+The scheduled/manual `Compatibility` workflow generates and validates exactly
+one fresh, passed 100 MiB receipt. Immutable release verification uses the same
+single-100 MiB contract at
+`.superpowers/benchmarks/release-supported-100.json` before the complete
+release verifier, checksummed artifact verification, and attestation. The
+historical `HWP_BENCH_LARGE` plumbing name remains for compatibility:
 
 ```powershell
 $env:HWP_BENCH_LARGE = "1"
-npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100,256,512 --output .superpowers/benchmarks/large.json
+npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/supported-100.json
+Remove-Item Env:HWP_BENCH_LARGE
+npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/supported-100.json
+```
+
+The 256 and 512 MiB cases remain available only as explicit local experiments.
+They are schema-validated diagnostics, may pass, fail, or report
+`resource-refused`, and never satisfy or fail the required release evidence:
+
+```powershell
+$env:HWP_BENCH_LARGE = "1"
+npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 256,512 --output .superpowers/benchmarks/experimental-256-512.json
 Remove-Item Env:HWP_BENCH_LARGE
 ```
 
-Do not enable this mode in ordinary pull requests. Each case runs in a fresh
-orchestrator process with concurrency fixed at one. The 100 and 256 MiB cases
-are descriptor-transport and supervised-child evidence; they are not proof that
+Do not enable the experimental cases in hosted CI or ordinary pull requests.
+Each case runs in a fresh orchestrator process with concurrency fixed at one.
+The descriptor-transport and supervised-child evidence does not prove that
 Kordoc can parse document content above its own 100 MiB decompression guard.
-The post-case probe performs a small normal parse/read to prove the engine still
-serves ordinary work. The source fixture and all
+Kordoc 3.18.1 also limits HWPX packages to 500 entries. The post-case probe
+performs a small normal parse/read to prove the engine still serves ordinary
+work. The source fixture and all
 engine inputs live in a fresh owned temporary directory below the ignored
 output directory and are removed in `finally`. Delete old ignored receipts when
 they are no longer needed.
+
+Valid documents up to and including 100 MiB are in the CI-verified support
+envelope, subject to malformed-archive rejection, decompression and resource
+policies, and allowed-root policy. Documents over 100 MiB through the 512 MiB
+safety ceiling are best-effort and carry no compatibility guarantee. Files over
+512 MiB are rejected.
+
+## CI gate ownership
+
+The required pull-request jobs and their deliberately bounded responsibilities
+are:
+
+| Protected check | Pull-request responsibility |
+| --- | --- |
+| `Windows x64` | source install, build, `runtime:check`, fresh runtime production install, `verify:runtime-smoke`, Windows hosted classifier, `test:pr` (including `bp16`), Python, then one 10 MiB smoke |
+| `macOS arm64` | the same ordered boundary with the macOS hosted classifier and `test:pr:macos`; the installed-runtime stress and hosted `bp16` stress are deferred |
+| `Linux lifecycle` | the existing bounded registration, document-child, and benchmark-policy lifecycle suite |
+| `Security policy` | repository privacy, dependency, generated-runtime, and workflow policy rather than platform compatibility |
+
+The desktop PR jobs do not create platform receipts, build or verify release
+artifacts, request attestation permissions, or generate 100/256/512 MiB
+evidence. Their bounded installed-runtime smoke still initializes the exact
+runtime manifest, verifies all nine tool schemas, and exercises SVG-to-PNG
+Sharp behavior after a fresh production-only install. It is a bounded PR
+substitute and does not restore the deferred full compatibility evidence.
+
+The scheduled and manually dispatched compatibility responsibilities are:
+
+| Compatibility job | Full-gate responsibility |
+| --- | --- |
+| `Windows full compatibility` | source install; generate then validate one passed 100 MiB receipt; create one Windows platform receipt |
+| `macOS full compatibility` | the same 100 MiB and platform-receipt boundary on `macos-15` |
+| `Linux full compatibility` | full Node profile, Python suite, and generate-plus-validate 100 MiB evidence once each; Linux has no platform-receipt implementation |
+| `macOS bp16 stability N of 20` | manual-only exact `bp16` execution after production cleanup-semantics changes |
+
+The Windows/macOS platform receipt invokes the complete release verifier. It
+already owns the full Node and Python suites, temporary installed-runtime and
+nine-tool verification, and `bp16`; no separate full test or `bp16` command is
+allowed in those jobs. Only source dependencies are installed before the 100
+MiB benchmark. npm automatically runs `prebenchmark:documents` and builds the
+source, while the nine-tool stage builds and installs a fresh temporary public
+runtime. Installing the checked-in plugin runtime separately would duplicate
+that ownership.
+
+Core validation steps use `continue-on-error` only to preserve later evidence
+and diagnostics. The final `compatibility-gate.mjs` consumes the original
+`steps.*.outcome` values and accepts only `success`; `failure`, `cancelled`,
+`skipped`, missing, or unknown outcomes remain fatal. Node/Python/hosted-boundary
+diagnostics run only after their matching failure and cannot change the final
+decision. Exact benchmark JSON, platform receipts, and bounded diagnostic text
+are uploaded for three days. No dependency tree, user document, runtime tree,
+or raw `bp16` TAP is uploaded.
+
+`run_bp16_stability` is a boolean manual-dispatch input. When true, exactly 20
+independent `macos-15` matrix jobs run the anchored `bp16` case once each and
+retain only a distilled bounded receipt. Scheduled runs cannot activate the
+matrix. Enable it only when production process-cleanup semantics changed, not
+for receipt, profile, documentation, or workflow-only changes. The 256 and 512
+MiB cases remain local opt-in experiments outside every hosted compatibility
+and release gate.
+
+Release preflight is deliberately fail-closed. Its 100 MiB step is not
+`continue-on-error`; on failure, only a bounded 10 MiB probe, the same
+supported-evidence validator, the Windows hosted-boundary classifier, and a
+three-day diagnostic artifact run. The original failed step keeps the job red,
+so the full release gate, artifact construction, and attestation remain skipped.
+Runs for the same immutable tag and SHA are serialized and never auto-cancel an
+execution already in progress.
+
+PR concurrency combines the workflow name with pull-request number or ref and
+cancels only stale PR executions. Compatibility concurrency also includes the
+event name and cancels only stale scheduled work on the same ref; manual runs
+remain separate from scheduled, release, and dependency work.
+
+## CI resource measurement
+
+The v0.2.2 workflow reduces maintainer CI work by moving full compatibility to
+its post-merge owner, not by removing public MCP functionality. An ordinary
+v0.2.1 desktop PR generated 100, 256, and 512 MiB on both Windows and macOS:
+1,736 MiB in aggregate. v0.2.2 generates one 10 MiB case on each platform:
+20 MiB in aggregate, a reduction of about 98.8%. Compatibility and immutable
+release verification retain the required 100 MiB evidence. The 256 and 512 MiB
+cases remain explicit local experiments.
+
+| Measurement | v0.2.1 baseline | v0.2.2 candidate | Change |
+| --- | ---: | ---: | ---: |
+| Synthetic large-document volume in an ordinary PR | 1,736 MiB | 20 MiB | About 98.8% less |
+| Required platform CI wall time | 14m 22s | 8m 55s | About 37.9% less |
+| Aggregate platform runner time | 20m 17s | 13m 56s | About 31.3% less |
+| Windows x64 job | 14m 18s | 8m 51s | About 38.1% less |
+| macOS arm64 job | 5m 12s | 4m 12s | About 19.2% less |
+| Linux lifecycle job | 47s | 53s | 6s longer |
+| Security policy job | 36s | 28s | About 22.2% less |
+
+Timings use passing v0.2.1 run `29861590295`, v0.2.2 candidate run
+`30250809345`, and their job start/completion timestamps. Security compares
+runs `29861590517` and `30250809321`. GitHub runner load varies, so this is a
+controlled workflow comparison from two real runs rather than a universal
+performance guarantee.
+
+User installation footprint did not materially change. A Windows x64
+production-only install measured 46,536,901 bytes (44.38 MiB) for v0.2.1 and
+46,273,924 bytes (44.13 MiB) for v0.2.2, about 0.6% less. The latest installed-
+runtime smoke reported zero remaining descendants, which supports the cleanup
+contract but is not evidence of a percentage reduction in long-session RSS.
 
 Benchmark receipts use exact schema version 2. `dispatchStarted` changes from
 false only when the isolated worker/child emits its initial zero-byte metric
@@ -129,9 +253,13 @@ It does not grant protection from a hostile document or a same-user process;
 run untrusted inputs under an appropriate least-privilege OS account or sandbox.
 
 For a public-release evidence gate, set `HWP_BENCH_REQUIRE_LARGE=1`. The release
-verifier then checks the exact large receipt schema, order, and freshness. Set
-`HWP_BENCH_LARGE_EVIDENCE` only when the ignored receipt is not at the default
-`.superpowers/benchmarks/large.json` location.
+verifier then checks that the evidence contains exactly one fresh, schema-valid,
+passed 100 MiB receipt. Set `HWP_BENCH_LARGE_EVIDENCE` only when the ignored
+receipt is not at the default `.superpowers/benchmarks/supported-100.json`
+location. The environment names remain unchanged for backward-compatible
+internal plumbing. `Compatibility` uses
+`.superpowers/benchmarks/compatibility-supported-100.json`; immutable release
+verification uses `.superpowers/benchmarks/release-supported-100.json`.
 
 Windows x64 is the currently exercised and verified device class. macOS Apple
 Silicon remains a compatibility target with unverified-device status; no

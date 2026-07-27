@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
-  <img alt="Release v0.2.1" src="https://img.shields.io/badge/release-v0.2.1-5865F2">
+  <img alt="Candidate v0.2.2" src="https://img.shields.io/badge/candidate-v0.2.2-E67E22">
   <img alt="Node.js 22 or later" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
   <a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -27,13 +27,13 @@
 
 Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
-## v0.2.1 Release
+## v0.2.2 Release Candidate
 
-`v0.2.1` strengthens the public-source boundary, security controls, reproducible artifacts, and protected GitHub release gates, and pins the MCP SDK's transitive Hono Node adapter to security-fixed version 2.0.11. The release commit is published under an immutable tag only after Windows x64, macOS arm64, Linux, and security checks pass, with a ZIP, SBOM, and provenance. Development and real-document validation were performed on Windows x64. macOS compatibility remains a target, but use with Codex Desktop and Hancom Office Hangul on a physical Mac is still unverified.
+`v0.2.2` separates the Windows x64, macOS arm64, and Linux verification responsibilities and establishes 100 MiB as the CI-verified document envelope. It fixes installed-runtime initialization on GitHub hosted runners by reusing the verified canonical temporary root instead of a runner path alias, and adds bounded diagnostics that never disclose raw errors, paths, or PIDs. Development and real-document validation were performed on Windows x64. macOS Apple Silicon has hosted-runner compatibility evidence, but use with Codex Desktop and Hancom Office Hangul on a physical Mac remains unverified.
 
-## v0.1.4 Release
+## Previous releases
 
-`v0.1.4` is the previous stable release and completed final Windows x64 validation. Its highlights and verification evidence remain in the [English release notes](RELEASE_NOTES.en.md) and [Korean release notes](RELEASE_NOTES.md). New installations should pin `v0.2.1` instead of the moving `main` branch.
+`v0.2.1` is the previous stable release that introduced the security-fixed Hono Node adapter and reproducible ZIP, SBOM, and provenance gates. See the [changelog](CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for the retained history.
 
 ## Features
 
@@ -96,11 +96,11 @@ The final release passed 330 of 334 Node tests with 4 expected platform/privileg
 
 ## Agent-assisted installation from GitHub
 
-`v0.2.1` is the current recommended release. `v0.1.0` through `v0.1.4` remain historical releases. The `v0.2.0` tag is a candidate withdrawn before publication after a security advisory appeared; it was never distributed as a GitHub Release. New installations should pin `v0.2.1` and review the [release notes](RELEASE_NOTES.en.md) first.
+`v0.2.1` is the current recommended release and `v0.2.2` is a pre-release candidate. `v0.1.0` through `v0.1.4` remain historical releases. The `v0.2.0` tag is a candidate withdrawn before publication after a security advisory appeared; it was never distributed as a GitHub Release. Until v0.2.2 is published, new installations should pin `v0.2.1` and review the [release notes](RELEASE_NOTES.en.md) first.
 
 A user can ask a Codex agent:
 
-> Install release `v0.2.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
+> Install the latest public release `v0.2.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
@@ -186,7 +186,7 @@ For an existing HWPX, read it first and call `hwp_patch_document` with Markdown 
 
 ## Large-document reading
 
-The source-file hard ceiling is 512 MiB; stricter format-engine limits may apply. This outer safety limit does not guarantee that every 512 MiB document can be parsed. Kordoc 3.18.1 currently caps total HWP/HWPX decompression at 100 MiB and HWPX packages at 500 entries.
+Valid source documents up to and including 100 MiB are in the CI-verified support envelope, subject to malformed-archive rejection, decompression and resource policies, and the optional allowed-root policy. Documents over 100 MiB through the 512 MiB safety ceiling are best-effort and carry no compatibility guarantee; files over 512 MiB are rejected. Kordoc 3.18.1 currently caps total HWP/HWPX decompression at 100 MiB and HWPX packages at 500 entries, so a stricter engine limit may apply first.
 
 Inline Markdown defaults to 64,000 JavaScript string characters. For larger results, pass a new `.md` path as `markdown_output_path`. The plugin parses the source once, saves complete UTF-8 Markdown up to 256 MiB without overwriting, and returns a 64,000-character preview with total size, source fingerprint, and recommended chunk size. Codex can then read the derived Markdown in roughly 64,000-character chunks without reparsing the HWP/HWPX source.
 
@@ -230,7 +230,7 @@ The plugin does not bundle font files, embed them in HWPX, or install system fon
 ## Known Limitations
 
 - Classic HWP is read-only; all generated and edited documents are written as HWPX.
-- The 512 MiB source ceiling remains subject to stricter engine limits, including Kordoc 3.18.1's 100 MiB decompression and 500-entry HWPX limits.
+- Valid source documents are CI-verified through 100 MiB; documents over 100 MiB through 512 MiB are non-guaranteed best-effort, and files over 512 MiB are rejected. Malformed-archive, decompression, resource, and allowed-root policies still apply, including Kordoc 3.18.1's 100 MiB decompression and 500-entry HWPX limits.
 - Inline Markdown is capped at 64,000 characters, derived Markdown at 256 MiB, and the final serialized MCP result at 8 MiB.
 - Kordoc or rhwp previews may not match Hancom GUI output pixel-for-pixel.
 - The rhwp preview fallback may render only the first page and use approximate Node-side font widths.
