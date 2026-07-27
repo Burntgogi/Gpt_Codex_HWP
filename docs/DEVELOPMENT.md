@@ -157,6 +157,38 @@ cancels only stale PR executions. Compatibility concurrency also includes the
 event name and cancels only stale scheduled work on the same ref; manual runs
 remain separate from scheduled, release, and dependency work.
 
+## CI resource measurement
+
+The v0.2.2 workflow reduces maintainer CI work by moving full compatibility to
+its post-merge owner, not by removing public MCP functionality. An ordinary
+v0.2.1 desktop PR generated 100, 256, and 512 MiB on both Windows and macOS:
+1,736 MiB in aggregate. v0.2.2 generates one 10 MiB case on each platform:
+20 MiB in aggregate, a reduction of about 98.8%. Compatibility and immutable
+release verification retain the required 100 MiB evidence. The 256 and 512 MiB
+cases remain explicit local experiments.
+
+| Measurement | v0.2.1 baseline | v0.2.2 candidate | Change |
+| --- | ---: | ---: | ---: |
+| Synthetic large-document volume in an ordinary PR | 1,736 MiB | 20 MiB | About 98.8% less |
+| Required platform CI wall time | 14m 22s | 8m 55s | About 37.9% less |
+| Aggregate platform runner time | 20m 17s | 13m 56s | About 31.3% less |
+| Windows x64 job | 14m 18s | 8m 51s | About 38.1% less |
+| macOS arm64 job | 5m 12s | 4m 12s | About 19.2% less |
+| Linux lifecycle job | 47s | 53s | 6s longer |
+| Security policy job | 36s | 28s | About 22.2% less |
+
+Timings use passing v0.2.1 run `29861590295`, v0.2.2 candidate run
+`30250809345`, and their job start/completion timestamps. Security compares
+runs `29861590517` and `30250809321`. GitHub runner load varies, so this is a
+controlled workflow comparison from two real runs rather than a universal
+performance guarantee.
+
+User installation footprint did not materially change. A Windows x64
+production-only install measured 46,536,901 bytes (44.38 MiB) for v0.2.1 and
+46,273,924 bytes (44.13 MiB) for v0.2.2, about 0.6% less. The latest installed-
+runtime smoke reported zero remaining descendants, which supports the cleanup
+contract but is not evidence of a percentage reduction in long-session RSS.
+
 Benchmark receipts use exact schema version 2. `dispatchStarted` changes from
 false only when the isolated worker/child emits its initial zero-byte metric
 immediately before the first engine execution. `copiedBytes` is an observed,
