@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
-  <img alt="Release v0.2.1" src="https://img.shields.io/badge/release-v0.2.1-5865F2">
+  <img alt="Candidate v0.2.2" src="https://img.shields.io/badge/candidate-v0.2.2-E67E22">
   <img alt="Node.js 22 or later" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
   <a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -27,13 +27,13 @@
 
 Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
-## v0.2.1 Release
+## v0.2.2 Release Candidate
 
-`v0.2.1` strengthens the public-source boundary, security controls, reproducible artifacts, and protected GitHub release gates, and pins the MCP SDK's transitive Hono Node adapter to security-fixed version 2.0.11. The release commit is published under an immutable tag only after Windows x64, macOS arm64, Linux, and security checks pass, with a ZIP, SBOM, and provenance. Development and real-document validation were performed on Windows x64. macOS compatibility remains a target, but use with Codex Desktop and Hancom Office Hangul on a physical Mac is still unverified.
+`v0.2.2` separates the Windows x64, macOS arm64, and Linux verification responsibilities and establishes 100 MiB as the CI-verified document envelope. It fixes installed-runtime initialization on GitHub hosted runners by reusing the verified canonical temporary root instead of a runner path alias, and adds bounded diagnostics that never disclose raw errors, paths, or PIDs. Development and real-document validation were performed on Windows x64. macOS Apple Silicon has hosted-runner compatibility evidence, but use with Codex Desktop and Hancom Office Hangul on a physical Mac remains unverified.
 
-## v0.1.4 Release
+## Previous releases
 
-`v0.1.4` is the previous stable release and completed final Windows x64 validation. Its highlights and verification evidence remain in the [English release notes](RELEASE_NOTES.en.md) and [Korean release notes](RELEASE_NOTES.md). New installations should pin `v0.2.1` instead of the moving `main` branch.
+`v0.2.1` is the previous stable release that introduced the security-fixed Hono Node adapter and reproducible ZIP, SBOM, and provenance gates. See the [changelog](CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for the retained history.
 
 ## Features
 
@@ -96,11 +96,11 @@ The final release passed 330 of 334 Node tests with 4 expected platform/privileg
 
 ## Agent-assisted installation from GitHub
 
-`v0.2.1` is the current recommended release. `v0.1.0` through `v0.1.4` remain historical releases. The `v0.2.0` tag is a candidate withdrawn before publication after a security advisory appeared; it was never distributed as a GitHub Release. New installations should pin `v0.2.1` and review the [release notes](RELEASE_NOTES.en.md) first.
+`v0.2.1` is the current recommended release and `v0.2.2` is a pre-release candidate. `v0.1.0` through `v0.1.4` remain historical releases. The `v0.2.0` tag is a candidate withdrawn before publication after a security advisory appeared; it was never distributed as a GitHub Release. Until v0.2.2 is published, new installations should pin `v0.2.1` and review the [release notes](RELEASE_NOTES.en.md) first.
 
 A user can ask a Codex agent:
 
-> Install release `v0.2.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
+> Install the latest public release `v0.2.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.

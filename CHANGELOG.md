@@ -6,6 +6,17 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - No unreleased changes.
 
+## [0.2.2] - 2026-07-27
+
+- Added bounded Windows x64, macOS arm64, Linux, and Security pull-request
+  gates plus a scheduled/manual full compatibility workflow.
+- Established 100 MiB as the CI-verified document support envelope while
+  retaining 256 and 512 MiB as explicit, non-guaranteed local experiments.
+- Fixed installed-runtime smoke initialization on hosted Windows and macOS by
+  reusing the verified canonical temporary root instead of its runner alias.
+- Added privacy-safe lifecycle diagnostics, exact process-cleanup receipts,
+  stale-run cancellation, and fail-closed release preflight handling.
+
 ## [0.2.1] - 2026-07-22
 
 - Published the first public 0.2 series release without changing immutable
@@ -50,7 +61,8 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.2.0
 [0.1.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4

@@ -1,77 +1,66 @@
-# Gpt_Codex_HWP v0.2.1 Release Notes
+# Gpt_Codex_HWP v0.2.2 Release Notes
 
-- Status: final release
-- Prepared: 2026-07-22
-- Validation: Windows x64, macOS arm64, Linux, and security release gates; physical Mac unverified
+- Status: pre-release candidate
+- Prepared: 2026-07-27
+- Verification platforms: Windows x64, macOS arm64 hosted runner, Linux x64, and security policy; no physical Mac verification
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
 ## Overview
 
-v0.2.1 treats HWP as a safe read-only input format and writes every new or edited document as HWPX. The public runtime includes only the Kordoc Core required for document workflows; optional PDF, OCR, ONNX, and formula engines are excluded. The public surface remains exactly nine tools. This release adds public-tree and Git-history scans, least-privilege CI, and reproducible ZIP, SBOM, and provenance verification and attestation gates. The `v0.2.0` candidate was withdrawn before a GitHub Release was published when a new security advisory appeared; `v0.2.1` is the actual public release.
+v0.2.2 is a patch release that preserves the HWP-read-only/HWPX-write model and the exact nine-tool MCP surface while making platform CI and large-document verification release-ready. Structurally valid documents through 100 MiB are the CI-verified support envelope. Documents over 100 MiB through 512 MiB remain non-guaranteed best effort, and files over 512 MiB are rejected.
+
+Installed-runtime smoke tests previously stalled for 60 seconds on GitHub hosted Windows and macOS because the displayed temporary-directory path differed from its canonical path. The smoke now reuses the canonical path already proven by its ownership check for the MCP allowed root and output paths.
 
 ## Highlights
 
-- Binary HWP is limited to format detection, reading, and preview. Direct generation, editing, or saving is refused with `HWP_READ_ONLY`.
-- The MCP SDK's `@hono/node-server` dependency is exactly overridden to security-fixed 2.0.11, with zero known production vulnerabilities in both source and compact-runtime audits.
-- The release attestation workflow builds large-document evidence and artifacts on validated Windows x64 and fails closed unless its immutable tag, exact commit SHA, and version inputs agree.
-- Markdown-to-HWPX generation, structure-preserving patching, form filling, image insertion, validation, and SVG preview are supported.
-- The outer 512 MiB source-file ceiling and 64,000-character inline Markdown policy remain in place. Large results parse the source once, save a new UTF-8 Markdown file, and are then read in chunks.
-- The official Kordoc 3.18.1 npm archive is authenticated against a pinned SHA-512 value; unnecessary source maps and optional dependency engines are removed.
-- The installed dependency tree rejects PDF, OCR, ONNX, and formula-engine packages at both top-level and nested paths.
-- Both distribution builders reject personal home paths, private keys, literal credentials, `.env` files, source maps, test documents, and user documents.
-- Credential scanning rejects cloud secret names including `AWS_SECRET_ACCESS_KEY`, and the public runtime explicitly carries the two icons referenced by skill metadata.
-- The release gate automatically verifies Kordoc provenance, `npm ls`, `npm audit`, size budgets, MCP stderr, and all nine tool smokes.
-- Historical generated `release/**` trees were removed from public source and retained only in local backups.
-- The README introduction now leads with the original pixel-art banner, status badges, fast navigation, and a preview of an actually generated HWPX.
-- The README example HWPX was generated from privacy-safe synthetic Markdown and verified as one page with one table, zero structural issues, and zero preview warnings.
-- The new HWPX result PNG is pinned by exact size and SHA-256 in the public-content policy so an unapproved binary replacement fails closed. The original title banner keeps its existing pinned policy.
-
-## README Design References
-
-GitHub repository search on 2026-07-22 found no repository with at least one million stars, so the introduction patterns of the actual five most-starred repositories were reviewed instead. No original copy or imagery was reused.
-
-- [codecrafters-io/build-your-own-x](https://github.com/codecrafters-io/build-your-own-x): a full-width banner that owns the first screen
-- [sindresorhus/awesome](https://github.com/sindresorhus/awesome): centered brand identity and concise navigation
-- [freeCodeCamp/freeCodeCamp](https://github.com/freeCodeCamp/freeCodeCamp): trust status surfaced through badges
-- [public-apis/public-apis](https://github.com/public-apis/public-apis): purpose and usage paths exposed immediately
-- [EbookFoundation/free-programming-books](https://github.com/EbookFoundation/free-programming-books): clear separation of language, license, and contribution routes
+- Split Windows x64, macOS arm64, Linux lifecycle, and Security policy into stable required pull-request checks.
+- Kept the pull-request document smoke at 10 MiB; the post-merge manual/scheduled Compatibility workflow owns full platform verification and 100 MiB evidence.
+- Retained 256 and 512 MiB benchmarks as explicit local engineering experiments without compatibility guarantees.
+- Accepted hosted-runner path aliases during ownership validation while using only the verified canonical temporary root as the runtime boundary.
+- Initialization diagnostics emit only the last allowlisted lifecycle boundary and a bounded stderr byte count. Raw errors, user paths, PIDs, and document content are never emitted.
+- Kept process start gates, supervisor readiness, termination receipts, and remaining-child verification fail closed.
+- Removed duplicate full-suite ownership from pull-request jobs; Compatibility and immutable release verification own full platform receipts and 100 MiB evidence.
+- A failed release 100 MiB preflight now runs only bounded diagnostics and prevents artifact construction and attestation.
+- HWP remains detection/read/preview only, and every generated or edited result remains HWPX.
 
 ## Public tools
 
 `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`
 
-## Verification results
+## Current verification evidence
 
-Release policy requires the exact commit referenced by the tag to pass the Windows x64, macOS arm64, Linux, and security checks. The runs below are passing records for the pre-release hardening baseline; the final tag is published only after the current release commit passes every required check.
+- [PR #5 required CI run 30248171415](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/30248171415): Windows x64, macOS arm64, and Linux lifecycle passed. The previously documented hosted macOS `bp16` scheduling variance passed both the same-run isolated diagnostic and one failed-job rerun.
+- [PR #5 Security run 30248171437](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/30248171437): public tree, every reachable Git object and author identity, production dependencies, runtime projection, and policy checks passed.
+- Final candidate local verification: repository Node 420 passed, one capability skip, zero failed out of 421; all 41 source files passed with zero deferred; Python 20/20; installed-runtime nine-tool and SVG/PNG smoke passed.
+- Source and public-runtime `npm audit --omit=dev`: zero known vulnerabilities.
+- Remote repository policy: `compliant` for protected main, immutable tags, and owner-only writes.
 
-- [v0.2.1 CI run 29861590295](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29861590295): Windows x64 full release gate and platform receipt, macOS arm64 full release gate and platform receipt, and Linux lifecycle checks passed
-- [v0.2.1 Security run 29861590517](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/29861590517): public-tree and all-reachable Git object/identity scans, source/runtime production audits, runtime projection, and artifact build and verification passed
-- The platform release gates include the authenticated Kordoc rebuild, fresh large-document evidence, real read-only HWP smoke, all nine MCP tool smokes, and artifact-integrity checks
-- The hosted macOS arm64 gate passed, but actual use with Codex Desktop and Hancom Office Hangul on a physical Mac remains unverified
+Because this pull request introduces the new `Compatibility` workflow, GitHub does not allow manual dispatch until that workflow exists on the default branch. The remaining release gates are to run full Windows x64, macOS arm64, and Linux x64 compatibility plus 100 MiB evidence at the exact merged commit, then run release-candidate verification, artifact checks, and attestation against the immutable `v0.2.2` tag.
 
 ## Installation and upgrade
 
-For installation, pin the immutable `v0.2.1` tag instead of the moving `main` branch. Validate the returned `installedPath` and plugin ID, then run the following commands only from that validated directory:
+After the final release is published, pin immutable tag `v0.2.2` instead of the moving `main` branch. Validate the returned `installedPath` and plugin ID, then run from that validated directory:
 
 ```powershell
 npm ci --omit=dev --ignore-scripts
 npm audit --omit=dev
 ```
 
-Restart Codex or open a new task and verify exactly nine tools. Do not remove an older working plugin until the new installation passes verification. Follow the [agent-assisted GitHub installation section](README.en.md#agent-assisted-installation-from-github) for the complete sequence.
+Restart Codex or open a new task and verify exactly nine tools. Do not remove an existing working installation until the new installation passes validation.
 
 ## Compatibility and known limitations
 
-- Developed and validated on Windows x64.
-- macOS Apple Silicon is a compatibility target but has not been validated on a physical Mac.
-- HWP 5.x is read-only. HWP 3.x is not guaranteed because no real fixture has been validated.
-- Font files are not bundled, installed, or embedded. Rendering and line wrapping depend on fonts installed on the system that opens the document.
-- Protected, encrypted, signed, or DRM-controlled documents are refused without bypass.
-- Engine limits such as Kordoc's 100 MiB decompression ceiling and 500-entry HWPX ceiling may apply before the outer 512 MiB file limit.
+- Development and real-document functional validation were performed on Windows x64.
+- macOS Apple Silicon is a hosted-runner compatibility target, but Codex Desktop and Hancom Office Hangul remain unverified on a physical Mac.
+- HWP 5.x is read-only; HWP 3.x has no real fixture and is not guaranteed.
+- The plugin does not bundle, install, or embed fonts. Rendering and line breaks depend on system fonts.
+- Protected, encrypted, signed, and DRM documents are rejected rather than bypassed.
+- Inline Markdown is capped at 64,000 characters, derived Markdown at 256 MiB, and the serialized MCP result at 8 MiB.
+- Stricter engine policies may apply first, including Kordoc's 100 MiB decompression and 500-entry HWPX limits.
 
 ## License and acknowledgements
 
-Project code is distributed under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and other third-party components remain subject to their original copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for pinned versions, usage scopes, and notices.
+Project code is released under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and all other third-party components remain under their authors' copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for exact versions, scope, and notices.
 
-These are the stable `v0.2.1` release notes. Install from the immutable `v0.2.1` tag rather than the moving `main` branch.
+These are pre-release candidate notes for `v0.2.2`. Until compatibility, immutable-tag verification, and the GitHub Release are complete, `v0.2.1` remains the latest public release.
