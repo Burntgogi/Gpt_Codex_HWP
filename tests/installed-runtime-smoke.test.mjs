@@ -85,6 +85,33 @@ test("installed runtime smoke encodes the allowed root as the runtime's exact JS
   });
 });
 
+test("initialization failure emits only the last bounded lifecycle boundary and stderr count", async (t) => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-initialize-boundary-"));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+    mcpServers: {
+      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+    },
+  }), "utf8");
+  let output = "";
+  const passed = await smokeModule.runInstalledRuntimeSmoke({
+    runtimeRoot,
+    createRuntimeSession: async (_spec, observers) => {
+      observers.onInitializeBoundary("process-spawned");
+      observers.onStderr(Buffer.alloc(70 * 1024, 0x78));
+      throw new Error("private hosted initialization failure");
+    },
+    stdout: { write(value) { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(
+    output,
+    "RUNTIME_SMOKE status=failed stage=initialize boundary=process-spawned stderrBytes=65537\n",
+  );
+  assert.doesNotMatch(output, /private|hosted initialization|runtime-smoke-initialize-boundary/iu);
+});
+
 test("Windows identity snapshots ignore only the non-process PID zero record", () => {
   assert.equal(typeof smokeModule.parseRuntimeProcessTable, "function");
   assert.deepEqual(
@@ -115,6 +142,7 @@ test("supervisor establishment rejection closes the still-gated owned root befor
     runtimeRoot, "dist", "workers", "document-process-registration.js",
   )).href);
   let child;
+  const boundaries = [];
   class EmptyReadBuffer {
     append() {}
     readMessage() { return null; }
@@ -130,6 +158,7 @@ test("supervisor establishment rejection closes the still-gated owned root befor
     startGateEntry: join(runtimeRoot, "dist", "workers", "document-child-start-gate.js"),
     startFrame: registration.DOCUMENT_START_FRAME,
     registrationEnvironmentVariable: registration.DOCUMENT_REGISTRATION_ENV,
+    onInitializeBoundary(boundary) { boundaries.push(boundary); },
     spawnProcess(command, args, options) {
       child = spawn(command, args, options);
       return child;
@@ -139,6 +168,7 @@ test("supervisor establishment rejection closes the still-gated owned root befor
   assert.ok(child !== undefined);
   assert.equal(child.exitCode !== null || child.signalCode !== null, true);
   assert.equal(await readFile(marker).catch(() => undefined), undefined);
+  assert.deepEqual(boundaries, ["process-spawned"]);
 });
 
 test("MCP stdout budget rejects per-frame and aggregate overflow before buffering", () => {
@@ -189,7 +219,10 @@ test("over-limit MCP stdout emits one fixed initialization failure and closes th
   assert.equal(passed, false);
   assert.ok(child !== undefined);
   assert.equal(child.exitCode !== null || child.signalCode !== null, true);
-  assert.equal(output, "RUNTIME_SMOKE status=failed stage=initialize\n");
+  assert.equal(
+    output,
+    "RUNTIME_SMOKE status=failed stage=initialize boundary=gate-released stderrBytes=1019\n",
+  );
   assert.doesNotMatch(output, /oversized-stdout|runtime-smoke-stdout-limit|private/iu);
 });
 
@@ -591,7 +624,9 @@ test("initialized cleanup rejects a gated-root-only receipt and an inventory mis
     assert.equal(passed, false, fault);
     assert.equal(
       output,
-      `RUNTIME_SMOKE status=failed stage=${fault === "missing-root" ? "initialize" : "cleanup"}\n`,
+      fault === "missing-root"
+        ? "RUNTIME_SMOKE status=failed stage=initialize boundary=process-inventory stderrBytes=0\n"
+        : "RUNTIME_SMOKE status=failed stage=cleanup\n",
       fault,
     );
   }

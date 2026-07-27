@@ -18,6 +18,16 @@ const MAX_SVG_BYTES = 1024;
 const MAX_PNG_BYTES = 16 * 1024;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const SVG_INPUT = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="#000"/></svg>';
+const INITIALIZE_BOUNDARIES = new Set([
+  "session-create",
+  "runtime-imports",
+  "transport-created",
+  "process-spawned",
+  "supervisor-ready",
+  "gate-released",
+  "mcp-connected",
+  "process-inventory",
+]);
 
 export const RUNTIME_TOOL_SCHEMA_FINGERPRINTS = Object.freeze({
   hwp_detect_format: "1a645a175df1695f59f8e1c38320c270a1a851ef88b74fb7cbdce7dd076b3906",
@@ -103,6 +113,7 @@ export async function runInstalledRuntimeSmoke(options = {}) {
   let cleanupRoot;
   let session;
   let stderrBytes = 0;
+  let initializeBoundary = "session-create";
   let processIdentities = [];
   let report;
   let failure;
@@ -129,7 +140,11 @@ export async function runInstalledRuntimeSmoke(options = {}) {
           ? Math.min(MAX_STDERR_BYTES + 1, stderrBytes + chunk.byteLength)
           : MAX_STDERR_BYTES + 1;
       },
+      onInitializeBoundary(boundary) {
+        if (INITIALIZE_BOUNDARIES.has(boundary)) initializeBoundary = boundary;
+      },
     });
+    initializeBoundary = "process-inventory";
     if (!Number.isSafeInteger(session?.pid) || session.pid < 1) {
       throw new Error("Runtime MCP process identity is invalid.");
     }
@@ -210,7 +225,10 @@ export async function runInstalledRuntimeSmoke(options = {}) {
   }
 
   if (failure !== undefined || report === undefined) {
-    stdout.write(`RUNTIME_SMOKE status=failed stage=${failure ?? "unknown"}\n`);
+    const diagnostic = failure === "initialize"
+      ? ` boundary=${initializeBoundary} stderrBytes=${stderrBytes}`
+      : "";
+    stdout.write(`RUNTIME_SMOKE status=failed stage=${failure ?? "unknown"}${diagnostic}\n`);
     setExitCode(1);
     return false;
   }
@@ -254,6 +272,7 @@ export async function createDefaultRuntimeSession(spec, observers = {}, dependen
       "dist/workers/document-process-registration.js",
     )).href),
   ]);
+  emitInitializeBoundary(observers.onInitializeBoundary, "runtime-imports");
   const transport = createSupervisedStdioTransport({
     spec,
     ReadBuffer: stdio.ReadBuffer,
@@ -266,10 +285,13 @@ export async function createDefaultRuntimeSession(spec, observers = {}, dependen
     registrationEnvironmentVariable: registration.DOCUMENT_REGISTRATION_ENV,
     spawnProcess: dependencies.spawnProcess,
     onStderr: observers.onStderr,
+    onInitializeBoundary: observers.onInitializeBoundary,
   });
+  emitInitializeBoundary(observers.onInitializeBoundary, "transport-created");
   const client = new Client({ name: "gpt-codex-hwp-runtime-smoke", version: "1" });
   try {
     await client.connect(transport);
+    emitInitializeBoundary(observers.onInitializeBoundary, "mcp-connected");
   } catch (error) {
     let terminationVerified = false;
     try {
@@ -312,6 +334,7 @@ export function createSupervisedStdioTransport({
   registrationEnvironmentVariable,
   spawnProcess = spawn,
   onStderr,
+  onInitializeBoundary,
 }) {
   const readBuffer = new ReadBuffer();
   const stdoutBudget = createMcpStdoutBudget({
@@ -423,6 +446,7 @@ export function createSupervisedStdioTransport({
         termination = Promise.resolve(Object.freeze({ gone: true, proof: "gated-root-closed" }));
         throw error;
       }
+      emitInitializeBoundary(onInitializeBoundary, "process-spawned");
       child.on("error", (error) => transport.onerror?.(error));
       try {
         supervisor = await superviseProcessTree(child);
@@ -435,6 +459,7 @@ export function createSupervisedStdioTransport({
         termination = Promise.resolve(Object.freeze({ gone: true, proof: "gated-root-closed" }));
         throw error;
       }
+      emitInitializeBoundary(onInitializeBoundary, "supervisor-ready");
       if (protocolFailure !== undefined) {
         await transport.terminateTree();
         throw protocolFailure;
@@ -450,6 +475,7 @@ export function createSupervisedStdioTransport({
         await transport.terminateTree();
         throw error;
       }
+      emitInitializeBoundary(onInitializeBoundary, "gate-released");
     },
     async send(message) {
       if (child?.stdin === null || child?.stdin === undefined) throw new Error("Runtime is not connected.");
@@ -484,6 +510,11 @@ export function createSupervisedStdioTransport({
     },
   };
   return transport;
+}
+
+function emitInitializeBoundary(observer, boundary) {
+  if (typeof observer !== "function" || !INITIALIZE_BOUNDARIES.has(boundary)) return;
+  try { observer(boundary); } catch {}
 }
 
 export function createMcpStdoutBudget({ maximumAggregateBytes, maximumFrameBytes }) {

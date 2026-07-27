@@ -267,6 +267,14 @@ test("fast desktop PR policy rejects terminal-boundary, full-profile, and receip
     ["receipt verify", appendRunStep(windows, "node scripts/platform-receipts.mjs verify"), /platform receipts are forbidden/u],
     ["receipt checksum", appendRunStep(windows, "node scripts/platform-receipts.mjs checksum"), /platform receipts are forbidden/u],
     ["receipt upload path", appendRunStep(windows, "echo release-receipts/platform-receipt.json"), /platform receipts are forbidden/u],
+    [
+      "hosted classifier failure condition removal",
+      windows.replace(
+        "        if: ${{ !cancelled() }}\n        timeout-minutes: 10\n        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor",
+        "        timeout-minutes: 10\n        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor",
+      ),
+      /hosted classifier must run after an earlier failure/u,
+    ],
   ];
 
   for (const [label, mutation, expected] of mutations) {
@@ -380,7 +388,15 @@ test("CI diagnostics are bounded, profile-preserving, and scoped to their failed
 
     const continuedSteps = steps.filter((step) => step.includes("continue-on-error: true"));
     assert.deepEqual(continuedSteps, [nodeDiagnostic, pythonDiagnostic]);
-    assert.doesNotMatch(section, /if:\s*\$\{\{\s*(?:always\(\)|!cancelled\(\))/u);
+    const hostedClassifier = steps.find((step) => step.includes("run diagnose:hosted"));
+    assert.ok(hostedClassifier, "missing hosted classifier");
+    const nonCancelledSteps = steps.filter((step) => /if:\s*\$\{\{\s*!cancelled\(\)/u.test(step));
+    assert.deepEqual(
+      nonCancelledSteps,
+      [hostedClassifier],
+      "only the hosted classifier may run after an earlier failure",
+    );
+    assert.doesNotMatch(section, /if:\s*\$\{\{\s*always\(\)/u);
   }
   assert.doesNotMatch(windows, /macos-node-tests-diagnostic/iu);
   assert.doesNotMatch(macos, /windows-node-tests-diagnostic/iu);
@@ -1424,6 +1440,17 @@ function assertFastDesktopPrJobBoundary(section, options) {
     "clean-tree check must precede diagnostics",
   );
   const steps = workflowStepSections(section);
+  const hostedDiagnosticCommand = options.profile === "test:pr"
+    ? "npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor"
+    : "npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker";
+  const hostedClassifier = steps.find((step) => step.includes(hostedDiagnosticCommand));
+  assert.notEqual(hostedClassifier, undefined, "hosted classifier is required");
+  assert.match(
+    hostedClassifier,
+    /^        if: \$\{\{ !cancelled\(\) \}\}$/mu,
+    "hosted classifier must run after an earlier failure unless the job is cancelled",
+  );
+  assert.doesNotMatch(hostedClassifier, /continue-on-error/u);
   const benchmarkStep = steps.findIndex((step) => step.includes(`run: ${benchmarkCommand}`));
   const cleanStep = steps.findIndex((step) => step.includes(`run: ${cleanCommand}`));
   const diagnosticStep = steps.findIndex((step) => /^      - name: Diagnose /u.test(step));

@@ -55,6 +55,7 @@ jobs:
         timeout-minutes: 10
         run: npm run verify:runtime-smoke
       - name: Classify hosted Windows supervisor boundary
+        if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor
       - name: Run Windows PR Node profile
@@ -124,6 +125,7 @@ jobs:
         timeout-minutes: 10
         run: npm run verify:runtime-smoke
       - name: Classify hosted macOS worker boundaries
+        if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker
       - name: Run macOS PR Node profile
