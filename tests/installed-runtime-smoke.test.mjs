@@ -230,13 +230,14 @@ test("owned temporary-root validation accepts a canonicalized ancestor alias", a
   const rawParent = join(tmpdir(), "ancestor-alias");
   const canonicalParent = join(tmpdir(), "canonical-ancestor");
   const root = join(rawParent, "gpt-codex-hwp-runtime-smoke-alias-case");
-  await assert.doesNotReject(() => smokeModule.assertOwnedTemporaryRoot(root, {
+  const canonicalRoot = join(canonicalParent, "gpt-codex-hwp-runtime-smoke-alias-case");
+  assert.equal(await smokeModule.assertOwnedTemporaryRoot(root, {
     temporaryParent: rawParent,
     lstatPath: async () => ({ isDirectory: () => true, isSymbolicLink: () => false }),
     realpathPath: async (path) => path === root
-      ? join(canonicalParent, "gpt-codex-hwp-runtime-smoke-alias-case")
+      ? canonicalRoot
       : canonicalParent,
-  }));
+  }), canonicalRoot);
 });
 
 test("installed runtime smoke uses the exact manifest command and one bounded Sharp PNG path", async (t) => {

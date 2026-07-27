@@ -120,8 +120,8 @@ export async function runInstalledRuntimeSmoke(options = {}) {
   try {
     const command = await readExactManifestCommand(runtimeRoot);
     stage = "temporary-root";
-    ownedRoot = resolve(await createTemporaryRoot());
-    await assertOwnedTemporaryRoot(ownedRoot);
+    const requestedRoot = resolve(await createTemporaryRoot());
+    ownedRoot = await assertOwnedTemporaryRoot(requestedRoot);
     cleanupRoot = ownedRoot;
     const svgPath = join(ownedRoot, "sharp-smoke.svg");
     const pngPath = join(ownedRoot, "sharp-smoke.png");
@@ -760,6 +760,7 @@ export async function assertOwnedTemporaryRoot(root, options = {}) {
   if (pathKey(canonicalRoot) !== pathKey(expectedCanonicalRoot)) {
     throw new Error("Runtime smoke temporary root is outside the system temporary directory.");
   }
+  return canonicalRoot;
 }
 
 function assertProcessIdentityInventory(value, requiredRootPid = undefined) {
