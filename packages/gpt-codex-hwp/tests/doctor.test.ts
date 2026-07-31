@@ -43,6 +43,10 @@ test("doctor contract reports safe required and optional capability results", as
   assert.equal(report.required.failed, 0);
   assert.equal(report.optional.unavailable, 0);
   assert.equal(report.checks.find((check) => check.code === "MCP_TOOL_COUNT_OK")?.count, 9);
+  assert.ok(report.checks.some((check) => check.code === "DEFAULT_MCP_DISABLED_OK"));
+  assert.ok(report.checks.some((check) => check.code === "ONESHOT_RUNTIME_OK"));
+  assert.ok(report.checks.some((check) => check.code === "MCP_COMPATIBILITY_OK"));
+  assert.equal(report.checks.some((check) => check.code === "MCP_MANIFEST_OK"), false);
   assert.equal(report.checks.find((check) => check.code === "NODE_RUNTIME_OK")?.version, "22.20.1");
 
   assert.deepEqual(commands.map(({ command, args }) => [command, args]), [
@@ -59,7 +63,7 @@ test("doctor contract reports safe required and optional capability results", as
   }
   assert.deepEqual([...new Set(reads)].sort(), [
     ".codex-plugin/plugin.json",
-    ".mcp.json",
+    "examples/mcp-manual.json",
     "node_modules/@rhwp/core/package.json",
     "package.json",
     "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp",
@@ -161,6 +165,31 @@ test("doctor contract maps hostile probe output to stable codes without leaking 
     `${privateWindowsPath}\n${fragments.join("")}\nHOME=${privatePosixPath}`,
   );
   assert.doesNotMatch(redacted, /private-person|private\.hwp|leaked-value/u);
+});
+
+test("doctor rejects default MCP activation and missing one-shot compatibility files", async () => {
+  const activeMcp = passingDependencies();
+  const activeMcpStatRegular = activeMcp.dependencies.statRegular;
+  activeMcp.dependencies.statRegular = async (path) => path === ".mcp.json"
+    ? { regular: true, size: 1 }
+    : activeMcpStatRegular(path);
+  let report = await runDoctor(activeMcp.dependencies);
+  assert.ok(report.checks.some((check) => check.code === "DEFAULT_MCP_DISABLED_INVALID"));
+
+  const missingOneShot = passingDependencies();
+  const missingOneShotStatRegular = missingOneShot.dependencies.statRegular;
+  missingOneShot.dependencies.statRegular = async (path) => path === "dist/oneshot.js"
+    ? { regular: false, size: 0 }
+    : missingOneShotStatRegular(path);
+  report = await runDoctor(missingOneShot.dependencies);
+  assert.ok(report.checks.some((check) => check.code === "ONESHOT_RUNTIME_INVALID"));
+
+  const missingManual = passingDependencies();
+  missingManual.dependencies.readJson = async (path) => path === "examples/mcp-manual.json"
+    ? Promise.reject(Object.assign(new Error("missing"), { code: "ENOENT" }))
+    : missingManual.readJson(path);
+  report = await runDoctor(missingManual.dependencies);
+  assert.ok(report.checks.some((check) => check.code === "MCP_COMPATIBILITY_INVALID"));
 });
 
 test("doctor contract rejects an impossible shared Kordoc verifier result", async () => {
@@ -740,11 +769,14 @@ function passingDependencies(): {
     [".codex-plugin/plugin.json", {
       name: "gpt-codex-hwp",
       version: "0.1.4+codex.20260713023606",
-      mcpServers: "./.mcp.json",
     }],
-    [".mcp.json", {
+    ["examples/mcp-manual.json", {
       mcpServers: {
-        "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+        "gpt-codex-hwp": {
+          command: "node",
+          args: ["--max-semi-space-size=1", "./dist/mcp.js"],
+          cwd: ".",
+        },
       },
     }],
     ["node_modules/@rhwp/core/package.json", { name: "@rhwp/core", version: "0.7.17" }],
@@ -793,7 +825,10 @@ function passingDependencies(): {
         if (path === "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp") return Buffer.from("fixture");
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
       },
-      statRegular: async (path) => path === "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp"
+      statRegular: async (path) => [
+        "dist/oneshot.js",
+        "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp",
+      ].includes(path)
         ? { regular: true, size: 7 }
         : { regular: false, size: 0 },
       sameCanonicalPath: async (left, right) => left === "node_modules/kordoc" && right === "vendor/kordoc-core",

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import packageJson from "../package.json" with { type: "json" };
+import { assertExactToolSchemas } from "../../../scripts/installed-runtime-smoke.mjs";
 
 const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -49,6 +50,11 @@ test("built MCP server initializes and registers exactly nine tools without stde
         "hwp_insert_image",
       ],
     );
+    const catalog = JSON.parse(await readFile(
+      join(SOURCE_ROOT, "examples", "oneshot-tool-schemas.json"),
+      "utf8",
+    ));
+    assert.doesNotThrow(() => assertExactToolSchemas(response.tools, catalog));
   } finally {
     await client.close();
     await transport.close();

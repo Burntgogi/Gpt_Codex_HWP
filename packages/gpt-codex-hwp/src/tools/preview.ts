@@ -3,10 +3,10 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import {
-  defaultDocumentEngineFacade,
-  prepareDocumentRenderOutput,
   type DocumentEngineFacade,
 } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
+import { prepareDocumentRenderOutput } from "../shared/document-render-output.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import {
@@ -35,7 +35,7 @@ export interface HwpRenderPreviewInput {
 
 export async function handleHwpRenderPreview(
   input: HwpRenderPreviewInput,
-  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  documentEngine?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
@@ -77,7 +77,8 @@ export async function handleHwpRenderPreview(
       }
     }
 
-    const rendered = await documentEngine.render(
+    const resolvedDocumentEngine = documentEngine ?? await getDefaultDocumentEngineFacade();
+    const rendered = await resolvedDocumentEngine.render(
       snapshot,
       renderOptions,
       toDocumentEngineExecutionContext(context),
@@ -163,7 +164,7 @@ export async function handleHwpRenderPreview(
 
 export function registerHwpRenderPreview(
   server: McpServer,
-  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  documentEngine?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_RENDER_PREVIEW_TOOL_NAME,

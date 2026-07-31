@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/document-contract.js";
-import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
@@ -10,7 +10,7 @@ import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-
 export const HWP_PATCH_DOCUMENT_TOOL_NAME = "hwp_patch_document";
 export const HWP_FILL_FORM_TOOL_NAME = "hwp_fill_form";
 const MAX_TEXT_INPUT_CHARACTERS = 5_000_000;
-export async function handleHwpPatchDocument(input, facade = defaultDocumentEngineFacade, context) {
+export async function handleHwpPatchDocument(input, facade, context) {
     let filePath;
     let outputPath;
     try {
@@ -56,7 +56,8 @@ export async function handleHwpPatchDocument(input, facade = defaultDocumentEngi
                 format,
             });
         }
-        const patchResult = await facade.patch(snapshot, input.edited_markdown, toDocumentEngineExecutionContext(context));
+        const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+        const patchResult = await resolvedFacade.patch(snapshot, input.edited_markdown, toDocumentEngineExecutionContext(context));
         try {
             const metadata = readPatchMetadata(patchResult.resultMetadata);
             const complete = patchIsComplete(metadata);
@@ -123,7 +124,7 @@ export async function handleHwpPatchDocument(input, facade = defaultDocumentEngi
         });
     }
 }
-export async function handleHwpFillForm(input, facade = defaultDocumentEngineFacade, context) {
+export async function handleHwpFillForm(input, facade, context) {
     let filePath;
     let outputPath;
     try {
@@ -183,7 +184,8 @@ export async function handleHwpFillForm(input, facade = defaultDocumentEngineFac
                 format,
             });
         }
-        const fillResult = await facade.fill(snapshot, input.fields, fillOptions, toDocumentEngineExecutionContext(context));
+        const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+        const fillResult = await resolvedFacade.fill(snapshot, input.fields, fillOptions, toDocumentEngineExecutionContext(context));
         try {
             const metadata = readFillMetadata(fillResult.resultMetadata);
             const { filled, unmatched, rejected } = metadata;
@@ -238,7 +240,7 @@ export async function handleHwpFillForm(input, facade = defaultDocumentEngineFac
         });
     }
 }
-export function registerHwpPatchDocument(server, facade = defaultDocumentEngineFacade) {
+export function registerHwpPatchDocument(server, facade) {
     server.registerTool(HWP_PATCH_DOCUMENT_TOOL_NAME, {
         title: "Patch an HWPX document",
         description: "Apply edited Markdown to a new HWPX file while preserving the source document; binary HWP input is read-only.",
@@ -250,7 +252,7 @@ export function registerHwpPatchDocument(server, facade = defaultDocumentEngineF
         annotations: { readOnlyHint: false },
     }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpPatchDocument(args, facade, context)));
 }
-export function registerHwpFillForm(server, facade = defaultDocumentEngineFacade) {
+export function registerHwpFillForm(server, facade) {
     server.registerTool(HWP_FILL_FORM_TOOL_NAME, {
         title: "Fill an HWPX form",
         description: "Fill labelled fields into a new HWPX file while preserving the source document and its formatting.",

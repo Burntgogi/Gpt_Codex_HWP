@@ -7,10 +7,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import {
-  defaultDocumentEngineFacade,
-  type DocumentEngineFacade,
-} from "../shared/document-engine.js";
+import type { DocumentEngineFacade } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import {
@@ -63,7 +61,7 @@ interface ReadWarning {
 
 export async function handleHwpRead(
   input: HwpReadInput,
-  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  documentEngine?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string;
@@ -92,7 +90,8 @@ export async function handleHwpRead(
         await snapshot.cleanup();
       }
     }
-    const engineResult = await documentEngine.parse(
+    const resolvedDocumentEngine = documentEngine ?? await getDefaultDocumentEngineFacade();
+    const engineResult = await resolvedDocumentEngine.parse(
       snapshot,
       parseOptions,
       toDocumentEngineExecutionContext(context),
@@ -220,7 +219,7 @@ export async function handleHwpRead(
 
 export function registerHwpRead(
   server: McpServer,
-  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  documentEngine?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_READ_TOOL_NAME,

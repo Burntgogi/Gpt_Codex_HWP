@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "requestSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schemaVersion", "tool", "arguments"],
+    "properties": {
+      "schemaVersion": { "const": 1 },
+      "tool": { "enum": [
+        "hwp_create_svg_asset",
+        "hwp_detect_format",
+        "hwp_fill_form",
+        "hwp_generate_hwpx",
+        "hwp_insert_image",
+        "hwp_patch_document",
+        "hwp_read",
+        "hwp_render_preview",
+        "hwp_validate"
+      ] },
+      "arguments": { "type": "object" }
+    }
+  },
+  "tools": {
+    "hwp_create_svg_asset": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "output_png_path": { "minLength": 1, "type": "string" }, "output_svg_path": { "minLength": 1, "type": "string" }, "prompt_or_spec": { "maxLength": 1000000, "minLength": 1, "type": "string" } }, "required": ["prompt_or_spec", "output_svg_path"], "type": "object" },
+    "hwp_detect_format": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "file_path": { "minLength": 1, "type": "string" } }, "required": ["file_path"], "type": "object" },
+    "hwp_fill_form": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "fields": { "additionalProperties": { "anyOf": [{ "maxLength": 5000000, "type": "string" }, { "items": { "maxLength": 5000000, "type": "string" }, "maxItems": 10000, "minItems": 1, "type": "array" }] }, "type": "object" }, "file_path": { "minLength": 1, "type": "string" }, "formats": { "additionalProperties": { "type": "string" }, "type": "object" }, "mask_values": { "type": "boolean" }, "output_path": { "minLength": 1, "type": "string" }, "require_unique": { "type": "boolean" } }, "required": ["file_path", "fields", "output_path"], "type": "object" },
+    "hwp_generate_hwpx": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "markdown": { "maxLength": 5000000, "minLength": 1, "type": "string" }, "output_path": { "minLength": 1, "type": "string" }, "preset": { "enum": ["official", "report", "plan", "notice", "minutes"], "type": "string" }, "preview_svg_path": { "minLength": 1, "type": "string" }, "validate": { "const": true, "type": "boolean" } }, "required": ["markdown", "output_path"], "type": "object" },
+    "hwp_insert_image": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "anchor_occurrence": { "minimum": 0, "type": "integer" }, "anchor_text": { "maxLength": 10000, "minLength": 1, "type": "string" }, "file_path": { "minLength": 1, "type": "string" }, "image_path": { "minLength": 1, "type": "string" }, "mode": { "enum": ["after-paragraph", "seal-anchor"], "type": "string" }, "output_path": { "minLength": 1, "type": "string" }, "size_mm": { "maximum": 200, "minimum": 1, "type": "number" } }, "required": ["file_path", "image_path", "output_path", "anchor_text"], "type": "object" },
+    "hwp_patch_document": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "edited_markdown": { "maxLength": 5000000, "minLength": 1, "type": "string" }, "file_path": { "minLength": 1, "type": "string" }, "output_path": { "minLength": 1, "type": "string" } }, "required": ["file_path", "edited_markdown", "output_path"], "type": "object" },
+    "hwp_read": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "extract_images": { "type": "boolean" }, "file_path": { "minLength": 1, "type": "string" }, "markdown_output_path": { "minLength": 1, "type": "string" }, "output_dir": { "minLength": 1, "type": "string" }, "pages": { "minLength": 1, "type": "string" } }, "required": ["file_path"], "type": "object" },
+    "hwp_render_preview": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "file_path": { "minLength": 1, "type": "string" }, "highlight": { "items": { "maxLength": 256, "minLength": 1, "type": "string" }, "maxItems": 256, "type": "array" }, "output_svg_path": { "minLength": 1, "type": "string" }, "reflow": { "type": "boolean" } }, "required": ["file_path", "output_svg_path"], "type": "object" },
+    "hwp_validate": { "$schema": "http://json-schema.org/draft-07/schema#", "additionalProperties": false, "properties": { "file_path": { "minLength": 1, "type": "string" } }, "required": ["file_path"], "type": "object" }
+  }
+}

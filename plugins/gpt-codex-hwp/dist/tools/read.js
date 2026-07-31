@@ -1,7 +1,7 @@
 import { lstat, } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { z } from "zod";
-import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
@@ -11,7 +11,7 @@ import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
 import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_READ_TOOL_NAME = "hwp_read";
-export async function handleHwpRead(input, documentEngine = defaultDocumentEngineFacade, context) {
+export async function handleHwpRead(input, documentEngine, context) {
     let filePath;
     try {
         filePath = resolveLocalPath(input.file_path, "file_path");
@@ -38,7 +38,8 @@ export async function handleHwpRead(input, documentEngine = defaultDocumentEngin
                 await snapshot.cleanup();
             }
         }
-        const engineResult = await documentEngine.parse(snapshot, parseOptions, toDocumentEngineExecutionContext(context));
+        const resolvedDocumentEngine = documentEngine ?? await getDefaultDocumentEngineFacade();
+        const engineResult = await resolvedDocumentEngine.parse(snapshot, parseOptions, toDocumentEngineExecutionContext(context));
         const parsed = engineResult.payload;
         let delivery;
         try {
@@ -141,7 +142,7 @@ export async function handleHwpRead(input, documentEngine = defaultDocumentEngin
         return toolError(`Could not read the document: ${message}`, details);
     }
 }
-export function registerHwpRead(server, documentEngine = defaultDocumentEngineFacade) {
+export function registerHwpRead(server, documentEngine) {
     server.registerTool(HWP_READ_TOOL_NAME, {
         title: "Read HWP document",
         description: "Read the exact requested local HWP/HWPX document as Markdown with metadata, warnings, and optional extracted images.",

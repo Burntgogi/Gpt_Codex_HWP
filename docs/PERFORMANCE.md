@@ -4,8 +4,16 @@ The document engine accepts sources up to a 512 MiB safety ceiling, but that
 ceiling is an input boundary, not a capacity guarantee. It does not raise the
 limits of either engine in the hybrid Kordoc/rhwp path. Actual work is also
 bounded by the 64 MiB worker-input and worker-inline result ceilings, the 8 MiB
-aggregate MCP response ceiling, the 64,000-character inline Markdown limit, and
+aggregate serialized tool-result ceiling, the 64,000-character inline Markdown limit, and
 the 1536 MiB supervised-child working-set policy.
+
+The default plugin lifecycle has zero persistent Gpt_Codex_HWP Node processes
+while idle. Each skill operation starts `dist/oneshot.js`, invokes one existing
+tool contract through an in-memory MCP transport, and exits after verified
+process-tree cleanup. This removes per-task idle server multiplication; it does
+not reduce the peak memory required by an active document parse. The optional
+`examples/mcp-manual.json` mode retains the previous persistent stdio behavior
+and must be measured separately.
 
 Every measured size uses the production `detectFormat` engine operation. The
 10 MiB default benchmark demonstrates the transferable-worker path. The opt-in

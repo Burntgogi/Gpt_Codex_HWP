@@ -220,9 +220,14 @@ async function stageRuntime({ projectRoot, stage, subprocessEnvironment }) {
     await copyRegularFile(join(projectRoot, name), join(stage, name), name);
   }
   await copyRegularFile(join(sourceRoot, ".npmrc"), join(stage, ".npmrc"), ".npmrc");
+  await copyRegularFile(
+    join(sourceRoot, "examples", "oneshot-tool-schemas.json"),
+    join(stage, "examples", "oneshot-tool-schemas.json"),
+    "examples/oneshot-tool-schemas.json",
+  );
 
   await writeJsonExclusive(join(stage, ".codex-plugin", "plugin.json"), renderPluginManifest(metadata, rootPackage.license));
-  await writeJsonExclusive(join(stage, ".mcp.json"), renderMcpConfiguration(metadata));
+  await writeJsonExclusive(join(stage, "examples", "mcp-manual.json"), renderMcpConfiguration(metadata));
   const runtimePackage = renderRuntimePackage(metadata, rootPackage.license, sourcePackage);
   await writeJsonExclusive(join(stage, "package.json"), runtimePackage);
   await writeJsonExclusive(join(stage, "package-lock.json"), renderRuntimeLock(metadata, rootPackage.license, sourceLock));
@@ -282,7 +287,6 @@ function renderPluginManifest(metadata, license) {
     license,
     keywords: ["hwp", "hwpx", "hancom", "hangul", "korean-documents"],
     skills: "./skills/",
-    mcpServers: "./.mcp.json",
     interface: {
       displayName: metadata.displayName,
       shortDescription: "Read HWP and safely create or edit HWPX.",
@@ -308,7 +312,7 @@ function renderMcpConfiguration(metadata) {
     mcpServers: {
       [metadata.productId]: {
         command: "node",
-        args: ["./dist/mcp.js"],
+        args: ["--max-semi-space-size=1", "./dist/mcp.js"],
         cwd: ".",
       },
     },
@@ -532,6 +536,33 @@ async function assertRuntimeContract(runtimeRoot, metadata, runtimePackage) {
 
   const lock = await readJson(join(runtimeRoot, "package-lock.json"), "package-lock.json");
   assertCompactLockfile(lock);
+  const catalogPath = join(runtimeRoot, "examples", "oneshot-tool-schemas.json");
+  const catalogMetadata = await lstat(catalogPath);
+  if (!catalogMetadata.isFile() || catalogMetadata.isSymbolicLink()) {
+    throw runtimeBuildError("Runtime one-shot tool schema catalog must be a regular file");
+  }
+  const catalog = await readJson(catalogPath, "examples/oneshot-tool-schemas.json");
+  const catalogNames = catalog?.tools !== null && typeof catalog?.tools === "object"
+    ? Object.keys(catalog.tools)
+    : [];
+  if (catalog === null || typeof catalog !== "object"
+    || Object.keys(catalog).join(",") !== "schemaVersion,requestSchema,tools"
+    || catalog.schemaVersion !== 1
+    || catalogNames.length !== 9
+    || catalogNames.join(",") !== [...catalogNames].sort(comparePaths).join(",")
+    || JSON.stringify(catalogNames) !== JSON.stringify(TOOL_NAMES)
+    || JSON.stringify(catalog.requestSchema) !== JSON.stringify({
+      type: "object",
+      additionalProperties: false,
+      required: ["schemaVersion", "tool", "arguments"],
+      properties: {
+        schemaVersion: { const: 1 },
+        tool: { enum: catalogNames },
+        arguments: { type: "object" },
+      },
+    })) {
+    throw runtimeBuildError("Runtime one-shot tool schema catalog is invalid");
+  }
   const skillRoot = join(runtimeRoot, "skills", metadata.productId);
   const skillAssets = await readdir(join(skillRoot, "assets"));
   skillAssets.sort(comparePaths);

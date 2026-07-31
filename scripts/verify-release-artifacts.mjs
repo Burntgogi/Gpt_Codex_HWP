@@ -487,9 +487,37 @@ function verifyNineTools(entries, provenance) {
     || /\bname:\s*(?:[A-Z0-9_]+_TOOL_NAME|["']hwp_[a-z0-9_]+["'])/u.test(outsideDefinitions)) {
     throw verificationError("RELEASE_ARTIFACTS_TOOL_CONTRACT");
   }
-  const mcp = entryJson(entries, ".mcp.json", "RELEASE_ARTIFACTS_TOOL_CONTRACT");
-  if (!isRecord(mcp.mcpServers) || Object.keys(mcp.mcpServers).length !== 1
-    || !isRecord(mcp.mcpServers[PRODUCT])) {
+  if (entries.some(({ name }) => name === ".mcp.json")) {
+    throw verificationError("RELEASE_ARTIFACTS_TOOL_CONTRACT");
+  }
+  const oneshot = entries.find(({ name }) => name === "dist/oneshot.js");
+  if (oneshot === undefined || oneshot.bytes.length === 0) {
+    throw verificationError("RELEASE_ARTIFACTS_TOOL_CONTRACT");
+  }
+  const plugin = entryJson(
+    entries,
+    ".codex-plugin/plugin.json",
+    "RELEASE_ARTIFACTS_TOOL_CONTRACT",
+  );
+  if (!isRecord(plugin) || Object.hasOwn(plugin, "mcpServers")) {
+    throw verificationError("RELEASE_ARTIFACTS_TOOL_CONTRACT");
+  }
+  const manual = entryJson(
+    entries,
+    "examples/mcp-manual.json",
+    "RELEASE_ARTIFACTS_TOOL_CONTRACT",
+  );
+  const servers = isRecord(manual) && isRecord(manual.mcpServers)
+    ? manual.mcpServers
+    : {};
+  const keys = Object.keys(servers);
+  const server = keys.length === 1 ? servers[PRODUCT] : undefined;
+  if (keys.length !== 1 || keys[0] !== PRODUCT || !isRecord(server)
+    || Object.keys(server).sort().join(",") !== "args,command,cwd"
+    || server.command !== "node"
+    || JSON.stringify(server.args)
+      !== JSON.stringify(["--max-semi-space-size=1", "./dist/mcp.js"])
+    || server.cwd !== ".") {
     throw verificationError("RELEASE_ARTIFACTS_TOOL_CONTRACT");
   }
   if (provenance.toolContract.count !== TOOL_NAMES.length) {

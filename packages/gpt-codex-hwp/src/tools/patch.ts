@@ -6,10 +6,8 @@ import {
   HwpxOutputRequiredError,
   assertHwpxOutputPath,
 } from "../shared/document-contract.js";
-import {
-  defaultDocumentEngineFacade,
-  type DocumentEngineFacade,
-} from "../shared/document-engine.js";
+import type { DocumentEngineFacade } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import {
@@ -55,7 +53,7 @@ export interface HwpFillFormInput {
 
 export async function handleHwpPatchDocument(
   input: HwpPatchDocumentInput,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
@@ -112,7 +110,8 @@ export async function handleHwpPatchDocument(
       );
     }
 
-    const patchResult = await facade.patch(
+    const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+    const patchResult = await resolvedFacade.patch(
       snapshot,
       input.edited_markdown,
       toDocumentEngineExecutionContext(context),
@@ -199,7 +198,7 @@ export async function handleHwpPatchDocument(
 
 export async function handleHwpFillForm(
   input: HwpFillFormInput,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
@@ -274,7 +273,8 @@ export async function handleHwpFillForm(
       );
     }
 
-    const fillResult = await facade.fill(
+    const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+    const fillResult = await resolvedFacade.fill(
       snapshot,
       input.fields,
       fillOptions,
@@ -346,7 +346,7 @@ export async function handleHwpFillForm(
 
 export function registerHwpPatchDocument(
   server: McpServer,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_PATCH_DOCUMENT_TOOL_NAME,
@@ -370,7 +370,7 @@ export function registerHwpPatchDocument(
 
 export function registerHwpFillForm(
   server: McpServer,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_FILL_FORM_TOOL_NAME,

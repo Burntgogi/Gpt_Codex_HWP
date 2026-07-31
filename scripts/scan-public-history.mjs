@@ -197,7 +197,9 @@ function scanGitMetadata({ objectId, type, bytes, neutralObjectAllowlist }) {
       const continuationFindings = classifyPublicContent(Buffer.from(continuation, "utf8"), {
         label: `${type}:${objectId}`,
       });
-      const continuationLabelFindings = classifyPublicLabel(continuation);
+      const continuationLabelFindings = continuation.length === 0
+        ? []
+        : classifyPublicLabel(continuation);
       if (continuationFindings.length > 0 || continuationLabelFindings.length > 0) {
         findings.push(historyFinding("sensitive Git metadata", `${type}:${objectId}`, objectId, type));
       }

@@ -14,9 +14,16 @@ Do not edit the generated runtime. `npm run runtime:write` builds a fresh staged
 projection from source, verifies it, and atomically promotes it. A clean
 `npm run runtime:check` proves that committed runtime bytes match a fresh build.
 
-## Public MCP surface
+## Tool contract and process lifecycle
 
-The server registers exactly these nine tools:
+The default plugin is skill-only: its manifest has no `mcpServers` field and its
+root has no `.mcp.json`. For each requested operation, the skill launches
+`dist/oneshot.js`, which connects an SDK client to the existing server through
+`InMemoryTransport`, invokes one existing handler, publishes one bounded result,
+closes both transports, and exits. This keeps the plugin discoverable without a
+persistent idle Node process.
+
+The internal contract registers exactly these nine tools:
 
 1. `hwp_create_svg_asset`
 2. `hwp_detect_format`
@@ -32,6 +39,10 @@ Classic binary HWP is a read-only input: it can be detected, read, and previewed
 but it is never generated, patched, or exported. HWPX is the only write/output
 document format. Reading an HWP and authoring a separate HWPX is not a byte-exact
 conversion claim.
+
+`dist/mcp.js`, `npm start`, and `examples/mcp-manual.json` preserve explicit
+stdio MCP compatibility. They are never auto-registered; enabling that mode can
+retain one server for each Codex task or host.
 
 ## Hybrid engine boundary
 
@@ -56,7 +67,7 @@ The limits are independent safety boundaries, not one interchangeable quota:
 - 512 MiB is the outer source-file ceiling, not a promise that every file parses.
 - 64 MiB bounds worker input copied inline and worker inline results; larger safe
   inputs use descriptor or supervised-child paths.
-- 8 MiB bounds the aggregate serialized MCP response.
+- 8 MiB bounds the aggregate serialized tool result, including manual MCP mode.
 - 64,000 JavaScript string characters bound inline Markdown; a new derived
   Markdown output path supports larger read results without reparsing the source.
 - 1536 MiB is the supervised-child working-set policy.

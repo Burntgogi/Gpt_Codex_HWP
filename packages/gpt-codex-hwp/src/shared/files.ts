@@ -1,7 +1,8 @@
 import { constants, type BigIntStats } from "node:fs";
-import { open, stat, type FileHandle } from "node:fs/promises";
+import { lstat, open, realpath, stat, type FileHandle } from "node:fs/promises";
 
-import { authorizeExistingPath } from "./allowed-roots.js";
+import { AllowedRootsPathError, authorizeExistingPath } from "./allowed-roots.js";
+import { resolveLocalPath } from "./paths.js";
 
 export const MAX_DOCUMENT_BYTES = 512 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -14,6 +15,7 @@ export interface BoundedFileReadTestHooks {
 
 export interface BoundedFileReadOptions {
   allocationObserver?: (allocatedBytes: number) => void;
+  directPath?: true;
   testHooks?: BoundedFileReadTestHooks;
 }
 
@@ -35,14 +37,27 @@ export async function readFileBounded(
   if (typeof path !== "string" || path.trim().length === 0) {
     throw readFailedError(safeLabel);
   }
-  const authorizedPath = await authorizeExistingPath(path);
+  const lexicalPath = options.directPath === true
+    ? resolveLocalPath(path, "file_path")
+    : path;
 
   try {
-    const handle = await openFileForBoundedRead(authorizedPath);
+    if (options.directPath === true) {
+      await assertDirectRegularPath(lexicalPath, safeLabel);
+    }
+    const authorizedPath = await authorizeExistingPath(lexicalPath);
+    if (
+      options.directPath === true &&
+      comparablePath(authorizedPath) !== comparablePath(lexicalPath)
+    ) {
+      throw readFailedError(safeLabel);
+    }
+    const readPath = options.directPath === true ? lexicalPath : authorizedPath;
+    const handle = await openFileForBoundedRead(readPath);
     try {
       return await readExactFile(
         handle,
-        authorizedPath,
+        readPath,
         safeLabel,
         maximumBytes,
         options,
@@ -55,6 +70,9 @@ export async function readFileBounded(
       }
     }
   } catch (error: unknown) {
+    if (error instanceof AllowedRootsPathError) {
+      throw error;
+    }
     if (error instanceof FileLimitError || error instanceof FileReadError) {
       throw error;
     }
@@ -92,6 +110,9 @@ async function readExactFile(
   }
 
   const initialIdentity = identityOf(initialHandleStatus);
+  if (options.directPath === true) {
+    await assertDirectRegularPath(path, label);
+  }
   assertSameIdentity(initialIdentity, await pathIdentity(path, label), label);
   const sizeBytes = Number(initialHandleStatus.size);
   options.allocationObserver?.(sizeBytes);
@@ -116,6 +137,9 @@ async function readExactFile(
     identityOf(await handle.stat({ bigint: true })),
     label,
   );
+  if (options.directPath === true) {
+    await assertDirectRegularPath(path, label);
+  }
   assertSameIdentity(initialIdentity, await pathIdentity(path, label), label);
   return bytes;
 }
@@ -130,6 +154,9 @@ function validateReadOptions(
     typeof options !== "object" ||
     options === null
   ) {
+    throw invalidOptionsError();
+  }
+  if (options.directPath !== undefined && options.directPath !== true) {
     throw invalidOptionsError();
   }
   if (
@@ -150,6 +177,26 @@ function validateReadOptions(
       throw invalidOptionsError();
     }
   }
+}
+
+async function assertDirectRegularPath(path: string, label: string): Promise<void> {
+  const linked = await lstat(path, { bigint: true });
+  if (!linked.isFile() || linked.isSymbolicLink()) {
+    throw new FileReadError(
+      "INVALID_FILE_TYPE",
+      `${label} must be a direct regular file.`,
+    );
+  }
+  const canonicalPath = await realpath(path);
+  if (comparablePath(canonicalPath) !== comparablePath(path)) {
+    throw readFailedError(label);
+  }
+}
+
+function comparablePath(path: string): string {
+  return process.platform === "win32"
+    ? path.toLocaleLowerCase("en-US")
+    : path;
 }
 
 interface FileIdentity {

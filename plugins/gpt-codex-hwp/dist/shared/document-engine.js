@@ -261,7 +261,6 @@ export function createDocumentEngineFacade(dependencies = {}) {
         };
     }
 }
-export const defaultDocumentEngineFacade = createDocumentEngineFacade();
 async function decodeResult(operation, result) {
     if (!isIntegrityVerifiedResultSpool(result)) {
         return result;

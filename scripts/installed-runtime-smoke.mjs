@@ -1,10 +1,11 @@
 import { execFile as nativeExecFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstat, mkdtemp, open, readFile, realpath, rm } from "node:fs/promises";
+import { lstat, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { runBoundedProcess } from "./public-content-policy.mjs";
 
 const execFile = promisify(nativeExecFile);
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,7 +17,12 @@ const MAX_MCP_STDOUT_BYTES = 512 * 1024;
 const MAX_MCP_FRAME_BYTES = 128 * 1024;
 const MAX_SVG_BYTES = 1024;
 const MAX_PNG_BYTES = 16 * 1024;
+const MAX_ONESHOT_CLEANUP_EVIDENCE_BYTES = 256;
+const MAX_ONESHOT_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_HWPX_BYTES = 8 * 1024 * 1024;
+const ONESHOT_CLEANUP_EVIDENCE_ENV = "GPT_CODEX_HWP_ONESHOT_CLEANUP_EVIDENCE";
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const SVG_INPUT = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="#000"/></svg>';
 const INITIALIZE_BOUNDARIES = new Set([
   "session-create",
@@ -29,39 +35,28 @@ const INITIALIZE_BOUNDARIES = new Set([
   "process-inventory",
 ]);
 
-export const RUNTIME_TOOL_SCHEMA_FINGERPRINTS = Object.freeze({
-  hwp_detect_format: "1a645a175df1695f59f8e1c38320c270a1a851ef88b74fb7cbdce7dd076b3906",
-  hwp_read: "cb9c5a8f36c234c0faa85e46edcd2470b9af69adde265e03f9472caa2b7523de",
-  hwp_generate_hwpx: "517de4d6704483924191a24b2dfcde918219aa34cd29adac96afc3604bbe964e",
-  hwp_validate: "1a645a175df1695f59f8e1c38320c270a1a851ef88b74fb7cbdce7dd076b3906",
-  hwp_render_preview: "c03bcba38861cae0af3d444078f395d8f9187125b6f1633ce688b6507034af07",
-  hwp_patch_document: "e5627927b65838bd2080b3a268e9d4472cf4f73d9677c37981766ada631f21ee",
-  hwp_fill_form: "a57442c1b00a1af26197b301374edb1fe24271e1a2740822a79edff89a49ee39",
-  hwp_create_svg_asset: "e5ff17677192ffdc0b5107ba35d3da312f2359d08004af68006df1c1586e0f02",
-  hwp_insert_image: "30113ddf59786dcb82f444b9cfa072426d974f4d6d2590975009f12ed9f03f5c",
-});
-
-export function assertExactToolSchemas(tools) {
+export function assertExactToolSchemas(tools, catalog) {
   if (!Array.isArray(tools)) throw new Error("Runtime tools schema response is invalid.");
-  const names = Object.keys(RUNTIME_TOOL_SCHEMA_FINGERPRINTS);
-  if (tools.length !== names.length
-    || tools.some((tool, index) => tool?.name !== names[index])) {
+  const names = assertToolSchemaCatalog(catalog);
+  const actualNames = tools.map((tool) => tool?.name).sort();
+  if (actualNames.length !== names.length
+    || actualNames.some((name, index) => name !== names[index])) {
     throw new Error("Runtime tools do not match the exact nine-tool schema contract.");
   }
   for (const tool of tools) {
-    if (schemaFingerprint(tool.inputSchema) !== RUNTIME_TOOL_SCHEMA_FINGERPRINTS[tool.name]) {
+    if (JSON.stringify(canonicalToolSchema(tool.inputSchema)) !== JSON.stringify(catalog.tools[tool.name])) {
       throw new Error(`Runtime tool ${tool.name} has an invalid exact schema contract.`);
     }
   }
 }
 
-export function schemaFingerprint(schema) {
+export function canonicalToolSchema(schema) {
   const state = { nodes: 0 };
-  const canonical = JSON.stringify(canonicalSchemaValue(schema, state, 0, "schema"));
-  if (Buffer.byteLength(canonical, "utf8") > 64 * 1024) {
+  const canonical = canonicalSchemaValue(schema, state, 0, "schema");
+  if (Buffer.byteLength(JSON.stringify(canonical), "utf8") > 64 * 1024) {
     throw new Error("Runtime tool schema exceeds its canonical bound.");
   }
-  return createHash("sha256").update(canonical).digest("hex");
+  return canonical;
 }
 
 function canonicalSchemaValue(value, state, depth, mode) {
@@ -74,7 +69,7 @@ function canonicalSchemaValue(value, state, depth, mode) {
     return value.map((entry) => canonicalSchemaValue(entry, state, depth + 1, entryMode));
   }
   if (typeof value !== "object") throw new Error("Runtime tool schema contains a non-JSON value.");
-  const result = Object.create(null);
+  const result = {};
   const keys = Object.keys(value).filter((key) => mode !== "schema" || key !== "description").sort();
   for (const key of keys) {
     let childMode = mode;
@@ -89,9 +84,50 @@ function canonicalSchemaValue(value, state, depth, mode) {
     } else if (mode === "schema-map") {
       childMode = "schema";
     }
-    result[key] = canonicalSchemaValue(value[key], state, depth + 1, childMode);
+    Object.defineProperty(result, key, {
+      configurable: true,
+      enumerable: true,
+      value: canonicalSchemaValue(value[key], state, depth + 1, childMode),
+      writable: true,
+    });
   }
   return result;
+}
+
+async function readToolSchemaCatalog(runtimeRoot) {
+  const path = join(runtimeRoot, "examples", "oneshot-tool-schemas.json");
+  const metadata = await lstat(path);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error("Runtime one-shot tool schema catalog is invalid.");
+  }
+  const catalog = JSON.parse(await readFile(path, "utf8"));
+  assertToolSchemaCatalog(catalog);
+  return catalog;
+}
+
+function assertToolSchemaCatalog(catalog) {
+  if (catalog === null || typeof catalog !== "object"
+    || Object.keys(catalog).join(",") !== "schemaVersion,requestSchema,tools"
+    || catalog.schemaVersion !== 1
+    || catalog.requestSchema === null || typeof catalog.requestSchema !== "object"
+    || catalog.tools === null || typeof catalog.tools !== "object") {
+    throw new Error("Runtime one-shot tool schema catalog is invalid.");
+  }
+  const names = Object.keys(catalog.tools);
+  if (names.length !== 9 || names.join(",") !== [...names].sort().join(",")
+    || JSON.stringify(catalog.requestSchema) !== JSON.stringify({
+      type: "object",
+      additionalProperties: false,
+      required: ["schemaVersion", "tool", "arguments"],
+      properties: {
+        schemaVersion: { const: 1 },
+        tool: { enum: names },
+        arguments: { type: "object" },
+      },
+    })) {
+    throw new Error("Runtime one-shot tool schema catalog is invalid.");
+  }
+  return names;
 }
 
 export function createRuntimeSessionEnvironment(allowedRoot) {
@@ -99,6 +135,223 @@ export function createRuntimeSessionEnvironment(allowedRoot) {
     throw new Error("Runtime allowed root is invalid.");
   }
   return { [ALLOWED_ROOTS_ENVIRONMENT_VARIABLE]: JSON.stringify([allowedRoot]) };
+}
+
+export function assertOneShotProcessCleanup(result) {
+  if (result?.terminationFailed !== false) {
+    throw new Error("One-shot outer process cleanup is unverified.");
+  }
+  const bytes = result.stdout;
+  if (!Buffer.isBuffer(bytes) || bytes.byteLength < 1
+    || bytes.byteLength > MAX_ONESHOT_CLEANUP_EVIDENCE_BYTES
+    || bytes.some((byte) => byte !== 0x0a && (byte < 0x20 || byte > 0x7e))) {
+    throw new Error("One-shot descendant cleanup evidence is invalid.");
+  }
+  const match = /^ONESHOT_CLEANUP proof=(windows-job-empty|registered-groups-empty) observedProcessTrees=([1-9][0-9]?) remainingProcessTrees=([0-9][0-9]?)\nONESHOT_OK\n$/u.exec(
+    bytes.toString("ascii"),
+  );
+  if (match === null) throw new Error("One-shot descendant cleanup evidence is invalid.");
+  const observedProcessTrees = Number(match[2]);
+  const remainingProcessTrees = Number(match[3]);
+  const platform = result.platform ?? process.platform;
+  if (observedProcessTrees > 16 || remainingProcessTrees > observedProcessTrees
+    || (platform === "win32"
+      ? match[1] !== "windows-job-empty" || observedProcessTrees !== 1
+      : (platform !== "linux" && platform !== "darwin")
+        || match[1] !== "registered-groups-empty")
+    || remainingProcessTrees !== 0) {
+    throw new Error("One-shot descendant cleanup is unverified.");
+  }
+  return Object.freeze({
+    observedProcessTreeCount: observedProcessTrees,
+    remainingDescendantCount: remainingProcessTrees,
+  });
+}
+
+function assertSuccessfulOneShotProcess(result, verifyStdout = true) {
+  if (result?.code !== 0 || result.signal !== null || result.overflow !== false
+    || result.timedOut !== false || result.terminationFailed !== false
+    || !Buffer.isBuffer(result.stderr) || result.stderr.length !== 0
+    || !Buffer.isBuffer(result.stdout)
+    || (verifyStdout && result.stdout.toString("utf8") !== "ONESHOT_OK\n")) {
+    throw new Error("One-shot process failed.");
+  }
+}
+
+export async function runInstalledOneShotSmoke(options = {}) {
+  const runtimeRoot = resolve(options.runtimeRoot ?? DEFAULT_RUNTIME_ROOT);
+  const stdout = options.stdout ?? process.stdout;
+  const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
+  const createTemporaryRoot = options.createTemporaryRoot
+    ?? (() => mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-")));
+  const runProcess = options.runProcess ?? runBoundedProcess;
+  const runEvidenceProcess = options.runEvidenceProcess
+    ?? runProcess;
+  let stage = "runtime";
+  let cleanupRoot;
+  let catalog;
+  let report;
+  let failure;
+  try {
+    const entry = join(runtimeRoot, "dist", "oneshot.js");
+    const entryMetadata = await lstat(entry);
+    if (!entryMetadata.isFile() || entryMetadata.isSymbolicLink()) {
+      throw new Error("invalid one-shot runtime");
+    }
+    await lstat(join(runtimeRoot, ".mcp.json")).then(
+      () => { throw new Error("default MCP is enabled"); },
+      (error) => { if (error?.code !== "ENOENT") throw error; },
+    );
+
+    stage = "temporary-root";
+    const ownedRoot = await assertOwnedTemporaryRoot(resolve(await createTemporaryRoot()));
+    cleanupRoot = ownedRoot;
+    const sourceRequestPath = join(ownedRoot, "source-request.json");
+    const sourceResponsePath = join(ownedRoot, "source-response.json");
+    const sourceHwpxPath = join(ownedRoot, "source.hwpx");
+    const requestPath = join(ownedRoot, "request.json");
+    const responsePath = join(ownedRoot, "response.json");
+    const hwpxPath = join(ownedRoot, "one-shot-smoke.hwpx");
+    const imagePath = join(ownedRoot, "seal.png");
+    for (const path of [
+      sourceRequestPath,
+      sourceResponsePath,
+      sourceHwpxPath,
+      requestPath,
+      responsePath,
+      hwpxPath,
+      imagePath,
+    ]) {
+      assertPathInside(ownedRoot, path);
+    }
+    await writeFile(sourceRequestPath, JSON.stringify({
+      schemaVersion: 1,
+      tool: "hwp_generate_hwpx",
+      arguments: {
+        markdown: "# Runtime smoke report\n\nApproval anchor: (인)\n",
+        output_path: sourceHwpxPath,
+        preset: "report",
+        validate: true,
+      },
+    }), { flag: "wx", mode: 0o600 });
+
+    stage = "generate";
+    const generated = await runProcess(process.execPath, [
+      "--max-semi-space-size=1",
+      "./dist/oneshot.js",
+      "--request",
+      sourceRequestPath,
+      "--response",
+      sourceResponsePath,
+    ], {
+      cwd: runtimeRoot,
+      env: {
+        ...defaultRuntimeEnvironment(),
+        ...createRuntimeSessionEnvironment(ownedRoot),
+      },
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      maxOutputBytes: MAX_STDERR_BYTES,
+    });
+    assertSuccessfulOneShotProcess(generated);
+
+    stage = "response";
+    const sourceResponse = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+      await readBoundedRegularFile(sourceResponsePath, MAX_ONESHOT_RESPONSE_BYTES),
+    ));
+    if (sourceResponse?.isError !== false
+      || sourceResponse.structuredContent?.output_path !== sourceHwpxPath
+      || sourceResponse.structuredContent?.validation?.ok !== true) {
+      throw new Error("invalid HWPX response");
+    }
+    await readBoundedRegularFile(sourceHwpxPath, MAX_HWPX_BYTES);
+    await writeFile(
+      imagePath,
+      await readBoundedRegularFile(
+        join(runtimeRoot, "assets", "gpt-codex-hwp-icon-64.png"),
+        MAX_PNG_BYTES,
+      ),
+      { flag: "wx", mode: 0o600 },
+    );
+    await writeFile(requestPath, JSON.stringify({
+      schemaVersion: 1,
+      tool: "hwp_insert_image",
+      arguments: {
+        file_path: sourceHwpxPath,
+        image_path: imagePath,
+        output_path: hwpxPath,
+        anchor_text: "(인)",
+        mode: "seal-anchor",
+        size_mm: 12,
+      },
+    }), { flag: "wx", mode: 0o600 });
+
+    stage = "oneshot";
+    const result = await runEvidenceProcess(process.execPath, [
+      "--max-semi-space-size=1",
+      "./dist/oneshot.js",
+      "--request",
+      requestPath,
+      "--response",
+      responsePath,
+    ], {
+      cwd: runtimeRoot,
+      env: {
+        ...defaultRuntimeEnvironment(),
+        ...createRuntimeSessionEnvironment(ownedRoot),
+        [ONESHOT_CLEANUP_EVIDENCE_ENV]: "stdout",
+      },
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      maxOutputBytes: MAX_STDERR_BYTES,
+    });
+    assertSuccessfulOneShotProcess(result, false);
+    stage = "cleanup";
+    const cleanupReceipt = assertOneShotProcessCleanup(result);
+
+    stage = "response";
+    const response = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+      await readBoundedRegularFile(responsePath, MAX_ONESHOT_RESPONSE_BYTES),
+    ));
+    if (response?.isError !== false
+      || response.structuredContent?.output_path !== hwpxPath
+      || response.structuredContent?.validation?.ok !== true) {
+      throw new Error("invalid HWPX response");
+    }
+    const hwpx = await readBoundedRegularFile(hwpxPath, MAX_HWPX_BYTES);
+    if (hwpx.byteLength < ZIP_SIGNATURE.byteLength
+      || !hwpx.subarray(0, ZIP_SIGNATURE.byteLength).equals(ZIP_SIGNATURE)) {
+      throw new Error("invalid HWPX");
+    }
+    catalog = await readToolSchemaCatalog(runtimeRoot);
+    report = Object.freeze({
+      toolCount: Object.keys(catalog.tools).length,
+      hwpxBytes: hwpx.byteLength,
+      stderrBytes: 0,
+      remainingDescendantCount: cleanupReceipt.remainingDescendantCount,
+    });
+  } catch {
+    failure = stage;
+  } finally {
+    if (cleanupRoot !== undefined) {
+      try {
+        await rm(cleanupRoot, { recursive: true, force: true });
+        await lstat(cleanupRoot).then(
+          () => { throw new Error("temporary root remains"); },
+          (error) => { if (error?.code !== "ENOENT") throw error; },
+        );
+      } catch { failure ??= "cleanup"; }
+    }
+  }
+
+  if (failure !== undefined || report === undefined) {
+    stdout.write(`RUNTIME_SMOKE status=failed stage=${failure ?? "unknown"}\n`);
+    setExitCode(1);
+    return false;
+  }
+  stdout.write(
+    `RUNTIME_SMOKE status=passed tools=${report.toolCount} hwpxBytes=${report.hwpxBytes} hwpx=passed stderrBytes=0 remainingDescendants=${report.remainingDescendantCount}\n`,
+  );
+  setExitCode(0);
+  return report;
 }
 
 export async function runInstalledRuntimeSmoke(options = {}) {
@@ -117,6 +370,7 @@ export async function runInstalledRuntimeSmoke(options = {}) {
   let processIdentities = [];
   let report;
   let failure;
+  let catalog;
   try {
     const command = await readExactManifestCommand(runtimeRoot);
     stage = "temporary-root";
@@ -155,7 +409,8 @@ export async function runInstalledRuntimeSmoke(options = {}) {
 
     stage = "tools";
     const listed = await session.listTools();
-    assertExactToolSchemas(listed?.tools);
+    catalog = await readToolSchemaCatalog(runtimeRoot);
+    assertExactToolSchemas(listed?.tools, catalog);
 
     stage = "asset";
     if (Buffer.byteLength(SVG_INPUT, "utf8") > MAX_SVG_BYTES) {
@@ -181,7 +436,7 @@ export async function runInstalledRuntimeSmoke(options = {}) {
       assertProcessIdentityInventory(await session.processIdentities(), session.pid),
     );
     report = {
-      toolCount: Object.keys(RUNTIME_TOOL_SCHEMA_FINGERPRINTS).length,
+      toolCount: Object.keys(catalog.tools).length,
       svgBytes: svg.byteLength,
       stderrBytes,
       remainingDescendantCount: -1,
@@ -240,17 +495,21 @@ export async function runInstalledRuntimeSmoke(options = {}) {
 }
 
 async function readExactManifestCommand(runtimeRoot) {
-  const manifest = JSON.parse(await readFile(join(runtimeRoot, ".mcp.json"), "utf8"));
+  const manifest = JSON.parse(await readFile(
+    join(runtimeRoot, "examples", "mcp-manual.json"),
+    "utf8",
+  ));
   const servers = manifest?.mcpServers;
   const names = servers !== null && typeof servers === "object" ? Object.keys(servers) : [];
   const server = names.length === 1 && names[0] === "gpt-codex-hwp"
     ? servers["gpt-codex-hwp"]
     : undefined;
-  if (server?.command !== "node" || !sameStrings(server.args, ["./dist/mcp.js"])
+  const runtimeArgs = ["--max-semi-space-size=1", "./dist/mcp.js"];
+  if (server?.command !== "node" || !sameStrings(server.args, runtimeArgs)
     || server.cwd !== "." || Object.keys(server).sort().join(",") !== "args,command,cwd") {
     throw new Error("Runtime MCP manifest command is invalid.");
   }
-  return Object.freeze({ command: "node", args: Object.freeze(["./dist/mcp.js"]) });
+  return Object.freeze({ command: "node", args: Object.freeze(runtimeArgs) });
 }
 
 export async function createDefaultRuntimeSession(spec, observers = {}, dependencies = {}) {
@@ -697,7 +956,8 @@ function assertIdentityAbsenceReceipt(receipt, expectedCount) {
 }
 
 export async function readBoundedRegularFile(path, maximumBytes) {
-  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 64 * 1024) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1
+    || maximumBytes > MAX_ONESHOT_RESPONSE_BYTES) {
     throw new Error("Runtime asset read bound is invalid.");
   }
   const pathBefore = await lstat(path, { bigint: true });
@@ -819,6 +1079,6 @@ if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryP
     process.stderr.write("Runtime smoke accepts no arguments.\n");
     process.exitCode = 1;
   } else {
-    await runInstalledRuntimeSmoke();
+    await runInstalledOneShotSmoke();
   }
 }

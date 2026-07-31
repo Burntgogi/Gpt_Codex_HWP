@@ -38,6 +38,16 @@ test("security boundary documentation states format, platform, and isolation lim
   assert.match(boundary, /not a security sandbox/iu);
 });
 
+test("security boundary documentation matches the exact one-shot control cleanup contract", async () => {
+  const boundary = await readFile(join(ROOT, "docs", "SECURITY-BOUNDARIES.md"), "utf8");
+
+  assert.match(
+    boundary,
+    /exact request[^\n]+response[^\n]+empty owner-only control directory/iu,
+  );
+  assert.doesNotMatch(boundary, /removes only the two control files/iu);
+});
+
 test("security boundary documentation is linked from both public READMEs", async () => {
   const [korean, english] = await Promise.all([
     readFile(join(ROOT, "README.md"), "utf8"),

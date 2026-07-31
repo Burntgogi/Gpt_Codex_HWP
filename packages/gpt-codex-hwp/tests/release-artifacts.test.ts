@@ -474,6 +474,71 @@ test("release artifacts reject malformed SPDX license expressions", async (t) =>
 });
 
 test("release artifacts verifier requires exact tool and Kordoc file contracts", async (t) => {
+  await t.test("default MCP auto-registration", async (t) => {
+    const fixture = await createReleaseFixture(t);
+    await writeJson(join(
+      fixture.root,
+      "plugins",
+      "gpt-codex-hwp",
+      ".mcp.json",
+    ), { mcpServers: { "gpt-codex-hwp": { command: "node" } } });
+    await runGit(fixture.root, ["add", "."]);
+    await runGit(fixture.root, ["commit", "-m", "auto register MCP"]);
+    const output = join(fixture.parent, "auto-mcp");
+    await buildReleaseArtifacts({
+      root: fixture.root, output, sourceDateEpoch: REPRODUCIBLE_EPOCH,
+      prepareRuntime: fixture.prepareRuntime, versions: VERSIONS,
+    });
+    await assert.rejects(
+      verifyReleaseArtifacts({ root: fixture.root, artifacts: output, sourceDateEpoch: REPRODUCIBLE_EPOCH }),
+      /RELEASE_ARTIFACTS_TOOL_CONTRACT/u,
+    );
+  });
+
+  await t.test("missing one-shot entry", async (t) => {
+    const fixture = await createReleaseFixture(t);
+    await rm(join(
+      fixture.root,
+      "plugins",
+      "gpt-codex-hwp",
+      "dist",
+      "oneshot.js",
+    ));
+    await runGit(fixture.root, ["add", "."]);
+    await runGit(fixture.root, ["commit", "-m", "remove one-shot"]);
+    const output = join(fixture.parent, "missing-oneshot");
+    await buildReleaseArtifacts({
+      root: fixture.root, output, sourceDateEpoch: REPRODUCIBLE_EPOCH,
+      prepareRuntime: fixture.prepareRuntime, versions: VERSIONS,
+    });
+    await assert.rejects(
+      verifyReleaseArtifacts({ root: fixture.root, artifacts: output, sourceDateEpoch: REPRODUCIBLE_EPOCH }),
+      /RELEASE_ARTIFACTS_TOOL_CONTRACT/u,
+    );
+  });
+
+  await t.test("invalid manual MCP compatibility command", async (t) => {
+    const fixture = await createReleaseFixture(t);
+    await writeJson(join(
+      fixture.root,
+      "plugins",
+      "gpt-codex-hwp",
+      "examples",
+      "mcp-manual.json",
+    ), { mcpServers: { "gpt-codex-hwp": { command: "private-command" } } });
+    await runGit(fixture.root, ["add", "."]);
+    await runGit(fixture.root, ["commit", "-m", "drift manual MCP"]);
+    const output = join(fixture.parent, "bad-manual-mcp");
+    await buildReleaseArtifacts({
+      root: fixture.root, output, sourceDateEpoch: REPRODUCIBLE_EPOCH,
+      prepareRuntime: fixture.prepareRuntime, versions: VERSIONS,
+    });
+    await assert.rejects(
+      verifyReleaseArtifacts({ root: fixture.root, artifacts: output, sourceDateEpoch: REPRODUCIBLE_EPOCH }),
+      /RELEASE_ARTIFACTS_TOOL_CONTRACT/u,
+    );
+  });
+
   await t.test("extra MCP tool", async (t) => {
     const fixture = await createReleaseFixture(t);
     const toolPath = join(fixture.root, "plugins", "gpt-codex-hwp", "dist", "tools", "index.js");
@@ -796,8 +861,22 @@ async function createReleaseFixture(t: test.TestContext) {
     packages: {},
   });
   await writeFile(join(runtimeRoot, ".npmrc"), NPMRC_POLICY);
-  await writeJson(join(runtimeRoot, ".mcp.json"), { mcpServers: { "gpt-codex-hwp": { command: "node" } } });
+  await writeJson(join(runtimeRoot, ".codex-plugin", "plugin.json"), {
+    name: "gpt-codex-hwp",
+    version: "0.1.4+codex.20260713023606",
+    skills: "./skills/",
+  });
+  await writeJson(join(runtimeRoot, "examples", "mcp-manual.json"), {
+    mcpServers: {
+      "gpt-codex-hwp": {
+        command: "node",
+        args: ["--max-semi-space-size=1", "./dist/mcp.js"],
+        cwd: ".",
+      },
+    },
+  });
   await writeFile(join(runtimeRoot, "README.md"), "# Public runtime\n");
+  await writeFile(join(runtimeRoot, "dist", "oneshot.js"), "export {};\n");
   await writeFile(
     join(runtimeRoot, "dist", "tools", "index.js"),
     `${TOOL_NAMES.map((name) => `export const ${name.toUpperCase()}_TOOL_NAME = ${JSON.stringify(name)};`).join("\n")}\n${TOOL_NAMES.map((name) => `export function register_${name}(server) { server.registerTool(${name.toUpperCase()}_TOOL_NAME, {}); }`).join("\n")}\nexport const toolDefinitions = Object.freeze([\n${TOOL_NAMES.map((name) => `  { name: ${name.toUpperCase()}_TOOL_NAME, register: register_${name}, },`).join("\n")}\n]);\n`,

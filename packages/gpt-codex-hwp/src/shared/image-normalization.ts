@@ -1,5 +1,6 @@
 import { DOMParser, type Element as XmlElement } from "@xmldom/xmldom";
-import sharp from "sharp";
+
+import { getSharp } from "./sharp-runtime.js";
 
 export const MAX_NORMALIZED_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_SVG_BYTES = 1_000_000;
@@ -55,6 +56,7 @@ export async function normalizeImageBytes(
     source = Buffer.from(sanitizeImageSvg(decoded));
   }
   try {
+    const sharp = await getSharp();
     const image = sharp(source, {
       failOn: "error",
       limitInputPixels: MAX_IMAGE_PIXELS,

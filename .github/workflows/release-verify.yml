@@ -50,6 +50,10 @@ jobs:
         run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
       - name: Assert exact immutable release tag
         run: node -e "const { execFileSync } = require('node:child_process'); const s = process.env.EXPECTED_RELEASE_SHA; const r = process.env.RELEASE_REF; const v = process.env.RELEASE_VERSION; const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim(); const tag = execFileSync('git', ['tag', '--points-at', 'HEAD', '--list', r], { encoding:'utf8' }).trim(); if (!/^[0-9a-f]{40}$/.test(s) || !/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(r) || r !== 'v' + v || s !== head || tag !== r) process.exit(1)"
+      - name: Pin npm
+        run: |
+          npm install --global npm@10.9.7 --ignore-scripts
+          if ((npm --version) -ne "10.9.7") { exit 1 }
       - name: Install source dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Install runtime dependencies without lifecycle scripts

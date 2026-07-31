@@ -1165,6 +1165,37 @@ test("typed termination registered POSIX authority maps ESRCH EPERM and other er
   }
 });
 
+test("stable process identity treats a reused PID as the original process absent", () => {
+  const expected: RegisteredProcessGroupIdentity = Object.freeze({
+    pid: 6262,
+    parentPid: 5151,
+    processGroupId: 6262,
+    identity: "kernel-start:20",
+    startOrder: 20,
+  });
+  const reused = Object.freeze({
+    ...expected,
+    parentPid: 1,
+    identity: "kernel-start:21",
+    startOrder: 21,
+  });
+  assert.equal(registeredProcessIdentityIsAbsent(expected, reused), true);
+});
+
+test("stable process identity keeps a reparented matching kernel identity present", () => {
+  const expected: RegisteredProcessGroupIdentity = Object.freeze({
+    pid: 6363,
+    parentPid: 5151,
+    processGroupId: 6363,
+    identity: "kernel-start:30",
+    startOrder: 30,
+  });
+  assert.equal(
+    registeredProcessIdentityIsAbsent(expected, { ...expected, parentPid: 1 }),
+    false,
+  );
+});
+
 test("parent lifeline removes a registered detached child group after forced parent exit", {
   timeout: 30_000,
 }, async () => {
@@ -1188,17 +1219,48 @@ test("parent lifeline removes a registered detached child group after forced par
     stdio: "ignore",
   });
   let pids: number[] = [];
+  let identities: RegisteredProcessGroupIdentity[] = [];
   try {
     await waitFor(() => {
       if (!existsSync(pidLog)) return false;
       pids = readPidLog(pidLog);
       return pids.length >= 2;
     });
+    if (process.platform === "linux" || process.platform === "darwin") {
+      const captured = await Promise.all(pids.map((pid) =>
+        childClientModule.snapshotRegisteredPosixProcessGroupIdentity(pid, process.platform)
+      ));
+      identities = captured.filter(
+        (identity): identity is RegisteredProcessGroupIdentity => identity !== undefined,
+      );
+      assert.equal(identities.length, pids.length);
+      const engineIdentity = identities.find((identity) => identity.pid === pids[0]);
+      const descendantIdentity = identities.find((identity) => identity.pid === pids[1]);
+      assert.ok(engineIdentity);
+      assert.ok(descendantIdentity);
+      assert.equal(engineIdentity.processGroupId, pids[0]);
+      assert.equal(descendantIdentity.processGroupId, pids[0]);
+    }
     parent.kill("SIGKILL");
-    await waitFor(() => pids.every((pid) => !isPidAlive(pid)), 10_000);
+    if (process.platform === "linux" || process.platform === "darwin") {
+      await waitForRegisteredIdentitiesAbsent(
+        identities,
+        (pid) => childClientModule.snapshotRegisteredPosixProcessGroupIdentity(pid, process.platform),
+      );
+    } else {
+      await waitFor(() => pids.every((pid) => !isPidAlive(pid)), 10_000);
+    }
   } finally {
     if (parent.exitCode === null && parent.signalCode === null) parent.kill("SIGKILL");
     for (const pid of pids) {
+      if (process.platform === "linux" || process.platform === "darwin") {
+        const expected = identities.find((identity) => identity.pid === pid);
+        const current = await childClientModule.snapshotRegisteredPosixProcessGroupIdentity(
+          pid,
+          process.platform,
+        );
+        if (expected === undefined || registeredProcessIdentityIsAbsent(expected, current)) continue;
+      }
       try { process.kill(pid, "SIGKILL"); } catch {}
     }
     rmSync(root, { recursive: true, force: true });
@@ -4669,6 +4731,38 @@ function isPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function registeredProcessIdentityIsAbsent(
+  expected: RegisteredProcessGroupIdentity,
+  current: RegisteredProcessGroupIdentity | undefined,
+): boolean {
+  return current === undefined ||
+    current.pid !== expected.pid ||
+    current.processGroupId !== expected.processGroupId ||
+    current.identity !== expected.identity ||
+    current.startOrder !== expected.startOrder;
+}
+
+type RegisteredIdentityInspector = (
+  pid: number,
+) => Promise<RegisteredProcessGroupIdentity | undefined>;
+
+async function waitForRegisteredIdentitiesAbsent(
+  identities: readonly RegisteredProcessGroupIdentity[],
+  inspectIdentity: RegisteredIdentityInspector,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = await Promise.all(
+      identities.map((identity) => inspectIdentity(identity.pid)),
+    );
+    if (identities.every((identity, index) =>
+      registeredProcessIdentityIsAbsent(identity, current[index]))) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail("registered detached process identity survived forced parent exit");
 }
 
 const TELEMETRY_STALLED = Symbol("telemetry-stalled");

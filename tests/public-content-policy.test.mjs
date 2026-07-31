@@ -616,6 +616,26 @@ test("Git history requires exact names and scans every header plus ref label", a
   );
 });
 
+test("Git history accepts an empty signed-header continuation", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-signed-commit-");
+  await commitFile(root, "safe.txt", "safe\n", "safe", OWNER_EMAIL);
+  const base = git(root, ["cat-file", "commit", "HEAD"]);
+  const boundary = base.indexOf("\n\n");
+  assert.notEqual(boundary, -1);
+  const signed = [
+    base.slice(0, boundary),
+    "gpgsig -----BEGIN PGP SIGNATURE-----",
+    " ",
+    " signed-fixture",
+    " -----END PGP SIGNATURE-----",
+  ].join("\n") + base.slice(boundary);
+  const signedId = gitInput(root, ["hash-object", "-t", "commit", "-w", "--stdin"], signed).trim();
+  git(root, ["update-ref", "refs/heads/signed-fixture", signedId]);
+
+  const result = await scanPublicHistory(syntheticHistoryOptions(root));
+  assert.equal(result.findings.length, 0);
+});
+
 test("Git history pins frozen releases to annotated tag objects and peeled commits", async (t) => {
   let stage = "SETUP";
   const enterStage = (value) => {

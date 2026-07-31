@@ -2,10 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import {
-  defaultDocumentEngineFacade,
-  type DocumentEngineFacade,
-} from "../shared/document-engine.js";
+import type { DocumentEngineFacade } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
@@ -31,7 +29,7 @@ interface FormatDetails {
 
 export async function handleHwpDetectFormat(
   input: HwpDetectFormatInput,
-  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  documentEngine?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string;
@@ -44,7 +42,8 @@ export async function handleHwpDetectFormat(
         options: {},
       }),
     });
-    const detected = await documentEngine.detect(
+    const resolvedDocumentEngine = documentEngine ?? await getDefaultDocumentEngineFacade();
+    const detected = await resolvedDocumentEngine.detect(
       snapshot,
       toDocumentEngineExecutionContext(context),
     );
@@ -79,7 +78,7 @@ export async function handleHwpDetectFormat(
 
 export function registerHwpDetectFormat(
   server: McpServer,
-  documentEngine: DocumentEngineFacade = defaultDocumentEngineFacade,
+  documentEngine?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_DETECT_FORMAT_TOOL_NAME,

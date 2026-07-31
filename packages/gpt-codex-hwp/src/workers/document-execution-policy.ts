@@ -24,6 +24,7 @@ export type { DocumentLogicalRequestContent };
 
 export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
 export const CHILD_WORKING_SET_MAX_BYTES = 1_536 * 1024 * 1024;
+export const MAX_DOCUMENT_DEADLINE_MS = 300_000;
 
 export type DocumentExecutionClass = "worker-safe" | "heavy";
 export type DocumentExecutionTransport = "worker" | "child";
@@ -124,7 +125,7 @@ export function defaultDocumentDeadlineMs(
       operation === "parse" ||
       operation === "validateHwpx"
     ? 60_000
-    : 300_000;
+    : MAX_DOCUMENT_DEADLINE_MS;
 }
 
 export function selectDocumentExecution(

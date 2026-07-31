@@ -18,6 +18,7 @@ import type { DocumentEngineFacade } from "../src/shared/document-engine.js";
 import { prepareDocumentRenderOutput } from "../src/shared/document-render-output.js";
 import {
   captureExistingOutputDirectoryIdentity,
+  preflightExclusiveOutput,
   writeFileRangeAndFilesExclusively,
   writeFileRangeExclusively,
   writeFilesExclusively,
@@ -168,6 +169,35 @@ test("a replaced planned image directory fails with OUTPUT_CONFLICT and no suffi
     await assertMissing(plannedPath);
     await assertMissing(join(outputDir, "seal_2.png"));
     await assertMissing(join(displacedDir, "seal.png"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("exclusive output preflight rejects existing targets and preserves parent identity", async () => {
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-preflight-",
+  });
+  const outputDir = join(root, "output");
+  const outputPath = join(outputDir, "response.json");
+  const movedDirectory = join(root, "moved");
+  try {
+    await mkdir(outputDir);
+    await writeFile(outputPath, "sentinel");
+    await assert.rejects(preflightExclusiveOutput(outputPath));
+    await rm(outputPath);
+
+    const preflight = await preflightExclusiveOutput(outputPath);
+    await rename(outputDir, movedDirectory);
+    await mkdir(outputDir);
+    await assert.rejects(
+      writeFilesExclusively(
+        [{ path: preflight.path, data: "response" }],
+        { expectedDirectoryIdentities: preflight.expectedDirectoryIdentities },
+      ),
+      (error: unknown) => (error as { code?: string }).code === "OUTPUT_CONFLICT",
+    );
+    await assertMissing(outputPath);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

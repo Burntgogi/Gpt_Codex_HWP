@@ -55,7 +55,8 @@ const READ_ONLY_RUNTIME_FILES = [
 ];
 const GENERATED_FILES = [
   ".codex-plugin/plugin.json",
-  ".mcp.json",
+  "examples/mcp-manual.json",
+  "examples/oneshot-tool-schemas.json",
   "package-lock.json",
   "package.json",
 ];
@@ -86,6 +87,56 @@ before(async () => {
 
 after(async () => {
   if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+});
+
+test("runtime projection is skill-only by default and preserves manual MCP", async () => {
+  const plugin = JSON.parse(await readFile(
+    join(actualRoot, ".codex-plugin", "plugin.json"),
+    "utf8",
+  ));
+  assert.equal(plugin.skills, "./skills/");
+  assert.equal(Object.hasOwn(plugin, "mcpServers"), false);
+  await assert.rejects(lstat(join(actualRoot, ".mcp.json")), { code: "ENOENT" });
+
+  const manual = JSON.parse(await readFile(
+    join(actualRoot, "examples", "mcp-manual.json"),
+    "utf8",
+  ));
+  assert.deepEqual(manual.mcpServers["gpt-codex-hwp"], {
+    command: "node",
+    args: ["--max-semi-space-size=1", "./dist/mcp.js"],
+    cwd: ".",
+  });
+  const oneshot = await lstat(join(actualRoot, "dist", "oneshot.js"));
+  assert.equal(oneshot.isFile(), true);
+  assert.equal(oneshot.isSymbolicLink(), false);
+
+  assert.deepEqual(
+    await readFile(join(actualRoot, "examples", "oneshot-tool-schemas.json")),
+    await readFile(join(SOURCE, "examples", "oneshot-tool-schemas.json")),
+  );
+});
+
+test("runtime projection rejects a catalog with nine wrong sorted tool names", async () => {
+  const catalogPath = join(SOURCE, "examples", "oneshot-tool-schemas.json");
+  const original = await readFile(catalogPath, "utf8");
+  const catalog = JSON.parse(original);
+  const wrongNames = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+  catalog.tools = Object.fromEntries(
+    Object.values(catalog.tools).map((schema, index) => [wrongNames[index], schema]),
+  );
+  catalog.requestSchema.properties.tool.enum = wrongNames;
+  const output = join(temporaryRoot, "wrong-tool-schema-catalog-output");
+  try {
+    await writeFile(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
+    await assert.rejects(
+      buildRuntime({ root: ROOT, outputRoot: output }),
+      /one-shot tool schema catalog is invalid/u,
+    );
+    await assert.rejects(lstat(output), { code: "ENOENT" });
+  } finally {
+    await writeFile(catalogPath, original, "utf8");
+  }
 });
 
 test("Sharp WASM constraint is projected only into the generated runtime lock", async () => {

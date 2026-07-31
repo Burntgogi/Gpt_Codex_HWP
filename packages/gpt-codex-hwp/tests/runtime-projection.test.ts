@@ -34,13 +34,13 @@ test("public runtime projection stages only branded executable files", { timeout
   assert.equal(result.outputRoot, output);
   const required = [
     ".codex-plugin/plugin.json",
-    ".mcp.json",
     "assets/gpt-codex-hwp-banner.png",
     "assets/gpt-codex-hwp-icon.png",
     "assets/gpt-codex-hwp-icon-64.png",
     "assets/gpt-codex-hwp-icon-128.png",
     "dist/doctor.js",
     "dist/mcp.js",
+    "dist/oneshot.js",
     "dist/workers/document-child-start-gate.js",
     "dist/workers/document-process-registration.js",
     "dist/workers/registered-process-supervisor.js",
@@ -50,6 +50,7 @@ test("public runtime projection stages only branded executable files", { timeout
     "scripts/hwpx-safe-edit/insert_image.py",
     "scripts/hwpx-safe-edit/verify.py",
     "scripts/kordoc-runtime-verifier.mjs",
+    "examples/mcp-manual.json",
     "skills/gpt-codex-hwp/SKILL.md",
     "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
     "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
@@ -79,6 +80,7 @@ test("public runtime projection stages only branded executable files", { timeout
     "tsconfig.json",
     "release-scripts",
     "node_modules",
+    ".mcp.json",
     "scripts/hwpx-safe-edit/test_hwpx_safe_edit.py",
   ]) {
     await assert.rejects(lstat(join(output, ...forbidden.split("/"))), { code: "ENOENT" });
@@ -111,6 +113,7 @@ test("public runtime projection stages only branded executable files", { timeout
   assert.equal(pluginManifest.interface.developerName, metadata.developerName);
   assert.equal(pluginManifest.interface.composerIcon, "./assets/gpt-codex-hwp-icon-64.png");
   assert.equal(pluginManifest.interface.logo, "./assets/gpt-codex-hwp-icon.png");
+  assert.equal(pluginManifest.mcpServers, undefined);
   assert.deepEqual(
     await readFile(join(output, "vendor", "kordoc-core", "dist", "index.js")),
     await readFile(join(SOURCE_ROOT, "vendor", "kordoc-core", "dist", "index.js")),
@@ -126,8 +129,13 @@ test("public runtime projection stages only branded executable files", { timeout
 
   const notice = await readFile(join(output, "NOTICE"), "utf8");
   assert.match(notice, /Copyright 2026 Gpt_Codex_HWP contributors/u);
-  const mcp = JSON.parse(await readFile(join(output, ".mcp.json"), "utf8"));
+  const mcp = JSON.parse(await readFile(join(output, "examples", "mcp-manual.json"), "utf8"));
   assert.deepEqual(Object.keys(mcp.mcpServers), [metadata.productId]);
+  assert.deepEqual(mcp.mcpServers[metadata.productId], {
+    command: "node",
+    args: ["--max-semi-space-size=1", "./dist/mcp.js"],
+    cwd: ".",
+  });
 
   assert.ok(result.files.length > 0);
   for (const file of result.files) {

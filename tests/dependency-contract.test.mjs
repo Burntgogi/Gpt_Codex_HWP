@@ -139,6 +139,31 @@ test("public installation guidance has one npm-ci step and no normalizer", async
   }
 });
 
+test("public guidance makes one-shot execution the default lifecycle", async () => {
+  const skill = await readFile(join(SOURCE, "skills", "gpt-codex-hwp", "SKILL.md"), "utf8");
+  assert.match(skill, /dist\/oneshot\.js/u);
+  assert.match(skill, /--request/u);
+  assert.match(skill, /--response/u);
+  assert.match(skill, /two parent directories|두 단계 상위/iu);
+  assert.match(skill, /exactly the keys\s+"schemaVersion",\s+"tool",\s+and\s+"arguments"/iu);
+  assert.match(skill, /\{plugin_root\}\/examples\/oneshot-tool-schemas\.json/u);
+  assert.match(skill, /\{"schemaVersion":1,"tool":"hwp_detect_format","arguments":\{"file_path":"C:\\\\Documents\\\\sample\.hwp"\}\}/u);
+  assert.match(skill, /owner-only control directory/iu);
+  assert.match(skill, /0700.*0600/iu);
+  assert.match(skill, /current user plus SYSTEM/iu);
+  assert.match(skill, /exact request, response, and empty directory/iu);
+
+  const korean = await readFile(join(ROOT, "README.md"), "utf8");
+  const english = await readFile(join(ROOT, "README.en.md"), "utf8");
+  for (const content of [korean, english]) {
+    assert.match(content, /dist\/oneshot\.js/u);
+    assert.match(content, /examples\/mcp-manual\.json/u);
+    assert.match(content, /\/mcp/u);
+  }
+  assert.match(korean, /상주.*Node|Node.*상주/u);
+  assert.match(english, /persistent.*Node|Node.*persistent/iu);
+});
+
 test("dependency contract resolves Kordoc only through the vendored compact core", async () => {
   for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
     const packageJson = await readJson(join(root, "package.json"));
