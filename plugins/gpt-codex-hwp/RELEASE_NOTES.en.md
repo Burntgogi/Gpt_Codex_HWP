@@ -15,14 +15,14 @@ Installed-runtime smoke tests previously stalled for 60 seconds on GitHub hosted
 ## Highlights
 
 - Split Windows x64, macOS arm64, Linux lifecycle, and Security policy into stable required pull-request checks.
-- Kept the pull-request document smoke at 10 MiB; the post-merge manual/scheduled Compatibility workflow owns full platform verification and 100 MiB evidence.
+- Kept the pull-request document smoke at 10 MiB; the post-merge manual/scheduled Compatibility workflow owns full platform verification and a 100 MiB detect smoke through the public one-shot runtime.
 - Retained 256 and 512 MiB benchmarks as explicit local engineering experiments without compatibility guarantees.
 - Accepted hosted-runner path aliases during ownership validation while using only the verified canonical temporary root as the runtime boundary.
 - Initialization diagnostics emit only the last allowlisted lifecycle boundary and a bounded stderr byte count. Raw errors, user paths, PIDs, and document content are never emitted.
 - Fixed the history scanner incorrectly treating an empty continuation line in a valid GPG-signed commit as malformed Git history.
 - Kept process start gates, supervisor readiness, termination receipts, and remaining-child verification fail closed.
-- Removed duplicate full-suite ownership from pull-request jobs; Compatibility and immutable release verification own full platform receipts and 100 MiB evidence.
-- A failed release 100 MiB preflight now runs only bounded diagnostics and prevents artifact construction and attestation.
+- Removed duplicate full-suite ownership from pull-request jobs; Compatibility and immutable release verification own full platform receipts and the production-path 100 MiB smoke.
+- A failed release 100 MiB preflight emits only a fixed bounded stage and prevents artifact construction and attestation.
 - HWP remains detection/read/preview only, and every generated or edited result remains HWPX.
 
 ## User-visible changes from v0.2.1
@@ -54,7 +54,7 @@ The verified resource claim is intentionally narrow: when unused, this plugin ha
 - Source and public-runtime `npm audit --omit=dev`: zero known vulnerabilities.
 - Remote repository policy: `compliant` for protected main, immutable tags, and owner-only writes.
 
-The `Compatibility` workflow exists on the default branch. The remaining release gates are to pass Windows x64, macOS arm64, Linux lifecycle, and Security policy on the new candidate pull request; run full-platform compatibility plus 100 MiB evidence at the exact merged commit; and then run release-candidate verification, artifact checks, and attestation against the immutable `v0.2.2` tag.
+The `Compatibility` workflow exists on the default branch. The remaining release gates are to pass Windows x64, macOS arm64, Linux lifecycle, and Security policy on the new candidate pull request; run full-platform compatibility plus the 100 MiB production one-shot smoke at the exact merged commit; and then run release-candidate verification, artifact checks, and attestation against the immutable `v0.2.2` tag.
 
 ## Installation and upgrade
 

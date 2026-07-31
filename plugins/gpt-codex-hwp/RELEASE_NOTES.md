@@ -15,14 +15,14 @@ GitHub hosted Windows와 macOS에서 설치 런타임 스모크가 60초 후 중
 ## 주요 변경 사항
 
 - Windows x64, macOS arm64, Linux lifecycle, Security policy를 안정적인 필수 PR 체크로 분리했습니다.
-- PR은 10 MiB 스모크를 사용하고, 병합 후 수동·주기 호환성 워크플로는 각 플랫폼에서 100 MiB 증적과 전체 검증을 담당합니다.
+- PR은 10 MiB 스모크를 사용하고, 병합 후 수동·주기 호환성 워크플로는 각 플랫폼에서 실제 공개 one-shot 경로의 100 MiB 감지와 전체 검증을 담당합니다.
 - 256·512 MiB 벤치마크는 설계 검사용 로컬 실험으로 유지하며 호환성을 보장하지 않습니다.
 - Windows와 macOS의 설치 런타임 스모크가 runner 경로 별칭을 허용하되, 검증된 정규 임시 루트만 실제 허용 경계로 사용합니다.
 - 초기화 실패 진단은 허용 목록의 마지막 생명주기 경계와 제한된 stderr 바이트 수만 기록합니다. 원시 오류, 사용자 경로, PID와 문서 내용은 출력하지 않습니다.
 - 정상적인 GPG 서명 커밋의 빈 연속행을 Git 이력 손상으로 오인하던 보안 검사기를 수정했습니다.
 - 프로세스 시작 게이트, 감독자 준비, 종료 영수증과 잔존 자식 검증은 계속 fail-closed로 동작합니다.
-- 중복된 전체 테스트를 PR에서 제거하고, 전체 플랫폼 영수증과 100 MiB 증적은 Compatibility 및 불변 릴리즈 검증 단계가 소유합니다.
-- 릴리즈 100 MiB 사전 검증이 실패하면 제한된 진단만 실행하고 배포물 생성과 attestation은 중단합니다.
+- 중복된 전체 테스트를 PR에서 제거하고, 전체 플랫폼 영수증과 100 MiB 실제 경로 검증은 Compatibility 및 불변 릴리즈 검증 단계가 소유합니다.
+- 릴리즈 100 MiB 사전 검증이 실패하면 고정된 제한 단계만 출력하고 배포물 생성과 attestation은 중단합니다.
 - HWP는 감지·읽기·미리보기 전용이며, 생성·편집 결과는 계속 HWPX로만 저장합니다.
 
 ## v0.2.1 대비 사용자 관점 변경
@@ -54,7 +54,7 @@ GitHub hosted Windows와 macOS에서 설치 런타임 스모크가 60초 후 중
 - 소스 및 공개 런타임 `npm audit --omit=dev`: 알려진 취약점 0개.
 - 원격 저장소 정책: 보호된 main, 불변 태그와 작성자 전용 쓰기 정책에 대해 `compliant`.
 
-`Compatibility` 워크플로는 기본 브랜치에 존재합니다. 릴리즈 전 필수 잔여 관문은 새 후보 PR의 Windows x64·macOS arm64·Linux lifecycle·Security policy를 통과하고, 병합된 정확한 커밋에서 전체 플랫폼 호환성과 100 MiB 증적을 통과한 뒤, 불변 `v0.2.2` 태그에 대해 릴리즈 후보 검증·배포물 검사·attestation을 통과하는 것입니다.
+`Compatibility` 워크플로는 기본 브랜치에 존재합니다. 릴리즈 전 필수 잔여 관문은 새 후보 PR의 Windows x64·macOS arm64·Linux lifecycle·Security policy를 통과하고, 병합된 정확한 커밋에서 전체 플랫폼 호환성과 100 MiB production one-shot 스모크를 통과한 뒤, 불변 `v0.2.2` 태그에 대해 릴리즈 후보 검증·배포물 검사·attestation을 통과하는 것입니다.
 
 ## 설치와 업그레이드
 
