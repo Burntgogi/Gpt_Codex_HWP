@@ -28,7 +28,7 @@ import { snapshotProcessTreeIdentities } from "../benchmarks/process-tree-ledger
 const CONTROL_MCP = "C:\\bench-control\\dist\\mcp.js";
 const CANDIDATE_MCP = "C:\\bench-candidate\\dist\\mcp.js";
 const OUTPUT = "C:\\bench-output\\idle.json";
-const CONTROL_REVISION = "6983ffaf7e0a392bc9852a121ae14895ab4160fb";
+const CONTROL_REVISION = "8aefe5f17e112376163d495c6993b570240d07fb";
 const CANDIDATE_REVISION = "05efdd9a901e82567887d50d1501ce7fd2ee9370";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);

@@ -11,7 +11,7 @@ import {
   verifyEvidenceBundle,
 } from "../scripts/node-phase-a-evidence.mjs";
 
-const CONTROL_REVISION = "6983ffaf7e0a392bc9852a121ae14895ab4160fb";
+const CONTROL_REVISION = "8aefe5f17e112376163d495c6993b570240d07fb";
 const CANDIDATE_REVISION = "05efdd9a901e82567887d50d1501ce7fd2ee9370";
 
 function sha256(bytes) {

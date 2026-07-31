@@ -50,7 +50,7 @@ The verified resource claim is intentionally narrow: when unused, this plugin ha
 - Clean public-lineage local scan: 406 public-tree entries and all 714 reachable Git objects passed without personal identity, credential, or private-path findings.
 - Repository Node tests passed with `452 passed / 2 skipped / 0 failed`; all 41 source Node test files and 20 Python safe-edit tests passed.
 - Runtime projection for 119 files, project metadata, and source/public-runtime dependency contracts were verified.
-- The installed-runtime one-shot generated and validated an HWPX and confirmed zero remaining supervised descendants.
+- The installed-runtime one-shot generated an HWPX, validated it, and confirmed zero remaining supervised descendants.
 - Source and public-runtime `npm audit --omit=dev`: zero known vulnerabilities.
 - Remote repository policy: `compliant` for protected main, immutable tags, and owner-only writes.
 

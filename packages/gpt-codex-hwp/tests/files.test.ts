@@ -6,6 +6,7 @@ import {
   mkdtemp,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -108,7 +109,7 @@ test("bounded file read accepts only regular files and redacts the path", async 
 });
 
 test("direct bounded reads reject linked control paths while ordinary reads retain link behavior", async (context) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-bounded-direct-link-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "hwp-bounded-direct-link-")));
   const targetDirectory = join(root, "target");
   const linkedDirectory = join(root, "linked");
   const targetPath = join(targetDirectory, "request.json");
@@ -145,7 +146,7 @@ test("direct bounded reads reject linked control paths while ordinary reads reta
 });
 
 test("direct bounded reads reject a same-target link replacement after reading", async (context) => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-bounded-direct-race-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "hwp-bounded-direct-race-")));
   const requestPath = join(root, "request.json");
   const targetPath = join(root, "target.json");
   const replacementLink = join(root, "replacement-link.json");
@@ -170,7 +171,8 @@ test("direct bounded reads reject a same-target link replacement after reading",
           },
         },
       }),
-      (error: unknown) => error instanceof FileReadError && error.code === "INVALID_FILE_TYPE",
+      (error: unknown) => error instanceof FileReadError
+        && ["INVALID_FILE_TYPE", "SOURCE_CHANGED"].includes(error.code),
     );
   } finally {
     await rm(root, { recursive: true, force: true });

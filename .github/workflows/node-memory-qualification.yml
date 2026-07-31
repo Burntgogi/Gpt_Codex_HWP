@@ -55,7 +55,7 @@ jobs:
         run: |
           node scripts/node-memory-gate.mjs decision create --output .superpowers/decisions/pr-node-memory.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run memory:qualify -- prepare --control-revision 6983ffaf7e0a392bc9852a121ae14895ab4160fb --decision .superpowers/decisions/pr-node-memory.json --output .superpowers/qualifications/pr
+          npm run memory:qualify -- prepare --control-revision 8aefe5f17e112376163d495c6993b570240d07fb --decision .superpowers/decisions/pr-node-memory.json --output .superpowers/qualifications/pr
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         if: ${{ !cancelled() }}
         with:
