@@ -1,4 +1,6 @@
 import { execFile as nativeExecFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { lstat, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -12,6 +14,7 @@ const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_RUNTIME_ROOT = resolve(PROJECT_ROOT, "plugins/gpt-codex-hwp");
 const ALLOWED_ROOTS_ENVIRONMENT_VARIABLE = "GPT_CODEX_HWP_ALLOWED_ROOTS";
 const REQUEST_TIMEOUT_MS = 20_000;
+const LARGE_DOCUMENT_TIMEOUT_MS = 180_000;
 const MAX_STDERR_BYTES = 64 * 1024;
 const MAX_MCP_STDOUT_BYTES = 512 * 1024;
 const MAX_MCP_FRAME_BYTES = 128 * 1024;
@@ -352,6 +355,125 @@ export async function runInstalledOneShotSmoke(options = {}) {
   );
   setExitCode(0);
   return report;
+}
+
+export async function runInstalledLargeDocumentSmoke(options = {}) {
+  const runtimeRoot = resolve(options.runtimeRoot ?? DEFAULT_RUNTIME_ROOT);
+  const stdout = options.stdout ?? process.stdout;
+  const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
+  const createTemporaryRoot = options.createTemporaryRoot
+    ?? (() => mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-large-")));
+  const generateSource = options.generateSource ?? (async (request) => {
+    const { generatePaddedHwpx } = await import(
+      "../packages/gpt-codex-hwp/benchmarks/generate-padded-hwpx.mjs"
+    );
+    return generatePaddedHwpx(request);
+  });
+  const runProcess = options.runProcess ?? runBoundedProcess;
+  const requestedMiB = options.sizeMiB ?? 100;
+  let stage = "runtime";
+  let cleanupRoot;
+  let report;
+  let failure;
+  try {
+    if (requestedMiB !== 100) throw new Error("invalid supported size");
+    const entry = join(runtimeRoot, "dist", "oneshot.js");
+    const entryMetadata = await lstat(entry);
+    if (!entryMetadata.isFile() || entryMetadata.isSymbolicLink()) {
+      throw new Error("invalid one-shot runtime");
+    }
+    stage = "temporary-root";
+    const ownedRoot = await assertOwnedTemporaryRoot(resolve(await createTemporaryRoot()));
+    cleanupRoot = ownedRoot;
+    const sourcePath = join(ownedRoot, "supported-100.hwpx");
+    const requestPath = join(ownedRoot, "request.json");
+    const responsePath = join(ownedRoot, "response.json");
+    for (const path of [sourcePath, requestPath, responsePath]) assertPathInside(ownedRoot, path);
+
+    stage = "generate";
+    const requestedBytes = requestedMiB * 1024 * 1024;
+    await generateSource({ outputPath: sourcePath, requestedBytes });
+    const before = await lstat(sourcePath);
+    if (!before.isFile() || before.isSymbolicLink()
+      || before.size > requestedBytes || before.size < requestedBytes - 4096) {
+      throw new Error("invalid generated document");
+    }
+    const sourceSha256 = await sha256RegularFile(sourcePath);
+    await writeFile(requestPath, JSON.stringify({
+      schemaVersion: 1,
+      tool: "hwp_detect_format",
+      arguments: { file_path: sourcePath },
+    }), { flag: "wx", mode: 0o600 });
+
+    stage = "detect";
+    const result = await runProcess(process.execPath, [
+      "--max-semi-space-size=1",
+      "./dist/oneshot.js",
+      "--request",
+      requestPath,
+      "--response",
+      responsePath,
+    ], {
+      cwd: runtimeRoot,
+      env: {
+        ...defaultRuntimeEnvironment(),
+        ...createRuntimeSessionEnvironment(ownedRoot),
+        [ONESHOT_CLEANUP_EVIDENCE_ENV]: "stdout",
+      },
+      timeoutMs: LARGE_DOCUMENT_TIMEOUT_MS,
+      maxOutputBytes: MAX_STDERR_BYTES,
+    });
+    assertSuccessfulOneShotProcess(result, false);
+    stage = "cleanup";
+    const cleanupReceipt = assertOneShotProcessCleanup(result);
+
+    stage = "response";
+    const response = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+      await readBoundedRegularFile(responsePath, MAX_ONESHOT_RESPONSE_BYTES),
+    ));
+    if (response?.isError !== false
+      || response.structuredContent?.format !== "hwpx"
+      || response.structuredContent?.details?.file_size_bytes !== before.size) {
+      throw new Error("invalid large-document response");
+    }
+    const after = await lstat(sourcePath);
+    if (!after.isFile() || after.isSymbolicLink() || after.size !== before.size
+      || await sha256RegularFile(sourcePath) !== sourceSha256) {
+      throw new Error("large document changed");
+    }
+    report = Object.freeze({
+      requestedMiB,
+      actualBytes: before.size,
+      format: "hwpx",
+      sourceUnchanged: true,
+      remainingDescendantCount: cleanupReceipt.remainingDescendantCount,
+    });
+  } catch {
+    failure = stage;
+  } finally {
+    if (cleanupRoot !== undefined) {
+      try {
+        await rm(cleanupRoot, { recursive: true, force: true });
+      } catch { failure ??= "cleanup"; }
+    }
+  }
+
+  if (failure !== undefined || report === undefined) {
+    stdout.write(`LARGE_DOCUMENT_SMOKE status=failed stage=${failure ?? "unknown"}\n`);
+    setExitCode(1);
+    return false;
+  }
+  stdout.write(
+    `LARGE_DOCUMENT_SMOKE status=passed requestedMiB=${report.requestedMiB} actualBytes=${report.actualBytes} format=hwpx sourceUnchanged=true remainingDescendants=${report.remainingDescendantCount}\n`,
+  );
+  setExitCode(0);
+  return report;
+}
+
+async function sha256RegularFile(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path, { highWaterMark: 1024 * 1024 })) hash.update(chunk);
+  return hash.digest("hex");
 }
 
 export async function runInstalledRuntimeSmoke(options = {}) {
@@ -1075,7 +1197,9 @@ function sameStrings(actual, expected) {
 
 const entryPoint = process.argv[1];
 if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
-  if (process.argv.length !== 2) {
+  if (process.argv.length === 4 && process.argv[2] === "--large-detect" && process.argv[3] === "100") {
+    await runInstalledLargeDocumentSmoke();
+  } else if (process.argv.length !== 2) {
     process.stderr.write("Runtime smoke accepts no arguments.\n");
     process.exitCode = 1;
   } else {

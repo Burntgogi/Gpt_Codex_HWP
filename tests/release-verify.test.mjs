@@ -347,7 +347,7 @@ test("release verification runs the exact required stage contract in order", asy
     Number.isInteger(stage.elapsedMs) && stage.elapsedMs >= 0));
 });
 
-test("release benchmark evidence path is isolated to the supplied environment", async () => {
+test("release large-document stage always uses the production one-shot path", async () => {
   const benchmarkStage = async (environment) => {
     const calls = [];
     const receipt = await runReleaseVerification({
@@ -367,38 +367,14 @@ test("release benchmark evidence path is isolated to the supplied environment", 
     return calls.find((stage) => stage.name === "document-benchmark");
   };
 
-  const fallback = await benchmarkStage({ HWP_BENCH_REQUIRE_LARGE: "1" });
-  assert.equal(
-    fallback.commands[1].args.at(-1),
-    ".superpowers/benchmarks/supported-100.json",
-  );
-
-  const overridden = await benchmarkStage({
+  const stage = await benchmarkStage({
     HWP_BENCH_REQUIRE_LARGE: "1",
     HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/custom-supported-100.json",
   });
-  assert.equal(
-    overridden.commands[1].args.at(-1),
-    ".superpowers/benchmarks/custom-supported-100.json",
-  );
-
-  const disabled = await benchmarkStage({
-    HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/must-not-leak.json",
-  });
-  assert.equal(disabled.commands, undefined);
-  assert.deepEqual(disabled.args.slice(-4), [
-    "--sizes",
-    "10",
-    "--output",
-    `.superpowers/benchmarks/release-10m-${process.pid}.json`,
-  ]);
-
-  const inherited = Object.create({
-    HWP_BENCH_REQUIRE_LARGE: "1",
-    HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/inherited.json",
-  });
-  const inheritedStage = await benchmarkStage(inherited);
-  assert.equal(inheritedStage.commands, undefined);
+  assert.equal(stage.tool, "node");
+  assert.deepEqual(stage.args, ["scripts/installed-runtime-smoke.mjs", "--large-detect", "100"]);
+  assert.equal(stage.commands, undefined);
+  assert.deepEqual(stage.env, {});
 });
 
 test("release stages install source dependencies and keep temp nine-tools as runtime authority", async () => {
@@ -919,14 +895,14 @@ test("stage command execution is fail-closed and never returns process output", 
   assert.equal(JSON.stringify(failed).includes("PRIVATE_"), false);
 });
 
-test("document benchmark stage preserves only the first bounded failure receipt", async () => {
+test("large-document smoke stage preserves only its bounded failure receipt", async () => {
   const result = await runStageCommand(
     nodeStage(
       "document-benchmark",
       [
         'process.stdout.write("PRIVATE/path/document.hwpx\\n")',
         'process.stdout.write("BENCHMARK_CASE_FAILURE phase=detect engineCode=ENGINE_INIT_FAILED stage=startup\\n")',
-        'process.stderr.write("BENCHMARK_TERMINATION_FAILED stage=windows-termination-scan-exhausted\\n")',
+        'process.stderr.write("LARGE_DOCUMENT_SMOKE status=failed stage=detect\\n")',
         "process.exit(7)",
       ].join(";"),
     ),
@@ -938,7 +914,7 @@ test("document benchmark stage preserves only the first bounded failure receipt"
     diagnostic: {
       kind: "document-benchmark",
       command: 1,
-      receipt: "BENCHMARK_TERMINATION_FAILED stage=windows-termination-scan-exhausted",
+      receipt: "LARGE_DOCUMENT_SMOKE status=failed stage=detect",
     },
   });
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
@@ -1001,7 +977,7 @@ test("Node test stage maps a silent nonzero child to one fixed runner receipt", 
   });
 });
 
-test("release verification reports a bounded document benchmark diagnostic out of band", async () => {
+test("release verification reports a bounded large-document diagnostic out of band", async () => {
   const diagnostics = [];
   const receipt = await runReleaseVerification({
     root: ROOT,
@@ -1016,8 +992,8 @@ test("release verification reports a bounded document benchmark diagnostic out o
           status: "failed",
           diagnostic: {
             kind: "document-benchmark",
-            command: 2,
-            receipt: "BENCHMARK_EVIDENCE_INVALID",
+            command: 1,
+            receipt: "LARGE_DOCUMENT_SMOKE status=failed stage=response",
           },
         }
       : passedReleaseStage(stage),
@@ -1026,8 +1002,8 @@ test("release verification reports a bounded document benchmark diagnostic out o
   assert.equal(receipt.status, "failed");
   assert.deepEqual(diagnostics, [{
     kind: "document-benchmark",
-    command: 2,
-    receipt: "BENCHMARK_EVIDENCE_INVALID",
+    command: 1,
+    receipt: "LARGE_DOCUMENT_SMOKE status=failed stage=response",
   }]);
   assert.equal(JSON.stringify(receipt).includes("diagnostic"), false);
 });
@@ -1453,49 +1429,14 @@ function nodeStage(name, source) {
 
 function expectedStageCommands() {
   const noEvidence = undefined;
-  const documentBenchmarkArgs = [
-    "--prefix",
-    "packages/gpt-codex-hwp",
-    "run",
-    "benchmark:documents",
-    "--",
-    "--sizes",
-    "10",
-    "--output",
-    `.superpowers/benchmarks/release-10m-${process.pid}.json`,
-  ];
-  const documentBenchmark = process.env.HWP_BENCH_REQUIRE_LARGE === "1"
-    ? {
-        name: "document-benchmark",
-        tool: undefined,
-        args: undefined,
-        commands: [
-          { tool: "npm", args: documentBenchmarkArgs },
-          {
-            tool: "npm",
-            args: [
-              "--prefix",
-              "packages/gpt-codex-hwp",
-              "run",
-              "benchmark:documents",
-              "--",
-              "--validate-large",
-              process.env.HWP_BENCH_LARGE_EVIDENCE
-                ?? ".superpowers/benchmarks/supported-100.json",
-            ],
-          },
-        ],
-        env: {},
-        evidence: noEvidence,
-      }
-    : {
-        name: "document-benchmark",
-        tool: "npm",
-        args: documentBenchmarkArgs,
-        commands: undefined,
-        env: {},
-        evidence: noEvidence,
-      };
+  const documentBenchmark = {
+    name: "document-benchmark",
+    tool: "node",
+    args: ["scripts/installed-runtime-smoke.mjs", "--large-detect", "100"],
+    commands: undefined,
+    env: {},
+    evidence: noEvidence,
+  };
   const realHwpEvidence = {
     kind: "node-test-summary",
     tests: 1,

@@ -48,6 +48,9 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Install runtime dependencies without lifecycle scripts
+        timeout-minutes: 10
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Configure neutral release identity
         run: |
           git config --local user.name "Gpt_Codex_HWP contributors"
@@ -56,25 +59,17 @@ jobs:
       - name: Prepare bounded diagnostics directory
         if: ${{ !cancelled() }}
         run: node -e "require('node:fs').mkdirSync(process.env.RUNNER_TEMP + '/compatibility-diagnostics', { recursive:true })"
-      - name: Generate and validate Windows 100 MiB evidence
+      - name: Run Windows 100 MiB production-path smoke
         id: large
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 30
-        env:
-          HWP_BENCH_LARGE: "1"
-        run: |
-          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/compatibility-supported-100.json
-          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/compatibility-supported-100.json
+        run: node scripts/installed-runtime-smoke.mjs --large-detect 100
       - name: Create Windows full platform receipt
         id: receipt
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 120
-        env:
-          HWP_BENCH_LARGE: "1"
-          HWP_BENCH_REQUIRE_LARGE: "1"
-          HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/compatibility-supported-100.json"
         run: node scripts/platform-receipts.mjs create
       - name: Diagnose failed Windows full Node tests
         if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
@@ -96,7 +91,6 @@ jobs:
         with:
           name: compatibility-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .superpowers/benchmarks/compatibility-supported-100.json
             release-receipts/
             ${{ runner.temp }}/compatibility-diagnostics/
           if-no-files-found: error
@@ -137,6 +131,9 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Install runtime dependencies without lifecycle scripts
+        timeout-minutes: 10
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Prepare bounded diagnostics directory
         if: ${{ !cancelled() }}
         run: node -e "require('node:fs').mkdirSync(process.env.RUNNER_TEMP + '/compatibility-diagnostics', { recursive:true })"
@@ -152,16 +149,12 @@ jobs:
         continue-on-error: true
         timeout-minutes: 15
         run: npm run test:python
-      - name: Generate and validate Linux 100 MiB evidence
+      - name: Run Linux 100 MiB production-path smoke
         id: large
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 30
-        env:
-          HWP_BENCH_LARGE: "1"
-        run: |
-          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/compatibility-supported-100.json
-          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/compatibility-supported-100.json
+        run: node scripts/installed-runtime-smoke.mjs --large-detect 100
       - name: Diagnose failed Linux full Node tests
         if: ${{ !cancelled() && steps.node.outcome == 'failure' }}
         continue-on-error: true
@@ -184,9 +177,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: compatibility-linux-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .superpowers/benchmarks/compatibility-supported-100.json
-            ${{ runner.temp }}/compatibility-diagnostics/
+          path: ${{ runner.temp }}/compatibility-diagnostics/
           if-no-files-found: error
           retention-days: 3
           include-hidden-files: true
@@ -225,6 +216,9 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Install runtime dependencies without lifecycle scripts
+        timeout-minutes: 10
+        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Configure neutral release identity
         run: |
           git config --local user.name "Gpt_Codex_HWP contributors"
@@ -233,25 +227,17 @@ jobs:
       - name: Prepare bounded diagnostics directory
         if: ${{ !cancelled() }}
         run: node -e "require('node:fs').mkdirSync(process.env.RUNNER_TEMP + '/compatibility-diagnostics', { recursive:true })"
-      - name: Generate and validate macOS 100 MiB evidence
+      - name: Run macOS 100 MiB production-path smoke
         id: large
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 30
-        env:
-          HWP_BENCH_LARGE: "1"
-        run: |
-          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/compatibility-supported-100.json
-          npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/compatibility-supported-100.json
+        run: node scripts/installed-runtime-smoke.mjs --large-detect 100
       - name: Create macOS full platform receipt
         id: receipt
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 120
-        env:
-          HWP_BENCH_LARGE: "1"
-          HWP_BENCH_REQUIRE_LARGE: "1"
-          HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/compatibility-supported-100.json"
         run: node scripts/platform-receipts.mjs create
       - name: Diagnose failed macOS full Node tests
         if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
@@ -273,7 +259,6 @@ jobs:
         with:
           name: compatibility-macos-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .superpowers/benchmarks/compatibility-supported-100.json
             release-receipts/
             ${{ runner.temp }}/compatibility-diagnostics/
           if-no-files-found: error

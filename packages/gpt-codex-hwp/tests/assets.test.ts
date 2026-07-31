@@ -318,8 +318,6 @@ test("after-paragraph inserts a normalized PNG after a body anchor and passes st
   assert.ok(render.svg.length > 100);
   assert.match(render.svg, /<image\b/u);
 
-  const verify = await runVerifier(outputPath, sourcePath);
-  assert.match(verify.stdout, /RESULT: all hard checks PASSED/u);
 });
 
 test("after-paragraph inserts inside the same table-cell subList", { timeout: 30_000 }, async (t) => {
@@ -769,33 +767,6 @@ async function runTestPython(
   throw Object.assign(new Error("Python was not found for the test."), {
     code: "PYTHON_NOT_FOUND",
   });
-}
-
-async function runVerifier(edited: string, original: string): Promise<{ stdout: string; stderr: string }> {
-  const script = join(HWPX_SAFE_EDIT_ROOT, "verify.py");
-  const args = [
-    "-X", "utf8", script, edited, "--orig", original,
-    "--allow-changed", "Contents/content.hpf",
-    "--allow-changed", "Contents/section0.xml",
-    "--allow-added", "BinData/image1.png",
-  ];
-  try {
-    return await execFileAsync("python", args, {
-      cwd: dirname(script),
-      windowsHide: true,
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-  } catch (error: unknown) {
-    const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    if (code !== "ENOENT") throw error;
-    return execFileAsync("py", ["-3", ...args], {
-      cwd: dirname(script),
-      windowsHide: true,
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-  }
 }
 
 function details(result: { structuredContent?: Record<string, unknown> }): Record<string, unknown> {

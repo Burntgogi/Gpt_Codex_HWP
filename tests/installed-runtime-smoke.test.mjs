@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -93,6 +93,100 @@ test("default installed runtime smoke invokes the real compiled one-shot and ver
   assert.ok(receipt.hwpxBytes > 4);
   assert.equal(receipt.remainingDescendantCount, 0);
   assert.match(output, /^RUNTIME_SMOKE status=passed tools=9 hwpxBytes=\d+ hwpx=passed stderrBytes=0 remainingDescendants=0\n$/u);
+});
+
+test("large-document smoke uses the compiled one-shot detect path and proves the source unchanged", async (t) => {
+  assert.equal(typeof smokeModule.runInstalledLargeDocumentSmoke, "function");
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-large-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let output = "";
+  const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
+    sizeMiB: 100,
+    createTemporaryRoot: async () => root,
+    generateSource: async ({ outputPath, requestedBytes }) => {
+      const handle = await open(outputPath, "wx", 0o600);
+      await handle.write(Buffer.from("PK\u0003\u0004bounded-large-document-smoke"), 0, undefined, 0);
+      await handle.truncate(requestedBytes);
+      await handle.close();
+    },
+    runProcess: async (_tool, args) => {
+      const responsePath = args.at(-1);
+      await writeFile(responsePath, JSON.stringify({
+        isError: false,
+        structuredContent: {
+          format: "hwpx",
+          details: { file_size_bytes: 100 * 1024 * 1024 },
+        },
+      }), { flag: "wx", mode: 0o600 });
+      return {
+        code: 0,
+        signal: null,
+        overflow: false,
+        timedOut: false,
+        terminationFailed: false,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.from(
+          "ONESHOT_CLEANUP proof=registered-groups-empty observedProcessTrees=1 remainingProcessTrees=0\nONESHOT_OK\n",
+        ),
+        platform: "linux",
+      };
+    },
+    stdout: { write(value) { output += value; return true; } },
+    setExitCode() {},
+  });
+
+  assert.notEqual(receipt, false, output);
+  assert.equal(receipt.requestedMiB, 100);
+  assert.equal(receipt.format, "hwpx");
+  assert.equal(receipt.sourceUnchanged, true);
+  assert.equal(receipt.remainingDescendantCount, 0);
+  assert.match(output, /^LARGE_DOCUMENT_SMOKE status=passed requestedMiB=100 actualBytes=\d+ format=hwpx sourceUnchanged=true remainingDescendants=0\n$/u);
+});
+
+test("large-document smoke fails closed when detection changes the source", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-large-mutated-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let output = "";
+  const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
+    sizeMiB: 100,
+    createTemporaryRoot: async () => root,
+    generateSource: async ({ outputPath, requestedBytes }) => {
+      const handle = await open(outputPath, "wx", 0o600);
+      await handle.write(Buffer.from("PK\u0003\u0004bounded-large-document-smoke"), 0, 32, 0);
+      await handle.truncate(requestedBytes);
+      await handle.close();
+    },
+    runProcess: async (_tool, args) => {
+      const request = JSON.parse(await readFile(args.at(-3), "utf8"));
+      const source = await open(request.arguments.file_path, "r+");
+      await source.write(Buffer.from([0x78]), 0, 1, 8);
+      await source.close();
+      await writeFile(args.at(-1), JSON.stringify({
+        isError: false,
+        structuredContent: {
+          format: "hwpx",
+          details: { file_size_bytes: 100 * 1024 * 1024 },
+        },
+      }), { flag: "wx", mode: 0o600 });
+      return {
+        code: 0,
+        signal: null,
+        overflow: false,
+        timedOut: false,
+        terminationFailed: false,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.from(
+          "ONESHOT_CLEANUP proof=registered-groups-empty observedProcessTrees=1 remainingProcessTrees=0\nONESHOT_OK\n",
+        ),
+        platform: "linux",
+      };
+    },
+    stdout: { write(value) { output += value; return true; } },
+    setExitCode() {},
+  });
+
+  assert.equal(receipt, false);
+  assert.equal(output, "LARGE_DOCUMENT_SMOKE status=failed stage=response\n");
 });
 
 test("one-shot cleanup rejects a recorded detached identity after the outer group is gone", () => {

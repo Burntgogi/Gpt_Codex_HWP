@@ -439,26 +439,21 @@ test("compatibility workflow policy rejects trigger, gate, evidence, and stabili
       "attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]",
     ],
     ["fail-fast stability", "      fail-fast: false", "      fail-fast: true"],
+    ["hosted experimental size", "--large-detect 100", "--large-detect 256"],
     [
-      "missing required evidence environment",
-      "          HWP_BENCH_REQUIRE_LARGE: \"1\"\n",
-      "",
+      "duplicate large smoke",
+      "run: node scripts/installed-runtime-smoke.mjs --large-detect 100",
+      "run: node scripts/installed-runtime-smoke.mjs --large-detect 100 && node scripts/installed-runtime-smoke.mjs --large-detect 100",
     ],
-    [
-      "mismatched evidence path",
-      "--output .superpowers/benchmarks/compatibility-supported-100.json",
-      "--output .superpowers/benchmarks/other-100.json",
-    ],
-    ["hosted experimental size", "--sizes 100", "--sizes 100,256"],
     [
       "duplicate platform receipt",
       "run: node scripts/platform-receipts.mjs create",
       "run: node scripts/platform-receipts.mjs create && node scripts/platform-receipts.mjs create",
     ],
     [
-      "public plugin install",
-      "run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp",
-      "run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp && npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
+      "duplicate runtime install",
+      "run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
+      "run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev && npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
     ],
     [
       "duplicate desktop full Node run",
@@ -573,7 +568,7 @@ test("Linux compatibility rejects alternate or duplicate test and 100 MiB entry 
     "node scripts/macos-node-tests-diagnostic.mjs",
     "node scripts/macos-node-tests-diagnostic.mjs --profile=pr-macos",
     "sh -c 'node scripts/source-node-tests-isolated.mjs --profile=full'",
-    "npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/duplicate-100.json",
+    "node scripts/installed-runtime-smoke.mjs --large-detect 100",
   ];
   for (const command of commands) {
     const injected = `      - name: Injected Linux compatibility mutation\n        run: ${command}\n${marker}`;
@@ -587,8 +582,8 @@ test("Linux compatibility rejects alternate or duplicate test and 100 MiB entry 
     ["Python shell suffix", "npm run test:python", "npm run test:python && true"],
     [
       "100 MiB shell suffix",
-      "npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/compatibility-supported-100.json",
-      "npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/compatibility-supported-100.json || true",
+      "node scripts/installed-runtime-smoke.mjs --large-detect 100",
+      "node scripts/installed-runtime-smoke.mjs --large-detect 100 || true",
     ],
     [
       "Node diagnostic shell suffix",
@@ -636,14 +631,14 @@ test("compatibility forbids inherited or custom shells outside the two bp16 step
       ),
     ],
     ...[
-      "Generate and validate Windows 100 MiB evidence",
+      "Run Windows 100 MiB production-path smoke",
       "Create Windows full platform receipt",
       "Enforce Windows compatibility outcomes",
       "Run Linux full Node profile",
       "Run Linux Python tests",
-      "Generate and validate Linux 100 MiB evidence",
+      "Run Linux 100 MiB production-path smoke",
       "Enforce Linux compatibility outcomes",
-      "Generate and validate macOS 100 MiB evidence",
+      "Run macOS 100 MiB production-path smoke",
       "Create macOS full platform receipt",
       "Enforce macOS compatibility outcomes",
     ].map((stepName) => [
@@ -879,42 +874,13 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.doesNotMatch(build, /memory:qualify|node-memory-gate|node-memory-qualification/iu);
   const large = requiredStep(steps, "id: large");
   assert.match(large, /^        timeout-minutes: 30$/mu);
-  assert.match(large, /^          HWP_BENCH_LARGE: "1"$/mu);
   assert.doesNotMatch(large, /continue-on-error|^        if:|^        shell:/mu);
-  assert.match(
-    large,
-    /benchmark:documents -- --sizes 100 --output \.superpowers\/benchmarks\/release-supported-100\.json\r?\n          if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}\r?\n          npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --validate-large \.superpowers\/benchmarks\/release-supported-100\.json/u,
-  );
-  const releaseDiagnosticCondition = "if: ${{ !cancelled() && steps.large.outcome == 'failure' }}";
-  const probe = requiredStep(steps, "name: Diagnose failed release 10 MiB probe");
-  const validator = requiredStep(steps, "name: Diagnose failed release supported evidence");
-  const classifier = requiredStep(steps, "name: Classify failed Windows release platform boundary");
-  for (const diagnostic of [probe, validator, classifier]) {
-    assert.match(diagnostic, new RegExp(`^        ${escapeRegExp(releaseDiagnosticCondition)}$`, "mu"));
-    assert.match(diagnostic, /^        continue-on-error: true$/mu);
-    assert.doesNotMatch(diagnostic, /^        shell:/mu);
-  }
-  assert.match(probe, /--sizes 10 --output \.superpowers\/benchmarks\/release-diagnostic-10\.json/u);
-  assert.match(validator, /--validate-large \.superpowers\/benchmarks\/release-supported-100\.json/u);
-  assert.match(classifier, /diagnose:hosted -- --windows-supervisor/u);
-  const diagnosticUpload = requiredStep(steps, "name: release-preflight-diagnostics-${{ inputs.release_version }}-${{ github.run_id }}-${{ github.run_attempt }}");
-  assert.match(diagnosticUpload, new RegExp(`^        ${escapeRegExp(releaseDiagnosticCondition)}$`, "mu"));
-  assert.match(diagnosticUpload, /^          retention-days: 3$/mu);
-  assert.match(diagnosticUpload, /^          include-hidden-files: true$/mu);
-  assert.match(diagnosticUpload, /^          if-no-files-found: error$/mu);
-  assert.match(diagnosticUpload, /\.superpowers\/benchmarks\/release-supported-100\.json/u);
-  assert.match(diagnosticUpload, /\.superpowers\/benchmarks\/release-diagnostic-10\.json/u);
-  assert.deepEqual(
-    steps.filter((step) => step.includes("continue-on-error: true")),
-    [probe, validator, classifier],
-  );
-  assert.deepEqual(
-    steps.filter((step) => /^        if:/mu.test(step)),
-    [probe, validator, classifier, diagnosticUpload],
-  );
+  assertExactInlineRun(large, "node scripts/installed-runtime-smoke.mjs --large-detect 100");
+  assert.equal(countMatches(build, /installed-runtime-smoke\.mjs --large-detect 100/gu), 1);
+  assert.doesNotMatch(build, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
+  assert.deepEqual(steps.filter((step) => step.includes("continue-on-error: true")), []);
+  assert.deepEqual(steps.filter((step) => /^        if:/mu.test(step)), []);
   assert.doesNotMatch(build, /^        shell:/mu);
-  assert.match(build, /^          HWP_BENCH_REQUIRE_LARGE: "1"$/mu);
-  assert.match(build, /^          HWP_BENCH_LARGE_EVIDENCE: "\.superpowers\/benchmarks\/release-supported-100\.json"$/mu);
   const fullGate = requiredStep(steps, "run: npm run release:verify");
   assert.doesNotMatch(fullGate, /^        (?:continue-on-error|if|shell):/mu);
   assert.match(build, /npm run release:artifacts/u);
@@ -925,17 +891,15 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.match(build, /SHA256SUMS/u);
   assert.match(build, /actions\/upload-artifact@/u);
   assert.match(build, /^          path: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts\/$/mu);
-  const largeEvidence = build.indexOf("benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/release-supported-100.json");
+  const largeEvidence = build.indexOf("node scripts/installed-runtime-smoke.mjs --large-detect 100");
   const exactTag = build.indexOf("name: Assert exact immutable release tag");
   const sourceInstall = build.indexOf("name: Install source dependencies without lifecycle scripts");
-  const diagnosticProbe = build.indexOf("benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/release-diagnostic-10.json");
   const releaseGate = build.indexOf("npm run release:verify");
   const artifactBuild = build.indexOf("npm run release:artifacts");
   const artifactUpload = build.indexOf("name: gpt-codex-hwp-v${{ inputs.release_version }}-candidate");
   assert.equal(
     exactTag >= 0 && sourceInstall > exactTag && largeEvidence > sourceInstall
-      && diagnosticProbe > largeEvidence && diagnosticProbe < releaseGate
-      && releaseGate < artifactBuild && artifactBuild < artifactUpload,
+      && largeEvidence < releaseGate && releaseGate < artifactBuild && artifactBuild < artifactUpload,
     true,
     "large evidence and the full release gate must pass before building or uploading attested subjects",
   );
@@ -952,15 +916,14 @@ function assertReleaseWorkflowPolicy(workflow) {
   assertPinnedActions(workflow);
 }
 
-test("release policy rejects cancelled diagnostics, non-100 evidence, and preflight success bypasses", async () => {
+test("release policy rejects non-100 smoke, bypasses, and duplicate source installs", async () => {
   const workflow = await readFile(RELEASE_WORKFLOW_PATH, "utf8");
   const mutations = [
     ["cancel duplicate", workflow.replace("cancel-in-progress: false", "cancel-in-progress: true")],
     ["large continue", workflow.replace("        id: large", "        id: large\n        continue-on-error: true")],
-    ["legacy sizes", workflow.replace("--sizes 100 --output .superpowers/benchmarks/release-supported-100.json", "--sizes 100,256,512 --output .superpowers/benchmarks/release-supported-100.json")],
-    ["missing validation", workflow.replace(/^\s+npm --prefix packages\/gpt-codex-hwp run benchmark:documents -- --validate-large \.superpowers\/benchmarks\/release-supported-100\.json\r?$/mu, "")],
-    ["wrong diagnostic condition", workflow.replace("!cancelled() && steps.large.outcome == 'failure'", "failure()")],
-    ["gate before diagnostics", workflow.replace("      - name: Run the complete fail-closed release gate", "      - name: Run the complete fail-closed release gate\n        if: always()")],
+    ["unsupported size", workflow.replace("--large-detect 100", "--large-detect 256")],
+    ["smoke suffix bypass", workflow.replace("--large-detect 100", "--large-detect 100 || true")],
+    ["gate bypass", workflow.replace("      - name: Run the complete fail-closed release gate", "      - name: Run the complete fail-closed release gate\n        if: always()")],
     ["custom shell", workflow.replace("        id: large", "        id: large\n        shell: bash -c \"source {0}; exit 0\"")],
     ["duplicate source install", workflow.replace("      - name: Install runtime dependencies without lifecycle scripts", "      - run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp\n      - name: Install runtime dependencies without lifecycle scripts")],
   ];
@@ -1027,7 +990,6 @@ function assertCompatibilityWorkflowPolicy(workflow) {
     /^concurrency:\r?\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event_name \}\}-\$\{\{ github\.ref \}\}\r?\n  cancel-in-progress: \$\{\{ github\.event_name == 'schedule' \}\}$/mu,
   );
   assert.doesNotMatch(workflow, /--sizes[^\r\n]*(?:\b256\b|\b512\b)|--validate-large[^\r\n]*(?:\b256\b|\b512\b)/u);
-  assert.doesNotMatch(workflow, /npm ci[^\r\n]*--prefix plugins\/gpt-codex-hwp/iu);
 
   const windows = jobSection(workflow, "windows", "linux");
   const linux = jobSection(workflow, "linux", "macos");
@@ -1087,6 +1049,7 @@ function assertDesktopCompatibilityJob(section, options) {
   assert.match(section, /^    permissions:\r?\n      contents: read$/mu);
   assertCompatibilityIdentityBoundary(section, options.platform, options.arch);
   assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/gu), 1);
+  assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev(?:\s|$)/gu), 1);
   assert.doesNotMatch(section, /npm (?:--prefix packages\/gpt-codex-hwp )?run build(?:\s|$)/u,
     `${options.label} relies on benchmark prebenchmark build and receipt-owned build`);
   assert.match(section, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
@@ -1101,13 +1064,9 @@ function assertDesktopCompatibilityJob(section, options) {
   assertContinuedValidationStep(receipt);
   assertNoStepShell(large);
   assertNoStepShell(receipt);
-  assert.equal(countMatches(large, /^          HWP_BENCH_LARGE: "1"$/gmu), 1);
-  assert.doesNotMatch(large, /HWP_BENCH_REQUIRE_LARGE|HWP_BENCH_LARGE_EVIDENCE/u);
   assertExactSupported100Step(large);
   assertOnlySupported100Commands(section);
-  assert.equal(countMatches(receipt, /^          HWP_BENCH_LARGE: "1"$/gmu), 1);
-  assert.equal(countMatches(receipt, /^          HWP_BENCH_REQUIRE_LARGE: "1"$/gmu), 1);
-  assert.equal(countMatches(receipt, /^          HWP_BENCH_LARGE_EVIDENCE: "\.superpowers\/benchmarks\/compatibility-supported-100\.json"$/gmu), 1);
+  assert.doesNotMatch(section, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
   assertExactInlineRun(receipt, receiptCommand);
   assert.ok(section.indexOf("id: large") < section.indexOf("id: receipt"), `${options.label} evidence precedes receipt`);
   assert.deepEqual(
@@ -1135,7 +1094,7 @@ function assertDesktopCompatibilityJob(section, options) {
   const upload = requiredStep(steps, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
   assert.match(upload, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
   assert.match(upload, new RegExp(`^          name: ${escapeRegExp(options.artifactName)}$`, "mu"));
-  assert.match(upload, /^          path: \|\r?\n            \.superpowers\/benchmarks\/compatibility-supported-100\.json\r?\n            release-receipts\/\r?\n            \$\{\{ runner\.temp \}\}\/compatibility-diagnostics\/$/mu);
+  assert.match(upload, /^          path: \|\r?\n            release-receipts\/\r?\n            \$\{\{ runner\.temp \}\}\/compatibility-diagnostics\/$/mu);
   assert.match(upload, /^          if-no-files-found: error$/mu);
   assert.match(upload, /^          retention-days: 3$/mu);
   assert.match(upload, /^          include-hidden-files: true$/mu);
@@ -1158,6 +1117,7 @@ function assertLinuxCompatibilityJob(section) {
   assert.match(section, /^    permissions:\r?\n      contents: read$/mu);
   assertCompatibilityIdentityBoundary(section, "linux", "x64");
   assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/gu), 1);
+  assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev(?:\s|$)/gu), 1);
   assert.doesNotMatch(section, /npm (?:--prefix packages\/gpt-codex-hwp )?run build(?:\s|$)/u);
   assert.doesNotMatch(section, /platform-receipts|release-receipts|release:verify|release:artifacts|verify:release-artifacts/iu);
 
@@ -1173,7 +1133,7 @@ function assertLinuxCompatibilityJob(section) {
   assertExactInlineRun(python, pythonCommand);
   assertExactSupported100Step(large);
   assertOnlySupported100Commands(section);
-  assert.equal(countMatches(large, /^          HWP_BENCH_LARGE: "1"$/gmu), 1);
+  assert.doesNotMatch(section, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
 
   const nodeDiagnosticCommand = "node scripts/macos-node-tests-diagnostic.mjs --profile=full > \"${{ runner.temp }}/compatibility-diagnostics/node.txt\" 2>&1";
   const pythonDiagnosticCommand = "node scripts/python-tests-diagnostic.mjs > \"${{ runner.temp }}/compatibility-diagnostics/python.txt\" 2>&1";
@@ -1195,7 +1155,7 @@ function assertLinuxCompatibilityJob(section) {
   const upload = requiredStep(steps, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
   assert.match(upload, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
   assert.match(upload, /^          name: compatibility-linux-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}$/mu);
-  assert.match(upload, /^          path: \|\r?\n            \.superpowers\/benchmarks\/compatibility-supported-100\.json\r?\n            \$\{\{ runner\.temp \}\}\/compatibility-diagnostics\/$/mu);
+  assert.match(upload, /^          path: \$\{\{ runner\.temp \}\}\/compatibility-diagnostics\/$/mu);
   assert.match(upload, /^          if-no-files-found: error$/mu);
   assert.match(upload, /^          retention-days: 3$/mu);
   assert.match(upload, /^          include-hidden-files: true$/mu);
@@ -1271,25 +1231,21 @@ function assertCompatibilityIdentityBoundary(section, platform, arch) {
 }
 
 function assertExactSupported100Step(step) {
-  const output = ".superpowers/benchmarks/compatibility-supported-100.json";
-  const generate = `npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output ${output}`;
-  const validate = `npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large ${output}`;
-  assertExactBlockRun(step, [generate, validate]);
+  const command = "node scripts/installed-runtime-smoke.mjs --large-detect 100";
+  assertExactInlineRun(step, command);
   assert.deepEqual(
     workflowRunCommands(step).filter(isDocumentBenchmarkCommand),
-    [generate, validate],
-    "100 MiB generation and validation must be exact and unique",
+    [command],
+    "100 MiB production-path smoke must be exact and unique",
   );
 }
 
 function assertOnlySupported100Commands(section) {
-  const output = ".superpowers/benchmarks/compatibility-supported-100.json";
-  const generate = `npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output ${output}`;
-  const validate = `npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large ${output}`;
+  const command = "node scripts/installed-runtime-smoke.mjs --large-detect 100";
   assert.deepEqual(
     workflowRunCommands(section).filter(isDocumentBenchmarkCommand),
-    [generate, validate],
-    "compatibility permits exactly one canonical 100 MiB generation and validation pair",
+    [command],
+    "compatibility permits exactly one canonical 100 MiB production-path smoke",
   );
 }
 
@@ -1405,7 +1361,7 @@ function isCompatibilityTestCommand(command) {
 }
 
 function isDocumentBenchmarkCommand(command) {
-  return /(?:benchmark:documents|document-engine-benchmark\.mjs)/u.test(command);
+  return /(?:benchmark:documents|document-engine-benchmark\.mjs|installed-runtime-smoke\.mjs\s+--large-detect)/u.test(command);
 }
 
 function jobSection(workflow, job, nextJob) {

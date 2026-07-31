@@ -49,19 +49,18 @@ only below a Git-ignored directory and records sizes, timings, bounded resource
 measurements, status codes, and hashes. It never records document content,
 values, anchors, user paths, temporary paths, or raw errors.
 
-The scheduled/manual `Compatibility` workflow generates and validates exactly
-one fresh, passed 100 MiB receipt. Immutable release verification uses the same
-single-100 MiB contract at
-`.superpowers/benchmarks/release-supported-100.json` before the complete
-release verifier, checksummed artifact verification, and attestation. The
-historical `HWP_BENCH_LARGE` plumbing name remains for compatibility:
+Hosted compatibility and immutable release verification use the installed
+production one-shot path instead of the RSS benchmark supervisor. The smoke
+generates one 100 MiB HWPX, calls `hwp_detect_format`, verifies the reported
+format and size, proves the source SHA-256 is unchanged, and requires zero
+remaining descendants:
 
 ```powershell
-$env:HWP_BENCH_LARGE = "1"
-npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/supported-100.json
-Remove-Item Env:HWP_BENCH_LARGE
-npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --validate-large .superpowers/benchmarks/supported-100.json
+node scripts/installed-runtime-smoke.mjs --large-detect 100
 ```
+
+The RSS benchmark remains a maintainer-only local measurement tool. Its receipt
+is not a hosted compatibility or release gate.
 
 The 256 and 512 MiB cases remain available only as explicit local experiments.
 They are schema-validated diagnostics, may pass, fail, or report
@@ -113,28 +112,27 @@ The scheduled and manually dispatched compatibility responsibilities are:
 
 | Compatibility job | Full-gate responsibility |
 | --- | --- |
-| `Windows full compatibility` | source install; generate then validate one passed 100 MiB receipt; create one Windows platform receipt |
+| `Windows full compatibility` | source/runtime install; one 100 MiB production-path one-shot smoke; one Windows platform receipt |
 | `macOS full compatibility` | the same 100 MiB and platform-receipt boundary on `macos-15` |
-| `Linux full compatibility` | full Node profile, Python suite, and generate-plus-validate 100 MiB evidence once each; Linux has no platform-receipt implementation |
+| `Linux full compatibility` | source/runtime install, full Node profile, Python suite, and one 100 MiB production-path smoke; Linux has no platform-receipt implementation |
 | `macOS bp16 stability N of 20` | manual-only exact `bp16` execution after production cleanup-semantics changes |
 
 The Windows/macOS platform receipt invokes the complete release verifier. It
 already owns the full Node and Python suites, temporary installed-runtime and
 nine-tool verification, and `bp16`; no separate full test or `bp16` command is
 allowed in those jobs. Only source dependencies are installed before the 100
-MiB benchmark. npm automatically runs `prebenchmark:documents` and builds the
-source, while the nine-tool stage builds and installs a fresh temporary public
-runtime. Installing the checked-in plugin runtime separately would duplicate
-that ownership.
+MiB production-path smoke. The smoke uses the checked-in public runtime after
+one production-only dependency install, while the platform receipt separately
+builds and verifies a fresh release candidate.
 
 Core validation steps use `continue-on-error` only to preserve later evidence
 and diagnostics. The final `compatibility-gate.mjs` consumes the original
 `steps.*.outcome` values and accepts only `success`; `failure`, `cancelled`,
 `skipped`, missing, or unknown outcomes remain fatal. Node/Python/hosted-boundary
 diagnostics run only after their matching failure and cannot change the final
-decision. Exact benchmark JSON, platform receipts, and bounded diagnostic text
-are uploaded for three days. No dependency tree, user document, runtime tree,
-or raw `bp16` TAP is uploaded.
+decision. Platform receipts and bounded diagnostic text are uploaded for three
+days. No benchmark JSON, dependency tree, user document, runtime tree, or raw
+`bp16` TAP is uploaded.
 
 `run_bp16_stability` is a boolean manual-dispatch input. When true, exactly 20
 independent `macos-15` matrix jobs run the anchored `bp16` case once each and
@@ -144,11 +142,9 @@ for receipt, profile, documentation, or workflow-only changes. The 256 and 512
 MiB cases remain local opt-in experiments outside every hosted compatibility
 and release gate.
 
-Release preflight is deliberately fail-closed. Its 100 MiB step is not
-`continue-on-error`; on failure, only a bounded 10 MiB probe, the same
-supported-evidence validator, the Windows hosted-boundary classifier, and a
-three-day diagnostic artifact run. The original failed step keeps the job red,
-so the full release gate, artifact construction, and attestation remain skipped.
+Release preflight is deliberately fail-closed. Its 100 MiB production-path
+smoke is not `continue-on-error`; failure emits only a fixed bounded stage and
+stops the full release gate, artifact construction, and attestation.
 Runs for the same immutable tag and SHA are serialized and never auto-cancel an
 execution already in progress.
 
@@ -164,7 +160,7 @@ its post-merge owner, not by removing public MCP functionality. An ordinary
 v0.2.1 desktop PR generated 100, 256, and 512 MiB on both Windows and macOS:
 1,736 MiB in aggregate. v0.2.2 generates one 10 MiB case on each platform:
 20 MiB in aggregate, a reduction of about 98.8%. Compatibility and immutable
-release verification retain the required 100 MiB evidence. The 256 and 512 MiB
+release verification retain the required 100 MiB production-path smoke. The 256 and 512 MiB
 cases remain explicit local experiments.
 
 | Measurement | v0.2.1 baseline | v0.2.2 candidate | Change |
@@ -252,14 +248,10 @@ This lifecycle is a reliability and cleanup mechanism, not a security sandbox.
 It does not grant protection from a hostile document or a same-user process;
 run untrusted inputs under an appropriate least-privilege OS account or sandbox.
 
-For a public-release evidence gate, set `HWP_BENCH_REQUIRE_LARGE=1`. The release
-verifier then checks that the evidence contains exactly one fresh, schema-valid,
-passed 100 MiB receipt. Set `HWP_BENCH_LARGE_EVIDENCE` only when the ignored
-receipt is not at the default `.superpowers/benchmarks/supported-100.json`
-location. The environment names remain unchanged for backward-compatible
-internal plumbing. `Compatibility` uses
-`.superpowers/benchmarks/compatibility-supported-100.json`; immutable release
-verification uses `.superpowers/benchmarks/release-supported-100.json`.
+Public-release verification runs
+`node scripts/installed-runtime-smoke.mjs --large-detect 100` directly. Local
+RSS receipts and the historical `HWP_BENCH_*` controls remain engineering
+tools and cannot satisfy or bypass the public release gate.
 
 Windows x64 is the currently exercised and verified device class. macOS Apple
 Silicon remains a compatibility target with unverified-device status; no

@@ -288,6 +288,7 @@ function selectDocumentBenchmarkFailureReceipt(result) {
     .split(/\r?\n/u)
     .map((line) => line.trim());
   const patterns = [
+    /^LARGE_DOCUMENT_SMOKE status=failed stage=[a-z0-9-]+$/u,
     /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u,
     /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u,
     /^BENCHMARK_CASE_FAILURE phase=(?:facade|snapshot|detect|probe|unknown) engineCode=[A-Z_]+ stage=[a-zA-Z0-9-]+$/u,
@@ -328,7 +329,8 @@ function normalizedDocumentBenchmarkDiagnostic(value) {
 }
 
 function isSafeDocumentBenchmarkReceipt(value) {
-  return /^BENCHMARK_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value)
+  return /^LARGE_DOCUMENT_SMOKE status=failed stage=[a-z0-9-]+$/u.test(value)
+    || /^BENCHMARK_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value)
     || /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u.test(value)
     || /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u.test(value)
     || /^BENCHMARK_CASE_FAILURE phase=(?:facade|snapshot|detect|probe|unknown) engineCode=[A-Z_]+ stage=[a-zA-Z0-9-]+$/u.test(value)
@@ -826,7 +828,7 @@ function releaseStageDefinitions(root, environment) {
       "tests/public-runtime-privacy.test.ts",
     ], root, none),
     npmStage("runtime-diff", ["run", "runtime:check"], root, none),
-    documentBenchmarkStage(root, none, environment),
+    documentBenchmarkStage(root, none),
     Object.freeze({
       name: "release-artifacts",
       kind: "release-artifacts",
@@ -841,36 +843,11 @@ function releaseStageDefinitions(root, environment) {
   return Object.freeze(stages);
 }
 
-function documentBenchmarkStage(root, env, environment) {
-  const small = fixedCommand("npm", [
-    "--prefix",
-    "packages/gpt-codex-hwp",
-    "run",
-    "benchmark:documents",
-    "--",
-    "--sizes",
-    "10",
-    "--output",
-    `.superpowers/benchmarks/release-10m-${process.pid}.json`,
-  ]);
-  if (!Object.hasOwn(environment, "HWP_BENCH_REQUIRE_LARGE")
-    || environment.HWP_BENCH_REQUIRE_LARGE !== "1") {
-    return npmStage("document-benchmark", small.args, root, env);
-  }
-  const evidencePath = Object.hasOwn(environment, "HWP_BENCH_LARGE_EVIDENCE")
-    ? environment.HWP_BENCH_LARGE_EVIDENCE
-    : ".superpowers/benchmarks/supported-100.json";
-  return compositeStage("document-benchmark", [
-    small,
-    fixedCommand("npm", [
-      "--prefix",
-      "packages/gpt-codex-hwp",
-      "run",
-      "benchmark:documents",
-      "--",
-      "--validate-large",
-      evidencePath,
-    ]),
+function documentBenchmarkStage(root, env) {
+  return nodeStage("document-benchmark", [
+    "scripts/installed-runtime-smoke.mjs",
+    "--large-detect",
+    "100",
   ], root, env);
 }
 
