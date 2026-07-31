@@ -14,6 +14,8 @@ This file records published tags. Work under `Unreleased` is not a release claim
   reusing the verified canonical temporary root instead of its runner alias.
 - Added privacy-safe lifecycle diagnostics, exact process-cleanup receipts,
   stale-run cancellation, and fail-closed release preflight handling.
+- Fixed valid GPG-signed commits with empty signature continuation lines being
+  misclassified as malformed Git history during the public-history scan.
 - Replaced default persistent MCP registration with nine internal one-shot
   contracts while retaining explicit manual MCP compatibility for all nine.
 

@@ -1,7 +1,7 @@
 # Gpt_Codex_HWP v0.2.2 Release Notes
 
 - Status: pre-release candidate
-- Prepared: 2026-07-31
+- Prepared: 2026-08-01
 - Verification platforms: Windows x64, macOS arm64 hosted runner, Linux x64, and security policy; no physical Mac verification
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
@@ -19,6 +19,7 @@ Installed-runtime smoke tests previously stalled for 60 seconds on GitHub hosted
 - Retained 256 and 512 MiB benchmarks as explicit local engineering experiments without compatibility guarantees.
 - Accepted hosted-runner path aliases during ownership validation while using only the verified canonical temporary root as the runtime boundary.
 - Initialization diagnostics emit only the last allowlisted lifecycle boundary and a bounded stderr byte count. Raw errors, user paths, PIDs, and document content are never emitted.
+- Fixed the history scanner incorrectly treating an empty continuation line in a valid GPG-signed commit as malformed Git history.
 - Kept process start gates, supervisor readiness, termination receipts, and remaining-child verification fail closed.
 - Removed duplicate full-suite ownership from pull-request jobs; Compatibility and immutable release verification own full platform receipts and 100 MiB evidence.
 - A failed release 100 MiB preflight now runs only bounded diagnostics and prevents artifact construction and attestation.
@@ -46,13 +47,14 @@ The verified resource claim is intentionally narrow: when unused, this plugin ha
 
 ## Current verification evidence
 
-- [PR #5 required CI run 30248171415](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/30248171415): Windows x64, macOS arm64, and Linux lifecycle passed. The previously documented hosted macOS `bp16` scheduling variance passed both the same-run isolated diagnostic and one failed-job rerun.
-- [PR #5 Security run 30248171437](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/30248171437): public tree, every reachable Git object and author identity, production dependencies, runtime projection, and policy checks passed.
-- Final candidate local verification: the installed-runtime one-shot generated an HWPX, validated it, and confirmed zero remaining supervised descendants.
+- Clean public-lineage local scan: 406 public-tree entries and all 714 reachable Git objects passed without personal identity, credential, or private-path findings.
+- Repository Node tests passed with `452 passed / 2 skipped / 0 failed`; all 41 source Node test files and 20 Python safe-edit tests passed.
+- Runtime projection for 119 files, project metadata, and source/public-runtime dependency contracts were verified.
+- The installed-runtime one-shot generated and validated an HWPX and confirmed zero remaining supervised descendants.
 - Source and public-runtime `npm audit --omit=dev`: zero known vulnerabilities.
 - Remote repository policy: `compliant` for protected main, immutable tags, and owner-only writes.
 
-Because this pull request introduces the new `Compatibility` workflow, GitHub does not allow manual dispatch until that workflow exists on the default branch. The remaining release gates are to run full Windows x64, macOS arm64, and Linux x64 compatibility plus 100 MiB evidence at the exact merged commit, then run release-candidate verification, artifact checks, and attestation against the immutable `v0.2.2` tag.
+The `Compatibility` workflow exists on the default branch. The remaining release gates are to pass Windows x64, macOS arm64, Linux lifecycle, and Security policy on the new candidate pull request; run full-platform compatibility plus 100 MiB evidence at the exact merged commit; and then run release-candidate verification, artifact checks, and attestation against the immutable `v0.2.2` tag.
 
 ## Installation and upgrade
 

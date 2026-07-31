@@ -1,7 +1,7 @@
 # Gpt_Codex_HWP v0.2.2 릴리즈 노트
 
 - 상태: 배포 전 릴리즈 후보
-- 작성일: 2026-07-31
+- 작성일: 2026-08-01
 - 검증 플랫폼: Windows x64·macOS arm64 hosted runner·Linux x64·보안 정책; 실제 Mac 기기 미검증
 
 [English](RELEASE_NOTES.en.md) | [README](README.md)
@@ -19,6 +19,7 @@ GitHub hosted Windows와 macOS에서 설치 런타임 스모크가 60초 후 중
 - 256·512 MiB 벤치마크는 설계 검사용 로컬 실험으로 유지하며 호환성을 보장하지 않습니다.
 - Windows와 macOS의 설치 런타임 스모크가 runner 경로 별칭을 허용하되, 검증된 정규 임시 루트만 실제 허용 경계로 사용합니다.
 - 초기화 실패 진단은 허용 목록의 마지막 생명주기 경계와 제한된 stderr 바이트 수만 기록합니다. 원시 오류, 사용자 경로, PID와 문서 내용은 출력하지 않습니다.
+- 정상적인 GPG 서명 커밋의 빈 연속행을 Git 이력 손상으로 오인하던 보안 검사기를 수정했습니다.
 - 프로세스 시작 게이트, 감독자 준비, 종료 영수증과 잔존 자식 검증은 계속 fail-closed로 동작합니다.
 - 중복된 전체 테스트를 PR에서 제거하고, 전체 플랫폼 영수증과 100 MiB 증적은 Compatibility 및 불변 릴리즈 검증 단계가 소유합니다.
 - 릴리즈 100 MiB 사전 검증이 실패하면 제한된 진단만 실행하고 배포물 생성과 attestation은 중단합니다.
@@ -46,13 +47,14 @@ GitHub hosted Windows와 macOS에서 설치 런타임 스모크가 60초 후 중
 
 ## 현재 검증 증거
 
-- [PR #5 필수 CI 실행 30248171415](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/30248171415): Windows x64, macOS arm64, Linux lifecycle 통과. macOS의 기존 `bp16` hosted 스케줄링 변동은 동일 runner 격리 진단과 한 번의 실패 작업 재실행에서 통과했습니다.
-- [PR #5 보안 실행 30248171437](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/30248171437): 공개 트리, 전체 도달 가능 Git 객체·작성자 신원, 운영 의존성, 런타임 투영과 정책 검사 통과.
-- 최종 후보 로컬 검증: 실제 설치 런타임 one-shot이 HWPX를 생성·검증했고, 감독된 나머지 하위 프로세스 0개를 확인했습니다.
+- 공개 후보 계보 로컬 검사: 공개 트리 406개 항목과 전체 도달 가능 Git 이력 714개 객체를 검사했고, 개인정보·자격증명·비공개 경로 발견 없이 통과했습니다.
+- 저장소 Node 테스트 `452 passed / 2 skipped / 0 failed`, 소스 Node 테스트 41개 파일, Python 안전 편집 테스트 20개를 통과했습니다.
+- 런타임 투영 119개 파일, 프로젝트 메타데이터, 소스·공개 런타임 의존성 계약을 검증했습니다.
+- 실제 설치 런타임 one-shot이 HWPX를 생성·검증했고, 감독된 나머지 하위 프로세스 0개를 확인했습니다.
 - 소스 및 공개 런타임 `npm audit --omit=dev`: 알려진 취약점 0개.
 - 원격 저장소 정책: 보호된 main, 불변 태그와 작성자 전용 쓰기 정책에 대해 `compliant`.
 
-새 `Compatibility` 워크플로는 이 PR에서 추가되므로 GitHub 규칙상 기본 브랜치 병합 전에는 수동 실행할 수 없습니다. 릴리즈 전 필수 잔여 관문은 병합된 정확한 커밋에서 Windows x64·macOS arm64·Linux x64의 전체 호환성과 100 MiB 증적을 통과하고, 이후 불변 `v0.2.2` 태그에 대해 릴리즈 후보 검증·배포물 검사·attestation을 통과하는 것입니다.
+`Compatibility` 워크플로는 기본 브랜치에 존재합니다. 릴리즈 전 필수 잔여 관문은 새 후보 PR의 Windows x64·macOS arm64·Linux lifecycle·Security policy를 통과하고, 병합된 정확한 커밋에서 전체 플랫폼 호환성과 100 MiB 증적을 통과한 뒤, 불변 `v0.2.2` 태그에 대해 릴리즈 후보 검증·배포물 검사·attestation을 통과하는 것입니다.
 
 ## 설치와 업그레이드
 
