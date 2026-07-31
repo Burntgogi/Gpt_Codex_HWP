@@ -4,9 +4,7 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 ## [Unreleased]
 
-- No unreleased changes.
-
-## [0.2.2] - 2026-07-27
+### v0.2.2 candidate
 
 - Added bounded Windows x64, macOS arm64, Linux, and Security pull-request
   gates plus a scheduled/manual full compatibility workflow.
@@ -16,6 +14,8 @@ This file records published tags. Work under `Unreleased` is not a release claim
   reusing the verified canonical temporary root instead of its runner alias.
 - Added privacy-safe lifecycle diagnostics, exact process-cleanup receipts,
   stale-run cancellation, and fail-closed release preflight handling.
+- Replaced default persistent MCP registration with nine internal one-shot
+  contracts while retaining explicit manual MCP compatibility for all nine.
 
 ## [0.2.1] - 2026-07-22
 
@@ -61,8 +61,7 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.2...HEAD
-[0.2.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...v0.2.2
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.2.0
 [0.1.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4

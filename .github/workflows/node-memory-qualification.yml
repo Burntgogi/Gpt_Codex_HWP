@@ -1,0 +1,68 @@
+name: Node memory qualification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/node-memory-qualification.yml"
+      - ".github/workflows/release-verify.yml"
+      - "package.json"
+      - "packages/gpt-codex-hwp/package.json"
+      - "packages/gpt-codex-hwp/package-lock.json"
+      - "packages/gpt-codex-hwp/src/**"
+      - "packages/gpt-codex-hwp/benchmarks/**"
+      - "packages/gpt-codex-hwp/vendor/**"
+      - "plugins/gpt-codex-hwp/package.json"
+      - "plugins/gpt-codex-hwp/package-lock.json"
+      - "plugins/gpt-codex-hwp/.codex-plugin/plugin.json"
+      - "plugins/gpt-codex-hwp/dist/oneshot.js"
+      - "plugins/gpt-codex-hwp/examples/mcp-manual.json"
+      - "plugins/gpt-codex-hwp/skills/gpt-codex-hwp/SKILL.md"
+      - "scripts/installed-runtime-smoke.mjs"
+      - "scripts/node-memory-gate.mjs"
+      - "scripts/run-node-memory-qualification.mjs"
+      - "tests/node-memory-gate.test.mjs"
+      - "tests/run-node-memory-qualification.test.mjs"
+      - "tests/workflow-policy.test.mjs"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Node memory qualification
+    runs-on: windows-2025
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+          package-manager-cache: false
+      - name: Pin npm
+        run: |
+          npm install --global npm@10.9.7 --ignore-scripts
+          if ((npm --version) -ne "10.9.7") { exit 1 }
+      - name: Run exact-SHA qualification
+        run: |
+          node scripts/node-memory-gate.mjs decision create --output .superpowers/decisions/pr-node-memory.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run memory:qualify -- prepare --control-revision 6983ffaf7e0a392bc9852a121ae14895ab4160fb --decision .superpowers/decisions/pr-node-memory.json --output .superpowers/qualifications/pr
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        if: ${{ !cancelled() }}
+        with:
+          name: node-memory-qualification-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: |
+            .superpowers/decisions/pr-node-memory.json
+            .superpowers/qualifications/pr/
+          if-no-files-found: error
+          retention-days: 90
+          include-hidden-files: true

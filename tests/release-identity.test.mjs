@@ -10,7 +10,8 @@ const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)))
 const IMMUTABLE_RELEASES = Object.freeze([
   "0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.1",
 ]);
-const LAST_BUILD_ID = "20260722040551";
+const PRE_ONESHOT_BUILD_ID = "20260727172424";
+const EXPECTED_BUILD_ID = "20260731221916";
 
 test("release identity derives every 0.2.2 candidate surface from root metadata", async () => {
   const metadata = await loadProjectMetadata(ROOT);
@@ -35,7 +36,8 @@ test("release identity derives every 0.2.2 candidate surface from root metadata"
   assert.equal(rootPackage.version, "0.2.2");
   assert.equal(metadata.version, rootPackage.version);
   assert.match(metadata.codexBuildId, /^[0-9]{14}$/u);
-  assert.ok(metadata.codexBuildId > LAST_BUILD_ID);
+  assert.equal(metadata.codexBuildId, EXPECTED_BUILD_ID);
+  assert.ok(BigInt(metadata.codexBuildId) > BigInt(PRE_ONESHOT_BUILD_ID));
   assert.equal(expectedPluginVersion, `0.2.2+codex.${metadata.codexBuildId}`);
   assert.equal(sourcePackage.version, metadata.version);
   assert.equal(sourceLock.version, metadata.version);
@@ -43,7 +45,7 @@ test("release identity derives every 0.2.2 candidate surface from root metadata"
   assert.equal(runtimePackage.version, metadata.version);
   assert.equal(runtimeLock.version, metadata.version);
   assert.equal(runtimeLock.packages[""].version, metadata.version);
-  assert.equal(plugin.version, expectedPluginVersion);
+  assert.equal(plugin.version, `0.2.2+codex.${EXPECTED_BUILD_ID}`);
   assert.match(generated, new RegExp(`version: ${JSON.stringify(metadata.version)}`));
   assert.match(runtimeGenerated, new RegExp(`version: ${JSON.stringify(metadata.version)}`));
 
@@ -72,10 +74,73 @@ test("release identity derives every 0.2.2 candidate surface from root metadata"
   assert.match(releaseDocs[1], /## v0\.2\.2 Release Candidate/u);
   assert.match(releaseDocs[2], /상태: 배포 전 릴리즈 후보/u);
   assert.match(releaseDocs[3], /Status: pre-release candidate/iu);
-  assert.match(releaseDocs[4], /## \[0\.2\.2\] - 2026-07-27/u);
+  assert.match(releaseDocs[4], /^## \[Unreleased\]/mu);
+  assert.doesNotMatch(releaseDocs[4], /^## \[0\.2\.2\] -/mu);
   assert.match(releaseDocs[0], /macOS[^\n]+실제 (?:Mac )?기기[^\n]+(?:미검증|아직 검증하지 않았)/u);
   assert.match(releaseDocs[1], /macOS[^\n]+physical Mac[^\n]+unverified/iu);
+
+  const stableKo = markdownSection(releaseDocs[0], "## 안정 버전 v0.2.1 GitHub 설치", "## 로컬 v0.2.2 릴리즈 후보 검증");
+  const stableEn = markdownSection(releaseDocs[1], "## Stable v0.2.1 installation from GitHub", "## Local v0.2.2 release-candidate verification");
+  for (const stable of [stableKo, stableEn]) {
+    assert.match(stable, /v0\.2\.1/u);
+    assert.match(stable, /dist\/mcp\.js/u);
+    assert.match(stable, /\/mcp/u);
+    assert.doesNotMatch(stable, /dist\/oneshot\.js|oneshot-tool-schemas\.json/u);
+  }
+  assert.match(stableKo, /\/mcp[^\n]+기본[^\n]+등록/u);
+  assert.match(stableEn, /\/mcp[^\n]+registers the default/iu);
+
+  const candidateKo = markdownSection(releaseDocs[0], "## 로컬 v0.2.2 릴리즈 후보 검증", "## 설치 및 마이그레이션");
+  const candidateEn = markdownSection(releaseDocs[1], "## Local v0.2.2 release-candidate verification", "## Installation and Migration");
+  for (const candidate of [candidateKo, candidateEn]) {
+    assert.match(candidate, /0\.2\.2\+codex\.20260731221916/u);
+    assert.match(candidate, /dist\/oneshot\.js/u);
+    assert.match(candidate, /examples\/oneshot-tool-schemas\.json/u);
+    assert.match(candidate, /\/mcp/u);
+    assert.match(candidate, /dist\/mcp\.js/u);
+  }
+  assert.match(candidateKo, /새 작업만으로는 충분하지 않/u);
+  assert.match(candidateKo, /mcpServers[^\n]+없/u);
+  assert.match(candidateKo, /작업 하나[^\n]+성공[^\n]+생성 결과[^\n]+검증[^\n]+종료/u);
+  assert.match(candidateEn, /new task alone is not sufficient/iu);
+  assert.match(candidateEn, /no `mcpServers` property/iu);
+  assert.match(candidateEn, /one HWP\/HWPX operation[^\n]+succeed(?:s)?[^\n]+verif[^\n]+generated output[^\n]+exit/iu);
+
+  const notesKoInstallation = markdownSection(releaseDocs[2], "## 설치와 업그레이드", "## 호환성과 알려진 제한");
+  const notesEnInstallation = markdownSection(releaseDocs[3], "## Installation and upgrade", "## Compatibility and known limitations");
+  assert.match(notesKoInstallation, /문서 작업 하나[^\n]+성공[^\n]+생성 결과[^\n]+검증[^\n]+one-shot 프로세스와 그 하위 프로세스[^\n]+종료/u);
+  assert.match(notesEnInstallation, /one document operation[^\n]+succeed(?:s)?[^\n]+verif[^\n]+generated output[^\n]+one-shot process and (?:its )?descendants[^\n]+exit/iu);
+
+  assert.doesNotMatch(releaseDocs[2], /421|SVG\/PNG/u);
+  assert.doesNotMatch(releaseDocs[3], /421|SVG\/PNG/u);
+  assert.match(
+    releaseDocs[2],
+    /설치 런타임 one-shot[^\n]+HWPX[^\n]+검증[^\n]+감독[^\n]+하위 프로세스 0개/u,
+  );
+  assert.match(
+    releaseDocs[3],
+    /installed-runtime one-shot[^\n]+HWPX[^\n]+validated[^\n]+zero remaining supervised descendants/iu,
+  );
+
+  assert.match(releaseDocs[2], /상주 Gpt_Codex_HWP Node 프로세스는 0개/u);
+  assert.match(releaseDocs[2], /고정 RSS[^\n]+설치 크기[^\n]+주장하지 않/u);
+  assert.match(releaseDocs[3], /zero persistent Gpt_Codex_HWP Node processes/iu);
+  assert.match(releaseDocs[3], /No fixed RSS percentage or installation-size reduction is claimed/iu);
+  for (const notes of releaseDocs.slice(2, 4)) {
+    assert.doesNotMatch(notes, /44\.\d+\s*MiB|0\.6%/u);
+  }
+
+  const unreleased = markdownSection(releaseDocs[4], "## [Unreleased]", "## [0.2.1]");
+  assert.match(unreleased, /nine internal one-shot/u);
 });
+
+function markdownSection(document, startHeading, endHeading) {
+  const start = document.indexOf(startHeading);
+  const end = document.indexOf(endHeading, start + startHeading.length);
+  assert.ok(start >= 0, `missing section: ${startHeading}`);
+  assert.ok(end > start, `missing section boundary: ${endHeading}`);
+  return document.slice(start, end);
+}
 
 async function readJson(relativePath) {
   return JSON.parse(await readText(relativePath));

@@ -520,7 +520,7 @@ async function createProjectionFixture(fixtureRoot: string, fixtureSource: strin
   ]) {
     await copyFile(join(SOURCE_ROOT, name), join(fixtureSource, name));
   }
-  for (const name of ["assets", "src", "scripts", "skills", "vendor"]) {
+  for (const name of ["assets", "examples", "src", "scripts", "skills", "vendor"]) {
     await cp(join(SOURCE_ROOT, name), join(fixtureSource, name), { recursive: true });
   }
 

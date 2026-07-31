@@ -46,6 +46,7 @@ const CASE_DEADLINE_MS = 10 * 60 * 1000;
 const POSIX_TELEMETRY_FLUSH_MS = 20_000;
 const LARGE_EVIDENCE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CASE_METADATA_FILENAME = "case-source.json";
+const EXTERNAL_SOURCE_FILENAME = ".external-source.json";
 const CASE_CONTROL_FILENAME = ".case-owner-control";
 const CASE_PREFIX = ".document-benchmark-case-";
 const MAX_CASE_CONTROL_BYTES = 4 * 1024;
@@ -557,6 +558,123 @@ export async function runBenchmarkCaseWithTelemetryRetry(
     }
   }
   return runCase(sizeMiB, outputParent);
+}
+
+export async function runBenchmarkCaseFromSource(spec, dependencies = {}) {
+  if (spec === null || typeof spec !== "object" || Array.isArray(spec)
+    || Object.keys(spec).sort().join(",") !== "expectedSha256,nodeArgs,sizeMiB,sourcePath"
+    || ![10, 100].includes(spec.sizeMiB)
+    || typeof spec.sourcePath !== "string" || !isAbsolute(spec.sourcePath)
+    || typeof spec.expectedSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(spec.expectedSha256)
+    || !Array.isArray(spec.nodeArgs)
+    || !["[]", '["--max-semi-space-size=1"]'].includes(JSON.stringify(spec.nodeArgs))) {
+    throw benchmarkError("BENCHMARK_ARGUMENTS_INVALID");
+  }
+  const source = await inspectExactBenchmarkSource(
+    spec.sourcePath,
+    spec.sizeMiB,
+    spec.expectedSha256,
+    dependencies.allowFixtureSize === true,
+  );
+  const receipt = await (dependencies.executeCase ?? runFreshCaseFromSource)({ ...spec, source });
+  if (receipt?.status !== "passed" || receipt.sourceSha256 !== spec.expectedSha256) {
+    throw benchmarkError("BENCHMARK_RECEIPT_INVALID");
+  }
+  return receipt;
+}
+
+async function runFreshCaseFromSource(spec) {
+  const outputParent = join(REPOSITORY_ROOT, ".superpowers", "benchmarks");
+  await mkdir(outputParent, { recursive: true });
+  await assertIgnoredBenchmarkOutput(join(outputParent, "paired-case-boundary.json"));
+  const owner = await createOwnedBenchmarkCase(outputParent);
+  let result;
+  try {
+    const privateSpecPath = join(owner.path, EXTERNAL_SOURCE_FILENAME);
+    const handle = await open(privateSpecPath, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify({
+        sourcePath: spec.sourcePath,
+        expectedSha256: spec.expectedSha256,
+      })}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    result = await executeBounded(process.execPath, [
+      ...spec.nodeArgs,
+      "--import",
+      "tsx",
+      fileURLToPath(import.meta.url),
+      "--case-source",
+      String(spec.sizeMiB),
+    ], {
+      cwd: PACKAGE_ROOT,
+      timeoutMs: CASE_DEADLINE_MS,
+      env: process.env,
+      controlFrame: owner.control,
+    });
+    forwardSafeCaseDiagnostics(result.stderr);
+    assertCaseProcessGone(result);
+    let receipt;
+    if (result.status === "passed") {
+      try {
+        const outcome = validateCaseOutcome(JSON.parse(result.stdout.trim()));
+        receipt = await parentCaseReceipt(
+          spec.sizeMiB,
+          owner.path,
+          outcome,
+          result.caseMetrics,
+        );
+      } catch {
+        receipt = await parentFailureReceipt(
+          spec.sizeMiB,
+          owner.path,
+          "ENGINE_PROTOCOL_ERROR",
+          result,
+        );
+      }
+    } else {
+      receipt = await parentFailureReceipt(
+        spec.sizeMiB,
+        owner.path,
+        result.status === "timeout" ? "ENGINE_TIMEOUT" : "ENGINE_CRASH",
+        result,
+      );
+    }
+    return validateBenchmarkReceipt(receipt);
+  } finally {
+    if (result?.processGone === true) await cleanupOwnedBenchmarkCase(owner);
+  }
+}
+
+async function inspectExactBenchmarkSource(path, sizeMiB, expectedSha256, allowFixtureSize = false) {
+  let status;
+  try {
+    status = await lstat(path);
+  } catch {
+    throw benchmarkError("BENCHMARK_SOURCE_CHANGED");
+  }
+  const requestedBytes = sizeMiB * 1024 * 1024;
+  if (!status.isFile() || status.isSymbolicLink() || status.size < 1
+    || (!allowFixtureSize && (status.size > requestedBytes || requestedBytes - status.size > 4096))) {
+    throw benchmarkError("BENCHMARK_SOURCE_CHANGED");
+  }
+  const digest = createHash("sha256");
+  try {
+    await new Promise((resolveDigest, rejectDigest) => {
+      const stream = createReadStream(path);
+      stream.on("data", (chunk) => digest.update(chunk));
+      stream.once("end", resolveDigest);
+      stream.once("error", rejectDigest);
+    });
+  } catch {
+    throw benchmarkError("BENCHMARK_SOURCE_CHANGED");
+  }
+  if (digest.digest("hex") !== expectedSha256) {
+    throw benchmarkError("BENCHMARK_SOURCE_CHANGED");
+  }
+  return Object.freeze({ actualBytes: status.size, sha256: expectedSha256 });
 }
 
 function isRetryablePosixBenchmarkTelemetryGap(error) {
@@ -1175,16 +1293,17 @@ function closeCaseControl(control) {
   }
 }
 
-async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry) {
+async function runCase(sizeMiB, ownedRoot, ownedCase, telemetry, externalSource = undefined) {
   validateCaseSizeMiB(sizeMiB);
   const requestedBytes = sizeMiB * 1024 * 1024;
   await assertCaseBoundary(ownedRoot, ownedCase);
-  const sourcePath = join(ownedCase, "source.hwpx");
+  const sourcePath = externalSource?.sourcePath ?? join(ownedCase, "source.hwpx");
   const started = telemetry.started;
   let outcome;
   let phase = "facade";
   let snapshotStage = "source-authorize";
-  const source = await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes });
+  const source = externalSource?.source
+    ?? await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes });
   await writeCaseMetadata(ownedCase, source);
   let facade;
   try {
@@ -1576,6 +1695,44 @@ function benchmarkError(code, diagnosticStage) {
 }
 
 async function main() {
+  if (process.argv[2] === "--case-source") {
+    const [size] = process.argv.slice(3);
+    if (process.argv.length !== 4) throw benchmarkError("BENCHMARK_ARGUMENTS_INVALID");
+    const telemetry = createCaseTelemetry();
+    try {
+      const sizeMiB = validateCaseSizeMiB(Number(size));
+      if (![10, 100].includes(sizeMiB)) throw benchmarkError("BENCHMARK_ARGUMENTS_INVALID");
+      const control = await consumeInheritedCaseControl();
+      const privateSpecPath = join(control.ownedCase, EXTERNAL_SOURCE_FILENAME);
+      const info = await lstat(privateSpecPath);
+      if (!info.isFile() || info.isSymbolicLink() || info.size < 2 || info.size > 64 * 1024) {
+        throw benchmarkError("BENCHMARK_SOURCE_CHANGED");
+      }
+      const external = JSON.parse(await readFile(privateSpecPath, "utf8"));
+      await rm(privateSpecPath, { force: false });
+      if (external === null || typeof external !== "object" || Array.isArray(external)
+        || Object.keys(external).sort().join(",") !== "expectedSha256,sourcePath"
+        || typeof external.sourcePath !== "string" || !isAbsolute(external.sourcePath)
+        || typeof external.expectedSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(external.expectedSha256)) {
+        throw benchmarkError("BENCHMARK_SOURCE_CHANGED");
+      }
+      const source = await inspectExactBenchmarkSource(
+        external.sourcePath,
+        sizeMiB,
+        external.expectedSha256,
+      );
+      process.stdout.write(`${JSON.stringify(await runCase(
+        sizeMiB,
+        control.ownedRoot,
+        control.ownedCase,
+        telemetry,
+        { sourcePath: external.sourcePath, source },
+      ))}\n`);
+    } finally {
+      await telemetry.close();
+    }
+    return;
+  }
   if (process.argv[2] === "--case") {
     const [size] = process.argv.slice(3);
     if (process.argv.length !== 4) {

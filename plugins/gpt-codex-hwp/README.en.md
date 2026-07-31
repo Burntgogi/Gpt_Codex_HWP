@@ -18,7 +18,7 @@
   <a href="README.md">한국어</a> ·
   <a href="README.en.md">English</a> ·
   <a href="#real-hwpx-output">See the result</a> ·
-  <a href="#agent-assisted-installation-from-github">Quick install</a> ·
+  <a href="#stable-v021-installation-from-github">Quick install</a> ·
   <a href="#format-support">Format support</a> ·
   <a href="#safety">Security</a>
 </p>
@@ -94,13 +94,13 @@ This project was developed primarily on Windows x64 and validated there. macOS A
 
 The final release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 verification results](RELEASE_NOTES.en.md#verification-results) for details.
 
-## Agent-assisted installation from GitHub
+## Stable v0.2.1 installation from GitHub
 
 `v0.2.1` is the current recommended release and `v0.2.2` is a pre-release candidate. `v0.1.0` through `v0.1.4` remain historical releases. The `v0.2.0` tag is a candidate withdrawn before publication after a security advisory appeared; it was never distributed as a GitHub Release. Until v0.2.2 is published, new installations should pin `v0.2.1` and review the [release notes](RELEASE_NOTES.en.md) first.
 
 A user can ask a Codex agent:
 
-> Install the latest public release `v0.2.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, run `doctor` from the installed path, and verify all nine MCP tools in a new task.
+> Install the latest public release `v0.2.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and run `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, then verify the default `gpt-codex-hwp` MCP server and all nine tools in `/mcp`.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
@@ -118,7 +118,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. It must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, and `dist/mcp.js`. Never evaluate a JSON string as a command or run npm from an unexpected path.
+4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. The stable runtime must contain `.codex-plugin/plugin.json`, `.mcp.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, and `dist/mcp.js`. Never evaluate a JSON string as a command or run npm from an unexpected path.
 5. From that exact validated path, install and audit the lockfile-based production dependencies. On Windows x64, confirm that `node_modules` is at most 64 MiB.
 
 ```powershell
@@ -136,7 +136,17 @@ try {
 ```
 
 6. `doctor` is diagnostic only: it does not install or repair anything and is not an MCP tool. Its JSON contains only safe status codes, booleans, versions, and counts; missing optional capabilities such as Python, rhwp, or the pinned test fixture remain separate from required failures.
-7. Restart Codex or open a new task and verify exactly these nine tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`. If verification fails, do not remove an older working plugin; report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
+7. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and that `/mcp` registers the default `gpt-codex-hwp` server with exactly these nine tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`. If verification fails, do not remove an older working plugin; report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
+
+## Local v0.2.2 release-candidate verification
+
+This path is only for a local `v0.2.2` pre-release candidate checkout. The public stable installation above remains pinned to `v0.2.1`.
+
+1. From the candidate repository root, register the local marketplace with `codex plugin marketplace add . --json`, then install `gpt-codex-hwp@gpt-codex-hwp-local` and capture the JSON `installedPath` without evaluating it as a command.
+2. Require the installed cache path to end in `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.2.2+codex.20260731221916`. It must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`.
+3. Confirm that `.codex-plugin/plugin.json` has `skills` equal to `./skills/` and no `mcpServers` property. Install production dependencies from the validated path with the lockfile command under [Runtime Installation](#runtime-installation), then run `npm run doctor -- --json`.
+4. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration.
+5. Run one HWP/HWPX operation and require it to succeed. Verify the generated output, confirm that the one-shot interface retains the nine internal tool contracts listed below, and then confirm that the `dist/oneshot.js` Node process and its descendants exit after the response is written. Optional persistent MCP compatibility remains available only through explicit registration of `examples/mcp-manual.json`.
 
 ## Installation and Migration
 
@@ -155,7 +165,7 @@ codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 
 This command alone does not prepare npm production dependencies. From the validated runtime path returned by installation, run `npm ci --omit=dev --ignore-scripts` as described under `Runtime Installation` below.
 
-3. Open a new Codex task and verify the `gpt-codex-hwp@gpt-codex-hwp-local` plugin ID and exactly nine registered tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`.
+3. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. The `gpt-codex-hwp@gpt-codex-hwp-local` plugin and skill must be visible, while `/mcp` must not register `gpt-codex-hwp` by default. Run one skill operation and confirm that its one-shot process exits.
 
 4. Only after the new installation passes verification, remove the old plugin.
 ```powershell
@@ -163,6 +173,12 @@ codex plugin remove hwp-korean-docs@hwp-local
 ```
 
 5. If verification fails, keep the old plugin, remove only the new installation, and retry. After updating local source, update the manifest version cache-buster and reinstall the new plugin.
+
+## Default one-shot execution and manual MCP compatibility
+
+By default, the skill invokes `dist/oneshot.js` once per operation. An unused plugin retains no persistent Gpt_Codex_HWP Node process; each call executes one of the same nine tool contracts and exits. Request and response JSON keep document content off the command line and publish only a new response file.
+
+`dist/mcp.js` and `npm start` remain for stdio MCP compatibility but are not registered automatically. Users who explicitly need a persistent MCP server can copy and register `examples/mcp-manual.json`. That mode can retain a separate Node server for each Codex task or host.
 
 ## Tools
 

@@ -555,8 +555,6 @@ export function createDocumentEngineFacade(
   }
 }
 
-export const defaultDocumentEngineFacade = createDocumentEngineFacade();
-
 async function decodeResult<Operation extends "detect" | "parse" | "validateHwpx">(
   operation: Operation,
   result: IsolatedDocumentResult<Operation>,

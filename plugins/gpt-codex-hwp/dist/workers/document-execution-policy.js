@@ -3,6 +3,7 @@ import { documentLogicalRequestBytes, MAX_WORKER_INPUT_BYTES, } from "./document
 export { documentLogicalRequestBytes };
 export const WORKER_INPUT_MAX_BYTES = MAX_WORKER_INPUT_BYTES;
 export const CHILD_WORKING_SET_MAX_BYTES = 1_536 * 1024 * 1024;
+export const MAX_DOCUMENT_DEADLINE_MS = 300_000;
 export function maxWorkerSnapshotBytesForRequest(request, imageBytes = 0) {
     const reservedBytes = checkedByteSum(documentLogicalRequestBytes(request), imageBytes);
     return Math.max(0, WORKER_INPUT_MAX_BYTES - reservedBytes);
@@ -12,7 +13,7 @@ export function defaultDocumentDeadlineMs(operation) {
         operation === "parse" ||
         operation === "validateHwpx"
         ? 60_000
-        : 300_000;
+        : MAX_DOCUMENT_DEADLINE_MS;
 }
 export function selectDocumentExecution(selection) {
     requireSafeNonNegativeInteger(selection.inputBytes);

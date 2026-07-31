@@ -6,10 +6,8 @@ import {
   HwpxOutputRequiredError,
   assertHwpxOutputPath,
 } from "../shared/document-contract.js";
-import {
-  defaultDocumentEngineFacade,
-  type DocumentEngineFacade,
-} from "../shared/document-engine.js";
+import type { DocumentEngineFacade } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import {
@@ -44,7 +42,7 @@ export interface HwpValidateInput {
 
 export async function handleHwpGenerateHwpx(
   input: HwpGenerateHwpxInput,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let outputPath: string | undefined;
@@ -74,7 +72,8 @@ export async function handleHwpGenerateHwpx(
         },
       );
     }
-    const generatedResult = await facade.generate(
+    const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+    const generatedResult = await resolvedFacade.generate(
       input.markdown,
       {
         ...(input.preset === undefined ? {} : { preset: input.preset }),
@@ -160,7 +159,7 @@ export async function handleHwpGenerateHwpx(
 
 export async function handleHwpValidate(
   input: HwpValidateInput,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
@@ -189,7 +188,8 @@ export async function handleHwpValidate(
         await snapshot.cleanup();
       }
     }
-    const validationResult = await facade.validate(
+    const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+    const validationResult = await resolvedFacade.validate(
       snapshot,
       {},
       toDocumentEngineExecutionContext(context),
@@ -220,7 +220,7 @@ export async function handleHwpValidate(
 
 export function registerHwpGenerateHwpx(
   server: McpServer,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_GENERATE_HWPX_TOOL_NAME,
@@ -265,7 +265,7 @@ export function registerHwpGenerateHwpx(
 
 export function registerHwpValidate(
   server: McpServer,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_VALIDATE_TOOL_NAME,

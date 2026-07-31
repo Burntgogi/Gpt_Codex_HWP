@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
   appendFile,
+  mkdir,
   mkdtemp,
   open,
   readFile,
   rename,
   rm,
+  symlink,
   truncate,
   unlink,
   writeFile,
@@ -20,6 +22,7 @@ const execFileAsync = promisify(execFile);
 
 import {
   MAX_DOCUMENT_BYTES,
+  FileReadError,
   readFileBounded,
 } from "../src/shared/files.js";
 
@@ -102,6 +105,76 @@ test("bounded file read accepts only regular files and redacts the path", async 
       return true;
     },
   );
+});
+
+test("direct bounded reads reject linked control paths while ordinary reads retain link behavior", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "hwp-bounded-direct-link-"));
+  const targetDirectory = join(root, "target");
+  const linkedDirectory = join(root, "linked");
+  const targetPath = join(targetDirectory, "request.json");
+  const linkPath = join(root, "request-link.json");
+  try {
+    await mkdir(targetDirectory);
+    await writeFile(targetPath, "safe");
+    try {
+      await symlink(targetPath, linkPath, "file");
+      await symlink(targetDirectory, linkedDirectory, "dir");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        context.skip("symbolic-link creation is unavailable");
+        return;
+      }
+      throw error;
+    }
+
+    await assert.rejects(
+      readFileBounded(linkPath, "one-shot request", 1024, { directPath: true }),
+      (error: unknown) => error instanceof FileReadError,
+    );
+    await assert.rejects(
+      readFileBounded(join(linkedDirectory, "request.json"), "one-shot request", 1024, { directPath: true }),
+      (error: unknown) => error instanceof FileReadError,
+    );
+    assert.equal(
+      (await readFileBounded(linkPath, "ordinary document", 1024)).toString("utf8"),
+      "safe",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("direct bounded reads reject a same-target link replacement after reading", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "hwp-bounded-direct-race-"));
+  const requestPath = join(root, "request.json");
+  const targetPath = join(root, "target.json");
+  const replacementLink = join(root, "replacement-link.json");
+  try {
+    await writeFile(requestPath, "safe");
+    try {
+      await symlink(targetPath, replacementLink, "file");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        context.skip("symbolic-link creation is unavailable");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(
+      readFileBounded(requestPath, "one-shot request", 1024, {
+        directPath: true,
+        testHooks: {
+          afterSourceRead: async () => {
+            await rename(requestPath, targetPath);
+            await rename(replacementLink, requestPath);
+          },
+        },
+      }),
+      (error: unknown) => error instanceof FileReadError && error.code === "INVALID_FILE_TYPE",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 for (const scenario of ["grow", "shrink", "replace", "delete"] as const) {

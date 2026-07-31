@@ -3,6 +3,7 @@
     "gpt-codex-hwp": {
       "command": "node",
       "args": [
+        "--max-semi-space-size=1",
         "./dist/mcp.js"
       ],
       "cwd": "."

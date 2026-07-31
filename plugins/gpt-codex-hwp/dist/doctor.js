@@ -48,7 +48,9 @@ export async function runDoctor(providedDependencies) {
     checks.push(await pythonCheck(dependencies));
     checks.push(await projectMetadataCheck(dependencies));
     checks.push(await pluginManifestCheck(dependencies));
-    checks.push(await mcpManifestCheck(dependencies));
+    checks.push(await defaultMcpDisabledCheck(dependencies));
+    checks.push(await oneShotRuntimeCheck(dependencies));
+    checks.push(await mcpCompatibilityCheck(dependencies));
     checks.push(await kordocProvenanceCheck(dependencies));
     checks.push(await kordocLinkCheck(dependencies));
     checks.push(await productionDependencyCheck(dependencies));
@@ -190,7 +192,7 @@ async function pluginManifestCheck(dependencies) {
         const version = typeof manifest.version === "string" ? manifest.version : "";
         const valid = manifest.name === dependencies.projectMetadata.productId
             && version.startsWith(`${dependencies.projectMetadata.version}+codex.`)
-            && manifest.mcpServers === "./.mcp.json";
+            && !Object.hasOwn(manifest, "mcpServers");
         return valid
             ? check("PLUGIN_MANIFEST_OK", true, true)
             : check("PLUGIN_MANIFEST_INVALID", false, true, { remediation: REMEDIATION.metadata });
@@ -199,23 +201,43 @@ async function pluginManifestCheck(dependencies) {
         return check("PLUGIN_MANIFEST_INVALID", false, true, { remediation: REMEDIATION.metadata });
     }
 }
-async function mcpManifestCheck(dependencies) {
+async function defaultMcpDisabledCheck(dependencies) {
+    const file = await dependencies.statRegular(".mcp.json");
+    return !file.regular
+        ? check("DEFAULT_MCP_DISABLED_OK", true, true)
+        : check("DEFAULT_MCP_DISABLED_INVALID", false, true, {
+            remediation: REMEDIATION.metadata,
+        });
+}
+async function oneShotRuntimeCheck(dependencies) {
+    const file = await dependencies.statRegular("dist/oneshot.js");
+    return file.regular && file.size > 0
+        ? check("ONESHOT_RUNTIME_OK", true, true)
+        : check("ONESHOT_RUNTIME_INVALID", false, true, {
+            remediation: REMEDIATION.metadata,
+        });
+}
+async function mcpCompatibilityCheck(dependencies) {
     try {
-        const manifest = object(await dependencies.readJson(".mcp.json"));
+        const manifest = object(await dependencies.readJson("examples/mcp-manual.json"));
         const servers = object(manifest.mcpServers);
         const keys = Object.keys(servers);
         const server = object(servers[dependencies.projectMetadata.productId]);
         const valid = keys.length === 1
             && keys[0] === dependencies.projectMetadata.productId
             && server.command === "node"
-            && isExactStringArray(server.args, ["./dist/mcp.js"])
+            && isExactStringArray(server.args, ["--max-semi-space-size=1", "./dist/mcp.js"])
             && server.cwd === ".";
         return valid
-            ? check("MCP_MANIFEST_OK", true, true, { count: keys.length })
-            : check("MCP_MANIFEST_INVALID", false, true, { remediation: REMEDIATION.metadata });
+            ? check("MCP_COMPATIBILITY_OK", true, true, { count: keys.length })
+            : check("MCP_COMPATIBILITY_INVALID", false, true, {
+                remediation: REMEDIATION.metadata,
+            });
     }
     catch {
-        return check("MCP_MANIFEST_INVALID", false, true, { remediation: REMEDIATION.metadata });
+        return check("MCP_COMPATIBILITY_INVALID", false, true, {
+            remediation: REMEDIATION.metadata,
+        });
     }
 }
 async function kordocProvenanceCheck(dependencies) {

@@ -1,13 +1,13 @@
 import { lstat, stat, } from "node:fs/promises";
 import { DOMParser } from "@xmldom/xmldom";
-import sharp from "sharp";
 import { z } from "zod";
-import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot, } from "../shared/document-snapshot.js";
 import { OutputConflictError, PathAliasError, writeFilesExclusively, } from "../shared/output.js";
 import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/document-contract.js";
 import { MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES, } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
+import { getSharp } from "../shared/sharp-runtime.js";
 import { authorizeExistingPath, authorizeFuturePath, } from "../shared/allowed-roots.js";
 import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
 import { requireToolNotCancelled, runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
@@ -20,13 +20,17 @@ const MAX_ANCHOR_CHARACTERS = 10_000;
 const PNG_MAGIC = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const defaultSvgDependencies = {
     validateSvg: async (svg) => {
+        const sharp = await getSharp();
         await sharp(Buffer.from(svg), { limitInputPixels: MAX_IMAGE_PIXELS })
             .png({ compressionLevel: 9, adaptiveFiltering: false })
             .toBuffer();
     },
-    renderSvgToPng: async (svg) => sharp(Buffer.from(svg), { limitInputPixels: MAX_IMAGE_PIXELS })
-        .png({ compressionLevel: 9, adaptiveFiltering: false })
-        .toBuffer(),
+    renderSvgToPng: async (svg) => {
+        const sharp = await getSharp();
+        return sharp(Buffer.from(svg), { limitInputPixels: MAX_IMAGE_PIXELS })
+            .png({ compressionLevel: 9, adaptiveFiltering: false })
+            .toBuffer();
+    },
 };
 export async function handleHwpCreateSvgAsset(input, dependencyOverrides = {}, context) {
     let svgPath;
@@ -91,7 +95,7 @@ export async function handleHwpCreateSvgAsset(input, dependencyOverrides = {}, c
         });
     }
 }
-export async function handleHwpInsertImage(input, facade = defaultDocumentEngineFacade, context) {
+export async function handleHwpInsertImage(input, facade, context) {
     let filePath;
     let imagePath;
     let outputPath;
@@ -131,7 +135,8 @@ export async function handleHwpInsertImage(input, facade = defaultDocumentEngine
         }
         let inserted;
         try {
-            inserted = await facade.insertImage(documentSnapshot, imageSnapshot, input.anchor_text, {
+            const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+            inserted = await resolvedFacade.insertImage(documentSnapshot, imageSnapshot, input.anchor_text, {
                 mode,
                 ...(input.size_mm === undefined ? {} : { sizeMm: input.size_mm }),
                 ...(input.anchor_occurrence === undefined
@@ -221,7 +226,7 @@ export function registerHwpCreateSvgAsset(server, dependencyOverrides = {}) {
         annotations: { readOnlyHint: false },
     }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpCreateSvgAsset(args, dependencyOverrides, context)));
 }
-export function registerHwpInsertImage(server, facade = defaultDocumentEngineFacade) {
+export function registerHwpInsertImage(server, facade) {
     server.registerTool(HWP_INSERT_IMAGE_TOOL_NAME, {
         title: "Insert an image into HWPX",
         description: "Normalize a local image to PNG and insert it into a new, structurally validated HWPX after an anchor paragraph or as a seal overlay.",

@@ -49,7 +49,7 @@ export async function writeFilesExclusively(files, options = {}) {
             await assertFuturePathStillAuthorized(file.path);
             let handle;
             try {
-                handle = await open(file.path, "wx");
+                handle = await openExclusiveOutput(file);
             }
             catch (error) {
                 if (errorCode(error, "") === "EEXIST") {
@@ -94,6 +94,21 @@ export async function writeFilesExclusively(files, options = {}) {
         // is safer than deleting a concurrent replacement owned by another actor.
         throw error;
     }
+}
+export async function preflightExclusiveOutput(outputPath, options = {}) {
+    const path = await authorizeFuturePath(resolveLocalPath(outputPath, "output_path"));
+    const sourcePaths = await Promise.all((options.sourcePaths ?? []).map((sourcePath) => authorizeExistingPath(resolveLocalPath(sourcePath, "source_path"))));
+    assertNoLexicalSourceAliases([path], sourcePaths);
+    await rejectExistingTarget(path, await existingSourceIdentities(sourcePaths));
+    const directory = await captureExistingOutputDirectoryIdentity(dirname(path));
+    if (directory === undefined) {
+        throw new UnsafeOutputPathError(`Output parent does not exist: ${dirname(path)}`);
+    }
+    await prepareOutputDirectoryPlan([path], [directory]);
+    return Object.freeze({
+        path,
+        expectedDirectoryIdentities: Object.freeze([directory]),
+    });
 }
 export async function captureExistingOutputDirectoryIdentity(directoryPath) {
     const resolvedDirectory = await authorizeFuturePath(resolveLocalPath(directoryPath, "output_dir"));
@@ -201,7 +216,7 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
             await assertFuturePathStillAuthorized(file.path);
             let handle;
             try {
-                handle = await open(file.path, "wx");
+                handle = await openExclusiveOutput(file);
             }
             catch (error) {
                 if (errorCode(error, "") === "EEXIST") {
@@ -273,6 +288,11 @@ async function prepareOutputDirectoryPlan(outputPaths, expectedIdentities, unitT
             ? {}
             : { unitTestDirectoryIdentityCheck }),
     };
+}
+function openExclusiveOutput(file) {
+    return file.mode === undefined
+        ? open(file.path, "wx")
+        : open(file.path, "wx", file.mode);
 }
 function outputDirectoryForPath(outputPath, plan) {
     const directory = plan.directories.get(comparablePath(dirname(outputPath)));

@@ -6,13 +6,10 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { DOMParser, type Element as XmlElement } from "@xmldom/xmldom";
-import sharp from "sharp";
 import { z } from "zod";
 
-import {
-  defaultDocumentEngineFacade,
-  type DocumentEngineFacade,
-} from "../shared/document-engine.js";
+import type { DocumentEngineFacade } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import {
   openDocumentSnapshot,
   type DocumentSnapshot,
@@ -31,6 +28,7 @@ import {
   MAX_IMAGE_BYTES as MAX_IMAGE_FILE_BYTES,
 } from "../shared/files.js";
 import { resolveLocalPath } from "../shared/paths.js";
+import { getSharp } from "../shared/sharp-runtime.js";
 import {
   authorizeExistingPath,
   authorizeFuturePath,
@@ -81,14 +79,17 @@ export interface SvgAssetDependencies {
 
 const defaultSvgDependencies: SvgAssetDependencies = {
   validateSvg: async (svg) => {
+    const sharp = await getSharp();
     await sharp(Buffer.from(svg), { limitInputPixels: MAX_IMAGE_PIXELS })
       .png({ compressionLevel: 9, adaptiveFiltering: false })
       .toBuffer();
   },
-  renderSvgToPng: async (svg) =>
-    sharp(Buffer.from(svg), { limitInputPixels: MAX_IMAGE_PIXELS })
+  renderSvgToPng: async (svg) => {
+    const sharp = await getSharp();
+    return sharp(Buffer.from(svg), { limitInputPixels: MAX_IMAGE_PIXELS })
       .png({ compressionLevel: 9, adaptiveFiltering: false })
-      .toBuffer(),
+      .toBuffer();
+  },
 };
 
 
@@ -181,7 +182,7 @@ export async function handleHwpCreateSvgAsset(
 
 export async function handleHwpInsertImage(
   input: HwpInsertImageInput,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
   context?: ToolExecutionContext,
 ): Promise<CallToolResult> {
   let filePath: string | undefined;
@@ -237,7 +238,8 @@ export async function handleHwpInsertImage(
 
     let inserted;
     try {
-      inserted = await facade.insertImage(
+      const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+      inserted = await resolvedFacade.insertImage(
         documentSnapshot,
         imageSnapshot,
         input.anchor_text,
@@ -369,7 +371,7 @@ export function registerHwpCreateSvgAsset(
 
 export function registerHwpInsertImage(
   server: McpServer,
-  facade: DocumentEngineFacade = defaultDocumentEngineFacade,
+  facade?: DocumentEngineFacade,
 ): void {
   server.registerTool(
     HWP_INSERT_IMAGE_TOOL_NAME,

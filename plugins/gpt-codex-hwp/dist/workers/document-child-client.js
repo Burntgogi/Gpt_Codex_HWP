@@ -11,6 +11,7 @@ import { DocumentEngineRunError, createDocumentEngineRunError, normalizeDocument
 import { defaultDocumentDeadlineMs, HeavyChildGate, } from "./document-execution-policy.js";
 import { createChildDocumentEventValidator, createWireDocumentRequest, MAX_CHILD_INLINE_RESULT_BYTES, MAX_CHILD_REQUEST_FRAME_BYTES, validateLogicalDocumentRequest, } from "./document-protocol.js";
 import { DOCUMENT_START_FRAME, DOCUMENT_REGISTRATION_ENV, } from "./document-process-registration.js";
+import { publishDocumentChildTerminationReceipt } from "./document-child-termination-channel.js";
 import { createRegisteredPosixProcessGroupSupervisor, normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./registered-process-supervisor.js";
 const execFileAsync = promisify(execFile);
 const MAX_DRAIN_ACCOUNTED_BYTES = 64 * 1024;
@@ -574,6 +575,7 @@ async function runChild(request, snapshot, options, deadlineMs, child, release, 
             void (async () => {
                 let terminalError = "error" in outcome ? outcome.error : undefined;
                 const receipt = await terminateWithReceipt(treeTerminator, child);
+                publishDocumentChildTerminationReceipt(receipt);
                 if (!receipt.gone) {
                     scheduleCleanupAfterActualExit(child, snapshot, outputOwner, release, capture, treeTerminator, startGate);
                     reject(terminationFailedError());

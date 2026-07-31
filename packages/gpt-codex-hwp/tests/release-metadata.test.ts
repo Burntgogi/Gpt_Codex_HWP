@@ -248,9 +248,11 @@ test("the staged runtime documents secure agent-assisted GitHub installation", a
     readFile(join(RUNTIME_ROOT, "README.en.md"), "utf8"),
   ]);
   const sections = [
-    extractMarkdownSection(readmes[0], "## 에이전트를 통한 GitHub 설치"),
-    extractMarkdownSection(readmes[1], "## Agent-assisted installation from GitHub"),
+    extractMarkdownSection(readmes[0], "## 안정 버전 v0.2.1 GitHub 설치"),
+    extractMarkdownSection(readmes[1], "## Stable v0.2.1 installation from GitHub"),
   ];
+  assert.match(readmes[0], /href="#안정-버전-v021-github-설치">빠른 설치</u);
+  assert.match(readmes[1], /href="#stable-v021-installation-from-github">Quick install/u);
   for (const section of sections) assertSecureAgentInstallSection(section, metadata);
 
   const missingMarketplaceIdentity = sections[0].replace("marketplaceName", "marketplace identity");
@@ -481,7 +483,11 @@ function assertSecureAgentInstallSection(
     /예상 밖의 경로에서 npm을 실행하지|run npm from an unexpected path/iu,
     "npm must not run from an unexpected path",
   );
-  assert.match(section, /재시작하거나 새 작업|Restart Codex or open a new task/iu);
+  assert.match(
+    section,
+    /실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 열[\s\S]*새 작업만으로는 충분하지 않|Close and reopen every active Codex CLI and Desktop host once[\s\S]*opening a new task alone is not sufficient/iu,
+    "every active CLI/Desktop host must be closed and reopened; a new task is insufficient",
+  );
   assert.match(section, /정확히 9개|exactly these nine/iu);
   assert.match(
     section,

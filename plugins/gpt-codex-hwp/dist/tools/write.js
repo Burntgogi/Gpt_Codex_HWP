@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { HwpxOutputRequiredError, assertHwpxOutputPath, } from "../shared/document-contract.js";
-import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { commitBudgetedToolSuccess, toolError, toolSuccess, } from "../shared/result.js";
@@ -9,7 +9,7 @@ import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-
 export const HWP_GENERATE_HWPX_TOOL_NAME = "hwp_generate_hwpx";
 export const HWP_VALIDATE_TOOL_NAME = "hwp_validate";
 const MAX_MARKDOWN_INPUT_CHARACTERS = 5_000_000;
-export async function handleHwpGenerateHwpx(input, facade = defaultDocumentEngineFacade, context) {
+export async function handleHwpGenerateHwpx(input, facade, context) {
     let outputPath;
     let previewPath;
     try {
@@ -33,7 +33,8 @@ export async function handleHwpGenerateHwpx(input, facade = defaultDocumentEngin
                 preview_svg_path: previewPath,
             });
         }
-        const generatedResult = await facade.generate(input.markdown, {
+        const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+        const generatedResult = await resolvedFacade.generate(input.markdown, {
             ...(input.preset === undefined ? {} : { preset: input.preset }),
             ...(previewPath === undefined ? {} : { renderPreview: true }),
         }, toDocumentEngineExecutionContext(context));
@@ -102,7 +103,7 @@ export async function handleHwpGenerateHwpx(input, facade = defaultDocumentEngin
         });
     }
 }
-export async function handleHwpValidate(input, facade = defaultDocumentEngineFacade, context) {
+export async function handleHwpValidate(input, facade, context) {
     let filePath;
     try {
         filePath = resolveLocalPath(input.file_path, "file_path");
@@ -129,7 +130,8 @@ export async function handleHwpValidate(input, facade = defaultDocumentEngineFac
                 await snapshot.cleanup();
             }
         }
-        const validationResult = await facade.validate(snapshot, {}, toDocumentEngineExecutionContext(context));
+        const resolvedFacade = facade ?? await getDefaultDocumentEngineFacade();
+        const validationResult = await resolvedFacade.validate(snapshot, {}, toDocumentEngineExecutionContext(context));
         const validation = validationResult.payload;
         const issues = validation.issues.map((issue) => ({ ...issue }));
         const ok = validation.ok;
@@ -151,7 +153,7 @@ export async function handleHwpValidate(input, facade = defaultDocumentEngineFac
         });
     }
 }
-export function registerHwpGenerateHwpx(server, facade = defaultDocumentEngineFacade) {
+export function registerHwpGenerateHwpx(server, facade) {
     server.registerTool(HWP_GENERATE_HWPX_TOOL_NAME, {
         title: "Generate HWPX document",
         description: "Generate a new HWPX document from Markdown, optionally applying a Korean public-document preset and producing an SVG preview.",
@@ -184,7 +186,7 @@ export function registerHwpGenerateHwpx(server, facade = defaultDocumentEngineFa
         },
     }, (args, extra) => runWithToolExecutionContext(extra, (context) => handleHwpGenerateHwpx(args, facade, context)));
 }
-export function registerHwpValidate(server, facade = defaultDocumentEngineFacade) {
+export function registerHwpValidate(server, facade) {
     server.registerTool(HWP_VALIDATE_TOOL_NAME, {
         title: "Validate HWPX structure",
         description: "Validate the ZIP and XML structure of the exact requested local HWPX file.",

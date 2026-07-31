@@ -19,6 +19,7 @@ import {
 export interface ExclusiveOutputFile {
   path: string;
   data: string | Uint8Array;
+  readonly mode?: number;
 }
 
 export interface ExclusiveOutputOptions {
@@ -37,6 +38,11 @@ export interface ExclusiveInputRange {
   readonly fd: number;
   readonly offset: number;
   readonly sizeBytes: number;
+}
+
+export interface ExclusiveOutputPreflight {
+  readonly path: string;
+  readonly expectedDirectoryIdentities: readonly OutputDirectoryIdentity[];
 }
 
 interface FileIdentity {
@@ -140,7 +146,7 @@ export async function writeFilesExclusively(
 
       let handle: FileHandle;
       try {
-        handle = await open(file.path, "wx");
+        handle = await openExclusiveOutput(file);
       } catch (error: unknown) {
         if (errorCode(error, "") === "EEXIST") {
           await rejectExistingTarget(file.path, sourceIdentities);
@@ -189,6 +195,34 @@ export async function writeFilesExclusively(
     // is safer than deleting a concurrent replacement owned by another actor.
     throw error;
   }
+}
+
+export async function preflightExclusiveOutput(
+  outputPath: string,
+  options: Pick<ExclusiveOutputOptions, "sourcePaths"> = {},
+): Promise<ExclusiveOutputPreflight> {
+  const path = await authorizeFuturePath(
+    resolveLocalPath(outputPath, "output_path"),
+  );
+  const sourcePaths = await Promise.all(
+    (options.sourcePaths ?? []).map((sourcePath) =>
+      authorizeExistingPath(resolveLocalPath(sourcePath, "source_path"))
+    ),
+  );
+  assertNoLexicalSourceAliases([path], sourcePaths);
+  await rejectExistingTarget(path, await existingSourceIdentities(sourcePaths));
+
+  const directory = await captureExistingOutputDirectoryIdentity(dirname(path));
+  if (directory === undefined) {
+    throw new UnsafeOutputPathError(
+      `Output parent does not exist: ${dirname(path)}`,
+    );
+  }
+  await prepareOutputDirectoryPlan([path], [directory]);
+  return Object.freeze({
+    path,
+    expectedDirectoryIdentities: Object.freeze([directory]),
+  });
 }
 
 export async function captureExistingOutputDirectoryIdentity(
@@ -343,7 +377,7 @@ export async function writeFileRangeAndFilesExclusively(
       await assertFuturePathStillAuthorized(file.path);
       let handle: FileHandle;
       try {
-        handle = await open(file.path, "wx");
+        handle = await openExclusiveOutput(file);
       } catch (error: unknown) {
         if (errorCode(error, "") === "EEXIST") {
           await rejectExistingTarget(file.path, sourceIdentities);
@@ -438,6 +472,14 @@ async function prepareOutputDirectoryPlan(
       ? {}
       : { unitTestDirectoryIdentityCheck }),
   };
+}
+
+function openExclusiveOutput(
+  file: Pick<ExclusiveOutputFile, "path" | "mode">,
+): Promise<FileHandle> {
+  return file.mode === undefined
+    ? open(file.path, "wx")
+    : open(file.path, "wx", file.mode);
 }
 
 function outputDirectoryForPath(

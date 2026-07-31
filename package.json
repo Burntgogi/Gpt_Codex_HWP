@@ -12,7 +12,7 @@
     "developerName": "Gpt_Codex_HWP contributors",
     "marketplaceName": "gpt-codex-hwp-local",
     "legacyUninstallSelector": "hwp-korean-docs@hwp-local",
-    "codexBuildId": "20260727172424"
+    "codexBuildId": "20260731221916"
   },
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",
@@ -32,6 +32,9 @@
     "verify:compact-runtime": "node packages/gpt-codex-hwp/release-scripts/verify-compact-runtime.mjs",
     "verify:dependencies": "node scripts/verify-installed-dependencies.mjs",
     "verify:source-dependencies": "node scripts/verify-installed-dependencies.mjs --source-only",
+    "benchmark:idle-memory": "npm --prefix packages/gpt-codex-hwp run benchmark:idle-memory:node --",
+    "memory:qualify": "node scripts/run-node-memory-qualification.mjs",
+    "memory:gate": "node scripts/node-memory-gate.mjs evaluate",
     "verify:runtime-smoke": "node scripts/installed-runtime-smoke.mjs",
     "test:repository": "node --test tests/*.test.mjs",
     "test:policy": "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",

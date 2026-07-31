@@ -59,6 +59,7 @@ import {
   DOCUMENT_START_FRAME,
   DOCUMENT_REGISTRATION_ENV,
 } from "./document-process-registration.js";
+import { publishDocumentChildTerminationReceipt } from "./document-child-termination-channel.js";
 import {
   createRegisteredPosixProcessGroupSupervisor,
   normalizeProcessTreeTerminationReceipt,
@@ -1027,6 +1028,7 @@ async function runChild<Operation extends DocumentEngineOperation>(
       void (async () => {
         let terminalError = "error" in outcome ? outcome.error : undefined;
         const receipt = await terminateWithReceipt(treeTerminator, child);
+        publishDocumentChildTerminationReceipt(receipt);
         if (!receipt.gone) {
           scheduleCleanupAfterActualExit(
             child,

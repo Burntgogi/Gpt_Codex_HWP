@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defaultDocumentEngineFacade, prepareDocumentRenderOutput, } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
+import { prepareDocumentRenderOutput } from "../shared/document-render-output.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { commitBudgetedToolSuccess, toolError, } from "../shared/result.js";
@@ -7,7 +8,7 @@ import { runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "
 import { MAX_HIGHLIGHT_TERMS, assertHighlightBudget, } from "../shared/resource-limits.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_RENDER_PREVIEW_TOOL_NAME = "hwp_render_preview";
-export async function handleHwpRenderPreview(input, documentEngine = defaultDocumentEngineFacade, context) {
+export async function handleHwpRenderPreview(input, documentEngine, context) {
     let filePath;
     let outputPath;
     try {
@@ -42,7 +43,8 @@ export async function handleHwpRenderPreview(input, documentEngine = defaultDocu
                 await snapshot.cleanup();
             }
         }
-        const rendered = await documentEngine.render(snapshot, renderOptions, toDocumentEngineExecutionContext(context));
+        const resolvedDocumentEngine = documentEngine ?? await getDefaultDocumentEngineFacade();
+        const rendered = await resolvedDocumentEngine.render(snapshot, renderOptions, toDocumentEngineExecutionContext(context));
         const prepared = await prepareDocumentRenderOutput(rendered, {
             ...(context === undefined ? {} : { signal: context.signal }),
         });
@@ -120,7 +122,7 @@ export async function handleHwpRenderPreview(input, documentEngine = defaultDocu
         });
     }
 }
-export function registerHwpRenderPreview(server, documentEngine = defaultDocumentEngineFacade) {
+export function registerHwpRenderPreview(server, documentEngine) {
     server.registerTool(HWP_RENDER_PREVIEW_TOOL_NAME, {
         title: "Render HWP/HWPX SVG preview",
         description: "Render the exact requested HWP/HWPX file in an isolated engine, writing a new local SVG without returning its payload through MCP.",

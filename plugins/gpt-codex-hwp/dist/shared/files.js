@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
-import { open, stat } from "node:fs/promises";
-import { authorizeExistingPath } from "./allowed-roots.js";
+import { lstat, open, realpath, stat } from "node:fs/promises";
+import { AllowedRootsPathError, authorizeExistingPath } from "./allowed-roots.js";
+import { resolveLocalPath } from "./paths.js";
 export const MAX_DOCUMENT_BYTES = 512 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const READ_CHUNK_BYTES = 1024 * 1024;
@@ -10,11 +11,22 @@ export async function readFileBounded(path, label, maximumBytes = MAX_DOCUMENT_B
     if (typeof path !== "string" || path.trim().length === 0) {
         throw readFailedError(safeLabel);
     }
-    const authorizedPath = await authorizeExistingPath(path);
+    const lexicalPath = options.directPath === true
+        ? resolveLocalPath(path, "file_path")
+        : path;
     try {
-        const handle = await openFileForBoundedRead(authorizedPath);
+        if (options.directPath === true) {
+            await assertDirectRegularPath(lexicalPath, safeLabel);
+        }
+        const authorizedPath = await authorizeExistingPath(lexicalPath);
+        if (options.directPath === true &&
+            comparablePath(authorizedPath) !== comparablePath(lexicalPath)) {
+            throw readFailedError(safeLabel);
+        }
+        const readPath = options.directPath === true ? lexicalPath : authorizedPath;
+        const handle = await openFileForBoundedRead(readPath);
         try {
-            return await readExactFile(handle, authorizedPath, safeLabel, maximumBytes, options);
+            return await readExactFile(handle, readPath, safeLabel, maximumBytes, options);
         }
         finally {
             try {
@@ -26,6 +38,9 @@ export async function readFileBounded(path, label, maximumBytes = MAX_DOCUMENT_B
         }
     }
     catch (error) {
+        if (error instanceof AllowedRootsPathError) {
+            throw error;
+        }
         if (error instanceof FileLimitError || error instanceof FileReadError) {
             throw error;
         }
@@ -49,6 +64,9 @@ async function readExactFile(handle, path, label, maximumBytes, options) {
         throw new FileLimitError(`${label} exceeds the ${maximumBytes}-byte safety limit.`);
     }
     const initialIdentity = identityOf(initialHandleStatus);
+    if (options.directPath === true) {
+        await assertDirectRegularPath(path, label);
+    }
     assertSameIdentity(initialIdentity, await pathIdentity(path, label), label);
     const sizeBytes = Number(initialHandleStatus.size);
     options.allocationObserver?.(sizeBytes);
@@ -63,6 +81,9 @@ async function readExactFile(handle, path, label, maximumBytes, options) {
     }
     await options.testHooks?.afterSourceRead?.();
     assertSameIdentity(initialIdentity, identityOf(await handle.stat({ bigint: true })), label);
+    if (options.directPath === true) {
+        await assertDirectRegularPath(path, label);
+    }
     assertSameIdentity(initialIdentity, await pathIdentity(path, label), label);
     return bytes;
 }
@@ -71,6 +92,9 @@ function validateReadOptions(maximumBytes, options) {
         maximumBytes < 0 ||
         typeof options !== "object" ||
         options === null) {
+        throw invalidOptionsError();
+    }
+    if (options.directPath !== undefined && options.directPath !== true) {
         throw invalidOptionsError();
     }
     if (options.allocationObserver !== undefined &&
@@ -87,6 +111,21 @@ function validateReadOptions(maximumBytes, options) {
             throw invalidOptionsError();
         }
     }
+}
+async function assertDirectRegularPath(path, label) {
+    const linked = await lstat(path, { bigint: true });
+    if (!linked.isFile() || linked.isSymbolicLink()) {
+        throw new FileReadError("INVALID_FILE_TYPE", `${label} must be a direct regular file.`);
+    }
+    const canonicalPath = await realpath(path);
+    if (comparablePath(canonicalPath) !== comparablePath(path)) {
+        throw readFailedError(label);
+    }
+}
+function comparablePath(path) {
+    return process.platform === "win32"
+        ? path.toLocaleLowerCase("en-US")
+        : path;
 }
 async function pathIdentity(path, label) {
     try {

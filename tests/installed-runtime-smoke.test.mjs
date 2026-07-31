@@ -2,68 +2,65 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const smokeModule = await import("../scripts/installed-runtime-smoke.mjs").catch(() => ({}));
-
-const EXACT_SCHEMAS = Object.freeze({
-  hwp_detect_format: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"file_path":{"minLength":1,"type":"string"}},"required":["file_path"],"type":"object"}',
-  hwp_read: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"extract_images":{"type":"boolean"},"file_path":{"minLength":1,"type":"string"},"markdown_output_path":{"minLength":1,"type":"string"},"output_dir":{"minLength":1,"type":"string"},"pages":{"minLength":1,"type":"string"}},"required":["file_path"],"type":"object"}',
-  hwp_generate_hwpx: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"markdown":{"maxLength":5000000,"minLength":1,"type":"string"},"output_path":{"minLength":1,"type":"string"},"preset":{"enum":["official","report","plan","notice","minutes"],"type":"string"},"preview_svg_path":{"minLength":1,"type":"string"},"validate":{"const":true,"type":"boolean"}},"required":["markdown","output_path"],"type":"object"}',
-  hwp_validate: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"file_path":{"minLength":1,"type":"string"}},"required":["file_path"],"type":"object"}',
-  hwp_render_preview: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"file_path":{"minLength":1,"type":"string"},"highlight":{"items":{"maxLength":256,"minLength":1,"type":"string"},"maxItems":256,"type":"array"},"output_svg_path":{"minLength":1,"type":"string"},"reflow":{"type":"boolean"}},"required":["file_path","output_svg_path"],"type":"object"}',
-  hwp_patch_document: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"edited_markdown":{"maxLength":5000000,"minLength":1,"type":"string"},"file_path":{"minLength":1,"type":"string"},"output_path":{"minLength":1,"type":"string"}},"required":["file_path","edited_markdown","output_path"],"type":"object"}',
-  hwp_fill_form: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"fields":{"additionalProperties":{"anyOf":[{"maxLength":5000000,"type":"string"},{"items":{"maxLength":5000000,"type":"string"},"maxItems":10000,"minItems":1,"type":"array"}]},"type":"object"},"file_path":{"minLength":1,"type":"string"},"formats":{"additionalProperties":{"type":"string"},"type":"object"},"mask_values":{"type":"boolean"},"output_path":{"minLength":1,"type":"string"},"require_unique":{"type":"boolean"}},"required":["file_path","fields","output_path"],"type":"object"}',
-  hwp_create_svg_asset: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"output_png_path":{"minLength":1,"type":"string"},"output_svg_path":{"minLength":1,"type":"string"},"prompt_or_spec":{"maxLength":1000000,"minLength":1,"type":"string"}},"required":["prompt_or_spec","output_svg_path"],"type":"object"}',
-  hwp_insert_image: '{"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"properties":{"anchor_occurrence":{"minimum":0,"type":"integer"},"anchor_text":{"maxLength":10000,"minLength":1,"type":"string"},"file_path":{"minLength":1,"type":"string"},"image_path":{"minLength":1,"type":"string"},"mode":{"enum":["after-paragraph","seal-anchor"],"type":"string"},"output_path":{"minLength":1,"type":"string"},"size_mm":{"maximum":200,"minimum":1,"type":"number"}},"required":["file_path","image_path","output_path","anchor_text"],"type":"object"}',
-});
+const EXACT_RUNTIME_ARGS = Object.freeze(["--max-semi-space-size=1", "./dist/mcp.js"]);
+const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+const CATALOG = JSON.parse(await readFile(join(ROOT, "plugins", "gpt-codex-hwp", "examples", "oneshot-tool-schemas.json"), "utf8"));
 
 function toolList() {
-  return Object.entries(EXACT_SCHEMAS).map(([name, schema]) => ({
+  return Object.entries(CATALOG.tools).map(([name, schema]) => ({
     name,
-    inputSchema: JSON.parse(schema),
+    inputSchema: structuredClone(schema),
   }));
+}
+
+async function writeManualMcpManifest(runtimeRoot, serialized) {
+  await mkdir(join(runtimeRoot, "examples"), { recursive: true });
+  await writeFile(join(runtimeRoot, "examples", "mcp-manual.json"), serialized);
+  await writeFile(join(runtimeRoot, "examples", "oneshot-tool-schemas.json"), JSON.stringify(CATALOG));
 }
 
 test("installed runtime smoke validates the exact nine names and schema surface", () => {
   assert.equal(typeof smokeModule.assertExactToolSchemas, "function");
-  assert.doesNotThrow(() => smokeModule.assertExactToolSchemas(toolList()));
+  assert.doesNotThrow(() => smokeModule.assertExactToolSchemas(toolList(), CATALOG));
   const changed = toolList();
   changed[0] = {
     ...changed[0],
     inputSchema: { ...changed[0].inputSchema, properties: { broad: { type: "string" } } },
   };
-  assert.throws(() => smokeModule.assertExactToolSchemas(changed), /schema/iu);
+  assert.throws(() => smokeModule.assertExactToolSchemas(changed, CATALOG), /schema/iu);
 });
 
-test("validation-semantic fingerprints reject scalar, enum, nested-item, limit, and extra-key drift", () => {
+test("schema catalog rejects scalar, enum, nested-item, limit, and extra-key drift", () => {
   const mutations = [
-    (tools) => { tools[0].inputSchema.properties.file_path.type = "integer"; },
-    (tools) => { tools[2].inputSchema.properties.preset.enum[0] = "drift"; },
-    (tools) => { tools[4].inputSchema.properties.highlight.items.type = "number"; },
-    (tools) => { tools[6].inputSchema.properties.fields.additionalProperties.anyOf[1].items.type = "number"; },
-    (tools) => { tools[7].inputSchema.properties.prompt_or_spec.maxLength = 999999; },
+    (tools) => { tools[1].inputSchema.properties.file_path.type = "integer"; },
+    (tools) => { tools[3].inputSchema.properties.preset.enum[0] = "drift"; },
+    (tools) => { tools[7].inputSchema.properties.highlight.items.type = "number"; },
+    (tools) => { tools[2].inputSchema.properties.fields.additionalProperties.anyOf[1].items.type = "number"; },
+    (tools) => { tools[0].inputSchema.properties.prompt_or_spec.maxLength = 999999; },
     (tools) => { tools[8].inputSchema.unevaluatedProperties = false; },
     (tools) => { tools[0].inputSchema.properties.description = { type: "string" }; },
   ];
   for (const mutate of mutations) {
     const tools = toolList();
     mutate(tools);
-    assert.throws(() => smokeModule.assertExactToolSchemas(tools), /schema/iu);
+    assert.throws(() => smokeModule.assertExactToolSchemas(tools, CATALOG), /schema/iu);
   }
 });
 
-test("validation-semantic fingerprints deliberately exclude non-contract description prose", () => {
+test("schema catalog deliberately excludes non-contract description prose", () => {
   const tools = toolList();
-  tools[0].inputSchema.description = "Changed top-level prose.";
-  tools[0].inputSchema.properties.file_path.description = "Changed field prose.";
-  assert.doesNotThrow(() => smokeModule.assertExactToolSchemas(tools));
+  tools[1].inputSchema.description = "Changed top-level prose.";
+  tools[1].inputSchema.properties.file_path.description = "Changed field prose.";
+  assert.doesNotThrow(() => smokeModule.assertExactToolSchemas(tools, CATALOG));
 });
 
-test("validation-semantic fingerprints retain own enumerable __proto__ schema keys", () => {
+test("schema catalog retains own enumerable __proto__ schema keys", () => {
   for (const target of [
     (tools) => tools[0].inputSchema,
     (tools) => tools[0].inputSchema.properties,
@@ -75,7 +72,7 @@ test("validation-semantic fingerprints retain own enumerable __proto__ schema ke
       value: { type: "string" },
       writable: true,
     });
-    assert.throws(() => smokeModule.assertExactToolSchemas(tools), /schema/iu);
+    assert.throws(() => smokeModule.assertExactToolSchemas(tools, CATALOG), /schema/iu);
   }
 });
 
@@ -85,12 +82,36 @@ test("installed runtime smoke encodes the allowed root as the runtime's exact JS
   });
 });
 
+test("default installed runtime smoke invokes the real compiled one-shot and verifies bounded cleanup", async () => {
+  assert.equal(typeof smokeModule.runInstalledOneShotSmoke, "function");
+  let output = "";
+  const receipt = await smokeModule.runInstalledOneShotSmoke({
+    stdout: { write(value) { output += value; return true; } },
+    setExitCode(code) { assert.equal(code, 0); },
+  });
+
+  assert.ok(receipt.hwpxBytes > 4);
+  assert.equal(receipt.remainingDescendantCount, 0);
+  assert.match(output, /^RUNTIME_SMOKE status=passed tools=9 hwpxBytes=\d+ hwpx=passed stderrBytes=0 remainingDescendants=0\n$/u);
+});
+
+test("one-shot cleanup rejects a recorded detached identity after the outer group is gone", () => {
+  assert.equal(typeof smokeModule.assertOneShotProcessCleanup, "function");
+  assert.throws(() => smokeModule.assertOneShotProcessCleanup({
+    terminationFailed: false,
+    stdout: Buffer.from(
+      "ONESHOT_CLEANUP proof=registered-groups-empty observedProcessTrees=1 remainingProcessTrees=1\nONESHOT_OK\n",
+    ),
+    platform: "linux",
+  }), /descendant|identity|cleanup/iu);
+});
+
 test("initialization failure emits only the last bounded lifecycle boundary and stderr count", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-initialize-boundary-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let output = "";
@@ -245,9 +266,9 @@ test("installed runtime smoke uses the exact manifest command and one bounded Sh
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
   await mkdir(join(runtimeRoot, "dist"));
   await writeFile(join(runtimeRoot, "dist", "mcp.js"), "", "utf8");
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
 
@@ -298,7 +319,7 @@ test("installed runtime smoke uses the exact manifest command and one bounded Sh
 
   assert.deepEqual(sessionSpec, {
     command: "node",
-    args: ["./dist/mcp.js"],
+    args: EXACT_RUNTIME_ARGS,
     cwd: runtimeRoot,
     allowedRoot: ownedRoot,
   });
@@ -316,7 +337,7 @@ test("installed runtime smoke uses the exact manifest command and one bounded Sh
 test("installed runtime smoke rejects any manifest command drift before MCP initialization", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-manifest-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "npm", args: ["start"], cwd: "." },
     },
@@ -337,9 +358,9 @@ test("installed runtime smoke rejects any manifest command drift before MCP init
 test("installed runtime smoke verifies root and descendants and removes outputs after call and close failures", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-failure-fixture-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let ownedRoot;
@@ -388,9 +409,9 @@ test("list, result, and close failures still take a final snapshot and verify tr
   for (const { fault, expectedStage, expectedQueries } of cases) {
     const runtimeRoot = await mkdtemp(join(tmpdir(), `runtime-smoke-${fault}-fixture-`));
     t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-    await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
       mcpServers: {
-        "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+        "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
       },
     }), "utf8");
     let descendantQueries = 0;
@@ -449,9 +470,9 @@ test("list, result, and close failures still take a final snapshot and verify tr
 test("call failure still captures a late descendant and invokes verified supervisor termination", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-late-fixture-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let descendantQueries = 0;
@@ -498,9 +519,9 @@ test("call failure still captures a late descendant and invokes verified supervi
 test("unverified supervisor termination fails closed without leaking identity details", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-unverified-fixture-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let output = "";
@@ -548,9 +569,9 @@ test("unverified supervisor termination fails closed without leaking identity de
 test("a valid supervisor receipt cannot hide a captured surviving identity", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-survivor-fixture-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let output = "";
@@ -590,9 +611,9 @@ test("initialized cleanup rejects a gated-root-only receipt and an inventory mis
   for (const fault of ["gated-receipt", "missing-root"]) {
     const runtimeRoot = await mkdtemp(join(tmpdir(), `runtime-smoke-${fault}-fixture-`));
     t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-    await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
       mcpServers: {
-        "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+        "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
       },
     }), "utf8");
     let output = "";
@@ -649,9 +670,9 @@ test("oversized SVG and PNG outputs emit only fixed asset failures and still ver
   for (const kind of ["svg", "png"]) {
     const runtimeRoot = await mkdtemp(join(tmpdir(), `runtime-smoke-${kind}-limit-fixture-`));
     t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-    await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
       mcpServers: {
-        "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+        "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
       },
     }), "utf8");
     let output = "";
@@ -704,9 +725,9 @@ test("installed runtime smoke refuses an unowned temporary root without deleting
   const unownedRoot = await mkdtemp(join(tmpdir(), "unowned-runtime-smoke-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
   t.after(() => rm(unownedRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let sessions = 0;
@@ -727,9 +748,9 @@ test("installed runtime smoke refuses an unowned temporary root without deleting
 test("installed runtime smoke rejects schema drift before a tool call with a fixed stage", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-schema-fixture-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let calls = 0;
@@ -770,9 +791,9 @@ test("installed runtime smoke rejects a linked temporary-root alias without dele
     t.skip("Directory-link creation is unavailable.");
     return;
   }
-  await writeFile(join(runtimeRoot, ".mcp.json"), JSON.stringify({
+  await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
-      "gpt-codex-hwp": { command: "node", args: ["./dist/mcp.js"], cwd: "." },
+      "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
     },
   }), "utf8");
   let output = "";

@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { defaultDocumentEngineFacade, } from "../shared/document-engine.js";
+import { getDefaultDocumentEngineFacade } from "../shared/lazy-document-engine.js";
 import { openDocumentSnapshot } from "../shared/document-snapshot.js";
 import { resolveLocalPath } from "../shared/paths.js";
 import { toolError, toolSuccess } from "../shared/result.js";
 import { runWithToolExecutionContext, toDocumentEngineExecutionContext, } from "../shared/tool-context.js";
 import { maxWorkerSnapshotBytesForRequest } from "../workers/document-execution-policy.js";
 export const HWP_DETECT_FORMAT_TOOL_NAME = "hwp_detect_format";
-export async function handleHwpDetectFormat(input, documentEngine = defaultDocumentEngineFacade, context) {
+export async function handleHwpDetectFormat(input, documentEngine, context) {
     let filePath;
     try {
         filePath = resolveLocalPath(input.file_path, "file_path");
@@ -16,7 +16,8 @@ export async function handleHwpDetectFormat(input, documentEngine = defaultDocum
                 options: {},
             }),
         });
-        const detected = await documentEngine.detect(snapshot, toDocumentEngineExecutionContext(context));
+        const resolvedDocumentEngine = documentEngine ?? await getDefaultDocumentEngineFacade();
+        const detected = await resolvedDocumentEngine.detect(snapshot, toDocumentEngineExecutionContext(context));
         const details = {
             file_path: filePath,
             file_size_bytes: detected.snapshotMetadata.sizeBytes,
@@ -44,7 +45,7 @@ export async function handleHwpDetectFormat(input, documentEngine = defaultDocum
         });
     }
 }
-export function registerHwpDetectFormat(server, documentEngine = defaultDocumentEngineFacade) {
+export function registerHwpDetectFormat(server, documentEngine) {
     server.registerTool(HWP_DETECT_FORMAT_TOOL_NAME, {
         title: "Detect HWP document format",
         description: "Detect the exact requested local document format before applying the HWP/HWPX-only read contract.",
