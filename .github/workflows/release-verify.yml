@@ -54,11 +54,8 @@ jobs:
         run: |
           npm install --global npm@10.9.7 --ignore-scripts
           if ((npm --version) -ne "10.9.7") { exit 1 }
-      - name: Run exact-SHA node memory qualification
-        run: |
-          node scripts/node-memory-gate.mjs decision create --output .superpowers/decisions/release-node-memory.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run memory:qualify -- prepare --control-revision 8aefe5f17e112376163d495c6993b570240d07fb --decision .superpowers/decisions/release-node-memory.json --output .superpowers/qualifications/release
+      - name: Install source dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Install runtime dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Configure neutral release identity

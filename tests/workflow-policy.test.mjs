@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -826,84 +825,11 @@ test("workflow policy: release verification uploads checksummed candidates and o
   assertReleaseWorkflowPolicy(workflow);
 });
 
-test("memory-sensitive changes require exact-SHA qualification", async () => {
-  const workflow = await readFile(NODE_MEMORY_WORKFLOW_PATH, "utf8");
-  assertNodeMemoryWorkflowPolicy(workflow);
+test("automatic workflows exclude maintainer-only Node RSS qualification", async () => {
+  await assert.rejects(access(NODE_MEMORY_WORKFLOW_PATH), { code: "ENOENT" });
+  const releaseWorkflow = await readFile(RELEASE_WORKFLOW_PATH, "utf8");
+  assert.doesNotMatch(releaseWorkflow, /memory:qualify|node-memory-gate|node-memory-qualification/iu);
 });
-
-test("node memory workflows share a reachable control revision", async () => {
-  const workflows = await Promise.all([
-    readFile(NODE_MEMORY_WORKFLOW_PATH, "utf8"),
-    readFile(RELEASE_WORKFLOW_PATH, "utf8"),
-  ]);
-  const revisions = workflows.map((workflow) => {
-    const matches = [...workflow.matchAll(/--control-revision ([a-f0-9]{40})/gu)];
-    assert.equal(matches.length, 1);
-    return matches[0][1];
-  });
-
-  assert.equal(revisions[0], revisions[1]);
-  assert.doesNotThrow(() => execFileSync(
-    "git",
-    ["merge-base", "--is-ancestor", revisions[0], "HEAD"],
-    { cwd: ROOT, stdio: "pipe" },
-  ));
-});
-
-test("node memory qualification rejects identity, permission, and evidence drift", async () => {
-  const workflow = await readFile(NODE_MEMORY_WORKFLOW_PATH, "utf8");
-  const mutations = [
-    ["unsafe trigger", workflow.replace("  pull_request:\n", "  pull_request_target:\n")],
-    ["mutable head", workflow.replace("github.event.pull_request.head.sha", "github.ref")],
-    ["write permission", workflow.replace("      contents: read", "      contents: write")],
-    ["control drift", workflow.replace("8aefe5f17e112376163d495c6993b570240d07fb", "9aefe5f17e112376163d495c6993b570240d07fb")],
-    ["success bypass", workflow.replace("      - name: Run exact-SHA qualification", "      - name: Run exact-SHA qualification\n        continue-on-error: true")],
-    ["extra artifact", workflow.replace("            .superpowers/qualifications/pr/", "            .superpowers/qualifications/pr/\n            packages/gpt-codex-hwp/node_modules/")],
-  ];
-  for (const [label, mutation] of mutations) {
-    assert.notEqual(mutation, workflow, label);
-    assert.throws(() => assertNodeMemoryWorkflowPolicy(mutation), undefined, label);
-  }
-});
-
-function assertNodeMemoryWorkflowPolicy(workflow) {
-  assert.match(workflow, /^name: Node memory qualification$/mu);
-  assert.match(workflow, /^  pull_request:\r?\n    paths:$/mu);
-  for (const path of [
-    "packages/gpt-codex-hwp/src/**",
-    "packages/gpt-codex-hwp/benchmarks/**",
-    "packages/gpt-codex-hwp/package-lock.json",
-    "plugins/gpt-codex-hwp/.codex-plugin/plugin.json",
-    "plugins/gpt-codex-hwp/dist/oneshot.js",
-    "plugins/gpt-codex-hwp/examples/mcp-manual.json",
-    "plugins/gpt-codex-hwp/skills/gpt-codex-hwp/SKILL.md",
-    "scripts/installed-runtime-smoke.mjs",
-    "scripts/node-memory-gate.mjs",
-    "scripts/run-node-memory-qualification.mjs",
-  ]) {
-    assert.match(workflow, new RegExp(`^      - "${escapeRegExp(path)}"$`, "mu"));
-  }
-  assert.match(workflow, /^permissions: \{\}$/mu);
-  assert.doesNotMatch(workflow, /pull_request_target|\$\{\{\s*secrets\.|^\s+(?:contents|actions|checks|pull-requests): write$/gmu);
-  const job = jobSection(workflow, "qualify");
-  assert.match(job, /^    name: Node memory qualification$/mu);
-  assert.match(job, /^    runs-on: windows-2025$/mu);
-  assert.match(job, /^    timeout-minutes: 45$/mu);
-  assert.match(job, /^    permissions:\r?\n      contents: read$/mu);
-  assert.match(job, /^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}$/mu);
-  assert.match(job, /^          persist-credentials: false$/mu);
-  assert.match(job, /^          fetch-depth: 0$/mu);
-  assert.match(job, /^          node-version: "22\.22\.2"$/mu);
-  assert.match(job, /npm install --global npm@10\.9\.7 --ignore-scripts\r?\n          if \(\(npm --version\) -ne "10\.9\.7"\) \{ exit 1 \}/u);
-  assert.match(job, /node scripts\/node-memory-gate\.mjs decision create --output \.superpowers\/decisions\/pr-node-memory\.json\r?\n          if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}\r?\n          npm run memory:qualify -- prepare --control-revision 8aefe5f17e112376163d495c6993b570240d07fb --decision \.superpowers\/decisions\/pr-node-memory\.json --output \.superpowers\/qualifications\/pr/u);
-  assert.match(job, /^          retention-days: 90$/mu);
-  assert.match(job, /^          include-hidden-files: true$/mu);
-  assert.match(job, /^          if-no-files-found: error$/mu);
-  assert.match(job, /^          path: \|\r?\n            \.superpowers\/decisions\/pr-node-memory\.json\r?\n            \.superpowers\/qualifications\/pr\/\r?\n          if-no-files-found: error$/mu);
-  assert.doesNotMatch(job, /continue-on-error:\s*true|\|\|\s*true|git\s+push|gh\s+release/iu);
-  assert.equal(countMatches(job, /actions\/upload-artifact@/gu), 1);
-  assertPinnedActions(workflow);
-}
 
 function assertReleaseWorkflowPolicy(workflow) {
   assert.match(workflow, /^permissions: \{\}$/mu);
@@ -932,8 +858,11 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.match(build, /^    permissions:\n      contents: read$/mu);
   assert.equal(countMatches(build, /^\s+package-manager-cache: false$/gmu), 1,
     "release verification must not enable setup-node's implicit npm cache without a root lockfile");
-  assert.doesNotMatch(build, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp/u,
-    "prepared qualification owns the source install and build");
+  assert.equal(
+    countMatches(build, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp/gu),
+    1,
+    "release verification installs source dependencies exactly once",
+  );
   assert.match(build, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev/u);
   assert.match(build, /npm install --global npm@10\.9\.7 --ignore-scripts\r?\n          if \(\(npm --version\) -ne "10\.9\.7"\) \{ exit 1 \}/u);
   assert.match(build, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
@@ -947,12 +876,7 @@ function assertReleaseWorkflowPolicy(workflow) {
     "each release artifact command scopes runner.temp at step level",
   );
   const steps = workflowStepSections(build);
-  const qualification = requiredStep(steps, "name: Run exact-SHA node memory qualification");
-  assert.match(
-    qualification,
-    /node scripts\/node-memory-gate\.mjs decision create --output \.superpowers\/decisions\/release-node-memory\.json\r?\n          if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}\r?\n          npm run memory:qualify -- prepare --control-revision 8aefe5f17e112376163d495c6993b570240d07fb --decision \.superpowers\/decisions\/release-node-memory\.json --output \.superpowers\/qualifications\/release/u,
-  );
-  assert.doesNotMatch(qualification, /continue-on-error|^        if:|^        shell:/mu);
+  assert.doesNotMatch(build, /memory:qualify|node-memory-gate|node-memory-qualification/iu);
   const large = requiredStep(steps, "id: large");
   assert.match(large, /^        timeout-minutes: 30$/mu);
   assert.match(large, /^          HWP_BENCH_LARGE: "1"$/mu);
@@ -1003,13 +927,13 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.match(build, /^          path: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts\/$/mu);
   const largeEvidence = build.indexOf("benchmark:documents -- --sizes 100 --output .superpowers/benchmarks/release-supported-100.json");
   const exactTag = build.indexOf("name: Assert exact immutable release tag");
-  const exactQualification = build.indexOf("name: Run exact-SHA node memory qualification");
+  const sourceInstall = build.indexOf("name: Install source dependencies without lifecycle scripts");
   const diagnosticProbe = build.indexOf("benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/release-diagnostic-10.json");
   const releaseGate = build.indexOf("npm run release:verify");
   const artifactBuild = build.indexOf("npm run release:artifacts");
   const artifactUpload = build.indexOf("name: gpt-codex-hwp-v${{ inputs.release_version }}-candidate");
   assert.equal(
-    exactTag >= 0 && exactQualification > exactTag && largeEvidence > exactQualification
+    exactTag >= 0 && sourceInstall > exactTag && largeEvidence > sourceInstall
       && diagnosticProbe > largeEvidence && diagnosticProbe < releaseGate
       && releaseGate < artifactBuild && artifactBuild < artifactUpload,
     true,
@@ -1038,8 +962,6 @@ test("release policy rejects cancelled diagnostics, non-100 evidence, and prefli
     ["wrong diagnostic condition", workflow.replace("!cancelled() && steps.large.outcome == 'failure'", "failure()")],
     ["gate before diagnostics", workflow.replace("      - name: Run the complete fail-closed release gate", "      - name: Run the complete fail-closed release gate\n        if: always()")],
     ["custom shell", workflow.replace("        id: large", "        id: large\n        shell: bash -c \"source {0}; exit 0\"")],
-    ["qualification bypass", workflow.replace("      - name: Run exact-SHA node memory qualification", "      - name: Run exact-SHA node memory qualification\n        continue-on-error: true")],
-    ["qualification control drift", workflow.replace("8aefe5f17e112376163d495c6993b570240d07fb", "9aefe5f17e112376163d495c6993b570240d07fb")],
     ["duplicate source install", workflow.replace("      - name: Install runtime dependencies without lifecycle scripts", "      - run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp\n      - name: Install runtime dependencies without lifecycle scripts")],
   ];
   for (const [label, mutation] of mutations) {
