@@ -1,7 +1,7 @@
 # Gpt_Codex_HWP v0.2.3 Release Notes
 
 - Status: pre-release candidate
-- Date: 2026-08-01
+- Date: 2026-08-02
 - Validation baseline: Windows x64 development and real-document checks; physical Mac unverified
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
@@ -15,6 +15,7 @@ v0.2.3 retains v0.2.2's read-only HWP policy, HWPX writing, and all nine interna
 - Repository Node test files now run serially so `runtime-projection` cannot replace the shared `plugins/gpt-codex-hwp` tree while installed-runtime smoke tests use it.
 - Release verification now emits only the first safe phase and TAP ordinal on failure. It never publishes raw errors, user paths, PIDs, environment variables, or document content.
 - A verified runtime is installed atomically outside the managed plugin cache in a versioned, platform-specific location. Cache rehydration reuses it, while document operations perform no installation or network access.
+- The Windows PowerShell ACL helper now allows a 15-second cold-start window under host load. The applied DACL and allowed principals are unchanged.
 - Public stable-install guidance now targets v0.2.2 and its default one-shot lifecycle. The default installation does not register a persistent `gpt-codex-hwp` server in `/mcp`.
 - The immutable v0.2.2 tag and release remain unchanged; this follow-up uses a new v0.2.3 build ID.
 
@@ -25,6 +26,7 @@ v0.2.3 retains v0.2.2's read-only HWP policy, HWPX writing, and all nine interna
 - The shared Codex v0.2.2 installed-runtime one-shot generated HWPX, validated it, and reported zero remaining supervised descendants.
 - The parallel repository failure was reproduced locally; after restoring runtime dependencies, the affected smoke file passed all 28 tests, confirming a shared-tree race.
 - An isolated Codex-home regression installed the runtime, rebuilt the managed cache without dependencies, reran doctor and real HWPX generation/validation, and retained the exact installation-receipt hash.
+- The previously intermittent cache-rehydration regression passed three consecutive runs after the fix.
 - Before v0.2.3 release, serial repository tests, source Node tests, Python tests, public tree/history scans, and platform CI must pass again.
 
 ## User resource statement

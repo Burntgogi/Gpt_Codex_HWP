@@ -171,8 +171,8 @@
     },
     {
       "path": "dist/shared/windows-owner-only-acl.js",
-      "size": 4938,
-      "sha256": "557b9005875c9f6c4cc70a53cf19f39ee006d2aaf540508e179fac8f93f7f21a"
+      "size": 4939,
+      "sha256": "5df03d9d2e8098c1c8837bde77e7bd54ea99d957b45a268c13d9090d1097c44a"
     },
     {
       "path": "dist/shared/xml-policy.js",
