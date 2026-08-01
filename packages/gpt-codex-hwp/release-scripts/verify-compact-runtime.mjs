@@ -382,7 +382,11 @@ function requireSuccess(name, result) {
     || typeof result !== "object"
     || Array.isArray(result)
     || result.isError) {
-    const error = new Error("TOOL_SMOKE_FAILED: tool smoke returned an error.");
+    const candidateCode = result?.structuredContent?.code;
+    const safeName = TOOL_NAMES.includes(name) ? name : "internal";
+    const safeCode = typeof candidateCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(candidateCode)
+      ? candidateCode : "UNKNOWN";
+    const error = new Error(`TOOL_SMOKE_FAILED: tool=${safeName} code=${safeCode}.`);
     error.code = "TOOL_SMOKE_FAILED";
     throw error;
   }
@@ -734,10 +738,13 @@ async function verifyMcp(runtimeRoot, {
   expectedBytes,
   semanticMode,
 }) {
-  const serverPath = join(runtimeRoot, "dist", "mcp.js");
+  const serverUrl = pathToFileURL(join(runtimeRoot, "dist", "mcp-main.js")).href;
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [serverPath],
+    args: [
+      "--eval",
+      `import(${JSON.stringify(serverUrl)}).then(({runMcpServer})=>runMcpServer())`,
+    ],
     cwd: runtimeRoot,
     env: { GIT_NO_REPLACE_OBJECTS: "1" },
     stderr: "pipe",
@@ -916,7 +923,7 @@ export async function verifyCompactRuntime({
     const packageLockSha256BeforeNpmCi = await sha256Bytes(packageLockPath);
     const allowedBinLinks = expectedCompactBinLinks(lock, runtimeRoot);
     onDiagnosticStage("npm-ci");
-    await runNpm(["ci", "--omit=dev", "--ignore-scripts"], runtimeRoot);
+    await runNpm(["ci", "--omit=dev", "--ignore-scripts", "--install-links=true"], runtimeRoot);
     const packageLockSha256AfterNpmCi = await sha256Bytes(packageLockPath);
     if (packageLockSha256AfterNpmCi !== packageLockSha256BeforeNpmCi) {
       throw new Error("COMPACT_RUNTIME_LOCK_CHANGED: npm ci changed package-lock.json.");
@@ -925,7 +932,7 @@ export async function verifyCompactRuntime({
     const sharpSelection = await assertSharpRuntimeSelection(runtimeRoot);
     onDiagnosticStage("npm-ls");
     const npmLsRun = await runNpm(
-      ["ls", "--omit=dev", "--all", "--json"],
+      ["ls", "--omit=dev", "--all", "--json", "--install-links=true"],
       runtimeRoot,
       { allowFailure: true },
     );

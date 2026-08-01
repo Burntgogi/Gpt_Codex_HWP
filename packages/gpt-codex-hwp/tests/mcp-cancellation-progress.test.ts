@@ -22,7 +22,7 @@ import type {
   SpoolDocumentSnapshot,
   WorkerDocumentSnapshot,
 } from "../src/shared/document-snapshot.js";
-import { createMcpServer } from "../src/mcp.js";
+import { createMcpServer } from "../src/mcp-main.js";
 import {
   createToolExecutionContext,
   runWithToolExecutionContext,

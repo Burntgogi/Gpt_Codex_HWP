@@ -23,6 +23,7 @@ import {
   releaseSubprocessEnvironment,
 } from "../scripts/release-subprocess-environment.mjs";
 import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
+import { assertRestartSafeZipContractForTest } from "../scripts/verify-release-artifacts.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE_SHA256 =
@@ -58,6 +59,26 @@ const collectStableSourceIdentity = async () => SOURCE_IDENTITY;
 const passedReleaseStage = (stage) => stage.name === "release-artifacts"
   ? { status: "passed", ...SOURCE_IDENTITY }
   : { status: "passed" };
+
+test("release ZIP requires the restart-safe bootstrap and excludes node_modules", () => {
+  const required = [
+    "runtime-manifest.json",
+    "dist/install-runtime.js",
+    "dist/runtime-bootstrap.js",
+    "dist/oneshot-main.js",
+    "dist/doctor-main.js",
+    "dist/mcp-main.js",
+  ].map((name) => ({ name }));
+  assert.doesNotThrow(() => assertRestartSafeZipContractForTest(required));
+  assert.throws(
+    () => assertRestartSafeZipContractForTest(required.slice(1)),
+    /RELEASE_ARTIFACTS_RUNTIME_CONTRACT/u,
+  );
+  assert.throws(
+    () => assertRestartSafeZipContractForTest([...required, { name: "node_modules/pkg/index.js" }]),
+    /RELEASE_ARTIFACTS_RUNTIME_CONTRACT/u,
+  );
+});
 
 test("release subprocess environments scrub Git semantics and Node test context", async (t) => {
   const inherited = {
@@ -254,6 +275,10 @@ test("release verification package scripts use the exact public entry points", a
   ));
 
   assert.equal(rootPackage.scripts["release:verify"], "node scripts/release-verify.mjs");
+  assert.equal(
+    rootPackage.scripts["test:repository"],
+    "node --test --test-concurrency=1 tests/*.test.mjs",
+  );
   assert.equal(
     rootPackage.scripts["release:artifacts"],
     "node packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
@@ -855,6 +880,31 @@ test("release verification CLI emits only the receipt and exits nonzero on failu
   assert.equal(exitCode, 1);
   assert.deepEqual(JSON.parse(stdout), failedReceipt);
   assert.equal(stderr, "");
+});
+
+test("release verification CLI emits the bounded Node failure diagnostic", async () => {
+  const failedReceipt = Object.freeze({ status: "failed" });
+  let stdout = "";
+  let stderr = "";
+  let exitCode = 0;
+
+  await runCli({
+    runVerification: async (options = {}) => {
+      options.diagnosticObserver?.({
+        kind: "node-tests",
+        phase: "repository",
+        ordinal: 854,
+      });
+      return failedReceipt;
+    },
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { write: (chunk) => { stderr += chunk; } },
+    setExitCode: (code) => { exitCode = code; },
+  });
+
+  assert.equal(exitCode, 1);
+  assert.deepEqual(JSON.parse(stdout), failedReceipt);
+  assert.equal(stderr, "NODE_TEST_FIRST_FAILURE phase=repository ordinal=854\n");
 });
 
 test("release verification CLI redacts unexpected failures and exits nonzero", async () => {

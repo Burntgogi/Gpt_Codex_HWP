@@ -15,6 +15,7 @@ import { dirname, join, parse, resolve } from "node:path";
 import test, { after, afterEach, before } from "node:test";
 import { promisify } from "node:util";
 
+import { prepareRestartSafeRuntime } from "../../../scripts/installed-runtime-smoke.mjs";
 import {
   AllowedRootsConfigurationError,
   AllowedRootsPathError,
@@ -28,7 +29,7 @@ import { writeFilesExclusively } from "../src/shared/output.js";
 import {
   configureAllowedRootsForMcp,
   createMcpServer,
-} from "../src/mcp.js";
+} from "../src/mcp-main.js";
 import {
   handleHwpCreateSvgAsset,
   handleHwpInsertImage,
@@ -306,32 +307,38 @@ test("allowed roots: MCP startup rejects malformed configuration without echoing
 test("allowed roots: the MCP executable exits before transport startup and redacts malformed environment input", async () => {
   const privateFragment = ["never", "print", "startup", "path"].join("-");
   const rawValue = `[\"${privateFragment}`;
-  await assert.rejects(
-    execFileAsync(
-      process.execPath,
-      ["--import", "tsx", resolve("src", "mcp.ts")],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          GPT_CODEX_HWP_ALLOWED_ROOTS: rawValue,
+  const prepared = await prepareRestartSafeRuntime();
+  try {
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [resolve(prepared.managedRoot, "dist", "mcp.js")],
+        {
+          cwd: prepared.managedRoot,
+          env: {
+            ...process.env,
+            CODEX_HOME: prepared.codexHome,
+            GPT_CODEX_HWP_ALLOWED_ROOTS: rawValue,
+          },
+          encoding: "utf8",
+          timeout: 5_000,
+          windowsHide: true,
         },
-        encoding: "utf8",
-        timeout: 5_000,
-        windowsHide: true,
+      ),
+      (error: unknown) => {
+        const stderr = typeof error === "object" && error !== null &&
+            "stderr" in error && typeof error.stderr === "string"
+          ? error.stderr
+          : "";
+        assert.equal(stderr, "INVALID_ALLOWED_ROOTS_CONFIGURATION\n");
+        assert.doesNotMatch(stderr, new RegExp(privateFragment, "iu"));
+        assert.equal(stderr.includes(rawValue), false);
+        return true;
       },
-    ),
-    (error: unknown) => {
-      const stderr = typeof error === "object" && error !== null &&
-          "stderr" in error && typeof error.stderr === "string"
-        ? error.stderr
-        : "";
-      assert.match(stderr, /Allowed roots configuration is invalid/u);
-      assert.doesNotMatch(stderr, new RegExp(privateFragment, "iu"));
-      assert.equal(stderr.includes(rawValue), false);
-      return true;
-    },
-  );
+    );
+  } finally {
+    await prepared.cleanup();
+  }
 });
 
 test("allowed roots: all nine MCP tools return the same redacted denial for blocked user paths", async () => {

@@ -3,13 +3,25 @@ import { spawn } from "node:child_process";
 import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { after, before } from "node:test";
 
+import { prepareRestartSafeRuntime } from "../scripts/installed-runtime-smoke.mjs";
 import { runBoundedProcess } from "../scripts/public-content-policy.mjs";
 
-const RUNTIME_ROOT = resolve("plugins/gpt-codex-hwp");
+let runtimeRoot = resolve("plugins/gpt-codex-hwp");
+let codexHome;
+let cleanupRuntime;
 const ENTRY_ARGUMENTS = ["--max-semi-space-size=1", "./dist/oneshot.js"];
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
+before(async () => {
+  const prepared = await prepareRestartSafeRuntime();
+  runtimeRoot = prepared.managedRoot;
+  codexHome = prepared.codexHome;
+  cleanupRuntime = prepared.cleanup;
+});
+
+after(async () => cleanupRuntime?.());
 
 test("compiled one-shot generates one valid HWPX and never overwrites a response", { timeout: 60_000 }, async (t) => {
   const fixture = await createFixture(t, "success", {
@@ -88,7 +100,7 @@ test("compiled one-shot handles SIGTERM through bounded graceful cancellation", 
     "--response",
     fixture.responsePath,
   ], {
-    cwd: RUNTIME_ROOT,
+    cwd: runtimeRoot,
     env: runtimeEnvironment(fixture.root),
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
@@ -162,7 +174,7 @@ function runFixture(fixture, timeoutMs = 30_000) {
     "--response",
     fixture.responsePath,
   ], {
-    cwd: RUNTIME_ROOT,
+    cwd: runtimeRoot,
     env: runtimeEnvironment(fixture.root),
     timeoutMs,
     maxOutputBytes: 64 * 1024,
@@ -172,6 +184,7 @@ function runFixture(fixture, timeoutMs = 30_000) {
 function runtimeEnvironment(root) {
   return {
     ...process.env,
+    CODEX_HOME: codexHome,
     GPT_CODEX_HWP_ALLOWED_ROOTS: JSON.stringify([root]),
   };
 }

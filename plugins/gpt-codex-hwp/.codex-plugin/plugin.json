@@ -1,6 +1,6 @@
 {
   "name": "gpt-codex-hwp",
-  "version": "0.2.2+codex.20260731221916",
+  "version": "0.2.3+codex.20260802005314",
   "description": "Read and preview Korean HWP files, and create, edit, validate, and preview HWPX documents in Codex.",
   "author": {
     "name": "Gpt_Codex_HWP contributors"

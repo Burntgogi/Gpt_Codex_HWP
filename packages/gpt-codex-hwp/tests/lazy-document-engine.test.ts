@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createMcpServer } from "../src/mcp.js";
+import { createMcpServer } from "../src/mcp-main.js";
 import type { DocumentEngineFacade } from "../src/shared/document-engine.js";
 import {
   getDefaultDocumentEngineFacade,

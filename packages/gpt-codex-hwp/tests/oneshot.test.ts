@@ -21,7 +21,7 @@ import {
   parseOneShotArguments,
   parseOneShotRequest,
   runOneShot,
-} from "../src/oneshot.js";
+} from "../src/oneshot-main.js";
 
 const REQUEST_PATH = resolve("request.json");
 const RESPONSE_PATH = resolve("response.json");

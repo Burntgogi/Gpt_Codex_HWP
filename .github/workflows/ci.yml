@@ -48,10 +48,7 @@ jobs:
       - name: Verify generated runtime projection
         timeout-minutes: 5
         run: npm run runtime:check
-      - name: Fresh runtime production install
-        timeout-minutes: 10
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Verify bounded installed runtime smoke
+      - name: Install and verify restart-safe runtime
         timeout-minutes: 10
         run: npm run verify:runtime-smoke
       - name: Classify hosted Windows supervisor boundary
@@ -118,10 +115,7 @@ jobs:
       - name: Verify generated runtime projection
         timeout-minutes: 5
         run: npm run runtime:check
-      - name: Fresh runtime production install
-        timeout-minutes: 10
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Verify bounded installed runtime smoke
+      - name: Install and verify restart-safe runtime
         timeout-minutes: 10
         run: npm run verify:runtime-smoke
       - name: Classify hosted macOS worker boundaries

@@ -876,6 +876,16 @@ async function createReleaseFixture(t: test.TestContext) {
     },
   });
   await writeFile(join(runtimeRoot, "README.md"), "# Public runtime\n");
+  await writeJson(join(runtimeRoot, "runtime-manifest.json"), { schemaVersion: 1 });
+  for (const name of [
+    "install-runtime.js",
+    "runtime-bootstrap.js",
+    "oneshot-main.js",
+    "doctor-main.js",
+    "mcp-main.js",
+  ]) {
+    await writeFile(join(runtimeRoot, "dist", name), "export {};\n");
+  }
   await writeFile(join(runtimeRoot, "dist", "oneshot.js"), "export {};\n");
   await writeFile(
     join(runtimeRoot, "dist", "tools", "index.js"),

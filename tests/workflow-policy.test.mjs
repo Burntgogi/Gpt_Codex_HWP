@@ -194,7 +194,7 @@ test("Windows and macOS required jobs implement the bounded PR profile in exact 
     assert.match(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/u, `${label} fresh source install`);
     assert.match(section, /npm --prefix packages\/gpt-codex-hwp run build(?:\s|$)/u, `${label} source build`);
     assert.match(section, /npm run runtime:check(?:\s|$)/u, `${label} generated runtime check`);
-    assert.match(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev(?:\s|$)/u, `${label} fresh runtime install`);
+    assert.doesNotMatch(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp/u, `${label} avoids managed-cache dependency install`);
     assert.match(section, /npm run verify:runtime-smoke(?:\s|$)/u, `${label} bounded installed-runtime smoke`);
     assert.match(section, /npm --prefix packages\/gpt-codex-hwp run diagnose:hosted -- --(?:windows-supervisor|mac-worker)(?:\s|$)/u, `${label} hosted platform classifier`);
     assert.match(section, new RegExp(`npm --prefix packages/gpt-codex-hwp run ${escapeRegExp(profile)}(?:\\s|$)`, "u"), `${label} PR Node profile`);
@@ -212,7 +212,6 @@ test("Windows and macOS required jobs implement the bounded PR profile in exact 
       "npm ci --ignore-scripts --prefix packages/gpt-codex-hwp",
       "npm --prefix packages/gpt-codex-hwp run build",
       "npm run runtime:check",
-      "npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
       "npm run verify:runtime-smoke",
       "npm --prefix packages/gpt-codex-hwp run diagnose:hosted",
       `npm --prefix packages/gpt-codex-hwp run ${profile}`,
@@ -446,9 +445,9 @@ test("compatibility workflow policy rejects trigger, size, duplication, and stab
       "run: node scripts/installed-runtime-smoke.mjs --large-detect 100 && node scripts/installed-runtime-smoke.mjs --large-detect 100",
     ],
     [
-      "duplicate runtime install",
-      "run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
-      "run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev && npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
+      "direct runtime install",
+      "      - name: Run Windows 100 MiB production-path smoke",
+      "      - run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev\n      - name: Run Windows 100 MiB production-path smoke",
     ],
     [
       "continued large smoke",
@@ -627,7 +626,7 @@ function assertReleaseWorkflowPolicy(workflow) {
     1,
     "release verification installs source dependencies exactly once",
   );
-  assert.match(build, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev/u);
+  assert.doesNotMatch(build, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp/u);
   assert.match(build, /npm install --global npm@10\.9\.7 --ignore-scripts\r?\n          if \(\(npm --version\) -ne "10\.9\.7"\) \{ exit 1 \}/u);
   assert.match(build, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
   assert.match(build, /git config --local user\.email "224273819\+Burntgogi@users\.noreply\.github\.com"/u);
@@ -694,7 +693,7 @@ test("release policy rejects non-100 smoke, bypasses, and duplicate source insta
     ["smoke suffix bypass", workflow.replace("--large-detect 100", "--large-detect 100 || true")],
     ["gate bypass", workflow.replace("      - name: Run the complete fail-closed release gate", "      - name: Run the complete fail-closed release gate\n        if: always()")],
     ["custom shell", workflow.replace("        id: large", "        id: large\n        shell: bash -c \"source {0}; exit 0\"")],
-    ["duplicate source install", workflow.replace("      - name: Install runtime dependencies without lifecycle scripts", "      - run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp\n      - name: Install runtime dependencies without lifecycle scripts")],
+    ["duplicate source install", workflow.replace("      - name: Install source dependencies without lifecycle scripts", "      - run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp\n      - name: Install source dependencies without lifecycle scripts")],
   ];
   for (const [label, mutation] of mutations) {
     assert.notEqual(mutation, workflow, label);
@@ -819,7 +818,7 @@ function assert100MiBCompatibilityJob(section, options) {
   assert.match(section, /^    permissions:\r?\n      contents: read$/mu);
   assert100MiBIdentityBoundary(section, options.platform, options.arch);
   assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/gu), 1);
-  assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev(?:\s|$)/gu), 1);
+  assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp(?:\s|$)/gu), 0);
   assert.doesNotMatch(section, /npm (?:--prefix packages\/gpt-codex-hwp )?run build(?:\s|$)|git config --local|git remote set-url/u);
 
   const steps = workflowStepSections(section);

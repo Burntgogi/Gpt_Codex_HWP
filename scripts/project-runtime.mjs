@@ -46,6 +46,15 @@ const READ_ONLY_RUNTIME_FILES = Object.freeze([
   "kordoc-runtime-verifier.mjs",
 ]);
 const SKILL_ICONS = Object.freeze(["gpt-codex-hwp-icon-64.png", "gpt-codex-hwp-icon.png"]);
+const DURABLE_RUNTIME_EXACT_PATHS = new Set([
+  ".codex-plugin/plugin.json",
+  ".npmrc",
+  "examples/mcp-manual.json",
+  "examples/oneshot-tool-schemas.json",
+  "package-lock.json",
+  "package.json",
+]);
+const DURABLE_RUNTIME_DIRECTORY_PREFIXES = Object.freeze(["dist/", "scripts/", "vendor/"]);
 const FORBIDDEN_SEGMENTS = new Set([
   ".superpowers",
   "__pycache__",
@@ -231,11 +240,52 @@ async function stageRuntime({ projectRoot, stage, subprocessEnvironment }) {
   const runtimePackage = renderRuntimePackage(metadata, rootPackage.license, sourcePackage);
   await writeJsonExclusive(join(stage, "package.json"), runtimePackage);
   await writeJsonExclusive(join(stage, "package-lock.json"), renderRuntimeLock(metadata, rootPackage.license, sourceLock));
+  const recordsBeforeManifest = await fileRecords(stage);
+  const lockBytes = await readFile(join(stage, "package-lock.json"));
+  await writeJsonExclusive(
+    join(stage, "runtime-manifest.json"),
+    buildDurableRuntimeManifest(recordsBeforeManifest, metadata, lockBytes),
+  );
 
   const files = await assertRuntimeContract(stage, metadata, runtimePackage);
   await verifyKordocCoreRuntime(join(stage, "vendor", "kordoc-core"));
   await assertPublicRuntimePrivacy(stage);
   return files;
+}
+
+export function buildDurableRuntimeManifest(records, metadata, lockBytes) {
+  const files = records
+    .filter(({ path }) => durableRuntimePath(path))
+    .map(({ path, size, sha256 }) => Object.freeze({ path, size, sha256 }))
+    .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const folded = new Set();
+  for (const { path } of files) {
+    const key = path.toLowerCase();
+    if (folded.has(key)) throw runtimeBuildError("Durable runtime manifest contains a case collision");
+    folded.add(key);
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    productId: metadata.productId,
+    pluginVersion: pluginVersion(metadata),
+    packageLockSha256: sha256(lockBytes),
+    mainEntries: Object.freeze([
+      "dist/doctor-main.js",
+      "dist/mcp-main.js",
+      "dist/oneshot-main.js",
+    ]),
+    files: Object.freeze(files),
+  });
+}
+
+export function durableRuntimePath(path) {
+  if (typeof path !== "string" || path.length === 0 || path.includes("\\")
+    || path.startsWith("/")
+    || path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return false;
+  }
+  return DURABLE_RUNTIME_EXACT_PATHS.has(path)
+    || DURABLE_RUNTIME_DIRECTORY_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 async function compileFreshTypeScript(sourceRoot, outputRoot, subprocessEnvironment) {
@@ -336,6 +386,18 @@ function renderRuntimePackage(metadata, license, sourcePackage) {
 
 function renderRuntimeLock(metadata, license, sourceLock) {
   const lock = projectSharpWasmCpuConstraint(sourceLock);
+  const kordocLink = lock.packages["node_modules/kordoc"];
+  const kordocVendor = lock.packages["vendor/kordoc-core"];
+  if (!isPlainRecord(kordocLink) || kordocLink.resolved !== "vendor/kordoc-core"
+    || kordocLink.link !== true || !isPlainRecord(kordocVendor)
+    || kordocVendor.name !== "kordoc" || kordocVendor.version !== "3.18.1") {
+    throw runtimeBuildError("Kordoc source lock graph is unsupported");
+  }
+  const installedKordoc = structuredClone(kordocVendor);
+  delete installedKordoc.name;
+  installedKordoc.resolved = "file:vendor/kordoc-core";
+  lock.packages["node_modules/kordoc"] = installedKordoc;
+  delete lock.packages["vendor/kordoc-core"];
   lock.name = metadata.productId;
   lock.version = metadata.version;
   lock.packages[""].name = metadata.productId;

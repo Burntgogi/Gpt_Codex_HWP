@@ -19,13 +19,16 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  buildDurableRuntimeManifest,
   buildRuntime,
   compareRuntime,
+  durableRuntimePath,
   projectSharpWasmCpuConstraint,
 } from "../scripts/project-runtime.mjs";
 import { verifyKordocCoreRuntime } from "../scripts/kordoc-core-runtime.mjs";
 import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 import { releaseSubprocessEnvironment } from "../scripts/release-subprocess-environment.mjs";
+import { loadProjectMetadata, pluginVersion } from "../scripts/project-metadata.mjs";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const SOURCE = join(ROOT, "packages", "gpt-codex-hwp");
@@ -59,6 +62,7 @@ const GENERATED_FILES = [
   "examples/oneshot-tool-schemas.json",
   "package-lock.json",
   "package.json",
+  "runtime-manifest.json",
 ];
 const PACKAGE_RUNTIME_FILES = [".npmrc"];
 const SKILL_ICON_FILES = [
@@ -399,6 +403,9 @@ test("runtime projection contains the exact sorted allowlist and no special entr
   assert.deepEqual(actual.map(({ path }) => path), expected);
   for (const requiredPath of [
     "dist/doctor.js",
+    "dist/doctor-main.js",
+    "dist/mcp-main.js",
+    "dist/oneshot-main.js",
     "dist/workers/document-child-start-gate.js",
     "dist/workers/document-process-registration.js",
     "dist/workers/gpt-codex-hwp-job.dll",
@@ -406,6 +413,26 @@ test("runtime projection contains the exact sorted allowlist and no special entr
   ]) {
     assert.ok(actual.some(({ path }) => path === requiredPath), requiredPath);
   }
+
+  const manifest = JSON.parse(await readFile(join(actualRoot, "runtime-manifest.json"), "utf8"));
+  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.productId, "gpt-codex-hwp");
+  assert.equal(manifest.pluginVersion, pluginVersion(await loadProjectMetadata(ROOT)));
+  assert.match(manifest.packageLockSha256, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(manifest.mainEntries, [
+    "dist/doctor-main.js",
+    "dist/mcp-main.js",
+    "dist/oneshot-main.js",
+  ]);
+  assert.ok(manifest.files.some(({ path }) => path === "package.json"));
+  assert.ok(manifest.files.some(({ path }) => path === "dist/oneshot-main.js"));
+  assert.equal(manifest.files.some(({ path }) => path === "runtime-manifest.json"), false);
+  assert.equal(manifest.files.some(({ path }) => path.startsWith("assets/")), false);
+  assert.equal(manifest.files.some(({ path }) => path.startsWith("skills/")), false);
+  assert.deepEqual(
+    manifest.files.map(({ path }) => path),
+    manifest.files.map(({ path }) => path).sort(),
+  );
   assert.ok(actual.every(({ kind }) => kind === "file"));
   for (const { path } of actual) {
     const segments = path.split("/");
@@ -414,6 +441,17 @@ test("runtime projection contains the exact sorted allowlist and no special entr
     if (extname(path).toLowerCase() === ".dll") {
       assert.equal(path, "dist/workers/gpt-codex-hwp-job.dll");
     }
+  }
+});
+
+test("durable runtime manifest rejects case collisions and path traversal", async () => {
+  const metadata = await loadProjectMetadata(ROOT);
+  assert.throws(() => buildDurableRuntimeManifest([
+    { path: "dist/main.js", size: 1, sha256: "a".repeat(64) },
+    { path: "dist/MAIN.js", size: 1, sha256: "b".repeat(64) },
+  ], metadata, Buffer.from("{}")), /case collision/iu);
+  for (const path of ["dist/../package.json", "dist//main.js", "dist/./main.js", "../package.json"]) {
+    assert.equal(durableRuntimePath(path), false, path);
   }
 });
 

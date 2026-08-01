@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
-  <img alt="Candidate v0.2.2" src="https://img.shields.io/badge/candidate-v0.2.2-E67E22">
+  <img alt="Candidate v0.2.3" src="https://img.shields.io/badge/candidate-v0.2.3-E67E22">
   <img alt="Node.js 22 or later" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
   <a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -18,7 +18,7 @@
   <a href="README.md">한국어</a> ·
   <a href="README.en.md">English</a> ·
   <a href="#real-hwpx-output">See the result</a> ·
-  <a href="#stable-v021-installation-from-github">Quick install</a> ·
+  <a href="#stable-v022-installation-from-github">Quick install</a> ·
   <a href="#format-support">Format support</a> ·
   <a href="#safety">Security</a>
 </p>
@@ -27,13 +27,13 @@
 
 Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
-## v0.2.2 Release Candidate
+## v0.2.3 Release Candidate
 
-`v0.2.2` separates the Windows x64, macOS arm64, and Linux verification responsibilities and establishes 100 MiB as the CI-verified document envelope. It fixes installed-runtime initialization on GitHub hosted runners by reusing the verified canonical temporary root instead of a runner path alias, and adds bounded diagnostics that never disclose raw errors, paths, or PIDs. Development and real-document validation were performed on Windows x64. macOS Apple Silicon has hosted-runner compatibility evidence, but use with Codex Desktop and Hancom Office Hangul on a physical Mac remains unverified.
+`v0.2.3` retains the document behavior and nine one-shot tool contracts from `v0.2.2` while serializing release Node test files and installing a verified platform runtime outside the Codex-managed cache so cache rehydration does not remove it. Document operations never install dependencies or access the network automatically. Failures expose only bounded status codes, never raw errors, paths, or document content. Development and real-document validation were performed on Windows x64. macOS Apple Silicon remains a hosted-runner compatibility target; Codex Desktop and Hancom Office Hangul on a physical Mac remain unverified.
 
 ## Previous releases
 
-`v0.2.1` is the previous stable release that introduced the security-fixed Hono Node adapter and reproducible ZIP, SBOM, and provenance gates. See the [changelog](CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for the retained history.
+`v0.2.2` is the current public stable release and introduced read-only HWP, HWPX writing, default one-shot execution, and the 100 MiB CI-verified envelope. See the [changelog](CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for retained history.
 
 ## Features
 
@@ -94,19 +94,19 @@ This project was developed primarily on Windows x64 and validated there. macOS A
 
 The final release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 verification results](RELEASE_NOTES.en.md#verification-results) for details.
 
-## Stable v0.2.1 installation from GitHub
+## Stable v0.2.2 installation from GitHub
 
-`v0.2.1` is the current recommended release and `v0.2.2` is a pre-release candidate. `v0.1.0` through `v0.1.4` remain historical releases. The `v0.2.0` tag is a candidate withdrawn before publication after a security advisory appeared; it was never distributed as a GitHub Release. Until v0.2.2 is published, new installations should pin `v0.2.1` and review the [release notes](RELEASE_NOTES.en.md) first.
+`v0.2.2` is the current recommended public release and `v0.2.3` is a pre-release candidate. `v0.1.0` through `v0.1.4` remain historical releases. The `v0.2.0` tag was withdrawn before publication after a security advisory appeared and was never distributed as a GitHub Release. New installations should pin `v0.2.2` and review the [release notes](RELEASE_NOTES.en.md) first.
 
 A user can ask a Codex agent:
 
-> Install the latest public release `v0.2.1` of `Burntgogi/Gpt_Codex_HWP`. Follow the sequence in this section, validate `installedPath`, install production dependencies from the lockfile, and run `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, then verify the default `gpt-codex-hwp` MCP server and all nine tools in `/mcp`.
+> Install the latest public release `v0.2.2` of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, install production dependencies from the lockfile, and run `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.1 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.2 --json
 ```
 
 Verify that the returned JSON has `marketplaceName` equal to `gpt-codex-hwp-local`.
@@ -118,7 +118,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. The stable runtime must contain `.codex-plugin/plugin.json`, `.mcp.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, and `dist/mcp.js`. Never evaluate a JSON string as a command or run npm from an unexpected path.
+4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. The stable runtime must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`. Never evaluate a JSON string as a command or run npm from an unexpected path.
 5. From that exact validated path, install and audit the lockfile-based production dependencies. On Windows x64, confirm that `node_modules` is at most 64 MiB.
 
 ```powershell
@@ -136,16 +136,16 @@ try {
 ```
 
 6. `doctor` is diagnostic only: it does not install or repair anything and is not an MCP tool. Its JSON contains only safe status codes, booleans, versions, and counts; missing optional capabilities such as Python, rhwp, or the pinned test fixture remain separate from required failures.
-7. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and that `/mcp` registers the default `gpt-codex-hwp` server with exactly these nine tools: `hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, and `hwp_insert_image`. If verification fails, do not remove an older working plugin; report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
+7. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration. Run one HWP/HWPX operation and verify success, the generated output, and termination of the one-shot process and descendants. If verification fails, keep the older working plugin and report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
 
-## Local v0.2.2 release-candidate verification
+## Local v0.2.3 release-candidate verification
 
-This path is only for a local `v0.2.2` pre-release candidate checkout. The public stable installation above remains pinned to `v0.2.1`.
+This path is only for a local `v0.2.3` pre-release candidate checkout. The public stable installation above remains pinned to `v0.2.2`.
 
 1. From the candidate repository root, register the local marketplace with `codex plugin marketplace add . --json`, then install `gpt-codex-hwp@gpt-codex-hwp-local` and capture the JSON `installedPath` without evaluating it as a command.
-2. Require the installed cache path to end in `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.2.2+codex.20260731221916`. It must contain `.codex-plugin/plugin.json`, `package.json`, `package-lock.json`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`.
-3. Confirm that `.codex-plugin/plugin.json` has `skills` equal to `./skills/` and no `mcpServers` property. Install production dependencies from the validated path with the lockfile command under [Runtime Installation](#runtime-installation), then run `npm run doctor -- --json`.
-4. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration.
+2. Require the installed cache path to end in `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.2.3+codex.20260802005314`. It must contain `.codex-plugin/plugin.json`, `runtime-manifest.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`.
+3. Confirm that `.codex-plugin/plugin.json` has `skills` equal to `./skills/` and no `mcpServers` property. From the validated `installedPath`, run `node dist/install-runtime.js --json`, require JSON `code` `RUNTIME_INSTALL_OK`, and then run `node dist/doctor.js --json`. The installer publishes verified lockfile-based dependencies to a versioned, platform-specific location outside the Codex-managed cache.
+4. Fully close and reopen every active Codex CLI and Desktop host; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration. If `RUNTIME_NOT_INSTALLED` appears, stop retrying the document operation and rerun the installer from the validated `installedPath`. Document operations never install dependencies automatically.
 5. Run one HWP/HWPX operation and require it to succeed. Verify the generated output, confirm that the one-shot interface retains the nine internal tool contracts listed below, and then confirm that the `dist/oneshot.js` Node process and its descendants exit after the response is written. Optional persistent MCP compatibility remains available only through explicit registration of `examples/mcp-manual.json`.
 
 ## Installation and Migration
@@ -163,7 +163,7 @@ codex plugin marketplace add .
 codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
-This command alone does not prepare npm production dependencies. From the validated runtime path returned by installation, run `npm ci --omit=dev --ignore-scripts` as described under `Runtime Installation` below.
+This command alone does not prepare production dependencies. From the validated `installedPath`, run `node dist/install-runtime.js --json` and require `RUNTIME_INSTALL_OK`.
 
 3. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. The `gpt-codex-hwp@gpt-codex-hwp-local` plugin and skill must be visible, while `/mcp` must not register `gpt-codex-hwp` by default. Run one skill operation and confirm that its one-shot process exits.
 
@@ -257,15 +257,14 @@ The plugin does not bundle font files, embed them in HWPX, or install system fon
 
 ## Runtime Installation
 
-Install platform-specific native dependencies separately in each runtime environment. Do not copy Windows `node_modules` to macOS.
+Prepare platform-specific native dependencies with the explicit installer from the validated plugin `installedPath`. Do not copy a Windows runtime to macOS.
 
 ```bash
-npm ci --omit=dev --ignore-scripts
-npm audit --omit=dev
-npm run doctor -- --json
+node dist/install-runtime.js --json
+node dist/doctor.js --json
 ```
 
-The first two commands use the lockfile to install and audit runtime dependencies, including Sharp, for the current OS and CPU. The final command diagnoses the environment without installation, repair, or MCP registration. The installation does not include font files. Kordoc Core provides only the pinned runtime required by HWP/HWPX workflows; optional PDF, OCR, ONNX, and formula-engine dependencies are not installed. The verified Windows x64 `node_modules` budget is at most 64 MiB.
+The first command must return JSON `code` `RUNTIME_INSTALL_OK`. It verifies the lockfile and manifest, disables lifecycle scripts, and atomically publishes production dependencies including Sharp for the current OS and CPU outside the Codex-managed cache. The second command diagnoses the environment without installation or repair. Document operations never install dependencies; if they return `RUNTIME_NOT_INSTALLED`, explicitly run the installer from this section. Font files are not installed. Kordoc Core provides only the pinned runtime required by HWP/HWPX workflows; optional PDF, OCR, ONNX, and formula-engine dependencies are not installed. The verified Windows x64 runtime-dependency budget is at most 64 MiB.
 
 ## Open-Source Acknowledgements
 

@@ -314,12 +314,13 @@ test("over-limit MCP stdout emits one fixed initialization failure and closes th
     "utf8",
   );
   const runtimeRoot = join(process.cwd(), "plugins", "gpt-codex-hwp");
+  const sourceRoot = join(process.cwd(), "packages", "gpt-codex-hwp");
   let child;
   let output = "";
   const passed = await smokeModule.runInstalledRuntimeSmoke({
     runtimeRoot,
     createRuntimeSession: (spec, observers) => smokeModule.createDefaultRuntimeSession(
-      { ...spec, args: [target] },
+      { ...spec, cwd: sourceRoot, args: [target] },
       observers,
       {
         spawnProcess(command, args, options) {
