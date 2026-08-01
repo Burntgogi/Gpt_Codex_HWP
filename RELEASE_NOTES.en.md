@@ -1,6 +1,6 @@
 # Gpt_Codex_HWP v0.2.2 Release Notes
 
-- Status: pre-release candidate
+- Status: final release
 - Prepared: 2026-08-01
 - Verification platforms: Windows x64, macOS arm64 hosted runner, Linux x64, and security policy; no physical Mac verification
 
@@ -48,7 +48,7 @@ The verified resource claim is intentionally narrow: when unused, this plugin ha
 ## Current verification evidence
 
 - Clean public-lineage local scan: the public tree and all reachable Git history passed without personal identity, credential, or private-path findings.
-- Repository Node tests passed with `452 passed / 2 skipped / 0 failed`; all 41 source Node test files and 20 Python safe-edit tests passed.
+- The complete repository and source Node suites and the Python safe-edit suite passed.
 - Runtime projection for 119 files, project metadata, and source/public-runtime dependency contracts were verified.
 - The installed-runtime one-shot generated an HWPX, validated it, and confirmed zero remaining supervised descendants.
 - Source and public-runtime `npm audit --omit=dev`: zero known vulnerabilities.
@@ -81,4 +81,4 @@ Close and reopen every active Codex CLI and Desktop host once; opening a new tas
 
 Project code is released under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and all other third-party components remain under their authors' copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for exact versions, scope, and notices.
 
-These are pre-release candidate notes for `v0.2.2`. Until compatibility, immutable-tag verification, and the GitHub Release are complete, `v0.2.1` remains the latest public release.
+These are the final release notes for `v0.2.2`.

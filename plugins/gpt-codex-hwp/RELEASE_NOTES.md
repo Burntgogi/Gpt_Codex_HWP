@@ -1,6 +1,6 @@
 # Gpt_Codex_HWP v0.2.2 릴리즈 노트
 
-- 상태: 배포 전 릴리즈 후보
+- 상태: 정식 릴리즈
 - 작성일: 2026-08-01
 - 검증 플랫폼: Windows x64·macOS arm64 hosted runner·Linux x64·보안 정책; 실제 Mac 기기 미검증
 
@@ -48,7 +48,7 @@ GitHub hosted Windows와 macOS에서 설치 런타임 스모크가 60초 후 중
 ## 현재 검증 증거
 
 - 공개 후보 계보 로컬 검사: 공개 트리와 전체 도달 가능 Git 이력을 검사했고, 개인정보·자격증명·비공개 경로 발견 없이 통과했습니다.
-- 저장소 Node 테스트 `452 passed / 2 skipped / 0 failed`, 소스 Node 테스트 41개 파일, Python 안전 편집 테스트 20개를 통과했습니다.
+- 전체 저장소·소스 Node 테스트와 Python 안전 편집 테스트를 통과했습니다.
 - 런타임 투영 119개 파일, 프로젝트 메타데이터, 소스·공개 런타임 의존성 계약을 검증했습니다.
 - 실제 설치 런타임 one-shot이 HWPX를 생성·검증했고, 감독된 나머지 하위 프로세스 0개를 확인했습니다.
 - 소스 및 공개 런타임 `npm audit --omit=dev`: 알려진 취약점 0개.
@@ -81,4 +81,4 @@ npm audit --omit=dev
 
 프로젝트 코드는 Apache-2.0으로 배포됩니다. Kordoc, rhwp, hwpx-editing-skill 및 기타 제3자 구성 요소는 각 원저작자의 저작권과 라이선스를 따릅니다. 정확한 버전, 사용 범위와 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인하십시오.
 
-이 문서는 `v0.2.2` 배포 전 후보 노트입니다. 호환성·불변 태그 검증과 실제 GitHub Release 게시 전에는 `v0.2.1`이 최신 공개 릴리즈입니다.
+이 문서는 `v0.2.2` 정식 릴리즈 노트입니다.
