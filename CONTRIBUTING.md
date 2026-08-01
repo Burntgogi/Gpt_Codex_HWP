@@ -80,24 +80,11 @@ Python suite, and executes exactly the 10 MiB document smoke. Windows uses
 
 `Linux lifecycle` retains the bounded registration, document-child, and
 benchmark-policy suite. `Security policy` separately owns repository and
-dependency policy. The scheduled/manual compatibility workflow now owns the
-deferred full verification:
-
-- Windows x64 and macOS arm64 generate and validate the 100 MiB evidence before
-  creating one platform receipt. That receipt already runs the full Node and
-  Python suites, the temporary installed-runtime/nine-tool gate, and `bp16`, so
-  the workflow does not duplicate a full test or `bp16` command. The source
-  install is sufficient; the nine-tool gate builds and installs its own
-  temporary runtime.
-- Linux x64 has no platform-receipt implementation, so it runs the full Node
-  profile, Python suite, and generate-plus-validate 100 MiB benchmark once each.
-- Required validation steps retain their original `steps.*.outcome` while
-  bounded diagnostics run after matching failures. The final
-  `compatibility-gate.mjs` accepts only all-`success` outcomes; diagnostics can
-  never turn a failed validation green.
-- Benchmark JSON, platform receipts, and fixed bounded diagnostic output are
-  retained for three days. User documents, runtime trees, dependencies, and raw
-  test output are not uploaded.
+dependency policy. The scheduled/manual Compatibility workflow installs source
+and public-runtime dependencies, then runs only the exact 100 MiB production
+one-shot smoke on Windows x64, Linux x64, and macOS arm64. Stable Node, Python,
+runtime, and platform profiles remain in required CI; full release-candidate,
+artifact, and attestation verification remains in the immutable release gate.
 
 The optional `run_bp16_stability` dispatch input creates 20 independent
 `macos-15` jobs, each running the exact `bp16` case once. Enable it only after

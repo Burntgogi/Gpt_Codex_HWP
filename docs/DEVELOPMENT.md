@@ -106,33 +106,15 @@ artifacts, request attestation permissions, or generate 100/256/512 MiB
 evidence. Their bounded installed-runtime smoke still initializes the exact
 runtime manifest, verifies all nine tool schemas, and exercises SVG-to-PNG
 Sharp behavior after a fresh production-only install. It is a bounded PR
-substitute and does not restore the deferred full compatibility evidence.
+profile and does not replace immutable release verification.
 
-The scheduled and manually dispatched compatibility responsibilities are:
-
-| Compatibility job | Full-gate responsibility |
-| --- | --- |
-| `Windows full compatibility` | source/runtime install; one 100 MiB production-path one-shot smoke; one Windows platform receipt |
-| `macOS full compatibility` | the same 100 MiB and platform-receipt boundary on `macos-15` |
-| `Linux full compatibility` | source/runtime install, full Node profile, Python suite, and one 100 MiB production-path smoke; Linux has no platform-receipt implementation |
-| `macOS bp16 stability N of 20` | manual-only exact `bp16` execution after production cleanup-semantics changes |
-
-The Windows/macOS platform receipt invokes the complete release verifier. It
-already owns the full Node and Python suites, temporary installed-runtime and
-nine-tool verification, and `bp16`; no separate full test or `bp16` command is
-allowed in those jobs. Only source dependencies are installed before the 100
-MiB production-path smoke. The smoke uses the checked-in public runtime after
-one production-only dependency install, while the platform receipt separately
-builds and verifies a fresh release candidate.
-
-Core validation steps use `continue-on-error` only to preserve later evidence
-and diagnostics. The final `compatibility-gate.mjs` consumes the original
-`steps.*.outcome` values and accepts only `success`; `failure`, `cancelled`,
-`skipped`, missing, or unknown outcomes remain fatal. Node/Python/hosted-boundary
-diagnostics run only after their matching failure and cannot change the final
-decision. Platform receipts and bounded diagnostic text are uploaded for three
-days. No benchmark JSON, dependency tree, user document, runtime tree, or raw
-`bp16` TAP is uploaded.
+The scheduled and manually dispatched Compatibility workflow has one default
+responsibility: on Windows x64, Linux x64, and macOS arm64, install source and
+public-runtime dependencies and run the exact 100 MiB production one-shot
+smoke. Required CI already owns the stable Node, Python, runtime, and platform
+profiles; Compatibility does not duplicate those suites, create platform
+receipts, or upload default-run diagnostics. Immutable release verification
+separately owns the full release candidate, artifact, and attestation gates.
 
 `run_bp16_stability` is a boolean manual-dispatch input. When true, exactly 20
 independent `macos-15` matrix jobs run the anchored `bp16` case once each and
@@ -155,8 +137,9 @@ remain separate from scheduled, release, and dependency work.
 
 ## CI resource measurement
 
-The v0.2.2 workflow reduces maintainer CI work by moving full compatibility to
-its post-merge owner, not by removing public MCP functionality. An ordinary
+The v0.2.2 workflow reduces maintainer CI work by separating stable required CI
+from the post-merge 100 MiB production boundary, not by removing public MCP
+functionality. An ordinary
 v0.2.1 desktop PR generated 100, 256, and 512 MiB on both Windows and macOS:
 1,736 MiB in aggregate. v0.2.2 generates one 10 MiB case on each platform:
 20 MiB in aggregate, a reduction of about 98.8%. Compatibility and immutable

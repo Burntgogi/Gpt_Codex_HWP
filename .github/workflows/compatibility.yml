@@ -19,28 +19,23 @@ concurrency:
 
 jobs:
   windows:
-    name: Windows full compatibility
+    name: Windows 100 MiB compatibility
     runs-on: windows-2025
-    timeout-minutes: 180
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
       EXPECTED_HEAD_SHA: ${{ github.sha }}
       EXPECTED_SOURCE_REPOSITORY: ${{ github.repository }}
-      HWP_REQUIRE_RHWP: "1"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
           package-manager-cache: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
       - name: Assert Windows x64 runtime
         run: node -e "if (process.platform !== 'win32' || process.arch !== 'x64') process.exit(1)"
       - name: Assert exact compatibility head
@@ -51,79 +46,28 @@ jobs:
       - name: Install runtime dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Configure neutral release identity
-        run: |
-          git config --local user.name "Gpt_Codex_HWP contributors"
-          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
-          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
-      - name: Prepare bounded diagnostics directory
-        if: ${{ !cancelled() }}
-        run: node -e "require('node:fs').mkdirSync(process.env.RUNNER_TEMP + '/compatibility-diagnostics', { recursive:true })"
       - name: Run Windows 100 MiB production-path smoke
-        id: large
-        if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 30
         run: node scripts/installed-runtime-smoke.mjs --large-detect 100
-      - name: Create Windows full platform receipt
-        id: receipt
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 120
-        run: node scripts/platform-receipts.mjs create
-      - name: Diagnose failed Windows full Node tests
-        if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 60
-        run: node scripts/windows-node-tests-diagnostic.mjs --profile=full > "${{ runner.temp }}/compatibility-diagnostics/node.txt" 2>&1
-      - name: Diagnose failed Windows Python tests
-        if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 15
-        run: node scripts/python-tests-diagnostic.mjs > "${{ runner.temp }}/compatibility-diagnostics/python.txt" 2>&1
-      - name: Classify failed Windows platform boundary
-        if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor > "${{ runner.temp }}/compatibility-diagnostics/platform.txt" 2>&1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
-        if: ${{ !cancelled() }}
-        with:
-          name: compatibility-windows-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            release-receipts/
-            ${{ runner.temp }}/compatibility-diagnostics/
-          if-no-files-found: error
-          retention-days: 3
-          include-hidden-files: true
-      - name: Enforce Windows compatibility outcomes
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: node scripts/compatibility-gate.mjs --require large=${{ steps.large.outcome }} --require receipt=${{ steps.receipt.outcome }}
 
   linux:
-    name: Linux full compatibility
+    name: Linux 100 MiB compatibility
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
       EXPECTED_HEAD_SHA: ${{ github.sha }}
       EXPECTED_SOURCE_REPOSITORY: ${{ github.repository }}
-      HWP_REQUIRE_RHWP: "1"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
           package-manager-cache: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
       - name: Assert Linux x64 runtime
         run: node -e "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
       - name: Assert exact compatibility head
@@ -134,81 +78,28 @@ jobs:
       - name: Install runtime dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Prepare bounded diagnostics directory
-        if: ${{ !cancelled() }}
-        run: node -e "require('node:fs').mkdirSync(process.env.RUNNER_TEMP + '/compatibility-diagnostics', { recursive:true })"
-      - name: Run Linux full Node profile
-        id: node
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 60
-        run: npm --prefix packages/gpt-codex-hwp test
-      - name: Run Linux Python tests
-        id: python
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 15
-        run: npm run test:python
       - name: Run Linux 100 MiB production-path smoke
-        id: large
-        if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 30
         run: node scripts/installed-runtime-smoke.mjs --large-detect 100
-      - name: Diagnose failed Linux full Node tests
-        if: ${{ !cancelled() && steps.node.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 60
-        run: node scripts/macos-node-tests-diagnostic.mjs --profile=full > "${{ runner.temp }}/compatibility-diagnostics/node.txt" 2>&1
-      - name: Diagnose failed Linux Python tests
-        if: ${{ !cancelled() && steps.python.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 15
-        run: node scripts/python-tests-diagnostic.mjs > "${{ runner.temp }}/compatibility-diagnostics/python.txt" 2>&1
-      - name: Summarize Linux compatibility outcomes
-        if: ${{ !cancelled() }}
-        env:
-          NODE_OUTCOME: ${{ steps.node.outcome }}
-          PYTHON_OUTCOME: ${{ steps.python.outcome }}
-          LARGE_OUTCOME: ${{ steps.large.outcome }}
-        run: |
-          printf '%s\n' '### Linux compatibility' '' '| Gate | Outcome |' '| --- | --- |' "| Node | $NODE_OUTCOME |" "| Python | $PYTHON_OUTCOME |" "| 100 MiB | $LARGE_OUTCOME |" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
-        if: ${{ !cancelled() }}
-        with:
-          name: compatibility-linux-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/compatibility-diagnostics/
-          if-no-files-found: error
-          retention-days: 3
-          include-hidden-files: true
-      - name: Enforce Linux compatibility outcomes
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: node scripts/compatibility-gate.mjs --require node=${{ steps.node.outcome }} --require python=${{ steps.python.outcome }} --require large=${{ steps.large.outcome }}
 
   macos:
-    name: macOS full compatibility
+    name: macOS 100 MiB compatibility
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
       EXPECTED_HEAD_SHA: ${{ github.sha }}
       EXPECTED_SOURCE_REPOSITORY: ${{ github.repository }}
-      HWP_REQUIRE_RHWP: "1"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.22.2"
           package-manager-cache: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
       - name: Assert macOS arm64 runtime
         run: node -e "if (process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
       - name: Assert exact compatibility head
@@ -219,55 +110,9 @@ jobs:
       - name: Install runtime dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
-      - name: Configure neutral release identity
-        run: |
-          git config --local user.name "Gpt_Codex_HWP contributors"
-          git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
-          git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
-      - name: Prepare bounded diagnostics directory
-        if: ${{ !cancelled() }}
-        run: node -e "require('node:fs').mkdirSync(process.env.RUNNER_TEMP + '/compatibility-diagnostics', { recursive:true })"
       - name: Run macOS 100 MiB production-path smoke
-        id: large
-        if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 30
         run: node scripts/installed-runtime-smoke.mjs --large-detect 100
-      - name: Create macOS full platform receipt
-        id: receipt
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 120
-        run: node scripts/platform-receipts.mjs create
-      - name: Diagnose failed macOS full Node tests
-        if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 60
-        run: node scripts/macos-node-tests-diagnostic.mjs --profile=full > "${{ runner.temp }}/compatibility-diagnostics/node.txt" 2>&1
-      - name: Diagnose failed macOS Python tests
-        if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 15
-        run: node scripts/python-tests-diagnostic.mjs > "${{ runner.temp }}/compatibility-diagnostics/python.txt" 2>&1
-      - name: Classify failed macOS platform boundary
-        if: ${{ !cancelled() && steps.receipt.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        run: npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker > "${{ runner.temp }}/compatibility-diagnostics/platform.txt" 2>&1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
-        if: ${{ !cancelled() }}
-        with:
-          name: compatibility-macos-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            release-receipts/
-            ${{ runner.temp }}/compatibility-diagnostics/
-          if-no-files-found: error
-          retention-days: 3
-          include-hidden-files: true
-      - name: Enforce macOS compatibility outcomes
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: node scripts/compatibility-gate.mjs --require large=${{ steps.large.outcome }} --require receipt=${{ steps.receipt.outcome }}
 
   macos_bp16_stability:
     name: macOS bp16 stability ${{ matrix.attempt }} of 20

@@ -404,12 +404,12 @@ test("CI diagnostics are bounded, profile-preserving, and scoped to their failed
   assert.doesNotMatch(linux, /continue-on-error|node-tests-diagnostic|python-tests-diagnostic/iu);
 });
 
-test("scheduled and manual compatibility owns the full platform verification boundary", async () => {
+test("scheduled and manual compatibility owns only the 100 MiB production boundary", async () => {
   const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
   assertCompatibilityWorkflowPolicy(workflow);
 });
 
-test("compatibility workflow policy rejects trigger, gate, evidence, and stability regressions", async () => {
+test("compatibility workflow policy rejects trigger, size, duplication, and stability regressions", async () => {
   const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
   const mutations = [
     [
@@ -446,27 +446,15 @@ test("compatibility workflow policy rejects trigger, gate, evidence, and stabili
       "run: node scripts/installed-runtime-smoke.mjs --large-detect 100 && node scripts/installed-runtime-smoke.mjs --large-detect 100",
     ],
     [
-      "duplicate platform receipt",
-      "run: node scripts/platform-receipts.mjs create",
-      "run: node scripts/platform-receipts.mjs create && node scripts/platform-receipts.mjs create",
-    ],
-    [
       "duplicate runtime install",
       "run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
       "run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev && npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev",
     ],
     [
-      "duplicate desktop full Node run",
-      "run: node scripts/platform-receipts.mjs create",
-      "run: npm test && node scripts/platform-receipts.mjs create",
+      "continued large smoke",
+      "      - name: Run Windows 100 MiB production-path smoke\n        timeout-minutes: 30",
+      "      - name: Run Windows 100 MiB production-path smoke\n        continue-on-error: true\n        timeout-minutes: 30",
     ],
-    [
-      "outcome bypass",
-      "steps.large.outcome",
-      "steps.large.conclusion",
-    ],
-    ["long artifact retention", "          retention-days: 3", "          retention-days: 30"],
-    ["hidden evidence omission", "          include-hidden-files: true", "          include-hidden-files: false"],
     [
       "mutable upload action",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
@@ -480,254 +468,35 @@ test("compatibility workflow policy rejects trigger, gate, evidence, and stabili
   }
 });
 
-test("compatibility workflow policy rejects shell suffixes on receipts and final gates", async () => {
+test("standard compatibility jobs reject duplicate suites, receipts, diagnostics, and shell bypasses", async () => {
   const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
-  const desktopGate = "node scripts/compatibility-gate.mjs --require large=${{ steps.large.outcome }} --require receipt=${{ steps.receipt.outcome }}";
-  const linuxGate = "node scripts/compatibility-gate.mjs --require node=${{ steps.node.outcome }} --require python=${{ steps.python.outcome }} --require large=${{ steps.large.outcome }}";
-  const mutations = [
-    ["receipt OR bypass", "node scripts/platform-receipts.mjs create", "node scripts/platform-receipts.mjs create || true"],
-    ["receipt AND suffix", "node scripts/platform-receipts.mjs create", "node scripts/platform-receipts.mjs create && true"],
-    ["receipt semicolon bypass", "node scripts/platform-receipts.mjs create", "node scripts/platform-receipts.mjs create; exit 0"],
-    ["receipt extra token", "node scripts/platform-receipts.mjs create", "node scripts/platform-receipts.mjs create extra"],
-    ["desktop gate OR bypass", desktopGate, `${desktopGate} || true`],
-    ["desktop gate AND suffix", desktopGate, `${desktopGate} && true`],
-    ["desktop gate semicolon bypass", desktopGate, `${desktopGate}; exit 0`],
-    ["desktop gate extra token", desktopGate, `${desktopGate} extra`],
-    ["Linux gate OR bypass", linuxGate, `${linuxGate} || true`],
-    ["Linux gate AND suffix", linuxGate, `${linuxGate} && true`],
-    ["Linux gate semicolon bypass", linuxGate, `${linuxGate}; exit 0`],
-    ["Linux gate extra token", linuxGate, `${linuxGate} extra`],
-  ];
-
-  for (const [label, before, after] of mutations) {
-    const mutated = workflow.replace(before, after);
-    assert.notEqual(mutated, workflow, `${label} mutation did not match`);
-    assert.throws(() => assertCompatibilityWorkflowPolicy(mutated), undefined, label);
-  }
-});
-
-test("desktop compatibility rejects every unapproved full or focused source test entry point", async () => {
-  const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
-  const testName = "benchmark policy bounds synthetic child-tree stress and verifies every identity gone";
-  const jobs = [
-    {
-      label: "Windows",
-      marker: "      - name: Enforce Windows compatibility outcomes\n",
-      diagnostic: "windows-node-tests-diagnostic.mjs",
-      wrongProfile: "pr",
-    },
-    {
-      label: "macOS",
-      marker: "      - name: Enforce macOS compatibility outcomes\n",
-      diagnostic: "macos-node-tests-diagnostic.mjs",
-      wrongProfile: "pr-macos",
-    },
-  ];
-  const commonCommands = [
-    "npm run test:source",
-    "npm --prefix packages/gpt-codex-hwp run test",
-    "npm --prefix packages/gpt-codex-hwp run-script test",
-    "npm --prefix=packages/gpt-codex-hwp run test",
-    "npm --prefix=packages/gpt-codex-hwp run-script test:focused -- tests/benchmark-policy.test.ts",
-    "npm --prefix packages/gpt-codex-hwp run test:focused -- tests/benchmark-policy.test.ts",
-    `npm --prefix packages/gpt-codex-hwp run test:focused -- --test-name-pattern='^${testName}$' tests/benchmark-policy.test.ts`,
-    "node scripts/source-node-tests-isolated.mjs --profile=full",
-    "bash -c 'npm run test:source'",
-    "cmd /c \"npm --prefix=packages/gpt-codex-hwp run test\"",
-  ];
-
-  for (const job of jobs) {
-    for (const command of [
-      ...commonCommands,
-      `node scripts/${job.diagnostic}`,
-      `node scripts/${job.diagnostic} --profile=${job.wrongProfile}`,
-    ]) {
-      const injected = `      - name: Injected ${job.label} source-test mutation\n        run: ${command}\n${job.marker}`;
-      const mutated = workflow.replace(job.marker, injected);
-      assert.notEqual(mutated, workflow, `${job.label}: ${command}`);
-      assert.throws(
-        () => assertCompatibilityWorkflowPolicy(mutated),
-        undefined,
-        `${job.label}: ${command}`,
-      );
-    }
-  }
-});
-
-test("Linux compatibility rejects alternate or duplicate test and 100 MiB entry points", async () => {
-  const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
-  const marker = "      - name: Enforce Linux compatibility outcomes\n";
   const commands = [
-    "npm run test:source",
-    "npm --prefix packages/gpt-codex-hwp run test",
-    "npm --prefix=packages/gpt-codex-hwp run-script test:focused -- tests/benchmark-policy.test.ts",
-    "node scripts/source-node-tests-isolated.mjs --profile=full",
+    "npm test",
     "npm --prefix packages/gpt-codex-hwp test",
     "npm run test:python",
-    "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit",
-    "node scripts/macos-node-tests-diagnostic.mjs",
-    "node scripts/macos-node-tests-diagnostic.mjs --profile=pr-macos",
-    "sh -c 'node scripts/source-node-tests-isolated.mjs --profile=full'",
-    "node scripts/installed-runtime-smoke.mjs --large-detect 100",
+    "node scripts/platform-receipts.mjs create",
+    "node scripts/windows-node-tests-diagnostic.mjs --profile=full",
+    "node scripts/macos-node-tests-diagnostic.mjs --profile=full",
   ];
-  for (const command of commands) {
-    const injected = `      - name: Injected Linux compatibility mutation\n        run: ${command}\n${marker}`;
-    const mutated = workflow.replace(marker, injected);
-    assert.notEqual(mutated, workflow, command);
-    assert.throws(() => assertCompatibilityWorkflowPolicy(mutated), undefined, command);
-  }
-
-  for (const [label, before, after] of [
-    ["Node shell suffix", "npm --prefix packages/gpt-codex-hwp test", "npm --prefix packages/gpt-codex-hwp test || true"],
-    ["Python shell suffix", "npm run test:python", "npm run test:python && true"],
-    [
-      "100 MiB shell suffix",
-      "node scripts/installed-runtime-smoke.mjs --large-detect 100",
-      "node scripts/installed-runtime-smoke.mjs --large-detect 100 || true",
-    ],
-    [
-      "Node diagnostic shell suffix",
-      "node scripts/macos-node-tests-diagnostic.mjs --profile=full > \"${{ runner.temp }}/compatibility-diagnostics/node.txt\" 2>&1",
-      "node scripts/macos-node-tests-diagnostic.mjs --profile=full > \"${{ runner.temp }}/compatibility-diagnostics/node.txt\" 2>&1 || true",
-    ],
-  ]) {
-    const linuxStart = workflow.indexOf("  linux:\n");
-    const macosStart = workflow.indexOf("  macos:\n", linuxStart);
-    const linux = workflow.slice(linuxStart, macosStart);
-    const mutatedLinux = linux.replace(before, after);
-    assert.notEqual(mutatedLinux, linux, `${label} mutation did not match`);
-    const mutated = `${workflow.slice(0, linuxStart)}${mutatedLinux}${workflow.slice(macosStart)}`;
-    assert.throws(() => assertCompatibilityWorkflowPolicy(mutated), undefined, label);
-  }
-});
-
-test("compatibility forbids inherited or custom shells outside the two bp16 steps", async () => {
-  const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
-  const customShell = "bash -c \"source {0}; exit 0\"";
-  const mutations = [
-    [
-      "workflow defaults",
-      workflow.replace(
-        "permissions: {}\n\nconcurrency:",
-        `permissions: {}\n\ndefaults:\n  run:\n    shell: ${customShell}\n\nconcurrency:`,
-      ),
-    ],
-    [
-      "workflow inline defaults",
-      workflow.replace(
-        "permissions: {}\n\nconcurrency:",
-        `permissions: {}\ndefaults: { run: { shell: ${customShell} } }\n\nconcurrency:`,
-      ),
-    ],
-    ...["windows", "linux", "macos"].map((job) => [
-      `${job} job defaults`,
-      addCompatibilityJobDefaults(workflow, job, customShell),
-    ]),
-    [
-      "windows inline job defaults",
-      workflow.replace(
-        "  windows:\n    name: Windows full compatibility",
-        `  windows:\n    defaults: { run: { shell: ${customShell} } }\n    name: Windows full compatibility`,
-      ),
-    ],
-    ...[
-      "Run Windows 100 MiB production-path smoke",
-      "Create Windows full platform receipt",
-      "Enforce Windows compatibility outcomes",
-      "Run Linux full Node profile",
-      "Run Linux Python tests",
-      "Run Linux 100 MiB production-path smoke",
-      "Enforce Linux compatibility outcomes",
-      "Run macOS 100 MiB production-path smoke",
-      "Create macOS full platform receipt",
-      "Enforce macOS compatibility outcomes",
-    ].map((stepName) => [
-      `${stepName} custom shell`,
-      addCompatibilityStepShell(workflow, stepName, customShell),
-    ]),
-  ];
-
-  for (const [label, mutated] of mutations) {
-    assert.notEqual(mutated, workflow, `${label} mutation did not match`);
-    assert.throws(() => assertCompatibilityWorkflowPolicy(mutated), undefined, label);
-  }
-});
-
-test("compatibility inspects only run commands and rejects alternate test runners", async () => {
-  const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
-  const windowsFinal = "      - name: Enforce Windows compatibility outcomes\n";
-  const benign = [
-    "      - name: Explain npm run test:source ownership without executing it",
-    "        env:",
-    "          POLICY_NOTE: \"npx tsx --test is documentation only\"",
-    "        # npm exec -- tsx --test is a non-executable policy note",
-    "        run: echo compatibility-owner",
-    windowsFinal.trimEnd(),
-    "",
-  ].join("\n");
-  const benignMutation = workflow.replace(windowsFinal, benign);
-  assert.notEqual(benignMutation, workflow, "benign step-name mutation did not match");
-  assert.doesNotThrow(() => assertCompatibilityWorkflowPolicy(benignMutation));
-
-  const commands = [
-    "npm --prefix packages/gpt-codex-hwp exec -- tsx --test packages/gpt-codex-hwp/tests/tools.test.ts",
-    "npx --yes tsx --test packages/gpt-codex-hwp/tests/tools.test.ts",
-    "tsx --test packages/gpt-codex-hwp/tests/tools.test.ts",
-    "node --test packages/gpt-codex-hwp/tests/tools.test.ts",
-    "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit",
-    "python3 -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit",
-    "py -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit",
-    "npm run test:source",
-    "npm --prefix=packages/gpt-codex-hwp run-script test:source",
-  ];
-  for (const [label, marker] of [
-    ["Windows", windowsFinal],
-    ["Linux", "      - name: Enforce Linux compatibility outcomes\n"],
-  ]) {
+  for (const [job, next] of [["windows", "linux"], ["linux", "macos"], ["macos", "macos_bp16_stability"]]) {
+    const section = jobSection(workflow, job, next);
+    const marker = section.match(/^      - name: Run .+ 100 MiB production-path smoke$/mu)?.[0];
+    assert.ok(marker, `${job} smoke marker`);
     for (const command of commands) {
-      const injected = `      - name: Injected ${label} alternate-runner mutation\n        run: ${command}\n${marker}`;
-      const mutated = workflow.replace(marker, injected);
-      assert.notEqual(mutated, workflow, `${label}: ${command}`);
-      assert.throws(
-        () => assertCompatibilityWorkflowPolicy(mutated),
-        undefined,
-        `${label}: ${command}`,
+      const mutatedSection = section.replace(
+        marker,
+        `      - name: Injected duplicate validation\n        run: ${command}\n${marker}`,
       );
+      const mutated = workflow.replace(section, mutatedSection);
+      assert.throws(() => assertCompatibilityWorkflowPolicy(mutated), undefined, `${job}: ${command}`);
     }
   }
 
-  const stabilityMarker = "      - name: Distill bounded bp16 receipt\n";
-  const stabilityMutation = workflow.replace(
-    stabilityMarker,
-    `      - name: Injected stability source-test mutation\n        run: npm run test:source\n${stabilityMarker}`,
+  const bypassed = workflow.replace(
+    "run: node scripts/installed-runtime-smoke.mjs --large-detect 100",
+    "run: node scripts/installed-runtime-smoke.mjs --large-detect 100 || true",
   );
-  assert.notEqual(stabilityMutation, workflow, "stability mutation did not match");
-  assert.throws(() => assertCompatibilityWorkflowPolicy(stabilityMutation));
-
-  const foldedMutation = workflow.replace(
-    windowsFinal,
-    "      - name: Injected folded alternate-runner mutation\n"
-      + "        run: >\n"
-      + "          npm --prefix packages/gpt-codex-hwp exec -- tsx --test packages/gpt-codex-hwp/tests/tools.test.ts\n"
-      + windowsFinal,
-  );
-  assert.notEqual(foldedMutation, workflow, "folded mutation did not match");
-  assert.throws(() => assertCompatibilityWorkflowPolicy(foldedMutation));
-
-  for (const [label, step] of [
-    [
-      "spaced run key",
-      "      - name: Injected spaced-run mutation\n        run : npm run test:source\n",
-    ],
-    [
-      "flow-style step",
-      "      - { name: Injected flow mutation, run: \"npm run test:source\" }\n",
-    ],
-  ]) {
-    const mutated = workflow.replace(windowsFinal, `${step}${windowsFinal}`);
-    assert.notEqual(mutated, workflow, `${label} mutation did not match`);
-    assert.throws(() => assertCompatibilityWorkflowPolicy(mutated), undefined, label);
-  }
+  assert.throws(() => assertCompatibilityWorkflowPolicy(bypassed));
 });
 
 test("workflow policy: security is the least-privilege stable Security policy gate", async () => {
@@ -995,28 +764,29 @@ function assertCompatibilityWorkflowPolicy(workflow) {
   const linux = jobSection(workflow, "linux", "macos");
   const macos = jobSection(workflow, "macos", "macos_bp16_stability");
   const stability = jobSection(workflow, "macos_bp16_stability");
-  assertDesktopCompatibilityJob(windows, {
-    label: "Windows full compatibility",
+  assert100MiBCompatibilityJob(windows, {
+    label: "Windows 100 MiB compatibility",
     runner: "windows-2025",
     platform: "win32",
     arch: "x64",
-    nodeDiagnostic: "node scripts/windows-node-tests-diagnostic.mjs --profile=full",
-    hostedDiagnostic: "npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --windows-supervisor",
-    gate: "node scripts/compatibility-gate.mjs --require large=${{ steps.large.outcome }} --require receipt=${{ steps.receipt.outcome }}",
-    artifactName: "compatibility-windows-${{ github.run_id }}-${{ github.run_attempt }}",
   });
-  assertLinuxCompatibilityJob(linux);
-  assertDesktopCompatibilityJob(macos, {
-    label: "macOS full compatibility",
+  assert100MiBCompatibilityJob(linux, {
+    label: "Linux 100 MiB compatibility",
+    runner: "ubuntu-24.04",
+    platform: "linux",
+    arch: "x64",
+  });
+  assert100MiBCompatibilityJob(macos, {
+    label: "macOS 100 MiB compatibility",
     runner: "macos-15",
     platform: "darwin",
     arch: "arm64",
-    nodeDiagnostic: "node scripts/macos-node-tests-diagnostic.mjs --profile=full",
-    hostedDiagnostic: "npm --prefix packages/gpt-codex-hwp run diagnose:hosted -- --mac-worker",
-    gate: "node scripts/compatibility-gate.mjs --require large=${{ steps.large.outcome }} --require receipt=${{ steps.receipt.outcome }}",
-    artifactName: "compatibility-macos-${{ github.run_id }}-${{ github.run_attempt }}",
   });
   assertMacBp16StabilityJob(stability);
+  assert.doesNotMatch(
+    `${windows}${linux}${macos}`,
+    /platform-receipts|release-receipts|compatibility-gate|compatibility-diagnostics|setup-python|test:python|--profile=full|(?:^|\s)npm test(?:\s|$)/iu,
+  );
 
   assert.deepEqual(
     normalizedLines(workflow).filter((line) => /^\s*shell:/u.test(line)),
@@ -1029,148 +799,46 @@ function assertCompatibilityWorkflowPolicy(workflow) {
   for (const [action, expectedCount] of [
     ["actions/checkout", 4],
     ["actions/setup-node", 4],
-    ["actions/setup-python", 3],
-    ["actions/upload-artifact", 4],
+    ["actions/setup-python", 0],
+    ["actions/upload-artifact", 1],
   ]) {
     assert.equal(uses.filter((match) => match[1] === action).length, expectedCount, `${action} compatibility count`);
   }
-  assert.equal(countMatches(workflow, /^\s+fetch-depth: 0$/gmu), 4);
+  assert.equal(countMatches(workflow, /^\s+fetch-depth: 0$/gmu), 1);
   assert.equal(countMatches(workflow, /^\s+node-version: "22\.22\.2"$/gmu), 4);
   assert.equal(countMatches(workflow, /^\s+package-manager-cache: false$/gmu), 4);
-  assert.equal(countMatches(workflow, /^\s+python-version: "3\.12"$/gmu), 3);
-  assert.equal(countMatches(workflow, /^\s+retention-days: 3$/gmu), 4);
-  assert.equal(countMatches(workflow, /^\s+include-hidden-files: true$/gmu), 3);
+  assert.equal(countMatches(workflow, /^\s+python-version: "3\.12"$/gmu), 0);
+  assert.equal(countMatches(workflow, /^\s+retention-days: 3$/gmu), 1);
+  assert.equal(countMatches(workflow, /^\s+include-hidden-files: true$/gmu), 0);
 }
 
-function assertDesktopCompatibilityJob(section, options) {
+function assert100MiBCompatibilityJob(section, options) {
   assert.match(section, new RegExp(`^    name: ${escapeRegExp(options.label)}$`, "mu"));
   assert.match(section, new RegExp(`^    runs-on: ${escapeRegExp(options.runner)}$`, "mu"));
-  assert.match(section, /^    timeout-minutes: 180$/mu);
+  assert.match(section, /^    timeout-minutes: 60$/mu);
   assert.match(section, /^    permissions:\r?\n      contents: read$/mu);
-  assertCompatibilityIdentityBoundary(section, options.platform, options.arch);
+  assert100MiBIdentityBoundary(section, options.platform, options.arch);
   assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/gu), 1);
   assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev(?:\s|$)/gu), 1);
-  assert.doesNotMatch(section, /npm (?:--prefix packages\/gpt-codex-hwp )?run build(?:\s|$)/u,
-    `${options.label} relies on benchmark prebenchmark build and receipt-owned build`);
-  assert.match(section, /git config --local user\.name "Gpt_Codex_HWP contributors"/u);
-  assert.match(section, /git config --local user\.email "224273819\+Burntgogi@users\.noreply\.github\.com"/u);
-  assert.match(section, /git remote set-url origin "https:\/\/github\.com\/Burntgogi\/Gpt_Codex_HWP\.git"/u);
+  assert.doesNotMatch(section, /npm (?:--prefix packages\/gpt-codex-hwp )?run build(?:\s|$)|git config --local|git remote set-url/u);
 
   const steps = workflowStepSections(section);
-  const large = requiredStep(steps, "id: large");
-  const receipt = requiredStep(steps, "id: receipt");
-  const receiptCommand = "node scripts/platform-receipts.mjs create";
-  assertContinuedValidationStep(large);
-  assertContinuedValidationStep(receipt);
-  assertNoStepShell(large);
-  assertNoStepShell(receipt);
-  assertExactSupported100Step(large);
-  assertOnlySupported100Commands(section);
-  assert.doesNotMatch(section, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
-  assertExactInlineRun(receipt, receiptCommand);
-  assert.ok(section.indexOf("id: large") < section.indexOf("id: receipt"), `${options.label} evidence precedes receipt`);
-  assert.deepEqual(
-    workflowRunCommands(section).filter((command) => /platform-receipts\.mjs/u.test(command)),
-    [receiptCommand],
-    `${options.label} permits only the canonical receipt command`,
-  );
-
-  const nodeDiagnosticCommand = `${options.nodeDiagnostic} > "\${{ runner.temp }}/compatibility-diagnostics/node.txt" 2>&1`;
-  const pythonDiagnosticCommand = "node scripts/python-tests-diagnostic.mjs > \"${{ runner.temp }}/compatibility-diagnostics/python.txt\" 2>&1";
-  const hostedDiagnosticCommand = `${options.hostedDiagnostic} > "\${{ runner.temp }}/compatibility-diagnostics/platform.txt" 2>&1`;
-  const nodeDiagnostic = requiredInlineRunStep(steps, nodeDiagnosticCommand);
-  const pythonDiagnostic = requiredInlineRunStep(steps, pythonDiagnosticCommand);
-  const hostedDiagnostic = requiredInlineRunStep(steps, hostedDiagnosticCommand);
-  for (const diagnostic of [nodeDiagnostic, pythonDiagnostic, hostedDiagnostic]) {
-    assertReceiptFailureDiagnostic(diagnostic);
-    assert.match(diagnostic, /\$\{\{ runner\.temp \}\}\/compatibility-diagnostics\//u);
-  }
-  assert.deepEqual(
-    workflowRunCommands(section).filter(isCompatibilityTestCommand),
-    [nodeDiagnosticCommand, pythonDiagnosticCommand],
-    `${options.label} permits only receipt-failure test diagnostics outside the receipt`,
-  );
-
-  const upload = requiredStep(steps, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
-  assert.match(upload, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
-  assert.match(upload, new RegExp(`^          name: ${escapeRegExp(options.artifactName)}$`, "mu"));
-  assert.match(upload, /^          path: \|\r?\n            release-receipts\/\r?\n            \$\{\{ runner\.temp \}\}\/compatibility-diagnostics\/$/mu);
-  assert.match(upload, /^          if-no-files-found: error$/mu);
-  assert.match(upload, /^          retention-days: 3$/mu);
-  assert.match(upload, /^          include-hidden-files: true$/mu);
-  assert.doesNotMatch(upload, /\*|node_modules|release-artifacts/u);
-
-  const final = requiredInlineRunStep(steps, options.gate);
-  assert.equal(steps.at(-1), final, `${options.label} compatibility gate must be final`);
-  assertNoStepShell(final);
-  assert.match(final, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
-  assert.doesNotMatch(final, /continue-on-error/u);
-  assert.match(final, /^        timeout-minutes: 5$/mu);
-  const continued = steps.filter((step) => step.includes("continue-on-error: true"));
-  assert.deepEqual(continued, [large, receipt, nodeDiagnostic, pythonDiagnostic, hostedDiagnostic]);
-}
-
-function assertLinuxCompatibilityJob(section) {
-  assert.match(section, /^    name: Linux full compatibility$/mu);
-  assert.match(section, /^    runs-on: ubuntu-24\.04$/mu);
-  assert.match(section, /^    timeout-minutes: 180$/mu);
-  assert.match(section, /^    permissions:\r?\n      contents: read$/mu);
-  assertCompatibilityIdentityBoundary(section, "linux", "x64");
-  assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/gu), 1);
-  assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp --omit=dev(?:\s|$)/gu), 1);
-  assert.doesNotMatch(section, /npm (?:--prefix packages\/gpt-codex-hwp )?run build(?:\s|$)/u);
-  assert.doesNotMatch(section, /platform-receipts|release-receipts|release:verify|release:artifacts|verify:release-artifacts/iu);
-
-  const steps = workflowStepSections(section);
-  const node = requiredStep(steps, "id: node");
-  const python = requiredStep(steps, "id: python");
-  const large = requiredStep(steps, "id: large");
-  const nodeCommand = "npm --prefix packages/gpt-codex-hwp test";
-  const pythonCommand = "npm run test:python";
-  for (const validation of [node, python, large]) assertContinuedValidationStep(validation);
-  for (const validation of [node, python, large]) assertNoStepShell(validation);
-  assertExactInlineRun(node, nodeCommand);
-  assertExactInlineRun(python, pythonCommand);
-  assertExactSupported100Step(large);
-  assertOnlySupported100Commands(section);
-  assert.doesNotMatch(section, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
-
-  const nodeDiagnosticCommand = "node scripts/macos-node-tests-diagnostic.mjs --profile=full > \"${{ runner.temp }}/compatibility-diagnostics/node.txt\" 2>&1";
-  const pythonDiagnosticCommand = "node scripts/python-tests-diagnostic.mjs > \"${{ runner.temp }}/compatibility-diagnostics/python.txt\" 2>&1";
-  const nodeDiagnostic = requiredInlineRunStep(steps, nodeDiagnosticCommand);
-  const pythonDiagnostic = requiredInlineRunStep(steps, pythonDiagnosticCommand);
-  assertIndividualFailureDiagnostic(nodeDiagnostic, "node");
-  assertIndividualFailureDiagnostic(pythonDiagnostic, "python");
-  assert.deepEqual(
-    workflowRunCommands(section).filter(isCompatibilityTestCommand),
-    [nodeCommand, pythonCommand, nodeDiagnosticCommand, pythonDiagnosticCommand],
-    "Linux permits only its canonical full suites and failure diagnostics",
-  );
-  const summary = requiredStep(steps, "GITHUB_STEP_SUMMARY");
-  assert.match(summary, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
-  assert.match(summary, /^          NODE_OUTCOME: \$\{\{ steps\.node\.outcome \}\}$/mu);
-  assert.match(summary, /^          PYTHON_OUTCOME: \$\{\{ steps\.python\.outcome \}\}$/mu);
-  assert.match(summary, /^          LARGE_OUTCOME: \$\{\{ steps\.large\.outcome \}\}$/mu);
-
-  const upload = requiredStep(steps, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
-  assert.match(upload, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
-  assert.match(upload, /^          name: compatibility-linux-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}$/mu);
-  assert.match(upload, /^          path: \$\{\{ runner\.temp \}\}\/compatibility-diagnostics\/$/mu);
-  assert.match(upload, /^          if-no-files-found: error$/mu);
-  assert.match(upload, /^          retention-days: 3$/mu);
-  assert.match(upload, /^          include-hidden-files: true$/mu);
-  assert.doesNotMatch(upload, /\*|node_modules|release-artifacts/u);
-
-  const gate = requiredInlineRunStep(
+  const large = requiredInlineRunStep(
     steps,
-    "node scripts/compatibility-gate.mjs --require node=${{ steps.node.outcome }} --require python=${{ steps.python.outcome }} --require large=${{ steps.large.outcome }}",
+    "node scripts/installed-runtime-smoke.mjs --large-detect 100",
   );
-  assert.equal(steps.at(-1), gate, "Linux compatibility gate must be final");
-  assertNoStepShell(gate);
-  assert.match(gate, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
-  assert.doesNotMatch(gate, /continue-on-error/u);
-  const continued = steps.filter((step) => step.includes("continue-on-error: true"));
-  assert.deepEqual(continued, [node, python, large, nodeDiagnostic, pythonDiagnostic]);
+  assertNoStepShell(large);
+  assertExactSupported100Step(large);
+  assertOnlySupported100Commands(section);
+  assert.doesNotMatch(section, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
+  assert.equal(steps.at(-1), large, `${options.label} 100 MiB smoke must be final`);
+  assert.match(large, /^        timeout-minutes: 30$/mu);
+  assert.doesNotMatch(large, /^        (?:continue-on-error|if):/mu);
+  assert.deepEqual(
+    workflowRunCommands(section).filter(isCompatibilityTestCommand),
+    [],
+    `${options.label} cannot repeat the test suites owned by required CI`,
+  );
 }
 
 function assertMacBp16StabilityJob(section) {
@@ -1217,6 +885,18 @@ function assertMacBp16StabilityJob(section) {
   );
 }
 
+function assert100MiBIdentityBoundary(section, platform, arch) {
+  assert.match(section, /^      EXPECTED_HEAD_SHA: \$\{\{ github\.sha \}\}$/mu);
+  assert.match(section, /^      EXPECTED_SOURCE_REPOSITORY: \$\{\{ github\.repository \}\}$/mu);
+  assert.doesNotMatch(section, /HWP_REQUIRE_RHWP|fetch-depth:/u);
+  assert.match(section, /^          ref: \$\{\{ github\.sha \}\}$/mu);
+  assert.match(section, /^          persist-credentials: false$/mu);
+  assert.match(section, new RegExp(`process\\.platform[^\\n]+["']${platform}["']`, "u"));
+  assert.match(section, new RegExp(`process\\.arch[^\\n]+["']${arch}["']`, "u"));
+  assert.match(section, /process\.env\.EXPECTED_HEAD_SHA[^\n]+rev-parse[^\n]+HEAD/u);
+  assert.match(section, /process\.env\.EXPECTED_SOURCE_REPOSITORY[^\n]+Burntgogi\/Gpt_Codex_HWP/u);
+}
+
 function assertCompatibilityIdentityBoundary(section, platform, arch) {
   assert.match(section, /^      EXPECTED_HEAD_SHA: \$\{\{ github\.sha \}\}$/mu);
   assert.match(section, /^      EXPECTED_SOURCE_REPOSITORY: \$\{\{ github\.repository \}\}$/mu);
@@ -1249,27 +929,8 @@ function assertOnlySupported100Commands(section) {
   );
 }
 
-function assertContinuedValidationStep(step) {
-  assert.match(step, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu);
-  assert.match(step, /^        continue-on-error: true$/mu);
-  assert.match(step, /^        timeout-minutes: \d+$/mu);
-}
-
 function assertNoStepShell(step) {
   assert.doesNotMatch(step, /^        shell:/mu, "critical compatibility steps cannot override their shell");
-}
-
-function assertReceiptFailureDiagnostic(step) {
-  assert.match(step, /^        if: \$\{\{ !cancelled\(\) && steps\.receipt\.outcome == 'failure' \}\}$/mu);
-  assert.match(step, /^        continue-on-error: true$/mu);
-  assert.match(step, /^        timeout-minutes: \d+$/mu);
-}
-
-function assertIndividualFailureDiagnostic(step, id) {
-  assert.match(step, new RegExp(`^        if: \\$\\{\\{ !cancelled\\(\\) && steps\\.${id}\\.outcome == 'failure' \\}\\}$`, "mu"));
-  assert.match(step, /^        continue-on-error: true$/mu);
-  assert.match(step, /^        timeout-minutes: \d+$/mu);
-  assert.match(step, /\$\{\{ runner\.temp \}\}\/compatibility-diagnostics\//u);
 }
 
 function requiredStep(steps, marker) {
@@ -1547,30 +1208,6 @@ function appendRunStep(section, command) {
     benchmarkStep,
     `      - name: Injected policy mutation\n        run: ${command}\n${benchmarkStep}`,
   );
-}
-
-function addCompatibilityJobDefaults(workflow, job, shell) {
-  const marker = `  ${job}:\n`;
-  const start = workflow.indexOf(marker);
-  assert.notEqual(start, -1, `missing ${job} job for defaults mutation`);
-  return `${workflow.slice(0, start + marker.length)}`
-    + `    defaults:\n      run:\n        shell: ${shell}\n`
-    + workflow.slice(start + marker.length);
-}
-
-function addCompatibilityStepShell(workflow, stepName, shell) {
-  const marker = `      - name: ${stepName}\n`;
-  const start = workflow.indexOf(marker);
-  assert.notEqual(start, -1, `missing ${stepName} step for shell mutation`);
-  const next = workflow.indexOf("\n      - ", start + marker.length);
-  const end = next === -1 ? workflow.length : next;
-  const step = workflow.slice(start, end);
-  const mutatedStep = step.replace(
-    /^        run:/mu,
-    `        shell: ${shell}\n        run:`,
-  );
-  assert.notEqual(mutatedStep, step, `${stepName} has no run field`);
-  return `${workflow.slice(0, start)}${mutatedStep}${workflow.slice(end)}`;
 }
 
 function assertPinnedActions(workflow, expectedCheckoutCount = 1) {
