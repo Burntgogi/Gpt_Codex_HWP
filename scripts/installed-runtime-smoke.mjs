@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { runBoundedProcess } from "./public-content-policy.mjs";
+import { createCanonicalTemporaryDirectory } from "./canonical-temp.mjs";
 import { loadProjectMetadata, pluginVersion } from "./project-metadata.mjs";
 import { buildRuntime } from "./project-runtime.mjs";
 
@@ -483,7 +484,9 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
 
 export async function prepareRestartSafeRuntime(options = {}) {
   const projectRoot = resolve(options.projectRoot ?? PROJECT_ROOT);
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-"));
+  const temporaryRoot = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-runtime-smoke-",
+  });
   try {
     const codexHome = join(temporaryRoot, "codex-home");
     const metadata = await loadProjectMetadata(projectRoot);
