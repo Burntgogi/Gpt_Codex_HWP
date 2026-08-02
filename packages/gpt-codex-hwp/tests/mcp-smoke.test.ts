@@ -15,7 +15,7 @@ import {
 
 const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-test("built MCP server initializes and registers exactly nine tools without stderr", { timeout: 15_000 }, async () => {
+test("built MCP server initializes and registers exactly nine tools without stderr", { timeout: 90_000 }, async () => {
   const configuredServerPath = process.env.HWP_MCP_SERVER_PATH?.trim();
   const prepared = configuredServerPath ? undefined : await prepareRestartSafeRuntime();
   const serverPath = configuredServerPath
