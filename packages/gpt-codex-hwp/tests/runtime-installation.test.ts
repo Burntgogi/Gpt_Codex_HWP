@@ -92,8 +92,18 @@ test("runtime installer keeps supported Node majors isolated in one Codex home",
   ));
   assert.notEqual(node22Root, node24Root);
 
+  const versionRoot = join(fixture.codexHome, "plugin-runtime-data", PRODUCT, PLUGIN_VERSION);
   await mkdir(node24Root, { recursive: true });
   await writeFile(join(node24Root, "keep.txt"), "node24\n", "utf8");
+  const legacySharedLock = join(versionRoot, `.${process.platform}-${process.arch}.install.lock`);
+  const node24Lock = join(versionRoot, `.${process.platform}-${process.arch}-node24.install.lock`);
+  const activeLock = `${JSON.stringify({
+    schemaVersion: 1,
+    nonce: "a".repeat(32),
+    createdAt: "2026-08-03T00:00:00.000Z",
+  })}\n`;
+  await writeFile(legacySharedLock, activeLock, "utf8");
+  await writeFile(node24Lock, activeLock, "utf8");
   const receipt = await installRuntime(fixture.installerUrl, {
     codexHome: fixture.codexHome,
     nodeVersion: "22.22.2",
@@ -104,6 +114,9 @@ test("runtime installer keeps supported Node majors isolated in one Codex home",
   });
   assert.equal(receipt.nodeMajor, 22);
   assert.equal(await readFile(join(node24Root, "keep.txt"), "utf8"), "node24\n");
+  assert.equal(await readFile(legacySharedLock, "utf8"), activeLock);
+  assert.equal(await readFile(node24Lock, "utf8"), activeLock);
+  assert.equal(commands.filter((command) => command.args.includes("ci")).length, 1);
 });
 
 test("runtime installer rejects an active lock without touching an earlier version", async (t) => {
