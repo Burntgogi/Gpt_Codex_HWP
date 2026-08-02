@@ -36,8 +36,8 @@
     },
     {
       "path": "dist/install-runtime.js",
-      "size": 17846,
-      "sha256": "f0ccdedc776d0fb0581b1cf04d84a6ff7e185a2145fca892a222d9691093d7e8"
+      "size": 17855,
+      "sha256": "48e0209b2e8ec2088316df8e6ba0b88f45fcabe3fd507d383f2cd20c37a8021f"
     },
     {
       "path": "dist/mcp-main.js",
@@ -61,8 +61,8 @@
     },
     {
       "path": "dist/runtime-bootstrap.js",
-      "size": 18638,
-      "sha256": "941a0c3a49bf227bec787f39b7a43f575288bb563dd5861916779b891dae01a0"
+      "size": 18763,
+      "sha256": "f61859bcee2d8a7bb7fd0d1208c44c341b028d46e44c84195661318c412217c9"
     },
     {
       "path": "dist/shared/allowed-roots.js",

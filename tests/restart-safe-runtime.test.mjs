@@ -14,6 +14,7 @@ import { buildRuntime } from "../scripts/project-runtime.mjs";
 
 const execute = promisify(execFile);
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
 
 test("durable runtime survives managed cache rehydration without another install", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-restart-safe-"));
@@ -27,7 +28,7 @@ test("durable runtime survives managed cache rehydration without another install
   );
   const durableRoot = join(
     codexHome,
-    "plugin-runtime-data", metadata.productId, version, `${process.platform}-${process.arch}`,
+    "plugin-runtime-data", metadata.productId, version, RUNTIME_KEY,
   );
 
   await buildRuntime({ root: ROOT, outputRoot: managedRoot, swapId: "restart-safe-first" });

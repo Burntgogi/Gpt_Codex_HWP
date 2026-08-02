@@ -92,7 +92,7 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 이 프로젝트는 주로 Windows x64에서 개발하고 실제 검증했습니다. macOS Apple Silicon 플러그인 런타임 CI는 구성되어 있지만, 현재 HEAD에 대한 성공 영수증이 확인되기 전에는 이 CI를 통과 또는 검증 완료로 표현하지 않습니다. 실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정은 검증하지 않았습니다. 따라서 macOS는 호환 대상이며 macOS 완전 지원을 주장하지 않습니다.
 
-`v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 릴리즈 노트](RELEASE_NOTES.md#검증-결과)를 참조하십시오.
+`v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 GitHub 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4)를 참조하십시오.
 
 ## 안정 버전 v0.2.2 GitHub 설치
 
@@ -144,7 +144,7 @@ try {
 
 1. 후보 저장소 루트에서 `codex plugin marketplace add . --json`으로 로컬 마켓플레이스를 등록한 뒤 `gpt-codex-hwp@gpt-codex-hwp-local`을 설치하고, 반환 JSON의 `installedPath`를 명령으로 평가하지 않고 추출합니다.
 2. 설치 캐시 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.2.3+codex.20260802005314`인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `runtime-manifest.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, `examples/mcp-manual.json`이 모두 있어야 합니다.
-3. `.codex-plugin/plugin.json`의 `skills`가 `./skills/`이고 `mcpServers` 속성이 없는지 확인합니다. 검증한 `installedPath`에서 `node dist/install-runtime.js --json`을 한 번 실행하고 JSON의 `code`가 `RUNTIME_INSTALL_OK`인지 확인한 뒤 `node dist/doctor.js --json`을 실행합니다. 설치기는 Codex 관리 캐시 밖의 버전·플랫폼별 경로에 잠금 파일 기반 운영 의존성을 설치하고 검증합니다.
+3. `.codex-plugin/plugin.json`의 `skills`가 `./skills/`이고 `mcpServers` 속성이 없는지 확인합니다. 검증한 `installedPath`에서 `node dist/install-runtime.js --json`을 한 번 실행하고 JSON의 `code`가 `RUNTIME_INSTALL_OK`인지 확인한 뒤 `node dist/doctor.js --json`을 실행합니다. 설치기는 Codex 관리 캐시 밖의 전체 플러그인 버전·플랫폼·아키텍처·Node 주버전별 경로에 잠금 파일 기반 운영 의존성을 설치하고 검증합니다.
 4. 실행 중인 모든 Codex CLI와 Desktop 호스트를 완전히 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 `installedPath`에서 설치기를 다시 실행하십시오. 문서 작업은 설치를 자동 수행하지 않습니다.
 5. HWP/HWPX 작업 하나를 실행하고 성공했는지 확인합니다. 생성 결과를 검증하고 one-shot 인터페이스가 아래의 내부 도구 계약 9개를 유지하는지 확인한 다음, 응답 파일 작성 후 `dist/oneshot.js` Node 프로세스와 그 하위 프로세스가 종료되는지 확인합니다. 선택적 영구 MCP 호환은 `examples/mcp-manual.json`을 명시적으로 등록할 때만 사용합니다.
 
@@ -173,6 +173,12 @@ codex plugin remove hwp-korean-docs@hwp-local
 ```
 
 5. 새 설치 검증에 실패하면 이전 플러그인을 유지하고 새 설치만 제거한 뒤 다시 시도하십시오. 로컬 소스를 갱신한 뒤에는 manifest 버전 캐시버스터를 갱신하고 새 플러그인을 다시 설치해야 합니다.
+
+## 지속 런타임 저장과 제거
+
+v0.2.3 후보의 운영 의존성은 Codex 관리 캐시가 아니라 `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<전체-플러그인-버전>/<platform>-<arch>-node<Node-주버전>`에 저장됩니다. 예를 들어 Windows x64의 Node.js 22 런타임 키는 `win32-x64-node22`입니다. 같은 Codex 프로필에서도 Node 주버전별 런타임은 서로 교체하지 않고 공존합니다.
+
+현재 Windows x64 후보에서 런타임 하나는 약 47~51 MiB였지만 플랫폼과 npm에 따라 달라질 수 있습니다. 플러그인 제거가 이 캐시 밖의 데이터를 자동으로 지운다고 가정하지 마십시오. 정리할 때는 모든 Codex CLI와 Desktop 호스트를 완전히 종료하고, 더 이상 사용하지 않는 정확한 `<전체-플러그인-버전>` 디렉터리만 확인해 수동으로 제거하십시오. 모든 Gpt_Codex_HWP 버전을 제거한 경우에만 상위 `gpt-codex-hwp` 런타임 데이터 디렉터리 전체를 제거할 수 있습니다. 나중에 다시 설치하면 검증된 `installedPath`에서 `node dist/install-runtime.js --json`을 실행해 런타임을 재생성합니다.
 
 ## 기본 1회 실행과 수동 MCP 호환
 

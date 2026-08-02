@@ -11,11 +11,16 @@ import {
   installRuntime,
   type RuntimeCommandSpec,
 } from "../src/install-runtime.js";
-import { RuntimeBootstrapError } from "../src/runtime-bootstrap.js";
+import {
+  RuntimeBootstrapError,
+  resolveDurableRoot,
+  resolveManagedRuntime,
+} from "../src/runtime-bootstrap.js";
 
 const PRODUCT = "gpt-codex-hwp";
 const MARKETPLACE = "gpt-codex-hwp-local";
 const PLUGIN_VERSION = "0.2.3+codex.20260802005314";
+const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
 const TOOL_NAMES = [
   "hwp_create_svg_asset",
   "hwp_detect_format",
@@ -63,6 +68,44 @@ test("runtime installer publishes a verified runtime and reuses it without npm c
   assert.equal(commands[0].args.includes("ci"), false);
 });
 
+test("runtime installer keeps supported Node majors isolated in one Codex home", async (t) => {
+  const fixture = await createInstallerFixture(t);
+  const commands: RuntimeCommandSpec[] = [];
+  const runCommand = createNpmRunner(commands);
+  const node22Identity = await resolveManagedRuntime(fixture.installerUrl, {
+    codexHome: fixture.codexHome,
+    nodeVersion: "22.22.2",
+  });
+  const node24Identity = await resolveManagedRuntime(fixture.installerUrl, {
+    codexHome: fixture.codexHome,
+    nodeVersion: "24.4.0",
+  });
+  const node22Root = resolveDurableRoot(node22Identity);
+  const node24Root = resolveDurableRoot(node24Identity);
+  assert.equal(node22Root, join(
+    fixture.codexHome, "plugin-runtime-data", PRODUCT, PLUGIN_VERSION,
+    `${process.platform}-${process.arch}-node22`,
+  ));
+  assert.equal(node24Root, join(
+    fixture.codexHome, "plugin-runtime-data", PRODUCT, PLUGIN_VERSION,
+    `${process.platform}-${process.arch}-node24`,
+  ));
+  assert.notEqual(node22Root, node24Root);
+
+  await mkdir(node24Root, { recursive: true });
+  await writeFile(join(node24Root, "keep.txt"), "node24\n", "utf8");
+  const receipt = await installRuntime(fixture.installerUrl, {
+    codexHome: fixture.codexHome,
+    nodeVersion: "22.22.2",
+    now: () => new Date("2026-08-03T00:00:00.000Z"),
+    randomId: sequence("1".repeat(32), "2".repeat(32), "3".repeat(32)),
+    runCommand,
+    secureDirectory: async () => true,
+  });
+  assert.equal(receipt.nodeMajor, 22);
+  assert.equal(await readFile(join(node24Root, "keep.txt"), "utf8"), "node24\n");
+});
+
 test("runtime installer rejects an active lock without touching an earlier version", async (t) => {
   const fixture = await createInstallerFixture(t);
   const versionRoot = join(fixture.codexHome, "plugin-runtime-data", PRODUCT, PLUGIN_VERSION);
@@ -70,7 +113,7 @@ test("runtime installer rejects an active lock without touching an earlier versi
   await mkdir(oldRuntime, { recursive: true });
   await writeFile(join(oldRuntime, "keep.txt"), "keep\n", "utf8");
   await mkdir(versionRoot, { recursive: true });
-  await writeFile(join(versionRoot, `.${process.platform}-${process.arch}.install.lock`), `${JSON.stringify({
+  await writeFile(join(versionRoot, `.${RUNTIME_KEY}.install.lock`), `${JSON.stringify({
     schemaVersion: 1,
     nonce: "a".repeat(32),
     createdAt: "2026-08-02T00:00:00.000Z",
@@ -174,7 +217,7 @@ test("runtime installer quarantines a stale lock and preserves an invalid final"
   const versionRoot = join(fixture.durableRoot, "..");
   await mkdir(fixture.durableRoot, { recursive: true });
   await writeFile(join(fixture.durableRoot, "keep.txt"), "preserve\n", "utf8");
-  const lockName = `.${process.platform}-${process.arch}.install.lock`;
+  const lockName = `.${RUNTIME_KEY}.install.lock`;
   await writeFile(join(versionRoot, lockName), `${JSON.stringify({
     schemaVersion: 1,
     nonce: "c".repeat(32),
@@ -286,7 +329,7 @@ async function createInstallerFixture(
   return {
     codexHome,
     managedRoot,
-    durableRoot: join(codexHome, "plugin-runtime-data", PRODUCT, PLUGIN_VERSION, `${process.platform}-${process.arch}`),
+    durableRoot: join(codexHome, "plugin-runtime-data", PRODUCT, PLUGIN_VERSION, RUNTIME_KEY),
     installerUrl: pathToFileURL(join(managedRoot, "dist", "install-runtime.js")).href,
   };
 }

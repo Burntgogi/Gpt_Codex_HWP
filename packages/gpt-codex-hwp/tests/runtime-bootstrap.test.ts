@@ -17,6 +17,7 @@ import { runOneShotBootstrap } from "../src/oneshot.js";
 const PRODUCT = "gpt-codex-hwp";
 const MARKETPLACE = "gpt-codex-hwp-local";
 const PLUGIN_VERSION = "0.2.3+codex.20260802005314";
+const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
 
 test("runtime bootstrap resolves the exact version and platform durable runtime", async (t) => {
   const fixture = await createRuntimeFixture(t);
@@ -205,7 +206,7 @@ async function createRuntimeFixture(
     "plugin-runtime-data",
     PRODUCT,
     PLUGIN_VERSION,
-    `${process.platform}-${process.arch}`,
+    RUNTIME_KEY,
   );
   const receiptPath = join(durableRoot, "install-receipt.json");
   const receipt = {

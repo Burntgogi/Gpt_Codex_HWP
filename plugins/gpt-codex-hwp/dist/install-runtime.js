@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile, }
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyWindowsOwnerOnlyAcl } from "./shared/windows-owner-only-acl.js";
-import { RuntimeBootstrapError, readVerifiedManagedRuntimeFile, resolveDurableRoot, resolveInstalledRuntime, resolveManagedRuntime, resolveNpmCommand, } from "./runtime-bootstrap.js";
+import { RuntimeBootstrapError, readVerifiedManagedRuntimeFile, resolveDurableRoot, resolveInstalledRuntime, resolveManagedRuntime, resolveNpmCommand, runtimePlatformKey, } from "./runtime-bootstrap.js";
 const LOCK_STALE_MS = 15 * 60 * 1000;
 const NPM_TIMEOUT_MS = 10 * 60 * 1000;
 const COMMAND_OUTPUT_BYTES = 64 * 1024;
@@ -37,7 +37,7 @@ export async function installRuntime(importMetaUrl, options = {}) {
     const finalRoot = resolveDurableRoot(identity);
     const versionRoot = dirname(finalRoot);
     await ensureRuntimeParents(identity, secureDirectory);
-    const platformKey = `${identity.platform}-${identity.arch}`;
+    const platformKey = runtimePlatformKey(identity);
     const lockPath = join(versionRoot, `.${platformKey}.install.lock`);
     const lock = await acquireInstallLock(lockPath, now(), randomId);
     let ownedStage;

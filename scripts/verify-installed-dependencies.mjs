@@ -198,7 +198,7 @@ async function main() {
       "plugin-runtime-data",
       prepared.receipt.productId,
       prepared.receipt.pluginVersion,
-      `${prepared.receipt.platform}-${prepared.receipt.arch}`,
+      `${prepared.receipt.platform}-${prepared.receipt.arch}-node${prepared.receipt.nodeMajor}`,
     );
     process.stdout.write(`${JSON.stringify(await verifyInstalledDependencies({
       root,

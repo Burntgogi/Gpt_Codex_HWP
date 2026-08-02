@@ -94,7 +94,10 @@ export async function resolveManagedRuntime(importMetaUrl, options = {}) {
     });
 }
 export function resolveDurableRoot(identity) {
-    return join(identity.codexHome, "plugin-runtime-data", identity.productId, identity.pluginVersion, `${identity.platform}-${identity.arch}`);
+    return join(identity.codexHome, "plugin-runtime-data", identity.productId, identity.pluginVersion, runtimePlatformKey(identity));
+}
+export function runtimePlatformKey(identity) {
+    return `${identity.platform}-${identity.arch}-node${major(identity.nodeVersion)}`;
 }
 export async function readVerifiedManagedRuntimeFile(identity, record) {
     if (!identity.manifestFiles.some((entry) => entry.path === record.path

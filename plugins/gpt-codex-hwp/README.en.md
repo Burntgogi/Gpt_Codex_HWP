@@ -92,7 +92,7 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for exact usage scopes, p
 
 This project was developed primarily on Windows x64 and validated there. macOS Apple Silicon plugin-runtime CI is configured, but it must not be described as passed or validated until a successful receipt for the current HEAD exists. Actual use with Codex Desktop and Hancom Office Hangul on macOS remains unverified. macOS remains a compatibility target. Full macOS support is not claimed.
 
-The final release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 verification results](RELEASE_NOTES.en.md#verification-results) for details.
+The final release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4) for details.
 
 ## Stable v0.2.2 installation from GitHub
 
@@ -144,7 +144,7 @@ This path is only for a local `v0.2.3` pre-release candidate checkout. The publi
 
 1. From the candidate repository root, register the local marketplace with `codex plugin marketplace add . --json`, then install `gpt-codex-hwp@gpt-codex-hwp-local` and capture the JSON `installedPath` without evaluating it as a command.
 2. Require the installed cache path to end in `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.2.3+codex.20260802005314`. It must contain `.codex-plugin/plugin.json`, `runtime-manifest.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`.
-3. Confirm that `.codex-plugin/plugin.json` has `skills` equal to `./skills/` and no `mcpServers` property. From the validated `installedPath`, run `node dist/install-runtime.js --json`, require JSON `code` `RUNTIME_INSTALL_OK`, and then run `node dist/doctor.js --json`. The installer publishes verified lockfile-based dependencies to a versioned, platform-specific location outside the Codex-managed cache.
+3. Confirm that `.codex-plugin/plugin.json` has `skills` equal to `./skills/` and no `mcpServers` property. From the validated `installedPath`, run `node dist/install-runtime.js --json`, require JSON `code` `RUNTIME_INSTALL_OK`, and then run `node dist/doctor.js --json`. The installer publishes verified lockfile-based dependencies outside the Codex-managed cache, scoped by full plugin version, platform, architecture, and Node major version.
 4. Fully close and reopen every active Codex CLI and Desktop host; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration. If `RUNTIME_NOT_INSTALLED` appears, stop retrying the document operation and rerun the installer from the validated `installedPath`. Document operations never install dependencies automatically.
 5. Run one HWP/HWPX operation and require it to succeed. Verify the generated output, confirm that the one-shot interface retains the nine internal tool contracts listed below, and then confirm that the `dist/oneshot.js` Node process and its descendants exit after the response is written. Optional persistent MCP compatibility remains available only through explicit registration of `examples/mcp-manual.json`.
 
@@ -173,6 +173,12 @@ codex plugin remove hwp-korean-docs@hwp-local
 ```
 
 5. If verification fails, keep the old plugin, remove only the new installation, and retry. After updating local source, update the manifest version cache-buster and reinstall the new plugin.
+
+## Durable runtime storage and removal
+
+The v0.2.3 candidate stores production dependencies at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>`, outside the Codex-managed cache. For example, Node.js 22 on Windows x64 uses the `win32-x64-node22` runtime key. Different Node major versions coexist without replacing each other even when they share one Codex profile.
+
+One runtime measured about 47–51 MiB on the current Windows x64 candidate, but the actual size varies by platform and npm. Do not assume that removing the plugin also removes this out-of-cache data. Before cleanup, fully close every Codex CLI and Desktop host, verify the exact unused `<full-plugin-version>` directory, and remove only that directory manually. Remove the parent `gpt-codex-hwp` runtime-data directory only after every Gpt_Codex_HWP version has been uninstalled. A later installation recreates the runtime by running `node dist/install-runtime.js --json` from a validated `installedPath`.
 
 ## Default one-shot execution and manual MCP compatibility
 

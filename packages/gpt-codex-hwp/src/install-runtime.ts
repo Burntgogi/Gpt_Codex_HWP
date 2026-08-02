@@ -22,6 +22,7 @@ import {
   resolveInstalledRuntime,
   resolveManagedRuntime,
   resolveNpmCommand,
+  runtimePlatformKey,
   type ManagedRuntimeIdentity,
   type RuntimeBootstrapOptions,
   type RuntimeReceipt,
@@ -88,7 +89,7 @@ export async function installRuntime(
   const versionRoot = dirname(finalRoot);
   await ensureRuntimeParents(identity, secureDirectory);
 
-  const platformKey = `${identity.platform}-${identity.arch}`;
+  const platformKey = runtimePlatformKey(identity);
   const lockPath = join(versionRoot, `.${platformKey}.install.lock`);
   const lock = await acquireInstallLock(lockPath, now(), randomId);
   let ownedStage: OwnedDirectory | undefined;

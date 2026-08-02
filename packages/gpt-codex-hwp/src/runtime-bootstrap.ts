@@ -169,8 +169,12 @@ export function resolveDurableRoot(identity: ManagedRuntimeIdentity): string {
     "plugin-runtime-data",
     identity.productId,
     identity.pluginVersion,
-    `${identity.platform}-${identity.arch}`,
+    runtimePlatformKey(identity),
   );
+}
+
+export function runtimePlatformKey(identity: ManagedRuntimeIdentity): string {
+  return `${identity.platform}-${identity.arch}-node${major(identity.nodeVersion)}`;
 }
 
 export async function readVerifiedManagedRuntimeFile(
