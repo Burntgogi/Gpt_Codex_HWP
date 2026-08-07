@@ -34,7 +34,27 @@ const HWP_FIXTURE = join(
   "re-01-hangul-only-hancom.hwp",
 );
 
-test("one-shot cleanup evidence requires one recognized platform receipt", () => {
+test("one-shot cleanup evidence verifies bounded worker and child receipts", () => {
+  const workerOnly = createOneShotCleanupEvidenceCollector({
+    platform: "win32",
+    subscribe() { return () => undefined; },
+    subscribeWorker(observer) {
+      observer({ terminated: true, proof: "worker-thread-terminated" });
+      return () => undefined;
+    },
+  });
+  assert.equal(
+    workerOnly.finish(),
+    "ONESHOT_CLEANUP proof=worker-thread-terminated observedProcessTrees=0 remainingProcessTrees=0\n",
+  );
+
+  const missing = createOneShotCleanupEvidenceCollector({
+    platform: "win32",
+    subscribe() { return () => undefined; },
+    subscribeWorker() { return () => undefined; },
+  });
+  assert.throws(() => missing.finish(), /cleanup evidence/iu);
+
   let observe: (message: unknown) => void = () => undefined;
   let unsubscribed = false;
   const collector = createOneShotCleanupEvidenceCollector({
@@ -56,7 +76,7 @@ test("one-shot cleanup evidence requires one recognized platform receipt", () =>
   );
   assert.equal(unsubscribed, true);
 
-  const duplicate = createOneShotCleanupEvidenceCollector({
+  const multipleChildren = createOneShotCleanupEvidenceCollector({
     platform: "win32",
     subscribe(observer) {
       observer({ gone: true, proof: "windows-job-empty" });
@@ -64,7 +84,26 @@ test("one-shot cleanup evidence requires one recognized platform receipt", () =>
       return () => undefined;
     },
   });
-  assert.throws(() => duplicate.finish(), /cleanup evidence/iu);
+  assert.equal(
+    multipleChildren.finish(),
+    "ONESHOT_CLEANUP proof=windows-job-empty observedProcessTrees=2 remainingProcessTrees=0\n",
+  );
+
+  const mixed = createOneShotCleanupEvidenceCollector({
+    platform: "win32",
+    subscribe(observer) {
+      observer({ gone: true, proof: "windows-job-empty" });
+      return () => undefined;
+    },
+    subscribeWorker(observer) {
+      observer({ terminated: true, proof: "worker-thread-terminated" });
+      return () => undefined;
+    },
+  });
+  assert.equal(
+    mixed.finish(),
+    "ONESHOT_CLEANUP proof=worker-and-windows-job-empty observedProcessTrees=1 remainingProcessTrees=0\n",
+  );
 
   const remaining = createOneShotCleanupEvidenceCollector({
     platform: "linux",
@@ -80,6 +119,32 @@ test("one-shot cleanup evidence requires one recognized platform receipt", () =>
     },
   });
   assert.throws(() => remaining.finish(), /unverified/iu);
+
+  const throwingMessage = createOneShotCleanupEvidenceCollector({
+    platform: "win32",
+    subscribe(observer) {
+      try {
+        observer(new Proxy({}, {
+          ownKeys() { throw new Error("invalid receipt"); },
+        }));
+      } catch {}
+      observer({ gone: true, proof: "windows-job-empty" });
+      return () => undefined;
+    },
+  });
+  assert.throws(() => throwingMessage.finish(), /unverified/iu);
+
+  const overflow = createOneShotCleanupEvidenceCollector({
+    platform: "win32",
+    subscribe() { return () => undefined; },
+    subscribeWorker(observer) {
+      for (let index = 0; index < 17; index += 1) {
+        observer({ terminated: true, proof: "worker-thread-terminated" });
+      }
+      return () => undefined;
+    },
+  });
+  assert.throws(() => overflow.finish(), /cleanup evidence/iu);
 });
 
 test("one-shot supplies its full deadline and cancellation signal to the MCP call", async () => {

@@ -154,18 +154,23 @@ export function assertOneShotProcessCleanup(result) {
     || bytes.some((byte) => byte !== 0x0a && (byte < 0x20 || byte > 0x7e))) {
     throw new Error("One-shot descendant cleanup evidence is invalid.");
   }
-  const match = /^ONESHOT_CLEANUP proof=(windows-job-empty|registered-groups-empty) observedProcessTrees=([1-9][0-9]?) remainingProcessTrees=([0-9][0-9]?)\nONESHOT_OK\n$/u.exec(
+  const match = /^ONESHOT_CLEANUP proof=(worker-thread-terminated|windows-job-empty|worker-and-windows-job-empty|registered-groups-empty|worker-and-registered-groups-empty) observedProcessTrees=(0|[1-9][0-9]?) remainingProcessTrees=([0-9][0-9]?)\nONESHOT_OK\n$/u.exec(
     bytes.toString("ascii"),
   );
   if (match === null) throw new Error("One-shot descendant cleanup evidence is invalid.");
   const observedProcessTrees = Number(match[2]);
   const remainingProcessTrees = Number(match[3]);
   const platform = result.platform ?? process.platform;
-  if (observedProcessTrees > 16 || remainingProcessTrees > observedProcessTrees
-    || (platform === "win32"
-      ? match[1] !== "windows-job-empty" || observedProcessTrees !== 1
-      : (platform !== "linux" && platform !== "darwin")
-        || match[1] !== "registered-groups-empty")
+  if ((platform !== "win32" && platform !== "linux" && platform !== "darwin")
+    || observedProcessTrees > 16 || remainingProcessTrees > observedProcessTrees
+    || (observedProcessTrees === 0
+      ? match[1] !== "worker-thread-terminated"
+      : match[1] === "worker-thread-terminated"
+        || (platform === "win32"
+          ? match[1] !== "windows-job-empty"
+            && match[1] !== "worker-and-windows-job-empty"
+          : match[1] !== "registered-groups-empty"
+            && match[1] !== "worker-and-registered-groups-empty"))
     || remainingProcessTrees !== 0) {
     throw new Error("One-shot descendant cleanup is unverified.");
   }

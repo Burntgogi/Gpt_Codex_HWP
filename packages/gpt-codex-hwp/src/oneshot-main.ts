@@ -21,9 +21,12 @@ import {
 import { toolDefinitions } from "./tools/index.js";
 import { MAX_DOCUMENT_DEADLINE_MS } from "./workers/document-execution-policy.js";
 import { subscribeDocumentChildTerminationReceipts } from "./workers/document-child-termination-channel.js";
+import { subscribeDocumentWorkerTerminationReceipts } from "./workers/document-worker-termination-channel.js";
 import {
+  MAX_REGISTERED_PROCESS_GROUPS,
   normalizeProcessTreeTerminationReceipt,
   type ProcessTreeTerminationReceipt,
+  unverifiedTermination,
 } from "./workers/registered-process-supervisor.js";
 
 export interface OneShotPaths {
@@ -54,47 +57,92 @@ interface OneShotCleanupEvidenceCollectorOptions {
   readonly subscribe?: (
     observer: (message: unknown) => void,
   ) => () => void;
+  readonly subscribeWorker?: (
+    observer: (message: unknown) => void,
+  ) => () => void;
 }
 
 export function createOneShotCleanupEvidenceCollector(
   options: OneShotCleanupEvidenceCollectorOptions = {},
 ): Readonly<{ finish(): string }> {
   const receipts: ProcessTreeTerminationReceipt[] = [];
-  let duplicate = false;
+  const workerReceipts: unknown[] = [];
+  let overflow = false;
   let finished = false;
-  const unsubscribe = (
+  const reserveReceipt = (): boolean => {
+    if (receipts.length + workerReceipts.length >= MAX_REGISTERED_PROCESS_GROUPS) {
+      overflow = true;
+      return false;
+    }
+    return true;
+  };
+  const unsubscribeChild = (
     options.subscribe ?? subscribeDocumentChildTerminationReceipts
   )((message) => {
-    if (receipts.length >= 2) {
-      duplicate = true;
-      return;
+    if (!reserveReceipt()) return;
+    try {
+      receipts.push(normalizeProcessTreeTerminationReceipt(message));
+    } catch {
+      receipts.push(unverifiedTermination("termination"));
     }
-    receipts.push(normalizeProcessTreeTerminationReceipt(message));
+  });
+  const unsubscribeWorker = (
+    options.subscribeWorker ?? subscribeDocumentWorkerTerminationReceipts
+  )((message) => {
+    if (!reserveReceipt()) return;
+    workerReceipts.push(message);
   });
   return Object.freeze({
     finish(): string {
       if (finished) throw new Error("One-shot cleanup evidence is unavailable.");
       finished = true;
-      unsubscribe();
-      if (duplicate || receipts.length !== 1) {
+      unsubscribeChild();
+      unsubscribeWorker();
+      if (overflow || receipts.length + workerReceipts.length === 0) {
         throw new Error("One-shot cleanup evidence is invalid.");
       }
-      const receipt = receipts[0];
       const platform = options.platform ?? process.platform;
-      if (platform === "win32") {
-        if (!receipt.gone || receipt.proof !== "windows-job-empty") {
-          throw new Error("One-shot cleanup evidence is unverified.");
-        }
-        return "ONESHOT_CLEANUP proof=windows-job-empty observedProcessTrees=1 remainingProcessTrees=0\n";
-      }
-      if ((platform !== "linux" && platform !== "darwin")
-        || !receipt.gone || receipt.proof !== "registered-groups-empty"
-        || !("registeredIdentityCount" in receipt)
-        || receipt.registeredIdentityCount < 1
-        || receipt.remainingIdentityCount !== 0) {
+      if (platform !== "win32" && platform !== "linux" && platform !== "darwin") {
         throw new Error("One-shot cleanup evidence is unverified.");
       }
-      return `ONESHOT_CLEANUP proof=registered-groups-empty observedProcessTrees=${receipt.registeredIdentityCount} remainingProcessTrees=0\n`;
+      for (const receipt of workerReceipts) {
+        if (!isRecord(receipt)
+          || Object.keys(receipt).sort().join(",") !== "proof,terminated"
+          || receipt.terminated !== true
+          || receipt.proof !== "worker-thread-terminated") {
+          throw new Error("One-shot cleanup evidence is unverified.");
+        }
+      }
+      if (receipts.length === 0) {
+        return "ONESHOT_CLEANUP proof=worker-thread-terminated observedProcessTrees=0 remainingProcessTrees=0\n";
+      }
+      if (platform === "win32") {
+        if (receipts.some((receipt) =>
+          !receipt.gone || receipt.proof !== "windows-job-empty")) {
+          throw new Error("One-shot cleanup evidence is unverified.");
+        }
+        const proof = workerReceipts.length === 0
+          ? "windows-job-empty"
+          : "worker-and-windows-job-empty";
+        return `ONESHOT_CLEANUP proof=${proof} observedProcessTrees=${receipts.length} remainingProcessTrees=0\n`;
+      }
+      let observedProcessTrees = 0;
+      for (const receipt of receipts) {
+        if (!receipt.gone || receipt.proof !== "registered-groups-empty"
+          || !("registeredIdentityCount" in receipt)
+          || receipt.registeredIdentityCount < 1
+          || receipt.remainingIdentityCount !== 0) {
+          throw new Error("One-shot cleanup evidence is unverified.");
+        }
+        observedProcessTrees += receipt.registeredIdentityCount;
+      }
+      if (observedProcessTrees > MAX_REGISTERED_PROCESS_GROUPS) {
+        throw new Error("One-shot cleanup evidence is invalid.");
+      }
+      const proof = workerReceipts.length === 0
+        ? "registered-groups-empty"
+        : "worker-and-registered-groups-empty";
+      return `ONESHOT_CLEANUP proof=${proof} observedProcessTrees=${observedProcessTrees} remainingProcessTrees=0\n`;
     },
   });
 }

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
   "pluginVersion": "0.2.3+codex.20260802005314",
-  "packageLockSha256": "ba7e2139054a9faa54bf93c7025f95fe0e13685549a5ee4c33728632398561d1",
+  "packageLockSha256": "1c66f33553116f1233e6184af3b24388241969c607bd4f7d2d3643019fc45911",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -51,8 +51,8 @@
     },
     {
       "path": "dist/oneshot-main.js",
-      "size": 8081,
-      "sha256": "33c58a7c27c602d6b80f0c473e687ab6ab6acaa2ac2e7d8b1c2bf77aa5f37af3"
+      "size": 10182,
+      "sha256": "d795140472c5d20f1f26ce1fb4bd5e8804e7ceae3f48b5530f37d62fef40469f"
     },
     {
       "path": "dist/oneshot.js",
@@ -281,8 +281,13 @@
     },
     {
       "path": "dist/workers/document-worker-client.js",
-      "size": 14486,
-      "sha256": "c4a9009e4b69fe5c14846fdd52f4cf3a56cdf9a9d4a19be13e628e5b5d50f25c"
+      "size": 14740,
+      "sha256": "4659fdd30c2a1e3668dd3acc101ac3a321498a6a34a7dde1f65fd4a965c8554a"
+    },
+    {
+      "path": "dist/workers/document-worker-termination-channel.js",
+      "size": 845,
+      "sha256": "67fada007cd8f4d6e164b84f69305db897d45d7381b39874c02ebeb3959012ef"
     },
     {
       "path": "dist/workers/document-worker.js",
@@ -316,13 +321,13 @@
     },
     {
       "path": "package-lock.json",
-      "size": 87221,
-      "sha256": "ba7e2139054a9faa54bf93c7025f95fe0e13685549a5ee4c33728632398561d1"
+      "size": 87219,
+      "sha256": "1c66f33553116f1233e6184af3b24388241969c607bd4f7d2d3643019fc45911"
     },
     {
       "path": "package.json",
       "size": 615,
-      "sha256": "f58ad81bfeeede7d615c2858706c9a9a6ea23801358384814c4a5c0e79765e9f"
+      "sha256": "e47783ffa23c31dcaf273add170c9997bce6e1657891fc93b67011efc823efcc"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

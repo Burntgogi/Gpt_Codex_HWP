@@ -46,7 +46,7 @@ const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
 });
 const EXPECTED_OVERRIDES = Object.freeze({
   "@hono/node-server": "2.0.11",
-  "fast-uri": "3.1.4",
+  "fast-uri": "3.1.5",
 });
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
@@ -107,7 +107,9 @@ test("dependency contract resolves patched production dependencies and projects 
     const lock = await readJson(join(root, "package-lock.json"));
     locks.set(label, lock);
     assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.3", label);
-    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.4", label);
+    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.5", label);
+    assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.1", label);
+    assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.4.0", label);
   }
 
   assert.deepEqual(
