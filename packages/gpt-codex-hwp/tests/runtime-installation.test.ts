@@ -19,7 +19,7 @@ import {
 
 const PRODUCT = "gpt-codex-hwp";
 const MARKETPLACE = "gpt-codex-hwp-local";
-const PLUGIN_VERSION = "0.2.3+codex.20260802005314";
+const PLUGIN_VERSION = "0.2.3+codex.20260808100029";
 const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
 const TOOL_NAMES = [
   "hwp_create_svg_asset",

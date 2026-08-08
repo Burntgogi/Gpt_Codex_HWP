@@ -12,7 +12,7 @@
     "developerName": "Gpt_Codex_HWP contributors",
     "marketplaceName": "gpt-codex-hwp-local",
     "legacyUninstallSelector": "hwp-korean-docs@hwp-local",
-    "codexBuildId": "20260802005314"
+    "codexBuildId": "20260808100029"
   },
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",

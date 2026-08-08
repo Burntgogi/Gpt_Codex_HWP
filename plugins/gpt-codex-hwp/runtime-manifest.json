@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
-  "pluginVersion": "0.2.3+codex.20260802005314",
+  "pluginVersion": "0.2.3+codex.20260808100029",
   "packageLockSha256": "1c66f33553116f1233e6184af3b24388241969c607bd4f7d2d3643019fc45911",
   "mainEntries": [
     "dist/doctor-main.js",
@@ -12,7 +12,7 @@
     {
       "path": ".codex-plugin/plugin.json",
       "size": 1208,
-      "sha256": "184285bcaa283250172e50daac3631fc6f5c333abe05bc60da61a024d45fba2f"
+      "sha256": "d337b7e0d77dd5292e92ae7064bf768801c823462f079ac25d30453f3ff6a376"
     },
     {
       "path": ".npmrc",

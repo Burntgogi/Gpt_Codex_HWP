@@ -16,7 +16,7 @@ import { runOneShotBootstrap } from "../src/oneshot.js";
 
 const PRODUCT = "gpt-codex-hwp";
 const MARKETPLACE = "gpt-codex-hwp-local";
-const PLUGIN_VERSION = "0.2.3+codex.20260802005314";
+const PLUGIN_VERSION = "0.2.3+codex.20260808100029";
 const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
 
 test("runtime bootstrap resolves the exact version and platform durable runtime", async (t) => {

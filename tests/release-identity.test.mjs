@@ -10,8 +10,8 @@ const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)))
 const IMMUTABLE_RELEASES = Object.freeze([
   "0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.1", "0.2.2",
 ]);
-const PREVIOUS_BUILD_ID = "20260731221916";
-const EXPECTED_BUILD_ID = "20260802005314";
+const PREVIOUS_BUILD_ID = "20260802005314";
+const EXPECTED_BUILD_ID = "20260808100029";
 
 test("release identity derives every 0.2.3 candidate surface from root metadata", async () => {
   const metadata = await loadProjectMetadata(ROOT);
@@ -96,7 +96,7 @@ test("release identity derives every 0.2.3 candidate surface from root metadata"
   const candidateKo = markdownSection(releaseDocs[0], "## 로컬 v0.2.3 릴리즈 후보 검증", "## 설치 및 마이그레이션");
   const candidateEn = markdownSection(releaseDocs[1], "## Local v0.2.3 release-candidate verification", "## Installation and Migration");
   for (const candidate of [candidateKo, candidateEn]) {
-    assert.match(candidate, /0\.2\.3\+codex\.20260802005314/u);
+    assert.match(candidate, /0\.2\.3\+codex\.20260808100029/u);
     assert.match(candidate, /dist\/oneshot\.js/u);
     assert.match(candidate, /examples\/oneshot-tool-schemas\.json/u);
     assert.match(candidate, /\/mcp/u);

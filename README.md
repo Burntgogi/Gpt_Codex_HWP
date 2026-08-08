@@ -143,7 +143,7 @@ try {
 이 경로는 로컬 `v0.2.3` 배포 전 후보 체크아웃 전용입니다. 위 공개 안정 버전 설치는 계속 `v0.2.2`에 고정합니다.
 
 1. 후보 저장소 루트에서 `codex plugin marketplace add . --json`으로 로컬 마켓플레이스를 등록한 뒤 `gpt-codex-hwp@gpt-codex-hwp-local`을 설치하고, 반환 JSON의 `installedPath`를 명령으로 평가하지 않고 추출합니다.
-2. 설치 캐시 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.2.3+codex.20260802005314`인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `runtime-manifest.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, `examples/mcp-manual.json`이 모두 있어야 합니다.
+2. 설치 캐시 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.2.3+codex.20260808100029`인지 확인합니다. 그 안에 `.codex-plugin/plugin.json`, `runtime-manifest.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, `examples/mcp-manual.json`이 모두 있어야 합니다.
 3. `.codex-plugin/plugin.json`의 `skills`가 `./skills/`이고 `mcpServers` 속성이 없는지 확인합니다. 검증한 `installedPath`에서 `node dist/install-runtime.js --json`을 한 번 실행하고 JSON의 `code`가 `RUNTIME_INSTALL_OK`인지 확인한 뒤 `node dist/doctor.js --json`을 실행합니다. 설치기는 Codex 관리 캐시 밖의 전체 플러그인 버전·플랫폼·아키텍처·Node 주버전별 경로에 잠금 파일 기반 운영 의존성을 설치하고 검증합니다.
 4. 실행 중인 모든 Codex CLI와 Desktop 호스트를 완전히 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 `installedPath`에서 설치기를 다시 실행하십시오. 문서 작업은 설치를 자동 수행하지 않습니다.
 5. HWP/HWPX 작업 하나를 실행하고 성공했는지 확인합니다. 생성 결과를 검증하고 one-shot 인터페이스가 아래의 내부 도구 계약 9개를 유지하는지 확인한 다음, 응답 파일 작성 후 `dist/oneshot.js` Node 프로세스와 그 하위 프로세스가 종료되는지 확인합니다. 선택적 영구 MCP 호환은 `examples/mcp-manual.json`을 명시적으로 등록할 때만 사용합니다.
