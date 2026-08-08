@@ -1,7 +1,7 @@
 # Gpt_Codex_HWP v0.2.3 Release Notes
 
-- Status: pre-release candidate
-- Date: 2026-08-03
+- Status: final release
+- Date: 2026-08-08
 - Validation baseline: Windows x64 development and real-document checks; physical Mac unverified
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
@@ -13,11 +13,14 @@ v0.2.3 retains v0.2.2's read-only HWP policy, HWPX writing, and all nine interna
 ## Main changes
 
 - Repository Node test files now run serially so `runtime-projection` cannot replace the shared `plugins/gpt-codex-hwp` tree while installed-runtime smoke tests use it.
+- Hosted-runner temporary-path aliases are normalized to the verified canonical temporary root.
 - Release verification now emits only the first safe phase and TAP ordinal on failure. It never publishes raw errors, user paths, PIDs, environment variables, or document content.
 - A verified runtime is installed atomically outside the managed plugin cache, scoped by full plugin version, platform, architecture, and Node major. Node 22 and Node 24 in one Codex profile do not replace each other's runtime. Cache rehydration reuses the matching runtime, while document operations perform no installation or network access.
+- Worker-only, child-only, and mixed cleanup receipts are aggregated fail-closed, and the runtime verifies zero remaining supervised process trees.
+- Source and generated-runtime locks now use `fast-uri 3.1.5`, `hono 4.13.1`, and `ip-address 10.4.0`; both production audits report zero known vulnerabilities.
 - The Windows PowerShell ACL helper now allows a 15-second cold-start window under host load. The applied DACL and allowed principals are unchanged.
-- Public stable-install guidance now targets v0.2.2 and its default one-shot lifecycle. The default installation does not register a persistent `gpt-codex-hwp` server in `/mcp`.
-- The immutable v0.2.2 tag and release remain unchanged; this follow-up uses a new v0.2.3 build ID.
+- Public stable-install guidance now targets v0.2.3 and its default one-shot lifecycle. The default installation does not register a persistent `gpt-codex-hwp` server in `/mcp`.
+- The immutable v0.2.2 tag and release remain unchanged; v0.2.3 uses a new build ID.
 
 ## Verification evidence
 
@@ -28,7 +31,8 @@ v0.2.3 retains v0.2.2's read-only HWP policy, HWPX writing, and all nine interna
 - An isolated Codex-home regression installed the runtime, rebuilt the managed cache without dependencies, reran doctor and real HWPX generation/validation, and retained the exact installation-receipt hash.
 - The previously intermittent cache-rehydration regression passed three consecutive runs after the fix.
 - A regression test now proves that Node 22 and Node 24 resolve to separate runtime paths in one Codex home and that installing one does not alter the other directory.
-- Before v0.2.3 release, serial repository tests, source Node tests, Python tests, public tree/history scans, and platform CI must pass again.
+- Worker-only, child-only, and mixed one-shot cleanup paths produced valid aggregated receipts with zero remaining supervised process trees.
+- On the final identity, the repository suite reported 453 total tests, 451 passed, 2 expected capability skips, and 0 failed; all 41 source Node test files passed. Python, public tree/history, runtime projection, release artifact, Windows x64, macOS arm64, Linux lifecycle, and Security policy gates also passed.
 
 ## User resource statement
 
@@ -36,14 +40,14 @@ There are zero persistent Gpt_Codex_HWP Node processes while the plugin is idle.
 
 ## Installation and upgrade
 
-To validate this candidate, first validate the returned `installedPath` against the existing path and plugin-identity rules, then run from that path:
+When installing v0.2.3, first validate the returned `installedPath` against the path and plugin-identity rules, then run from that path:
 
 ```powershell
 node dist/install-runtime.js --json
 node dist/doctor.js --json
 ```
 
-The first command must return JSON `code` `RUNTIME_INSTALL_OK`. Fully close and reopen every active Codex CLI and Desktop host. Run one document operation, require it to succeed, verify the generated output, and confirm that the one-shot process and its descendants exit. Document operations never install dependencies automatically; on `RUNTIME_NOT_INSTALLED`, explicitly rerun the installer from the validated `installedPath`. The v0.2.2 direct installation inside the managed cache was not durable across cache rehydration, so keep the older working version until the new candidate passes the restart check.
+The first command must return JSON `code` `RUNTIME_INSTALL_OK`. Fully close and reopen every active Codex CLI and Desktop host. Run one document operation, require it to succeed, verify the generated output, and confirm that the one-shot process and its descendants exit. Document operations never install dependencies automatically; on `RUNTIME_NOT_INSTALLED`, explicitly rerun the installer from the validated `installedPath`. The v0.2.2 direct installation inside the managed cache was not durable across cache rehydration, so keep the older working version until v0.2.3 passes the restart check.
 
 Production dependencies remain at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>`. To clean up after removing a plugin, close every Codex host and manually remove only the exact full-plugin-version directory that is no longer used. This release intentionally provides no automatic recursive deletion command.
 
@@ -60,4 +64,4 @@ Production dependencies remain at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp
 
 Project code is distributed under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and other third-party components remain under their original copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-These are pre-release candidate notes for `v0.2.3`. The current public stable release is `v0.2.2`.
+These notes accompany the `v0.2.3` release.

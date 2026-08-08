@@ -11,7 +11,6 @@ const SOURCE_ROOT = dirname(TEST_ROOT);
 const REPOSITORY_ROOT = dirname(dirname(SOURCE_ROOT));
 const RUNTIME_ROOT = join(REPOSITORY_ROOT, "plugins", "gpt-codex-hwp");
 const MIGRATION_PATH = join(TEST_ROOT, "release-test-migration.json");
-const PREVIOUS_RELEASE_TAG = "v0.2.2";
 const SPLIT_SUITES = new Set([
   "kordoc-core-runtime.test.ts",
   "runtime-projection.test.ts",
@@ -204,7 +203,7 @@ test("the staged runtime preserves the historical plugin removal selector", asyn
   const replacement = `codex plugin remove ${metadata.productId}@${metadata.marketplaceName}`;
   for (const readme of readmes) {
     assert.equal(readme.split(command).length - 1, 1, "historical selector must remain exact and singular");
-    assert.equal(readme.includes(replacement), false);
+    assert.equal(readme.split(replacement).length - 1, 1, "the current selector must appear once in rollback guidance");
   }
 });
 
@@ -236,11 +235,11 @@ test("the staged runtime documents secure agent-assisted GitHub installation", a
     readFile(join(RUNTIME_ROOT, "README.en.md"), "utf8"),
   ]);
   const sections = [
-    extractMarkdownSection(readmes[0], "## 안정 버전 v0.2.2 GitHub 설치"),
-    extractMarkdownSection(readmes[1], "## Stable v0.2.2 installation from GitHub"),
+    extractMarkdownSection(readmes[0], "## 안정 버전 v0.2.3 GitHub 설치"),
+    extractMarkdownSection(readmes[1], "## Stable v0.2.3 installation from GitHub"),
   ];
-  assert.match(readmes[0], /href="#안정-버전-v022-github-설치">빠른 설치</u);
-  assert.match(readmes[1], /href="#stable-v022-installation-from-github">Quick install/u);
+  assert.match(readmes[0], /href="#안정-버전-v023-github-설치">빠른 설치</u);
+  assert.match(readmes[1], /href="#stable-v023-installation-from-github">Quick install/u);
   for (const section of sections) assertSecureAgentInstallSection(section, metadata);
 
   const missingMarketplaceIdentity = sections[0].replace("marketplaceName", "marketplace identity");
@@ -391,22 +390,7 @@ function assertSecureAgentInstallSection(
     .map((match) => match[1]!);
   assert.equal(referencedTags.length, 1, "the marketplace source must pin exactly one version tag");
   const recommendedTag = referencedTags[0]!;
-  const candidateTag = `v${metadata.version}`;
-  assert.equal(
-    recommendedTag === candidateTag || recommendedTag === PREVIOUS_RELEASE_TAG,
-    true,
-    "the marketplace source must pin a verified release tag",
-  );
-  if (recommendedTag === PREVIOUS_RELEASE_TAG) {
-    assert.match(
-      section,
-      new RegExp(
-        `(?:${escapeRegExp(PREVIOUS_RELEASE_TAG)}.*현재 권장(?: 공개)? 릴리즈|${escapeRegExp(PREVIOUS_RELEASE_TAG)}.*current recommended(?: public)? release)`,
-        "iu",
-      ),
-      "the predecessor tag is allowed only while documented as the current recommended release",
-    );
-  }
+  assert.equal(recommendedTag, `v${metadata.version}`, "the marketplace source must pin the current verified release tag");
   const requiredText = [
     "Burntgogi/Gpt_Codex_HWP",
     `--ref ${recommendedTag}`,
@@ -425,16 +409,17 @@ function assertSecureAgentInstallSection(
     "dist/doctor.js",
     "dist/oneshot.js",
     "dist/mcp.js",
-    "npm ci --omit=dev --ignore-scripts",
-    "npm audit --omit=dev",
-    "npm run doctor -- --json",
+    "node dist/install-runtime.js --json",
+    "RUNTIME_INSTALL_OK",
+    "node dist/doctor.js --json",
+    "RUNTIME_NOT_INSTALLED",
     "64 MiB",
   ];
   for (const text of requiredText) {
     assert.match(section, new RegExp(escapeRegExp(text), "u"), `agent-install section must contain ${text}`);
   }
 
-  assert.equal(section.match(/--json/gu)?.length, 3, "Codex CLI calls and doctor must request JSON");
+  assert.equal(section.match(/--json/gu)?.length, 4, "Codex CLI calls, runtime installer, and doctor must request JSON");
   assert.match(
     section,
     /진단 전용.*설치나 복구.*MCP 도구가 (?:아니|아닙)|diagnostic only.*does not install or repair.*not an MCP tool/isu,

@@ -1,7 +1,7 @@
 # Gpt_Codex_HWP v0.2.3 릴리즈 노트
 
-- 상태: 배포 전 릴리즈 후보
-- 작성일: 2026-08-03
+- 상태: 정식 릴리즈
+- 작성일: 2026-08-08
 - 검증 기준: Windows x64 개발·실문서 검증, macOS Apple Silicon 실제 기기 미검증
 
 [English](RELEASE_NOTES.en.md) | [README](README.md)
@@ -13,11 +13,14 @@ v0.2.3은 v0.2.2의 HWP 읽기 전용·HWPX 쓰기 원칙과 내부 one-shot 도
 ## 주요 변경 사항
 
 - 저장소 Node 테스트 파일을 직렬 실행해 `runtime-projection`과 설치 런타임 스모크가 같은 `plugins/gpt-codex-hwp` 트리를 동시에 바꾸던 경합을 제거했습니다.
+- hosted runner가 제공하는 별칭 임시 경로를 검증된 canonical 임시 루트로 정규화했습니다.
 - 릴리스 검증 실패 시 원시 출력 대신 첫 실패의 안전한 phase와 TAP ordinal만 출력합니다. 사용자 경로, PID, 환경 변수와 문서 내용은 공개하지 않습니다.
 - 관리 플러그인 캐시 밖의 전체 플러그인 버전·플랫폼·아키텍처·Node 주버전별 경로에 검증된 런타임을 원자적으로 설치합니다. 같은 Codex 프로필의 Node 22와 Node 24가 서로의 런타임을 교체하지 않으며, 캐시가 재생성되어도 같은 런타임을 다시 사용합니다. 문서 작업 중에는 설치나 네트워크 접근을 하지 않습니다.
+- worker-only·child-only·mixed 종료 영수증을 모두 fail-closed로 집계하고 감독된 나머지 프로세스 트리가 0개인지 검증합니다.
+- 소스와 생성 런타임 잠금 파일을 `fast-uri 3.1.5`, `hono 4.13.1`, `ip-address 10.4.0`으로 갱신했으며 두 production audit 모두 알려진 취약점 0개입니다.
 - Windows 고부하·콜드 스타트에서 PowerShell ACL 헬퍼가 조기 실패하지 않도록 대기 상한을 15초로 조정했습니다. 적용하는 DACL과 허용 주체는 바꾸지 않았습니다.
-- 공개 안정판 설치 안내를 v0.2.2와 기본 one-shot 구조에 맞췄습니다. 기본 설치는 `/mcp`에 영구 `gpt-codex-hwp` 서버를 등록하지 않습니다.
-- v0.2.2 태그와 공개 릴리스는 변경하지 않으며, 이 후속 변경은 새 v0.2.3 빌드 ID를 사용합니다.
+- 공개 안정판 설치 안내를 v0.2.3과 기본 one-shot 구조에 맞췄습니다. 기본 설치는 `/mcp`에 영구 `gpt-codex-hwp` 서버를 등록하지 않습니다.
+- v0.2.2 태그와 공개 릴리스는 변경하지 않았으며 v0.2.3은 새 빌드 ID를 사용합니다.
 
 ## 검증 증거
 
@@ -28,7 +31,8 @@ v0.2.3은 v0.2.2의 HWP 읽기 전용·HWPX 쓰기 원칙과 내부 one-shot 도
 - 격리된 Codex 홈에서 런타임을 설치한 뒤 관리 캐시를 의존성 없이 다시 만들고 doctor와 실제 HWPX 생성·검증을 재실행해 설치 영수증 해시가 바뀌지 않음을 확인했습니다.
 - 간헐 실패하던 캐시 재생성 회귀 테스트를 수정 후 3회 연속 통과시켰습니다.
 - 한 Codex 홈에서 Node 22와 Node 24의 런타임 경로가 분리되고 한쪽 설치가 다른 쪽 디렉터리를 변경하지 않는 회귀 테스트를 추가했습니다.
-- v0.2.3 배포 전에는 직렬 저장소 테스트, 소스 Node 테스트, Python 테스트, 공개 트리·이력 검사와 플랫폼 CI를 다시 통과해야 합니다.
+- worker-only·child-only·mixed one-shot 정리 경로에서 유효한 영수증을 집계하고 감독된 나머지 프로세스 트리 0개를 확인했습니다.
+- 최종 정체성에서 저장소 테스트 453개 중 451개 통과, 예상 capability skip 2개, 실패 0개였고 소스 Node 테스트 41개 파일이 모두 통과했습니다. Python, 공개 트리·이력, 런타임 투영, 릴리스 아티팩트, Windows x64, macOS arm64, Linux lifecycle과 Security policy 게이트도 통과했습니다.
 
 ## 사용자 자원 사용 안내
 
@@ -36,14 +40,14 @@ v0.2.3은 v0.2.2의 HWP 읽기 전용·HWPX 쓰기 원칙과 내부 one-shot 도
 
 ## 설치와 업그레이드
 
-이 후보를 검증할 때는 설치 결과의 `installedPath`를 기존 경로·플러그인 identity 규칙으로 먼저 검증한 뒤 그 경로에서 실행합니다.
+v0.2.3을 설치할 때는 설치 결과의 `installedPath`를 경로·플러그인 identity 규칙으로 먼저 검증한 뒤 그 경로에서 실행합니다.
 
 ```powershell
 node dist/install-runtime.js --json
 node dist/doctor.js --json
 ```
 
-첫 명령은 JSON `code` `RUNTIME_INSTALL_OK`를 반환해야 합니다. 실행 중인 모든 Codex CLI와 Desktop 호스트를 완전히 닫았다가 다시 여십시오. 문서 작업 하나를 실행해 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 그 하위 프로세스가 종료되는지 확인하십시오. 문서 작업은 설치를 자동 수행하지 않으므로 `RUNTIME_NOT_INSTALLED`면 검증한 `installedPath`에서 설치기를 명시적으로 다시 실행합니다. v0.2.2의 관리 캐시 내부 직접 설치는 캐시 재생성 뒤 유지되는 방식이 아니었으므로, 새 후보의 재시작 검증 전에는 기존 작동 버전을 제거하지 마십시오.
+첫 명령은 JSON `code` `RUNTIME_INSTALL_OK`를 반환해야 합니다. 실행 중인 모든 Codex CLI와 Desktop 호스트를 완전히 닫았다가 다시 여십시오. 문서 작업 하나를 실행해 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 그 하위 프로세스가 종료되는지 확인하십시오. 문서 작업은 설치를 자동 수행하지 않으므로 `RUNTIME_NOT_INSTALLED`면 검증한 `installedPath`에서 설치기를 명시적으로 다시 실행합니다. v0.2.2의 관리 캐시 내부 직접 설치는 캐시 재생성 뒤 유지되는 방식이 아니었으므로, v0.2.3 재시작 검증 전에는 기존 작동 버전을 제거하지 마십시오.
 
 운영 의존성은 `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<전체-플러그인-버전>/<platform>-<arch>-node<Node-주버전>`에 남습니다. 플러그인을 제거한 뒤 정리하려면 모든 Codex 호스트를 종료하고 더 이상 사용하지 않는 정확한 전체 플러그인 버전 디렉터리만 수동으로 제거하십시오. 자동 재귀 삭제 명령은 이번 릴리즈에 포함하지 않습니다.
 
@@ -60,4 +64,4 @@ node dist/doctor.js --json
 
 프로젝트 코드는 Apache-2.0으로 배포합니다. Kordoc, rhwp, hwpx-editing-skill과 기타 제3자 구성 요소는 각 원저작자의 저작권과 라이선스를 따릅니다. 자세한 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인하십시오.
 
-이 문서는 `v0.2.3` 배포 전 후보 노트입니다. 현재 공개 안정판은 `v0.2.2`입니다.
+이 문서는 `v0.2.3` 릴리즈에 포함되는 노트입니다.
