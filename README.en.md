@@ -92,7 +92,7 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for exact usage scopes, p
 
 This project was developed primarily on Windows x64 and validated there. macOS Apple Silicon plugin-runtime CI is configured, but it must not be described as passed or validated until a successful receipt for the current HEAD exists. Actual use with Codex Desktop and Hancom Office Hangul on macOS remains unverified. macOS remains a compatibility target. Full macOS support is not claimed.
 
-The final release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4) for details.
+The v0.1.4 release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4) for details.
 
 ## Stable v0.2.3 installation from GitHub
 
