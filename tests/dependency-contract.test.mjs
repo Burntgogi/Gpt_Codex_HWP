@@ -15,6 +15,7 @@ import {
   isInstalledExcludedPackagePath,
   verifyInstalledDependencies,
 } from "../scripts/verify-installed-dependencies.mjs";
+import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const SOURCE = join(ROOT, "packages", "gpt-codex-hwp");
@@ -267,7 +268,7 @@ test("installed dependency verifier accepts only the canonical Kordoc link", asy
 });
 
 test("installed dependency verifier accepts only an exact durable-runtime Kordoc copy", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-copied-kordoc-"));
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-copied-kordoc-" });
   t.after(async () => rm(root, { recursive: true, force: true }));
   const vendor = join(root, "vendor", "kordoc-core");
   const installed = join(root, "node_modules", "kordoc");

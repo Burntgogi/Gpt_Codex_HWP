@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { access, readFile, readdir } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { access, mkdir, readFile, readdir, realpath, rm, symlink, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const WORKFLOWS_DIR = join(ROOT, ".github", "workflows");
@@ -588,6 +591,41 @@ test("workflow policy: release verification uploads checksummed candidates and o
   assertReleaseWorkflowPolicy(workflow);
 });
 
+test("release verification canonicalizes an aliased Windows temporary root", async (t) => {
+  const root = await createCanonicalTemporaryDirectory({ prefix: "release-workflow-temp-" });
+  const target = join(root, "target");
+  const alias = join(root, "alias");
+  const githubEnv = join(root, "github-env");
+  await mkdir(target);
+  t.after(async () => {
+    try { await unlink(alias); } catch {}
+    await rm(root, { recursive: true, force: true });
+  });
+  try {
+    await symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code ?? "")) {
+      t.skip(`directory alias creation is unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+
+  const workflow = await readFile(RELEASE_WORKFLOW_PATH, "utf8");
+  const build = jobSection(workflow, "build", "attest");
+  const step = requiredStep(workflowStepSections(build), "name: Canonicalize Windows temporary root");
+  const command = normalizedLines(step).find((line) => /^        run: /u.test(line))?.slice(13);
+  const script = /^node -e "(.*)"$/u.exec(command ?? "")?.[1];
+  assert.notEqual(script, undefined);
+  execFileSync(process.execPath, ["-e", script], {
+    env: { ...process.env, TMPDIR: alias, TEMP: alias, TMP: alias, GITHUB_ENV: githubEnv },
+    windowsHide: true,
+  });
+
+  const canonical = await realpath(target);
+  assert.equal(await readFile(githubEnv, "utf8"), `TEMP=${canonical}\nTMP=${canonical}\n`);
+});
+
 test("automatic workflows exclude maintainer-only Node RSS qualification", async () => {
   await assert.rejects(access(NODE_MEMORY_WORKFLOW_PATH), { code: "ENOENT" });
   const releaseWorkflow = await readFile(RELEASE_WORKFLOW_PATH, "utf8");
@@ -640,6 +678,11 @@ function assertReleaseWorkflowPolicy(workflow) {
   );
   const steps = workflowStepSections(build);
   assert.doesNotMatch(build, /memory:qualify|node-memory-gate|node-memory-qualification/iu);
+  const canonicalTemp = requiredStep(steps, "name: Canonicalize Windows temporary root");
+  assertExactInlineRun(
+    canonicalTemp,
+    "node -e \"const fs=require('node:fs'); const os=require('node:os'); const path=require('node:path'); const temp=fs.realpathSync.native(os.tmpdir()); const out=process.env.GITHUB_ENV; if (!path.isAbsolute(temp) || /[\\r\\n]/u.test(temp) || !path.isAbsolute(out) || /[\\r\\n]/u.test(out)) process.exit(1); fs.appendFileSync(out, 'TEMP=' + temp + '\\nTMP=' + temp + '\\n', 'utf8')\"",
+  );
   const large = requiredStep(steps, "id: large");
   assert.match(large, /^        timeout-minutes: 30$/mu);
   assert.doesNotMatch(large, /continue-on-error|^        if:|^        shell:/mu);
@@ -661,12 +704,13 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.match(build, /^          path: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts\/$/mu);
   const largeEvidence = build.indexOf("node scripts/installed-runtime-smoke.mjs --large-detect 100");
   const exactTag = build.indexOf("name: Assert exact immutable release tag");
+  const canonicalTempStep = build.indexOf("name: Canonicalize Windows temporary root");
   const sourceInstall = build.indexOf("name: Install source dependencies without lifecycle scripts");
   const releaseGate = build.indexOf("npm run release:verify");
   const artifactBuild = build.indexOf("npm run release:artifacts");
   const artifactUpload = build.indexOf("name: gpt-codex-hwp-v${{ inputs.release_version }}-candidate");
   assert.equal(
-    exactTag >= 0 && sourceInstall > exactTag && largeEvidence > sourceInstall
+    exactTag >= 0 && canonicalTempStep > exactTag && sourceInstall > canonicalTempStep && largeEvidence > sourceInstall
       && largeEvidence < releaseGate && releaseGate < artifactBuild && artifactBuild < artifactUpload,
     true,
     "large evidence and the full release gate must pass before building or uploading attested subjects",
