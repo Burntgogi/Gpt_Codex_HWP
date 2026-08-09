@@ -27,6 +27,14 @@ const TOOL_NAMES = Object.freeze([
   "hwp_render_preview",
   "hwp_validate",
 ]);
+const REQUIRED_RESTART_SAFE_FILES = Object.freeze([
+  "runtime-manifest.json",
+  "dist/install-runtime.js",
+  "dist/runtime-bootstrap.js",
+  "dist/oneshot-main.js",
+  "dist/doctor-main.js",
+  "dist/mcp-main.js",
+]);
 const ALLOWED_EXTENSIONS = new Set([
   ".cjs", ".cts", ".dll", ".js", ".json", ".md", ".png", ".ps1", ".py", ".ts", ".yaml",
 ]);
@@ -116,6 +124,7 @@ export async function verifyReleaseArtifacts(options = {}) {
     sourceDateEpoch: options.sourceDateEpoch ?? process.env.SOURCE_DATE_EPOCH,
   });
   const zipEntries = inspectReleaseZipForTest(artifactBytes.get(zipName));
+  assertRestartSafeZipContractForTest(zipEntries);
   assertVerifiedZipPrivacyForTest(zipEntries);
   const allowlist = await trackedRuntimeAllowlist(root, source.commit);
   if (JSON.stringify(zipEntries.map(({ name }) => name)) !== JSON.stringify(allowlist)) {
@@ -153,6 +162,14 @@ export async function verifyReleaseArtifacts(options = {}) {
     toolCount: TOOL_NAMES.length,
     hashes: Object.freeze(Object.fromEntries(checksumRecords.map(({ name, hash }) => [name, hash]))),
   });
+}
+
+export function assertRestartSafeZipContractForTest(entries) {
+  const names = new Set(entries.map(({ name }) => name));
+  if (REQUIRED_RESTART_SAFE_FILES.some((name) => !names.has(name))
+    || [...names].some((name) => name === "node_modules" || name.startsWith("node_modules/"))) {
+    throw verificationError("RELEASE_ARTIFACTS_RUNTIME_CONTRACT");
+  }
 }
 
 export function inspectReleaseZipForTest(input) {

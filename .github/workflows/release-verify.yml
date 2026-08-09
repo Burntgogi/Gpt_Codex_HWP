@@ -56,8 +56,6 @@ jobs:
           if ((npm --version) -ne "10.9.7") { exit 1 }
       - name: Install source dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Install runtime dependencies without lifecycle scripts
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Configure neutral release identity
         run: |
           git config --local user.name "Gpt_Codex_HWP contributors"

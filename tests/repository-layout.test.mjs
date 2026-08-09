@@ -21,6 +21,10 @@ const NPM_POLICY = Object.freeze({
 test("public repository contains source and a separate compact runtime projection", async () => {
   for (const path of [
     "src/mcp.ts",
+    "src/mcp-main.ts",
+    "src/doctor-main.ts",
+    "src/oneshot-main.ts",
+    "src/runtime-bootstrap.ts",
     "tests/tools.test.ts",
     "scripts/hwpx-safe-edit/test_hwpx_safe_edit.py",
     "release-scripts/public-runtime-privacy.mjs",

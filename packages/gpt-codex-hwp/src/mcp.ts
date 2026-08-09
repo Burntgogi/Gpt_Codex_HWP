@@ -1,50 +1,49 @@
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-
-import { PROJECT_METADATA } from "./generated/project-metadata.js";
 import {
-  createAllowedRootsPolicy,
-  setActiveAllowedRootsPolicy,
-  type AllowedRootsPolicy,
-} from "./shared/allowed-roots.js";
-import { registerTools } from "./tools/index.js";
+  RuntimeBootstrapError,
+  resolveInstalledRuntime,
+  type RuntimeBootstrapOptions,
+} from "./runtime-bootstrap.js";
 
-export const ALLOWED_ROOTS_ENVIRONMENT_VARIABLE =
-  "GPT_CODEX_HWP_ALLOWED_ROOTS";
-
-export function createMcpServer(): McpServer {
-  const server = new McpServer({
-    name: PROJECT_METADATA.productId,
-    version: PROJECT_METADATA.version,
-  });
-  registerTools(server);
-  return server;
+export async function runMcpBootstrap(
+  importMetaUrl: string,
+  options: RuntimeBootstrapOptions = {},
+  io: Readonly<{ stdout(value: string): void; stderr(value: string): void }> = {
+    stdout: (value) => process.stdout.write(value),
+    stderr: (value) => process.stderr.write(value),
+  },
+): Promise<0 | 1> {
+  try {
+    const runtime = await resolveInstalledRuntime(importMetaUrl, "dist/mcp-main.js", options);
+    const main = await import(runtime.mainUrl) as { runMcpServer?: () => Promise<void> };
+    if (typeof main.runMcpServer !== "function") {
+      throw new RuntimeBootstrapError("RUNTIME_DEPENDENCIES_INVALID");
+    }
+    await main.runMcpServer();
+    return 0;
+  } catch (error) {
+    const code = error instanceof RuntimeBootstrapError
+      ? error.code
+      : allowedRootsErrorCode(error) ?? "RUNTIME_DEPENDENCIES_INVALID";
+    io.stderr(`${code}\n`);
+    return 1;
+  }
 }
 
-export async function runMcpServer(): Promise<void> {
-  await configureAllowedRootsForMcp();
-  const server = createMcpServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-}
-
-export async function configureAllowedRootsForMcp(
-  environment: NodeJS.ProcessEnv = process.env,
-): Promise<AllowedRootsPolicy> {
-  const policy = await createAllowedRootsPolicy(
-    environment[ALLOWED_ROOTS_ENVIRONMENT_VARIABLE],
-  );
-  setActiveAllowedRootsPolicy(policy);
-  return policy;
+function allowedRootsErrorCode(error: unknown): "INVALID_ALLOWED_ROOTS_CONFIGURATION" | undefined {
+  try {
+    return typeof error === "object" && error !== null
+      && (error as { code?: unknown }).code === "INVALID_ALLOWED_ROOTS_CONFIGURATION"
+      ? "INVALID_ALLOWED_ROOTS_CONFIGURATION"
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const entryPoint = process.argv[1];
-if (entryPoint !== undefined && import.meta.url === pathToFileURL(entryPoint).href) {
-  runMcpServer().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`Failed to start ${PROJECT_METADATA.productId}: ${message}\n`);
-    process.exitCode = 1;
-  });
+if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
+  void runMcpBootstrap(import.meta.url).then((code) => { process.exitCode = code; });
 }

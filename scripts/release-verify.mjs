@@ -161,7 +161,12 @@ export async function runCli(options = {}) {
   const stderr = options.stderr ?? process.stderr;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   try {
-    const receipt = await runVerification();
+    const receipt = await runVerification({
+      diagnosticObserver: (diagnostic) => {
+        const message = formatReleaseStageDiagnostic(diagnostic);
+        if (message !== undefined) stderr.write(`${message}\n`);
+      },
+    });
     stdout.write(`${JSON.stringify(receipt)}\n`);
     setExitCode(receipt?.status === "passed" ? 0 : 1);
     return receipt;

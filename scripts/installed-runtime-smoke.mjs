@@ -8,6 +8,9 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { runBoundedProcess } from "./public-content-policy.mjs";
+import { createCanonicalTemporaryDirectory } from "./canonical-temp.mjs";
+import { loadProjectMetadata, pluginVersion } from "./project-metadata.mjs";
+import { buildRuntime } from "./project-runtime.mjs";
 
 const execFile = promisify(nativeExecFile);
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,6 +27,7 @@ const MAX_ONESHOT_CLEANUP_EVIDENCE_BYTES = 256;
 const MAX_ONESHOT_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_HWPX_BYTES = 8 * 1024 * 1024;
 const ONESHOT_CLEANUP_EVIDENCE_ENV = "GPT_CODEX_HWP_ONESHOT_CLEANUP_EVIDENCE";
+const INSTALL_TIMEOUT_MS = 12 * 60 * 1000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const SVG_INPUT = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="#000"/></svg>';
@@ -150,18 +154,23 @@ export function assertOneShotProcessCleanup(result) {
     || bytes.some((byte) => byte !== 0x0a && (byte < 0x20 || byte > 0x7e))) {
     throw new Error("One-shot descendant cleanup evidence is invalid.");
   }
-  const match = /^ONESHOT_CLEANUP proof=(windows-job-empty|registered-groups-empty) observedProcessTrees=([1-9][0-9]?) remainingProcessTrees=([0-9][0-9]?)\nONESHOT_OK\n$/u.exec(
+  const match = /^ONESHOT_CLEANUP proof=(worker-thread-terminated|windows-job-empty|worker-and-windows-job-empty|registered-groups-empty|worker-and-registered-groups-empty) observedProcessTrees=(0|[1-9][0-9]?) remainingProcessTrees=([0-9][0-9]?)\nONESHOT_OK\n$/u.exec(
     bytes.toString("ascii"),
   );
   if (match === null) throw new Error("One-shot descendant cleanup evidence is invalid.");
   const observedProcessTrees = Number(match[2]);
   const remainingProcessTrees = Number(match[3]);
   const platform = result.platform ?? process.platform;
-  if (observedProcessTrees > 16 || remainingProcessTrees > observedProcessTrees
-    || (platform === "win32"
-      ? match[1] !== "windows-job-empty" || observedProcessTrees !== 1
-      : (platform !== "linux" && platform !== "darwin")
-        || match[1] !== "registered-groups-empty")
+  if ((platform !== "win32" && platform !== "linux" && platform !== "darwin")
+    || observedProcessTrees > 16 || remainingProcessTrees > observedProcessTrees
+    || (observedProcessTrees === 0
+      ? match[1] !== "worker-thread-terminated"
+      : match[1] === "worker-thread-terminated"
+        || (platform === "win32"
+          ? match[1] !== "windows-job-empty"
+            && match[1] !== "worker-and-windows-job-empty"
+          : match[1] !== "registered-groups-empty"
+            && match[1] !== "worker-and-registered-groups-empty"))
     || remainingProcessTrees !== 0) {
     throw new Error("One-shot descendant cleanup is unverified.");
   }
@@ -182,7 +191,10 @@ function assertSuccessfulOneShotProcess(result, verifyStdout = true) {
 }
 
 export async function runInstalledOneShotSmoke(options = {}) {
-  const runtimeRoot = resolve(options.runtimeRoot ?? DEFAULT_RUNTIME_ROOT);
+  const prepared = options.runtimeRoot === undefined && options.runProcess === undefined
+    ? await prepareRestartSafeRuntime()
+    : undefined;
+  const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const createTemporaryRoot = options.createTemporaryRoot
@@ -343,6 +355,7 @@ export async function runInstalledOneShotSmoke(options = {}) {
         );
       } catch { failure ??= "cleanup"; }
     }
+    if (prepared !== undefined) await prepared.cleanup().catch(() => { failure ??= "cleanup"; });
   }
 
   if (failure !== undefined || report === undefined) {
@@ -358,7 +371,10 @@ export async function runInstalledOneShotSmoke(options = {}) {
 }
 
 export async function runInstalledLargeDocumentSmoke(options = {}) {
-  const runtimeRoot = resolve(options.runtimeRoot ?? DEFAULT_RUNTIME_ROOT);
+  const prepared = options.runtimeRoot === undefined && options.runProcess === undefined
+    ? await prepareRestartSafeRuntime()
+    : undefined;
+  const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const createTemporaryRoot = options.createTemporaryRoot
@@ -456,6 +472,7 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
         await rm(cleanupRoot, { recursive: true, force: true });
       } catch { failure ??= "cleanup"; }
     }
+    if (prepared !== undefined) await prepared.cleanup().catch(() => { failure ??= "cleanup"; });
   }
 
   if (failure !== undefined || report === undefined) {
@@ -468,6 +485,44 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
   );
   setExitCode(0);
   return report;
+}
+
+export async function prepareRestartSafeRuntime(options = {}) {
+  const projectRoot = resolve(options.projectRoot ?? PROJECT_ROOT);
+  const temporaryRoot = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-runtime-smoke-",
+  });
+  try {
+    const codexHome = join(temporaryRoot, "codex-home");
+    const metadata = await loadProjectMetadata(projectRoot);
+    const managedRoot = join(
+      codexHome,
+      "plugins", "cache", metadata.marketplaceName, metadata.productId, pluginVersion(metadata),
+    );
+    await buildRuntime({ root: projectRoot, outputRoot: managedRoot });
+    const result = await runBoundedProcess(process.execPath, [
+      join(managedRoot, "dist", "install-runtime.js"), "--json",
+    ], {
+      cwd: managedRoot,
+      env: { ...defaultRuntimeEnvironment(), CODEX_HOME: codexHome },
+      timeoutMs: INSTALL_TIMEOUT_MS,
+      maxOutputBytes: MAX_MCP_FRAME_BYTES,
+    });
+    assertSuccessfulOneShotProcess(result, false);
+    const receipt = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.stdout));
+    if (receipt?.code !== "RUNTIME_INSTALL_OK" || receipt.ok !== true || receipt.toolCount !== 9) {
+      throw new Error("Restart-safe runtime installation failed.");
+    }
+    return Object.freeze({
+      codexHome,
+      managedRoot,
+      receipt,
+      cleanup: () => rm(temporaryRoot, { recursive: true, force: true }),
+    });
+  } catch (error) {
+    await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function sha256RegularFile(path) {

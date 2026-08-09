@@ -3901,6 +3901,18 @@ test("Windows ACL helper replaces the DACL and accepts only one fixed clean rece
   );
 });
 
+test("Windows ACL helper allows a cold PowerShell start under host load", async () => {
+  const result = await applyWindowsOwnerOnlyAcl("C:\\safe\\spool.bin", "file", {
+    platform: "win32",
+    sourceEnvironment: { SystemRoot: "C:\\Windows" },
+    run: async (_command, _args, options) => {
+      if (options.timeout < 15_000) throw new Error("cold start budget is too short");
+      return { stdout: "OK", stderr: "" };
+    },
+  });
+  assert.equal(result, "OK");
+});
+
 test("Windows Job helper environment contains only required runtime variables", () => {
   assert.deepEqual(createJobHelperEnvironment({
     SystemRoot: "C:\\Windows",

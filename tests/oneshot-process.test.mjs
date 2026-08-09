@@ -1,15 +1,33 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { after, before } from "node:test";
 
+import {
+  assertOneShotProcessCleanup,
+  prepareRestartSafeRuntime,
+} from "../scripts/installed-runtime-smoke.mjs";
 import { runBoundedProcess } from "../scripts/public-content-policy.mjs";
 
-const RUNTIME_ROOT = resolve("plugins/gpt-codex-hwp");
+let runtimeRoot = resolve("plugins/gpt-codex-hwp");
+let codexHome;
+let cleanupRuntime;
 const ENTRY_ARGUMENTS = ["--max-semi-space-size=1", "./dist/oneshot.js"];
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+const HWP_FIXTURE = resolve(
+  "packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp",
+);
+
+before(async () => {
+  const prepared = await prepareRestartSafeRuntime();
+  runtimeRoot = prepared.managedRoot;
+  codexHome = prepared.codexHome;
+  cleanupRuntime = prepared.cleanup;
+});
+
+after(async () => cleanupRuntime?.());
 
 test("compiled one-shot generates one valid HWPX and never overwrites a response", { timeout: 60_000 }, async (t) => {
   const fixture = await createFixture(t, "success", {
@@ -67,6 +85,34 @@ test("compiled one-shot publishes a missing-HWP tool error", { timeout: 30_000 }
   assert.equal(JSON.parse(await readFile(fixture.responsePath, "utf8")).isError, true);
 });
 
+test("compiled one-shot reads a real HWP and proves every cleanup tree", { timeout: 60_000 }, async (t) => {
+  const fixture = await createFixture(t, "hwp-read-cleanup", {
+    schemaVersion: 1,
+    tool: "hwp_read",
+    arguments: { file_path: "INPUT_PATH" },
+  });
+  const inputPath = join(fixture.root, "input.hwp");
+  await copyFile(HWP_FIXTURE, inputPath);
+  fixture.request.arguments.file_path = inputPath;
+  await writePrivateRequest(fixture.requestPath, fixture.request);
+
+  const result = await runFixture(fixture, 60_000, {
+    GPT_CODEX_HWP_ONESHOT_CLEANUP_EVIDENCE: "stdout",
+  });
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr.length, 0);
+  assert.equal(
+    result.stdout.toString("utf8"),
+    "ONESHOT_CLEANUP proof=worker-thread-terminated observedProcessTrees=0 remainingProcessTrees=0\nONESHOT_OK\n",
+  );
+  const cleanup = assertOneShotProcessCleanup(result);
+  assert.equal(cleanup.observedProcessTreeCount, 0);
+  assert.equal(cleanup.remainingDescendantCount, 0);
+  const response = JSON.parse(await readFile(fixture.responsePath, "utf8"));
+  assert.equal(response.isError, false);
+  assert.ok(response.structuredContent.markdown.length > 0);
+});
+
 test("compiled one-shot rejects malformed JSON without publishing a response", { timeout: 30_000 }, async (t) => {
   const fixture = await createFixture(t, "malformed", "{");
   await writeFile(fixture.requestPath, fixture.request, { flag: "wx", mode: 0o600 });
@@ -88,7 +134,7 @@ test("compiled one-shot handles SIGTERM through bounded graceful cancellation", 
     "--response",
     fixture.responsePath,
   ], {
-    cwd: RUNTIME_ROOT,
+    cwd: runtimeRoot,
     env: runtimeEnvironment(fixture.root),
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
@@ -154,7 +200,7 @@ async function createLargeGenerationFixture(t, name) {
   return fixture;
 }
 
-function runFixture(fixture, timeoutMs = 30_000) {
+function runFixture(fixture, timeoutMs = 30_000, environment = {}) {
   return runBoundedProcess(process.execPath, [
     ...ENTRY_ARGUMENTS,
     "--request",
@@ -162,8 +208,8 @@ function runFixture(fixture, timeoutMs = 30_000) {
     "--response",
     fixture.responsePath,
   ], {
-    cwd: RUNTIME_ROOT,
-    env: runtimeEnvironment(fixture.root),
+    cwd: runtimeRoot,
+    env: { ...runtimeEnvironment(fixture.root), ...environment },
     timeoutMs,
     maxOutputBytes: 64 * 1024,
   });
@@ -172,6 +218,7 @@ function runFixture(fixture, timeoutMs = 30_000) {
 function runtimeEnvironment(root) {
   return {
     ...process.env,
+    CODEX_HOME: codexHome,
     GPT_CODEX_HWP_ALLOWED_ROOTS: JSON.stringify([root]),
   };
 }

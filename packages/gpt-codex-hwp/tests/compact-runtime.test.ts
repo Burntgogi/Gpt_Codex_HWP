@@ -120,7 +120,10 @@ test("obsolete public-source references are absent from split release suites", a
   const sourcePackage = JSON.parse(await readFile(join(SOURCE_ROOT, "package.json"), "utf8"));
   const rootPackage = JSON.parse(await readFile(join(REPOSITORY_ROOT, "package.json"), "utf8"));
   assert.equal(sourcePackage.scripts["test:python"], "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit");
-  assert.equal(rootPackage.scripts["test:repository"], "node --test tests/*.test.mjs");
+  assert.equal(
+    rootPackage.scripts["test:repository"],
+    "node --test --test-concurrency=1 tests/*.test.mjs",
+  );
   assert.equal(rootPackage.scripts["test:source"], "npm --prefix packages/gpt-codex-hwp test");
   assert.equal(rootPackage.scripts.test, "npm run test:repository && npm run test:source");
   assert.equal(rootPackage.scripts["test:python"], "npm --prefix packages/gpt-codex-hwp run test:python");
@@ -1431,10 +1434,10 @@ test("installed runtime gate is serialized in normal npm test", async () => {
   assert.doesNotMatch(packageJson.scripts.test, /verify:compact-runtime/u);
 });
 
-test("installed runtime runs npm ci immediately before strict npm ls without a normalizer", async () => {
+test("installed runtime runs copy-mode npm ci immediately before strict npm ls without a normalizer", async () => {
   const verifier = await readFile(join(SOURCE_ROOT, "release-scripts", "verify-compact-runtime.mjs"), "utf8");
-  const ci = verifier.indexOf('runNpm(["ci", "--omit=dev", "--ignore-scripts"], runtimeRoot)');
-  const npmLs = verifier.indexOf('["ls", "--omit=dev", "--all", "--json"]');
+  const ci = verifier.indexOf('runNpm(["ci", "--omit=dev", "--ignore-scripts", "--install-links=true"], runtimeRoot)');
+  const npmLs = verifier.indexOf('["ls", "--omit=dev", "--all", "--json", "--install-links=true"]');
   assert.ok(ci >= 0 && ci < npmLs);
   assert.doesNotMatch(verifier, /normalizeSharpOptionalTree|sharp-optional-tree/u);
 });

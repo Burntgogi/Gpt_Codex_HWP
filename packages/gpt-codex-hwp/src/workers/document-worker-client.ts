@@ -21,6 +21,7 @@ import {
   validateLogicalDocumentRequest,
 } from "./document-protocol.js";
 import { defaultDocumentDeadlineMs } from "./document-execution-policy.js";
+import { publishDocumentWorkerTerminationReceipt } from "./document-worker-termination-channel.js";
 
 export const DOCUMENT_WORKER_RESOURCE_LIMITS: Readonly<ResourceLimits> =
   Object.freeze({
@@ -123,6 +124,7 @@ export function createDocumentWorkerClient(
           worker,
           terminationDeadlineMs,
         );
+        if (terminated) publishDocumentWorkerTerminationReceipt();
         await cleanupSnapshot(snapshot);
         if (!terminated) {
           throw createDocumentEngineRunError("ENGINE_TERMINATION_FAILED", {
@@ -214,6 +216,7 @@ async function runWorker<Operation extends DocumentEngineOperation>(
           }));
           return;
         }
+        publishDocumentWorkerTerminationReceipt();
         worker.stdout?.off("data", onStdout);
         worker.stderr?.off("data", onStderr);
         try {

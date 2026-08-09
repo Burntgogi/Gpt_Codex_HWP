@@ -130,7 +130,7 @@ test("source Node diagnostic gives only document worker operations the measured 
   });
   assert.equal(passed, false);
   assert.equal(ordinaryTimeout, 120_000);
-  assert.equal(documentWorkerTimeout, 300_000);
+  assert.equal(documentWorkerTimeout, 600_000);
   assert.equal(output, "MAC_NODE_TEST_FILE file=files.test.ts status=failed\n");
 });
 

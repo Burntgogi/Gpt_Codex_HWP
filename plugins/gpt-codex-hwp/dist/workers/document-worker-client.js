@@ -2,6 +2,7 @@ import { Worker } from "node:worker_threads";
 import { DocumentEngineRunError, createDocumentEngineRunError, normalizeDocumentEngineError, } from "./document-errors.js";
 import { createDocumentEventValidator, createWireDocumentRequest, documentWorkerRequestBytes, MAX_WORKER_INPUT_BYTES, validateLogicalDocumentRequest, } from "./document-protocol.js";
 import { defaultDocumentDeadlineMs } from "./document-execution-policy.js";
+import { publishDocumentWorkerTerminationReceipt } from "./document-worker-termination-channel.js";
 export const DOCUMENT_WORKER_RESOURCE_LIMITS = Object.freeze({
     maxOldGenerationSizeMb: 768,
     maxYoungGenerationSizeMb: 64,
@@ -72,6 +73,8 @@ export function createDocumentWorkerClient(dependencies = {}) {
             const remainingDeadlineMs = deadlineMs - (Date.now() - requestStartedAt);
             if (remainingDeadlineMs <= 0) {
                 const terminated = await confirmWorkerTermination(worker, terminationDeadlineMs);
+                if (terminated)
+                    publishDocumentWorkerTerminationReceipt();
                 await cleanupSnapshot(snapshot);
                 if (!terminated) {
                     throw createDocumentEngineRunError("ENGINE_TERMINATION_FAILED", {
@@ -141,6 +144,7 @@ async function runWorker(request, snapshot, options, deadlineMs, worker, termina
                     }));
                     return;
                 }
+                publishDocumentWorkerTerminationReceipt();
                 worker.stdout?.off("data", onStdout);
                 worker.stderr?.off("data", onStderr);
                 try {

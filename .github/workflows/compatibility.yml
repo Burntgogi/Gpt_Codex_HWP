@@ -43,9 +43,6 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Install runtime dependencies without lifecycle scripts
-        timeout-minutes: 10
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Run Windows 100 MiB production-path smoke
         timeout-minutes: 30
         run: node scripts/installed-runtime-smoke.mjs --large-detect 100
@@ -75,9 +72,6 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Install runtime dependencies without lifecycle scripts
-        timeout-minutes: 10
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Run Linux 100 MiB production-path smoke
         timeout-minutes: 30
         run: node scripts/installed-runtime-smoke.mjs --large-detect 100
@@ -107,9 +101,6 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Install runtime dependencies without lifecycle scripts
-        timeout-minutes: 10
-        run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev
       - name: Run macOS 100 MiB production-path smoke
         timeout-minutes: 30
         run: node scripts/installed-runtime-smoke.mjs --large-detect 100

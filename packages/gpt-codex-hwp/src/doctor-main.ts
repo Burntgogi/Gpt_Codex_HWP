@@ -1,0 +1,1184 @@
+import { createHash } from "node:crypto";
+import { spawn, type ChildProcess } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
+import type { Stats } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+import { PROJECT_METADATA } from "./generated/project-metadata.js";
+import { resolveNpmCommand } from "./runtime-bootstrap.js";
+import { registerTools } from "./tools/index.js";
+import { encodeBoundedJsonFrame } from "./workers/bounded-frame.js";
+import {
+  isGatedRootGoneError,
+  isSupervisorHelperUnclosedError,
+  observeChildProcessClose,
+  superviseDocumentProcessTree,
+  terminateGatedChildByHandle,
+  terminateDocumentProcessTreeByPid,
+  type ChildLifecycleSupervisor,
+} from "./workers/document-child-client.js";
+import {
+  DOCTOR_RUNNER_MAX_FRAME_BYTES,
+  DOCTOR_RUNNER_READY,
+  DOCTOR_RUNNER_SCHEMA_VERSION,
+} from "./workers/doctor-command-runner.js";
+
+export const DOCTOR_SCHEMA_VERSION = 1;
+
+const EXPECTED_TOOL_NAMES = Object.freeze([
+  "hwp_detect_format",
+  "hwp_read",
+  "hwp_generate_hwpx",
+  "hwp_validate",
+  "hwp_render_preview",
+  "hwp_patch_document",
+  "hwp_fill_form",
+  "hwp_create_svg_asset",
+  "hwp_insert_image",
+]);
+const COMMAND_TIMEOUT_MS = 10_000;
+const COMMAND_OUTPUT_LIMIT_BYTES = 64 * 1024;
+const JSON_LIMIT_BYTES = 1024 * 1024;
+const KORDOC_FILE_LIMIT_BYTES = 16 * 1024 * 1024;
+const KORDOC_FILE_COUNT_LIMIT = 512;
+const KORDOC_TOTAL_LIMIT_BYTES = 64 * 1024 * 1024;
+const unsafeDoctorStartupRetentions = new Set<ChildProcess>();
+const REMEDIATION = Object.freeze({
+  node: "Install a supported Node.js release and retry the diagnostic.",
+  npm: "Install npm for the active Node.js runtime and retry the diagnostic.",
+  python: "Install a supported Python 3 runtime and retry the diagnostic.",
+  metadata: "Reinstall the plugin from a verified release.",
+  dependencies: "Reinstall production dependencies from the verified lockfile.",
+  optional: "Install the optional capability only if that workflow is required.",
+  fixture: "No repair is required unless pinned release-test evidence is needed.",
+});
+
+export interface BoundedCommandSpec {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwdCode: "RUNTIME_ROOT";
+  readonly shell: false;
+  readonly windowsHide: true;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+}
+
+export interface BoundedCommandResult {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly timedOut: boolean;
+  readonly truncated: boolean;
+  readonly terminationFailed?: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+export interface DoctorCommandExecutionDependencies {
+  readonly platform?: NodeJS.Platform;
+  readonly spawnProcess?: typeof spawn;
+  readonly terminateProcessTree?: (pid: number) => Promise<boolean>;
+  readonly superviseProcessTree?: (child: ChildProcess) => Promise<ChildLifecycleSupervisor>;
+  readonly runnerPath?: string;
+}
+
+export interface DoctorRuntimeAccess {
+  readJson(path: string): Promise<unknown>;
+  readBytes(path: string, maximumBytes: number): Promise<Uint8Array>;
+  statRegular(path: string): Promise<{ readonly regular: boolean; readonly size: number }>;
+  validCanonicalKordocDependency(): Promise<boolean>;
+}
+
+interface DoctorRuntimeBoundary {
+  readonly lexicalRoot: string;
+  readonly canonicalRoot: string;
+}
+
+export interface DoctorDependencies {
+  readonly nodeVersion: string;
+  readonly projectMetadata: { readonly productId: string; readonly version: string };
+  readonly npmCommand: { readonly command: string; readonly argsPrefix: readonly string[] } | null;
+  readonly pythonCommands: readonly {
+    readonly command: string;
+    readonly argsPrefix: readonly string[];
+  }[];
+  verifyKordocRuntime(): Promise<{ readonly fileCount: number }>;
+  probeRegisteredTools(): Promise<readonly string[]>;
+  probeRegisteredToolSchemas?(): Promise<readonly {
+    readonly name: string;
+    readonly inputSchema: unknown;
+  }[]>;
+  readJson(path: string): Promise<unknown>;
+  readBytes(path: string): Promise<Uint8Array>;
+  statRegular(path: string): Promise<{ readonly regular: boolean; readonly size: number }>;
+  sameCanonicalPath(left: string, right: string): Promise<boolean>;
+  runCommand(specification: BoundedCommandSpec): Promise<BoundedCommandResult>;
+}
+
+export interface DoctorCheck {
+  readonly code: string;
+  readonly ok: boolean;
+  readonly required: boolean;
+  readonly version?: string;
+  readonly count?: number;
+  readonly remediation?: string;
+}
+
+export interface DoctorReport {
+  readonly schemaVersion: number;
+  readonly code: "DOCTOR_OK" | "DOCTOR_REQUIRED_CHECK_FAILED";
+  readonly ok: boolean;
+  readonly required: { readonly passed: number; readonly failed: number };
+  readonly optional: { readonly available: number; readonly unavailable: number };
+  readonly checks: readonly DoctorCheck[];
+}
+
+export async function runDoctor(
+  providedDependencies?: DoctorDependencies,
+): Promise<DoctorReport> {
+  const dependencies = providedDependencies ?? await createDefaultDependencies();
+  const checks: DoctorCheck[] = [];
+
+  checks.push(nodeCheck(dependencies.nodeVersion));
+  checks.push(await npmCheck(dependencies));
+  checks.push(await pythonCheck(dependencies));
+  checks.push(await projectMetadataCheck(dependencies));
+  checks.push(await pluginManifestCheck(dependencies));
+  checks.push(await defaultMcpDisabledCheck(dependencies));
+  checks.push(await oneShotRuntimeCheck(dependencies));
+  checks.push(await mcpCompatibilityCheck(dependencies));
+  checks.push(await kordocProvenanceCheck(dependencies));
+  checks.push(await kordocLinkCheck(dependencies));
+  checks.push(await productionDependencyCheck(dependencies));
+  checks.push(await toolCountCheck(dependencies));
+  checks.push(await rhwpCheck(dependencies));
+  checks.push(await pinnedFixtureCheck(dependencies));
+
+  const requiredChecks = checks.filter((check) => check.required);
+  const optionalChecks = checks.filter((check) => !check.required);
+  const requiredFailed = requiredChecks.filter((check) => !check.ok).length;
+  const optionalUnavailable = optionalChecks.filter((check) => !check.ok).length;
+  const ok = requiredFailed === 0;
+  return Object.freeze({
+    schemaVersion: DOCTOR_SCHEMA_VERSION,
+    code: ok ? "DOCTOR_OK" : "DOCTOR_REQUIRED_CHECK_FAILED",
+    ok,
+    required: Object.freeze({
+      passed: requiredChecks.length - requiredFailed,
+      failed: requiredFailed,
+    }),
+    optional: Object.freeze({
+      available: optionalChecks.length - optionalUnavailable,
+      unavailable: optionalUnavailable,
+    }),
+    checks: Object.freeze(checks.map((check) => Object.freeze({ ...check }))),
+  });
+}
+
+export async function doctorMain(
+  args: readonly string[] = process.argv.slice(2),
+  io: {
+    stdout(value: string): void;
+    stderr(value: string): void;
+  } = {
+    stdout: (value) => process.stdout.write(value),
+    stderr: (value) => process.stderr.write(value),
+  },
+  dependencies?: DoctorDependencies,
+): Promise<number> {
+  if (args.length > 1 || (args.length === 1 && args[0] !== "--json")) {
+    io.stderr("DOCTOR_USAGE_INVALID: use --json or no arguments.\n");
+    return 2;
+  }
+  const report = await runDoctor(dependencies);
+  if (args[0] === "--json") io.stdout(`${JSON.stringify(report)}\n`);
+  else io.stdout(renderHumanReport(report));
+  return report.ok ? 0 : 1;
+}
+
+export function redactDiagnosticText(value: string): string {
+  return value
+    .slice(0, COMMAND_OUTPUT_LIMIT_BYTES)
+    .replace(/[A-Za-z]:\\(?:Users|Documents and Settings)\\[^\r\n"']+/gu, "<redacted-path>")
+    .replace(/\/(?:Users|home)\/[^\s"']+/gu, "<redacted-path>")
+    .replace(/\b[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY)[A-Z0-9_]*\s*=\s*[^\s"']+/gu, "<redacted-value>")
+    .replace(/\b(?:HOME|USERPROFILE|USERNAME|USER)\s*=\s*[^\r\n]+/giu, "<redacted-value>");
+}
+
+async function createDefaultDependencies(): Promise<DoctorDependencies> {
+  const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const runtimeAccess = await createDoctorRuntimeAccess(runtimeRoot);
+  const npmCommand = await resolveNpmCommand();
+  let verifiedKordoc = false;
+  return {
+    nodeVersion: process.version,
+    projectMetadata: PROJECT_METADATA,
+    npmCommand,
+    pythonCommands: process.platform === "win32"
+      ? [
+        { command: "python", argsPrefix: [] },
+        { command: "py", argsPrefix: ["-3"] },
+      ]
+      : [
+        { command: "python3", argsPrefix: [] },
+        { command: "python", argsPrefix: [] },
+      ],
+    verifyKordocRuntime: async () => {
+      const verifier = await import(new URL(
+        "../scripts/kordoc-runtime-verifier.mjs",
+        import.meta.url,
+      ).href) as {
+        verifyKordocCoreRuntime(root: string): Promise<{ readonly files?: readonly unknown[] }>;
+        kordocFileRecords(root: string): Promise<readonly unknown[]>;
+      };
+      const result = await verifier.verifyKordocCoreRuntime(
+        join(runtimeRoot, "vendor", "kordoc-core"),
+      );
+      const fileCount = Array.isArray(result.files) ? result.files.length : 0;
+      const installedFiles = await verifier.kordocFileRecords(
+        join(runtimeRoot, "node_modules", "kordoc"),
+      );
+      if (fileCount <= 0 || fileCount > KORDOC_FILE_COUNT_LIMIT) {
+        throw new Error("invalid verified Kordoc file count");
+      }
+      if (JSON.stringify(installedFiles) !== JSON.stringify(result.files)) {
+        throw new Error("installed Kordoc differs from verified vendor source");
+      }
+      verifiedKordoc = true;
+      return Object.freeze({ fileCount });
+    },
+    probeRegisteredTools: probeRegisteredToolsInProcess,
+    probeRegisteredToolSchemas: probeRegisteredToolSchemasInProcess,
+    readJson: (path) => runtimeAccess.readJson(path),
+    readBytes: (path) => runtimeAccess.readBytes(path, KORDOC_FILE_LIMIT_BYTES),
+    statRegular: (path) => runtimeAccess.statRegular(path),
+    sameCanonicalPath: async (left, right) => left === "node_modules/kordoc"
+      && right === "vendor/kordoc-core"
+      && verifiedKordoc
+      && await runtimeAccess.validCanonicalKordocDependency(),
+    runCommand: (specification) => executeBoundedCommand(specification, runtimeRoot),
+  };
+}
+
+function nodeCheck(value: string): DoctorCheck {
+  const version = cleanVersion(value);
+  if (version !== undefined && Number(version.split(".")[0]) >= 22) {
+    return check("NODE_RUNTIME_OK", true, true, { version });
+  }
+  return check("NODE_RUNTIME_UNSUPPORTED", false, true, { remediation: REMEDIATION.node });
+}
+
+async function npmCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  if (dependencies.npmCommand === null) {
+    return check("NPM_UNAVAILABLE", false, true, { remediation: REMEDIATION.npm });
+  }
+  const result = await safeRun(dependencies, dependencies.npmCommand.command, [
+    ...dependencies.npmCommand.argsPrefix,
+    "--version",
+  ]);
+  const version = cleanVersion(`${result.stdout}\n${result.stderr}`);
+  if (successful(result) && version !== undefined) return check("NPM_OK", true, true, { version });
+  return check("NPM_UNAVAILABLE", false, true, { remediation: REMEDIATION.npm });
+}
+
+async function pythonCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  for (const candidate of dependencies.pythonCommands) {
+    const result = await safeRun(dependencies, candidate.command, [
+      ...candidate.argsPrefix,
+      "--version",
+    ]);
+    const version = cleanVersion(`${result.stdout}\n${result.stderr}`);
+    if (successful(result) && version !== undefined && isSupportedPython(version)) {
+      return check("PYTHON_OK", true, false, { version });
+    }
+  }
+  return check("PYTHON_UNAVAILABLE", false, false, { remediation: REMEDIATION.python });
+}
+
+async function projectMetadataCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  try {
+    const runtimePackage = object(await dependencies.readJson("package.json"));
+    const valid = runtimePackage.name === dependencies.projectMetadata.productId
+      && runtimePackage.version === dependencies.projectMetadata.version
+      && object(runtimePackage.dependencies).kordoc === "file:vendor/kordoc-core";
+    return valid
+      ? check("PROJECT_METADATA_OK", true, true)
+      : check("PROJECT_METADATA_INVALID", false, true, { remediation: REMEDIATION.metadata });
+  } catch {
+    return check("PROJECT_METADATA_INVALID", false, true, { remediation: REMEDIATION.metadata });
+  }
+}
+
+async function pluginManifestCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  try {
+    const manifest = object(await dependencies.readJson(".codex-plugin/plugin.json"));
+    const version = typeof manifest.version === "string" ? manifest.version : "";
+    const valid = manifest.name === dependencies.projectMetadata.productId
+      && version.startsWith(`${dependencies.projectMetadata.version}+codex.`)
+      && !Object.hasOwn(manifest, "mcpServers");
+    return valid
+      ? check("PLUGIN_MANIFEST_OK", true, true)
+      : check("PLUGIN_MANIFEST_INVALID", false, true, { remediation: REMEDIATION.metadata });
+  } catch {
+    return check("PLUGIN_MANIFEST_INVALID", false, true, { remediation: REMEDIATION.metadata });
+  }
+}
+
+async function defaultMcpDisabledCheck(
+  dependencies: DoctorDependencies,
+): Promise<DoctorCheck> {
+  const file = await dependencies.statRegular(".mcp.json");
+  return !file.regular
+    ? check("DEFAULT_MCP_DISABLED_OK", true, true)
+    : check("DEFAULT_MCP_DISABLED_INVALID", false, true, {
+      remediation: REMEDIATION.metadata,
+    });
+}
+
+async function oneShotRuntimeCheck(
+  dependencies: DoctorDependencies,
+): Promise<DoctorCheck> {
+  const file = await dependencies.statRegular("dist/oneshot.js");
+  return file.regular && file.size > 0
+    ? check("ONESHOT_RUNTIME_OK", true, true)
+    : check("ONESHOT_RUNTIME_INVALID", false, true, {
+      remediation: REMEDIATION.metadata,
+    });
+}
+
+async function mcpCompatibilityCheck(
+  dependencies: DoctorDependencies,
+): Promise<DoctorCheck> {
+  try {
+    const manifest = object(await dependencies.readJson("examples/mcp-manual.json"));
+    const servers = object(manifest.mcpServers);
+    const keys = Object.keys(servers);
+    const server = object(servers[dependencies.projectMetadata.productId]);
+    const valid = keys.length === 1
+      && keys[0] === dependencies.projectMetadata.productId
+      && server.command === "node"
+      && isExactStringArray(server.args, ["--max-semi-space-size=1", "./dist/mcp.js"])
+      && server.cwd === ".";
+    return valid
+      ? check("MCP_COMPATIBILITY_OK", true, true, { count: keys.length })
+      : check("MCP_COMPATIBILITY_INVALID", false, true, {
+        remediation: REMEDIATION.metadata,
+      });
+  } catch {
+    return check("MCP_COMPATIBILITY_INVALID", false, true, {
+      remediation: REMEDIATION.metadata,
+    });
+  }
+}
+
+async function kordocProvenanceCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  try {
+    const verified = await dependencies.verifyKordocRuntime();
+    if (!Number.isSafeInteger(verified.fileCount) || verified.fileCount <= 0
+      || verified.fileCount > KORDOC_FILE_COUNT_LIMIT) throw new Error("invalid verifier result");
+    return check("KORDOC_PROVENANCE_OK", true, true, { count: verified.fileCount });
+  } catch {
+    return check("KORDOC_PROVENANCE_INVALID", false, true, { remediation: REMEDIATION.metadata });
+  }
+}
+
+async function kordocLinkCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  const valid = await dependencies.sameCanonicalPath(
+    "node_modules/kordoc",
+    "vendor/kordoc-core",
+  );
+  return valid
+    ? check("KORDOC_DEPENDENCY_OK", true, true)
+    : check("KORDOC_DEPENDENCY_INVALID", false, true, { remediation: REMEDIATION.dependencies });
+}
+
+async function productionDependencyCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  if (dependencies.npmCommand === null) {
+    return check("PRODUCTION_DEPENDENCIES_INVALID", false, true, {
+      remediation: REMEDIATION.dependencies,
+    });
+  }
+  const result = await safeRun(dependencies, dependencies.npmCommand.command, [
+    ...dependencies.npmCommand.argsPrefix,
+    "ls",
+    "--omit=dev",
+    "--json",
+    "--depth=0",
+    "--install-links=true",
+  ]);
+  try {
+    const parsed = object(JSON.parse(redactDiagnosticText(result.stdout)));
+    if (!successful(result)
+      || parsed.name !== dependencies.projectMetadata.productId
+      || parsed.version !== dependencies.projectMetadata.version) {
+      throw new Error("invalid dependency tree");
+    }
+    return check("PRODUCTION_DEPENDENCIES_OK", true, true, {
+      count: Object.keys(object(parsed.dependencies)).length,
+    });
+  } catch {
+    return check("PRODUCTION_DEPENDENCIES_INVALID", false, true, {
+      remediation: REMEDIATION.dependencies,
+    });
+  }
+}
+
+async function toolCountCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  try {
+    const tools = dependencies.probeRegisteredToolSchemas === undefined
+      ? undefined
+      : await dependencies.probeRegisteredToolSchemas();
+    const names = tools?.map((tool) => tool.name) ?? await dependencies.probeRegisteredTools();
+    const valid = names.length === EXPECTED_TOOL_NAMES.length
+      && names.every((name, index) => name === EXPECTED_TOOL_NAMES[index])
+      && (tools === undefined || await exactToolSchemas(dependencies, tools));
+    return valid
+      ? check("MCP_TOOL_COUNT_OK", true, true, { count: names.length })
+      : check("MCP_TOOL_COUNT_INVALID", false, true, {
+        count: names.length,
+        remediation: REMEDIATION.metadata,
+      });
+  } catch {
+    return check("MCP_TOOL_COUNT_INVALID", false, true, { remediation: REMEDIATION.metadata });
+  }
+}
+
+export async function probeRegisteredToolsInProcess(): Promise<readonly string[]> {
+  return Object.freeze((await probeRegisteredToolSchemasInProcess()).map((tool) => tool.name));
+}
+
+export async function probeRegisteredToolSchemasInProcess(): Promise<readonly {
+  readonly name: string;
+  readonly inputSchema: unknown;
+}[]> {
+  const server = new McpServer({
+    name: `${PROJECT_METADATA.productId}-doctor`,
+    version: PROJECT_METADATA.version,
+  });
+  const client = new Client({
+    name: `${PROJECT_METADATA.productId}-doctor-client`,
+    version: PROJECT_METADATA.version,
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  registerTools(server);
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const response = await client.listTools();
+    return Object.freeze(response.tools.map((tool) => Object.freeze({
+      name: tool.name,
+      inputSchema: tool.inputSchema,
+    })));
+  } finally {
+    await client.close().catch(() => undefined);
+    await server.close().catch(() => undefined);
+  }
+}
+
+async function exactToolSchemas(
+  dependencies: DoctorDependencies,
+  tools: readonly { readonly name: string; readonly inputSchema: unknown }[],
+): Promise<boolean> {
+  const catalog = object(await dependencies.readJson("examples/oneshot-tool-schemas.json"));
+  const schemas = object(catalog.tools);
+  const catalogNames = Object.keys(schemas);
+  if (catalog.schemaVersion !== 1 || catalogNames.length !== EXPECTED_TOOL_NAMES.length
+    || catalogNames.join(",") !== [...catalogNames].sort().join(",")) return false;
+  return tools.every((tool) => JSON.stringify(canonicalToolSchema(tool.inputSchema))
+    === JSON.stringify(schemas[tool.name]));
+}
+
+function canonicalToolSchema(value: unknown): unknown {
+  const state = { nodes: 0 };
+  const result = canonicalSchemaValue(value, state, 0, "schema");
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > 64 * 1024) {
+    throw new Error("tool schema exceeds bound");
+  }
+  return result;
+}
+
+function canonicalSchemaValue(
+  value: unknown,
+  state: { nodes: number },
+  depth: number,
+  mode: "schema" | "schema-map" | "schema-list" | "data",
+): unknown {
+  state.nodes += 1;
+  if (state.nodes > 2_048 || depth > 16) throw new Error("tool schema exceeds structure bound");
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalSchemaValue(
+      entry,
+      state,
+      depth + 1,
+      mode === "schema-list" ? "schema" : mode,
+    ));
+  }
+  if (typeof value !== "object") throw new Error("tool schema contains non-JSON value");
+  const source = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(source).filter((entry) => mode !== "schema" || entry !== "description").sort()) {
+    let childMode = mode;
+    if (mode === "schema") {
+      if (["$defs", "definitions", "dependentSchemas", "patternProperties", "properties"].includes(key)) {
+        childMode = "schema-map";
+      } else if (["allOf", "anyOf", "oneOf"].includes(key)) {
+        childMode = "schema-list";
+      } else if (["const", "default", "enum", "examples"].includes(key)) {
+        childMode = "data";
+      }
+    } else if (mode === "schema-map") childMode = "schema";
+    result[key] = canonicalSchemaValue(source[key], state, depth + 1, childMode);
+  }
+  return result;
+}
+
+async function rhwpCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  try {
+    const runtimePackage = object(await dependencies.readJson("package.json"));
+    const expectedVersion = object(runtimePackage.optionalDependencies)["@rhwp/core"];
+    const rhwpPackage = object(await dependencies.readJson("node_modules/@rhwp/core/package.json"));
+    const version = cleanVersion(String(rhwpPackage.version ?? ""));
+    if (rhwpPackage.name !== "@rhwp/core" || version === undefined || version !== expectedVersion) {
+      throw new Error("invalid optional package");
+    }
+    return check("RHWP_AVAILABLE", true, false, { version });
+  } catch {
+    return check("RHWP_UNAVAILABLE", false, false, { remediation: REMEDIATION.optional });
+  }
+}
+
+async function pinnedFixtureCheck(dependencies: DoctorDependencies): Promise<DoctorCheck> {
+  try {
+    const provenance = object(await dependencies.readJson("tests/fixtures/rhwp/provenance.json"));
+    const fixture = await dependencies.statRegular(
+      "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp",
+    );
+    const bytes = await dependencies.readBytes(
+      "tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp",
+    );
+    if (!fixture.regular || !safeSize(provenance.bytes) || !safeHash(provenance.sha256)
+      || fixture.size !== provenance.bytes || bytes.byteLength !== provenance.bytes
+      || sha256(bytes) !== provenance.sha256) throw new Error("fixture unavailable");
+    return check("PINNED_HWP_FIXTURE_AVAILABLE", true, false, { count: 1 });
+  } catch {
+    return check("PINNED_HWP_FIXTURE_UNAVAILABLE", false, false, {
+      remediation: REMEDIATION.fixture,
+    });
+  }
+}
+
+async function safeRun(
+  dependencies: DoctorDependencies,
+  command: string,
+  args: readonly string[],
+): Promise<BoundedCommandResult> {
+  try {
+    const result = await dependencies.runCommand({
+      command,
+      args: Object.freeze([...args]),
+      cwdCode: "RUNTIME_ROOT",
+      shell: false,
+      windowsHide: true,
+      timeoutMs: COMMAND_TIMEOUT_MS,
+      maxOutputBytes: COMMAND_OUTPUT_LIMIT_BYTES,
+    });
+    return Object.freeze({
+      code: result.code,
+      signal: result.signal,
+      timedOut: result.timedOut,
+      truncated: result.truncated,
+      terminationFailed: result.terminationFailed === true,
+      stdout: redactDiagnosticText(result.stdout),
+      stderr: redactDiagnosticText(result.stderr),
+    });
+  } catch {
+    return Object.freeze({
+      code: null,
+      signal: null,
+      timedOut: false,
+      truncated: false,
+      terminationFailed: false,
+      stdout: "",
+      stderr: "",
+    });
+  }
+}
+
+export function executeBoundedCommand(
+  specification: BoundedCommandSpec,
+  runtimeRoot: string,
+  dependencies: DoctorCommandExecutionDependencies = {},
+): Promise<BoundedCommandResult> {
+  const platform = dependencies.platform ?? process.platform;
+  if (platform === "win32") {
+    return executeWindowsBoundedCommand(specification, runtimeRoot, dependencies);
+  }
+  return new Promise((resolvePromise) => {
+    const spawnProcess = dependencies.spawnProcess ?? spawn;
+    const terminateProcessTree = dependencies.terminateProcessTree
+      ?? ((pid: number) => terminateDocumentProcessTreeByPid(pid));
+    let settled = false;
+    let terminalCleanupStarted = false;
+    let timedOut = false;
+    let truncated = false;
+    let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    const child = spawnProcess(specification.command, [...specification.args], {
+      cwd: runtimeRoot,
+      shell: false,
+      windowsHide: true,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const append = (current: Buffer<ArrayBufferLike>, chunk: Buffer | string): Buffer<ArrayBufferLike> => {
+      const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const remaining = specification.maxOutputBytes - stdout.byteLength - stderr.byteLength;
+      if (remaining <= 0) {
+        truncated = true;
+        return current;
+      }
+      if (incoming.byteLength > remaining) truncated = true;
+      return Buffer.concat([current, incoming.subarray(0, Math.max(0, remaining))]);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => { stdout = append(stdout, chunk); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr = append(stderr, chunk); });
+    const finish = (result: BoundedCommandResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise(result);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      void (async () => {
+        let treeGone = false;
+        try {
+          treeGone = child.pid === undefined ? child.exitCode !== null : await terminateProcessTree(child.pid);
+        } catch {
+          treeGone = false;
+        }
+        if (!treeGone) {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          try { child.unref(); } catch {}
+        }
+        finish({
+          code: null,
+          signal: null,
+          timedOut: true,
+          truncated,
+          terminationFailed: !treeGone,
+          stdout: stdout.toString("utf8"),
+          stderr: stderr.toString("utf8"),
+        });
+      })();
+    }, specification.timeoutMs);
+    child.once("error", () => finish({
+      code: null,
+      signal: null,
+      timedOut,
+      truncated,
+      terminationFailed: false,
+      stdout: stdout.toString("utf8"),
+      stderr: stderr.toString("utf8"),
+    }));
+    child.once("close", (code, signal) => {
+      if (timedOut || settled || terminalCleanupStarted) return;
+      terminalCleanupStarted = true;
+      clearTimeout(timer);
+      void (async () => {
+        let treeGone = false;
+        try {
+          treeGone = child.pid === undefined ? true : await terminateProcessTree(child.pid);
+        } catch {
+          treeGone = false;
+        }
+        if (!treeGone) {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          try { child.unref(); } catch {}
+        }
+        finish({
+          code,
+          signal,
+          timedOut: false,
+          truncated,
+          terminationFailed: !treeGone,
+          stdout: stdout.toString("utf8"),
+          stderr: stderr.toString("utf8"),
+        });
+      })();
+    });
+  });
+}
+
+async function executeWindowsBoundedCommand(
+  specification: BoundedCommandSpec,
+  runtimeRoot: string,
+  dependencies: DoctorCommandExecutionDependencies,
+): Promise<BoundedCommandResult> {
+  const spawnProcess = dependencies.spawnProcess ?? spawn;
+  const superviseProcessTree = dependencies.superviseProcessTree ?? superviseDocumentProcessTree;
+  const runnerPath = dependencies.runnerPath ?? resolveDoctorRunnerPath();
+  const frame = encodeBoundedJsonFrame({
+    schemaVersion: DOCTOR_RUNNER_SCHEMA_VERSION,
+    command: specification.command,
+    args: [...specification.args],
+  }, DOCTOR_RUNNER_MAX_FRAME_BYTES);
+  const child = spawnProcess(process.execPath, [runnerPath], {
+    cwd: runtimeRoot,
+    shell: false,
+    windowsHide: true,
+    detached: false,
+    stdio: ["pipe", "pipe", "pipe", "pipe"],
+  });
+  const childCloseReceipt = observeChildProcessClose(child);
+  let truncated = false;
+  let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  const append = (current: Buffer<ArrayBufferLike>, chunk: Buffer | string): Buffer<ArrayBufferLike> => {
+    const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const remaining = specification.maxOutputBytes - stdout.byteLength - stderr.byteLength;
+    if (remaining <= 0) {
+      truncated = true;
+      return current;
+    }
+    if (incoming.byteLength > remaining) truncated = true;
+    return Buffer.concat([current, incoming.subarray(0, Math.max(0, remaining))]);
+  };
+  child.stdout?.on("data", (chunk: Buffer) => { stdout = append(stdout, chunk); });
+  child.stderr?.on("data", (chunk: Buffer) => { stderr = append(stderr, chunk); });
+  const terminalPromise = new Promise<{
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+  }>((resolveTerminal) => {
+    let terminal = false;
+    const finish = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (terminal) return;
+      terminal = true;
+      resolveTerminal(Object.freeze({ code, signal }));
+    };
+    child.once("error", () => finish(null, null));
+    child.once("close", (code, signal) => finish(code, signal));
+  });
+  const supervisorReceiptPromise = receipt(superviseProcessTree(child));
+  const readyStream = child.stdio[3];
+  const readyReceiptPromise = receipt(
+    readyStream === null || readyStream === undefined || !("on" in readyStream)
+      ? Promise.reject(new Error("doctor runner control pipe unavailable"))
+      : waitForDoctorRunnerReady(
+        readyStream as NodeJS.ReadableStream,
+        Math.min(specification.timeoutMs, 2_000),
+      ),
+  );
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const deadlinePromise = new Promise<{ readonly kind: "deadline" }>((resolveDeadline) => {
+    deadlineTimer = setTimeout(() => resolveDeadline(Object.freeze({ kind: "deadline" })), specification.timeoutMs);
+  });
+  const startupPromise = Promise.all([supervisorReceiptPromise, readyReceiptPromise]).then(
+    ([supervisor, ready]) => Object.freeze({ kind: "startup" as const, supervisor, ready }),
+  );
+  const startupResult = await Promise.race([startupPromise, deadlinePromise]);
+  if (startupResult.kind === "deadline") {
+    const [supervisor] = await Promise.all([supervisorReceiptPromise, readyReceiptPromise]);
+    const gone = await terminateGatedRunner(child, supervisor, childCloseReceipt);
+    if (!unsafeDoctorStartupRetentions.has(child)) destroyChildPipes(child, !gone);
+    return commandResult(null, null, true, truncated, !gone, stdout, stderr);
+  }
+  if (!startupResult.supervisor.ok || !startupResult.ready.ok) {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    const gone = await terminateGatedRunner(child, startupResult.supervisor, childCloseReceipt);
+    if (!unsafeDoctorStartupRetentions.has(child)) destroyChildPipes(child, !gone);
+    return commandResult(null, null, false, truncated, !gone, stdout, stderr);
+  }
+
+  const input = child.stdin;
+  if (input === null) {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    const gone = await terminateSupervised(startupResult.supervisor.value);
+    destroyChildPipes(child, !gone);
+    return commandResult(null, null, false, truncated, !gone, stdout, stderr);
+  }
+  const dispatchPromise = dispatchDoctorRunnerInput(child, input, frame);
+  const dispatchResult = await Promise.race([dispatchPromise, terminalPromise, deadlinePromise]);
+  if ("kind" in dispatchResult && dispatchResult.kind === "deadline") {
+    const gone = await terminateSupervised(startupResult.supervisor.value);
+    destroyChildPipes(child, !gone);
+    return commandResult(null, null, true, truncated, !gone, stdout, stderr);
+  }
+  if (!("kind" in dispatchResult)) {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    const gone = await terminateSupervised(startupResult.supervisor.value);
+    destroyChildPipes(child, !gone);
+    return commandResult(
+      dispatchResult.code,
+      dispatchResult.signal,
+      false,
+      truncated,
+      !gone,
+      stdout,
+      stderr,
+    );
+  }
+  if (dispatchResult.kind !== "dispatch" || !dispatchResult.ok) {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    const gone = await terminateSupervised(startupResult.supervisor.value);
+    destroyChildPipes(child, !gone);
+    return commandResult(null, null, false, truncated, !gone, stdout, stderr);
+  }
+
+  const completion = await Promise.race([terminalPromise, deadlinePromise]);
+  if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  const gone = await terminateSupervised(startupResult.supervisor.value);
+  destroyChildPipes(child, !gone);
+  if ("kind" in completion) return commandResult(null, null, true, truncated, !gone, stdout, stderr);
+  return commandResult(completion.code, completion.signal, false, truncated, !gone, stdout, stderr);
+}
+
+function dispatchDoctorRunnerInput(
+  child: ChildProcess,
+  input: NodeJS.WritableStream,
+  frame: Buffer,
+): Promise<{ readonly kind: "dispatch"; readonly ok: boolean }> {
+  return new Promise((resolveDispatch) => {
+    let settled = false;
+    const finish = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      resolveDispatch(Object.freeze({ kind: "dispatch", ok: error == null }));
+    };
+    const onError = (error: Error): void => finish(error);
+    const onOwnerClose = (): void => {
+      input.removeListener("error", onError);
+    };
+    input.on("error", onError);
+    child.once("close", onOwnerClose);
+    try {
+      input.end(frame, (error?: Error | null) => finish(error));
+    } catch (error: unknown) {
+      finish(error);
+    }
+  });
+}
+
+function waitForDoctorRunnerReady(
+  stream: NodeJS.ReadableStream,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolveReady, rejectReady) => {
+    let settled = false;
+    let bytes = Buffer.alloc(0);
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.removeListener("data", onData);
+      stream.removeListener("end", onEnd);
+      stream.removeListener("error", onError);
+      if (error !== undefined) rejectReady(error);
+      else resolveReady();
+    };
+    const onData = (chunk: Buffer): void => {
+      bytes = Buffer.concat([bytes, chunk]);
+      if (bytes.byteLength > Buffer.byteLength(DOCTOR_RUNNER_READY, "utf8")) {
+        finish(new Error("invalid doctor runner READY frame"));
+      }
+    };
+    const onEnd = (): void => {
+      if (bytes.toString("utf8") !== DOCTOR_RUNNER_READY) {
+        finish(new Error("invalid doctor runner READY frame"));
+      } else finish();
+    };
+    const onError = (): void => finish(new Error("doctor runner READY pipe failed"));
+    const timer = setTimeout(
+      () => finish(new Error("doctor runner READY timed out")),
+      timeoutMs,
+    );
+    stream.on("data", onData);
+    stream.once("end", onEnd);
+    stream.once("error", onError);
+  });
+}
+
+async function terminateGatedRunner(
+  child: ChildProcess,
+  supervisor: Readonly<
+    { ok: true; value: ChildLifecycleSupervisor } | { ok: false; error: unknown }
+  >,
+  closeReceipt: ReturnType<typeof observeChildProcessClose>,
+): Promise<boolean> {
+  if (supervisor.ok) return terminateSupervised(supervisor.value);
+  if (isGatedRootGoneError(supervisor.error)) {
+    const close = await closeReceipt;
+    return close.error === null;
+  }
+  if (isSupervisorHelperUnclosedError(supervisor.error)) {
+    unsafeDoctorStartupRetentions.add(child);
+    return false;
+  }
+  return terminateGatedChildByHandle(child, closeReceipt);
+}
+
+function terminateSupervised(supervisor: ChildLifecycleSupervisor): Promise<boolean> {
+  return supervisor.terminate().then((receipt) => receipt.gone, () => false);
+}
+
+function destroyChildPipes(child: ChildProcess, unref: boolean): void {
+  child.stdin?.destroy();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  const control = child.stdio[3];
+  if (control !== null && control !== undefined && "destroy" in control
+    && typeof control.destroy === "function") control.destroy();
+  if (unref) {
+    try { child.unref(); } catch {}
+  }
+}
+
+function commandResult(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  timedOut: boolean,
+  truncated: boolean,
+  terminationFailed: boolean,
+  stdout: Buffer<ArrayBufferLike>,
+  stderr: Buffer<ArrayBufferLike>,
+): BoundedCommandResult {
+  return Object.freeze({
+    code,
+    signal,
+    timedOut,
+    truncated,
+    terminationFailed,
+    stdout: stdout.toString("utf8"),
+    stderr: stderr.toString("utf8"),
+  });
+}
+
+async function receipt<T>(promise: Promise<T>): Promise<Readonly<
+  { ok: true; value: T } | { ok: false; error: unknown }
+>> {
+  try {
+    return Object.freeze({ ok: true, value: await promise });
+  } catch (error: unknown) {
+    return Object.freeze({ ok: false, error });
+  }
+}
+
+function resolveDoctorRunnerPath(): string {
+  return fileURLToPath(new URL(
+    import.meta.url.endsWith(".ts")
+      ? "../dist/workers/doctor-command-runner.js"
+      : "./workers/doctor-command-runner.js",
+    import.meta.url,
+  ));
+}
+
+export async function createDoctorRuntimeAccess(runtimeRoot: string): Promise<DoctorRuntimeAccess> {
+  const lexicalRoot = resolve(runtimeRoot);
+  const rootMetadata = await lstat(lexicalRoot);
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
+    throw new Error("unsafe diagnostic runtime root");
+  }
+  const canonicalRoot = await realpath(lexicalRoot);
+  if (!samePath(lexicalRoot, canonicalRoot)) throw new Error("linked diagnostic runtime root");
+  const boundary = Object.freeze({ lexicalRoot, canonicalRoot });
+  return Object.freeze({
+    readJson: async (path: string) => JSON.parse(
+      new TextDecoder().decode(await readBoundedRuntimeFile(boundary, path, JSON_LIMIT_BYTES)),
+    ),
+    readBytes: (path: string, maximumBytes: number) =>
+      readBoundedRuntimeFile(boundary, path, maximumBytes),
+    statRegular: async (path: string) => {
+      try {
+        const { metadata } = await assertOwnedRuntimePath(boundary, path);
+        return { regular: metadata.isFile(), size: metadata.size };
+      } catch {
+        return { regular: false, size: 0 };
+      }
+    },
+    validCanonicalKordocDependency: async () => {
+      try {
+        const vendor = await assertOwnedRuntimePath(boundary, "vendor/kordoc-core");
+        if (!vendor.metadata.isDirectory()) return false;
+        const nodeModules = await assertOwnedRuntimePath(boundary, "node_modules");
+        if (!nodeModules.metadata.isDirectory()) return false;
+        const dependency = await assertOwnedRuntimePath(boundary, "node_modules/kordoc", true);
+        return dependency.metadata.isSymbolicLink()
+          ? samePath(await realpath(dependency.absolute), vendor.canonical)
+          : dependency.metadata.isDirectory() && samePath(dependency.absolute, dependency.canonical);
+      } catch {
+        return false;
+      }
+    },
+  });
+}
+
+async function readBoundedRuntimeFile(
+  boundary: DoctorRuntimeBoundary,
+  path: string,
+  maximumBytes: number,
+): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0 || maximumBytes > KORDOC_TOTAL_LIMIT_BYTES) {
+    throw new Error("invalid diagnostic read budget");
+  }
+  const { absolute, metadata } = await assertOwnedRuntimePath(boundary, path);
+  if (!metadata.isFile() || metadata.size > maximumBytes) {
+    throw new Error("unsafe diagnostic file");
+  }
+  const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+  const handle = await open(absolute, fsConstants.O_RDONLY | noFollow);
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.size > maximumBytes || !sameFileIdentity(metadata, opened)) {
+      throw new Error("diagnostic file changed");
+    }
+    const bytes = await handle.readFile();
+    const final = await handle.stat();
+    if (bytes.byteLength !== opened.size || bytes.byteLength > maximumBytes
+      || !sameFileIdentity(opened, final) || final.size !== opened.size
+      || final.mtimeMs !== opened.mtimeMs || final.ctimeMs !== opened.ctimeMs) {
+      throw new Error("diagnostic file changed");
+    }
+    return bytes;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertOwnedRuntimePath(
+  boundary: DoctorRuntimeBoundary,
+  path: string,
+  allowFinalLink = false,
+): Promise<{
+  readonly absolute: string;
+  readonly canonical: string;
+  readonly metadata: Stats;
+}> {
+  if (!safeRelativeFile(path)) throw new Error("unsafe diagnostic path");
+  const absolute = resolve(boundary.lexicalRoot, ...path.split("/"));
+  const fromRoot = relative(boundary.lexicalRoot, absolute);
+  if (isAbsolute(fromRoot) || fromRoot === ".." || fromRoot.startsWith(`..${sep}`)) {
+    throw new Error("diagnostic path escapes runtime");
+  }
+  let current = boundary.lexicalRoot;
+  const segments = path.split("/");
+  let metadata = await lstat(current);
+  let canonical = boundary.canonicalRoot;
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    metadata = await lstat(current);
+    const final = index === segments.length - 1;
+    if (metadata.isSymbolicLink()) {
+      if (!final || !allowFinalLink) throw new Error("linked diagnostic path component");
+      canonical = await realpath(current);
+      if (!isWithinBoundary(boundary, canonical)) throw new Error("diagnostic link escapes runtime");
+      continue;
+    }
+    if (!final && !metadata.isDirectory()) throw new Error("diagnostic ancestor is not a directory");
+    canonical = await realpath(current);
+    if (!isWithinBoundary(boundary, canonical) || !samePath(current, canonical)) {
+      throw new Error("diagnostic path component is redirected");
+    }
+  }
+  return Object.freeze({ absolute, canonical, metadata });
+}
+
+function isWithinBoundary(boundary: DoctorRuntimeBoundary, candidate: string): boolean {
+  if (samePath(candidate, boundary.canonicalRoot)) return true;
+  const suffix = relative(boundary.canonicalRoot, candidate);
+  return suffix !== "" && suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
+}
+
+function renderHumanReport(report: DoctorReport): string {
+  const lines = [
+    `${report.code} (schema ${report.schemaVersion})`,
+    `required: ${report.required.passed} passed, ${report.required.failed} failed`,
+    `optional: ${report.optional.available} available, ${report.optional.unavailable} unavailable`,
+  ];
+  for (const item of report.checks) {
+    const details = [
+      item.version === undefined ? "" : ` version=${item.version}`,
+      item.count === undefined ? "" : ` count=${item.count}`,
+    ].join("");
+    lines.push(`${item.ok ? "PASS" : item.required ? "FAIL" : "OPTIONAL"} ${item.code}${details}`);
+    if (item.remediation !== undefined) lines.push(`  ${item.remediation}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function check(
+  code: string,
+  ok: boolean,
+  required: boolean,
+  extra: Pick<DoctorCheck, "version" | "count" | "remediation"> = {},
+): DoctorCheck {
+  return Object.freeze({ code, ok, required, ...extra });
+}
+
+function successful(result: BoundedCommandResult): boolean {
+  return result.code === 0 && !result.timedOut && !result.truncated
+    && result.terminationFailed !== true;
+}
+
+function cleanVersion(value: string): string | undefined {
+  const match = value.match(/(?:^|\s|v)(\d{1,3}\.\d{1,3}\.\d{1,3})(?:\s|$)/u);
+  return match?.[1];
+}
+
+function isSupportedPython(version: string): boolean {
+  const [major, minor] = version.split(".").map(Number);
+  return major === 3 && minor !== undefined && minor >= 10;
+}
+
+function object(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function isExactStringArray(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((item, index) => item === expected[index]);
+}
+
+function safeRelativeFile(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 512
+    && !value.includes("\\")
+    && !value.startsWith("/")
+    && value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function safeHash(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function safeSize(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= KORDOC_FILE_LIMIT_BYTES;
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function samePath(left: string, right: string): boolean {
+  if (process.platform !== "win32") return left === right;
+  return left.replaceAll("\\", "/").toLowerCase() === right.replaceAll("\\", "/").toLowerCase();
+}
+
+function sameFileIdentity(
+  left: { readonly dev: number | bigint; readonly ino: number | bigint },
+  right: { readonly dev: number | bigint; readonly ino: number | bigint },
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}

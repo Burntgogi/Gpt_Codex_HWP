@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { canonicalToolSchema } from "../../../scripts/installed-runtime-smoke.mjs";
-import { createMcpServer } from "../src/mcp.js";
+import { createMcpServer } from "../src/mcp-main.js";
 
 const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const EXPECTED_NAMES = [

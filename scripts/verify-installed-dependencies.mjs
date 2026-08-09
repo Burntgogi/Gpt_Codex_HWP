@@ -2,6 +2,11 @@ import { lstat, realpath, readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  kordocFileRecords,
+  verifyKordocCoreRuntime,
+} from "./kordoc-runtime-verifier.mjs";
+
 export const INSTALLED_EXCLUDED_PACKAGES = Object.freeze([
   "@huggingface/transformers",
   "onnxruntime-node",
@@ -29,9 +34,16 @@ export function isInstalledExcludedPackagePath(input) {
   return false;
 }
 
-export async function assertInstalledDependencyTree({ packageRoot, label }) {
+export async function assertInstalledDependencyTree({
+  packageRoot,
+  label,
+  allowCopiedKordoc = false,
+}) {
   const root = resolveRequiredPath(packageRoot, "packageRoot");
   const treeLabel = requiredLabel(label);
+  if (typeof allowCopiedKordoc !== "boolean") {
+    throw dependencyContractError("allowCopiedKordoc must be a boolean");
+  }
   const nodeModules = join(root, "node_modules");
   const nodeModulesInfo = await requiredEntry(nodeModules, `${treeLabel} node_modules`);
   if (nodeModulesInfo.isSymbolicLink() || !nodeModulesInfo.isDirectory()) {
@@ -97,12 +109,19 @@ export async function assertInstalledDependencyTree({ packageRoot, label }) {
 
   await visit(nodeModules);
   if (!sawKordocLink) {
-    throw dependencyContractError(`${treeLabel} node_modules/kordoc must link to the vendored compact core`);
+    if (!allowCopiedKordoc) {
+      throw dependencyContractError(`${treeLabel} node_modules/kordoc must link to the vendored compact core`);
+    }
+    const provenance = await verifyKordocCoreRuntime(vendor);
+    const copied = await kordocFileRecords(join(nodeModules, "kordoc"));
+    if (JSON.stringify(copied) !== JSON.stringify(provenance.files)) {
+      throw dependencyContractError(`${treeLabel} copied Kordoc does not match the vendored compact core`);
+    }
   }
   return Object.freeze({ label: treeLabel, fileCount, linkCount, bytes });
 }
 
-export async function verifyInstalledDependencies({ root, sourceOnly = false }) {
+export async function verifyInstalledDependencies({ root, sourceOnly = false, runtimeRoot }) {
   const projectRoot = resolveRequiredPath(root, "root");
   if (typeof sourceOnly !== "boolean") {
     throw dependencyContractError("sourceOnly must be a boolean");
@@ -113,8 +132,9 @@ export async function verifyInstalledDependencies({ root, sourceOnly = false }) 
   });
   if (sourceOnly) return Object.freeze({ source });
   const runtime = await assertInstalledDependencyTree({
-    packageRoot: join(projectRoot, "plugins", "gpt-codex-hwp"),
+    packageRoot: runtimeRoot ?? join(projectRoot, "plugins", "gpt-codex-hwp"),
     label: "runtime",
+    allowCopiedKordoc: runtimeRoot !== undefined,
   });
   return Object.freeze({ source, runtime });
 }
@@ -163,10 +183,30 @@ async function main() {
     throw dependencyContractError("Usage: node scripts/verify-installed-dependencies.mjs [--source-only]");
   }
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  process.stdout.write(`${JSON.stringify(await verifyInstalledDependencies({
-    root,
-    sourceOnly: mode === "--source-only",
-  }), null, 2)}\n`);
+  if (mode === "--source-only") {
+    process.stdout.write(`${JSON.stringify(await verifyInstalledDependencies({
+      root,
+      sourceOnly: true,
+    }), null, 2)}\n`);
+    return;
+  }
+  const { prepareRestartSafeRuntime } = await import("./installed-runtime-smoke.mjs");
+  const prepared = await prepareRestartSafeRuntime({ projectRoot: root });
+  try {
+    const runtimeRoot = join(
+      prepared.codexHome,
+      "plugin-runtime-data",
+      prepared.receipt.productId,
+      prepared.receipt.pluginVersion,
+      `${prepared.receipt.platform}-${prepared.receipt.arch}-node${prepared.receipt.nodeMajor}`,
+    );
+    process.stdout.write(`${JSON.stringify(await verifyInstalledDependencies({
+      root,
+      runtimeRoot,
+    }), null, 2)}\n`);
+  } finally {
+    await prepared.cleanup();
+  }
 }
 
 const entryPoint = process.argv[1];

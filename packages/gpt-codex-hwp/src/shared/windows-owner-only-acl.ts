@@ -63,7 +63,7 @@ export async function applyWindowsOwnerOnlyAcl(
         encoding: "utf8",
         env: createWindowsAclHelperEnvironment(path, kind, sourceEnvironment),
         maxBuffer: 64 * 1024,
-        timeout: 5_000,
+        timeout: 15_000,
         windowsHide: true,
       },
     );

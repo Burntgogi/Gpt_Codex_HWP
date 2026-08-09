@@ -200,6 +200,36 @@ test("one-shot cleanup rejects a recorded detached identity after the outer grou
   }), /descendant|identity|cleanup/iu);
 });
 
+test("one-shot cleanup accepts worker-only and mixed cleanup but rejects mismatched proof", () => {
+  assert.deepEqual(smokeModule.assertOneShotProcessCleanup({
+    terminationFailed: false,
+    stdout: Buffer.from(
+      "ONESHOT_CLEANUP proof=worker-thread-terminated observedProcessTrees=0 remainingProcessTrees=0\nONESHOT_OK\n",
+    ),
+    platform: "win32",
+  }), {
+    observedProcessTreeCount: 0,
+    remainingDescendantCount: 0,
+  });
+  assert.throws(() => smokeModule.assertOneShotProcessCleanup({
+    terminationFailed: false,
+    stdout: Buffer.from(
+      "ONESHOT_CLEANUP proof=worker-thread-terminated observedProcessTrees=1 remainingProcessTrees=0\nONESHOT_OK\n",
+    ),
+    platform: "win32",
+  }), /descendant|cleanup/iu);
+  assert.deepEqual(smokeModule.assertOneShotProcessCleanup({
+    terminationFailed: false,
+    stdout: Buffer.from(
+      "ONESHOT_CLEANUP proof=worker-and-windows-job-empty observedProcessTrees=2 remainingProcessTrees=0\nONESHOT_OK\n",
+    ),
+    platform: "win32",
+  }), {
+    observedProcessTreeCount: 2,
+    remainingDescendantCount: 0,
+  });
+});
+
 test("initialization failure emits only the last bounded lifecycle boundary and stderr count", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-initialize-boundary-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
@@ -314,12 +344,13 @@ test("over-limit MCP stdout emits one fixed initialization failure and closes th
     "utf8",
   );
   const runtimeRoot = join(process.cwd(), "plugins", "gpt-codex-hwp");
+  const sourceRoot = join(process.cwd(), "packages", "gpt-codex-hwp");
   let child;
   let output = "";
   const passed = await smokeModule.runInstalledRuntimeSmoke({
     runtimeRoot,
     createRuntimeSession: (spec, observers) => smokeModule.createDefaultRuntimeSession(
-      { ...spec, args: [target] },
+      { ...spec, cwd: sourceRoot, args: [target] },
       observers,
       {
         spawnProcess(command, args, options) {

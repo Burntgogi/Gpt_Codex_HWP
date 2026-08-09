@@ -125,3 +125,15 @@ Project-authored code is offered under [Apache-2.0](LICENSE). Upstream and adapt
 components retain their own copyright and license terms. Preserve notices and see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) before copying or updating
 Kordoc, rhwp, hwpx-editing-skill, or another third-party component.
+
+## Release publication handoff
+
+Create the immutable `v0.2.3` tag only at the exact intended 40-character commit SHA. Resolve that SHA with `git rev-parse 'v0.2.3^{commit}'`, then run `release-verify.yml` with these exact inputs:
+
+```text
+release_ref=v0.2.3
+expected_release_sha=<the exact 40-character output of git rev-parse v0.2.3^{commit}>
+release_version=0.2.3
+```
+
+Publish only after both build and attestation jobs succeed. Use only `gpt-codex-hwp-0.2.3.zip`, `gpt-codex-hwp-0.2.3.spdx.json`, `provenance.json`, and `SHA256SUMS` from the same workflow artifact. Never rebuild, repackage, or substitute local files for those verified outputs.

@@ -8,21 +8,31 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import packageJson from "../package.json" with { type: "json" };
-import { assertExactToolSchemas } from "../../../scripts/installed-runtime-smoke.mjs";
+import {
+  assertExactToolSchemas,
+  prepareRestartSafeRuntime,
+} from "../../../scripts/installed-runtime-smoke.mjs";
 
 const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-test("built MCP server initializes and registers exactly nine tools without stderr", { timeout: 15_000 }, async () => {
+test("built MCP server initializes and registers exactly nine tools without stderr", { timeout: 90_000 }, async () => {
   const configuredServerPath = process.env.HWP_MCP_SERVER_PATH?.trim();
+  const prepared = configuredServerPath ? undefined : await prepareRestartSafeRuntime();
   const serverPath = configuredServerPath
     ? resolve(configuredServerPath)
-    : join(SOURCE_ROOT, "dist", "mcp.js");
+    : join(prepared!.managedRoot, "dist", "mcp.js");
   await access(serverPath);
 
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverPath],
-    cwd: SOURCE_ROOT,
+    cwd: prepared?.managedRoot ?? SOURCE_ROOT,
+    ...(prepared === undefined ? {} : {
+      env: Object.fromEntries(Object.entries({
+        ...process.env,
+        CODEX_HOME: prepared.codexHome,
+      }).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+    }),
     stderr: "pipe",
   });
   const client = new Client({ name: `${packageJson.name}-smoke`, version: packageJson.version });
@@ -58,6 +68,7 @@ test("built MCP server initializes and registers exactly nine tools without stde
   } finally {
     await client.close();
     await transport.close();
+    await prepared?.cleanup();
   }
 
   assert.equal(stderr, "");

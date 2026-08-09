@@ -4,7 +4,23 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 ## [Unreleased]
 
-### v0.2.2 candidate
+## [0.2.3] - 2026-08-08
+
+- Serialized repository Node test files to prevent shared runtime projection
+  races and reduce peak CI process count.
+- Added a bounded first-failure phase and TAP ordinal to release verification
+  without exposing raw output, paths, environment variables, or document data.
+- Updated public installation guidance for the stable v0.2.3 one-shot
+  lifecycle and retained all nine internal one-shot contracts.
+- Added an explicit verified runtime installer outside the Codex-managed cache
+  so plugin cache rehydration does not remove production dependencies.
+- Canonicalized hosted-runner temporary roots before installed-runtime work.
+- Aggregated worker-only, child-only, and mixed cleanup receipts fail-closed
+  and verified zero remaining supervised process trees.
+- Updated source and generated-runtime locks to `fast-uri 3.1.5`, `hono 4.13.1`,
+  and `ip-address 10.4.0`, with zero known production vulnerabilities.
+
+## [0.2.2] - 2026-08-01
 
 - Added bounded Windows x64, macOS arm64, Linux, and Security pull-request
   gates plus a scheduled/manual full compatibility workflow.
@@ -63,7 +79,9 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.2.0
 [0.1.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4

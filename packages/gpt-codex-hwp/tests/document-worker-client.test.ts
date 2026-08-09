@@ -8,6 +8,7 @@ import {
   DOCUMENT_WORKER_RESOURCE_LIMITS,
   type DocumentWorkerLike,
 } from "../src/workers/document-worker-client.js";
+import { subscribeDocumentWorkerTerminationReceipts } from "../src/workers/document-worker-termination-channel.js";
 import {
   CHILD_WORKING_SET_MAX_BYTES,
   HeavyChildGate,
@@ -343,6 +344,10 @@ test("document worker client closes the factory-to-listener abort gap", async ()
 
 test("document worker deadline includes factory startup and prevents postMessage", async () => {
   let posts = 0;
+  const receipts: unknown[] = [];
+  const unsubscribe = subscribeDocumentWorkerTerminationReceipts((message) => {
+    receipts.push(message);
+  });
   const snapshot = workerSnapshot(new ArrayBuffer(1));
   const client = createDocumentWorkerClient({
     workerFactory: (options) => {
@@ -360,13 +365,18 @@ test("document worker deadline includes factory startup and prevents postMessage
       return worker;
     },
   });
-  await assert.rejects(
-    client.run(detectRequest("worker-startup-deadline"), snapshot, { deadlineMs: 20 }),
-    (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
-  );
+  try {
+    await assert.rejects(
+      client.run(detectRequest("worker-startup-deadline"), snapshot, { deadlineMs: 20 }),
+      (error: unknown) => safeCode(error) === "ENGINE_TIMEOUT",
+    );
+  } finally {
+    unsubscribe();
+  }
   assert.equal(posts, 0);
   assert.equal(snapshot.takeCalls, 0);
   assert.equal(snapshot.cleanupCalls, 1);
+  assert.deepEqual(receipts, [{ terminated: true, proof: "worker-thread-terminated" }]);
 });
 
 test("worker factory failures preserve abort and deadline precedence", async () => {

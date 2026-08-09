@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -46,7 +46,7 @@ const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
 });
 const EXPECTED_OVERRIDES = Object.freeze({
   "@hono/node-server": "2.0.11",
-  "fast-uri": "3.1.4",
+  "fast-uri": "3.1.5",
 });
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
@@ -107,7 +107,9 @@ test("dependency contract resolves patched production dependencies and projects 
     const lock = await readJson(join(root, "package-lock.json"));
     locks.set(label, lock);
     assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.3", label);
-    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.4", label);
+    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.5", label);
+    assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.1", label);
+    assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.4.0", label);
   }
 
   assert.deepEqual(
@@ -127,7 +129,7 @@ test("dependency contract resolves patched production dependencies and projects 
   }
 });
 
-test("public installation guidance has one npm-ci step and no normalizer", async () => {
+test("public installation guidance uses the explicit durable-runtime installer and no normalizer", async () => {
   for (const path of [
     join(ROOT, "README.md"),
     join(ROOT, "README.en.md"),
@@ -135,8 +137,12 @@ test("public installation guidance has one npm-ci step and no normalizer", async
   ]) {
     const content = await readFile(path, "utf8");
     assert.doesNotMatch(content, /normalize-sharp-optional-tree|normaliz(?:e|ation).*Sharp/iu, path);
-    assert.match(content, /npm ci --omit=dev --ignore-scripts/u, path);
+    assert.match(content, /node dist\/install-runtime\.js --json/u, path);
+    assert.match(content, /RUNTIME_INSTALL_OK/u, path);
+    assert.match(content, /RUNTIME_NOT_INSTALLED/u, path);
   }
+  const skill = await readFile(join(SOURCE, "skills", "gpt-codex-hwp", "SKILL.md"), "utf8");
+  assert.doesNotMatch(skill, /npm ci --omit=dev --ignore-scripts/u);
 });
 
 test("public guidance makes one-shot execution the default lifecycle", async () => {
@@ -165,26 +171,27 @@ test("public guidance makes one-shot execution the default lifecycle", async () 
 });
 
 test("dependency contract resolves Kordoc only through the vendored compact core", async () => {
-  for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
-    const packageJson = await readJson(join(root, "package.json"));
-    const lock = await readJson(join(root, "package-lock.json"));
-    const rootRecord = lock.packages?.[""];
-    const linkRecord = lock.packages?.["node_modules/kordoc"];
-    const vendorRecord = lock.packages?.["vendor/kordoc-core"];
+  const sourcePackage = await readJson(join(SOURCE, "package.json"));
+  const sourceLock = await readJson(join(SOURCE, "package-lock.json"));
+  const runtimePackage = await readJson(join(RUNTIME, "package.json"));
+  const runtimeLock = await readJson(join(RUNTIME, "package-lock.json"));
 
+  for (const [label, packageJson, lock] of [
+    ["source", sourcePackage, sourceLock], ["runtime", runtimePackage, runtimeLock],
+  ]) {
     assert.equal(packageJson.dependencies?.kordoc, LOCAL_KORDOC_SPECIFIER, label);
-    assert.equal(rootRecord?.dependencies?.kordoc, LOCAL_KORDOC_SPECIFIER, label);
-    assert.deepEqual(linkRecord, { resolved: LOCAL_KORDOC_RESOLUTION, link: true }, label);
-    assert.equal(vendorRecord?.name, "kordoc", label);
-    assert.equal(vendorRecord?.version, "3.18.1", label);
-    assert.equal(vendorRecord?.license, "MIT", label);
-
-    const registryReferences = Object.entries(lock.packages ?? {})
-      .filter(([path, record]) => path !== "node_modules/kordoc"
-        && path !== "vendor/kordoc-core"
-        && (record?.name === "kordoc" || /(?:^|\/)kordoc(?:\/|$)/iu.test(path)));
-    assert.deepEqual(registryReferences, [], `${label} lock contains another Kordoc package`);
+    assert.equal(lock.packages?.[""]?.dependencies?.kordoc, LOCAL_KORDOC_SPECIFIER, label);
   }
+  assert.deepEqual(
+    sourceLock.packages?.["node_modules/kordoc"],
+    { resolved: LOCAL_KORDOC_RESOLUTION, link: true },
+  );
+  assert.equal(sourceLock.packages?.["vendor/kordoc-core"]?.version, "3.18.1");
+  assert.equal(sourceLock.packages?.["vendor/kordoc-core"]?.license, "MIT");
+  assert.equal(runtimeLock.packages?.["node_modules/kordoc"]?.version, "3.18.1");
+  assert.equal(runtimeLock.packages?.["node_modules/kordoc"]?.resolved, LOCAL_KORDOC_SPECIFIER);
+  assert.equal(runtimeLock.packages?.["node_modules/kordoc"]?.license, "MIT");
+  assert.equal(Object.hasOwn(runtimeLock.packages, "vendor/kordoc-core"), false);
 });
 
 test("dependency contract independently pins every heavyweight exclusion", async () => {
@@ -259,6 +266,31 @@ test("installed dependency verifier accepts only the canonical Kordoc link", asy
   );
 });
 
+test("installed dependency verifier accepts only an exact durable-runtime Kordoc copy", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-copied-kordoc-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const vendor = join(root, "vendor", "kordoc-core");
+  const installed = join(root, "node_modules", "kordoc");
+  await cp(join(SOURCE, "vendor", "kordoc-core"), vendor, { recursive: true });
+  await cp(vendor, installed, { recursive: true });
+  await rm(join(installed, "PROVENANCE.json"));
+
+  await assert.doesNotReject(assertInstalledDependencyTree({
+    packageRoot: root,
+    label: "durable runtime",
+    allowCopiedKordoc: true,
+  }));
+  await writeFile(join(installed, "dist", "index.js"), "tampered\n");
+  await assert.rejects(
+    assertInstalledDependencyTree({
+      packageRoot: root,
+      label: "durable runtime",
+      allowCopiedKordoc: true,
+    }),
+    /copied Kordoc does not match the vendored compact core/iu,
+  );
+});
+
 test("source-only dependency verification needs no installed runtime and rejects bad source trees", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-source-dependencies-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -309,12 +341,15 @@ function comparePaths(left, right) {
 
 function productionDependencyGraph(lock) {
   return Object.entries(lock.packages ?? {})
-    .filter(([path, record]) => path !== "" && record?.dev !== true)
-    .map(([path, record]) => ({
-      name: packageNameFromLockPath(path),
-      version: record?.version ?? null,
-      integrity: record?.integrity ?? null,
-    }))
+    .filter(([path, record]) => path !== "" && path !== LOCAL_KORDOC_RESOLUTION && record?.dev !== true)
+    .map(([path, link]) => {
+      const record = link?.link === true ? lock.packages?.[link.resolved] : link;
+      return {
+        name: record?.name ?? packageNameFromLockPath(path),
+        version: record?.version ?? null,
+        integrity: record?.integrity ?? null,
+      };
+    })
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right), "en"));
 }
 

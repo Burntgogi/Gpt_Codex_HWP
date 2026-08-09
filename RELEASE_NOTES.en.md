@@ -1,84 +1,67 @@
-# Gpt_Codex_HWP v0.2.2 Release Notes
+# Gpt_Codex_HWP v0.2.3 Release Notes
 
 - Status: final release
-- Prepared: 2026-08-01
-- Verification platforms: Windows x64, macOS arm64 hosted runner, Linux x64, and security policy; no physical Mac verification
+- Date: 2026-08-08
+- Validation baseline: Windows x64 development and real-document checks; physical Mac unverified
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
 ## Overview
 
-v0.2.2 is a patch release that preserves the HWP-read-only/HWPX-write model while making platform CI and large-document verification release-ready. Nine internal one-shot contracts are retained; optional manual MCP compatibility retains all nine. Structurally valid documents through 100 MiB are the CI-verified support envelope. Documents over 100 MiB through 512 MiB remain non-guaranteed best effort, and files over 512 MiB are rejected.
+v0.2.3 retains v0.2.2's read-only HWP policy, HWPX writing, and all nine internal one-shot tool contracts while adding explicit runtime installation that survives Codex-managed cache rehydration. It removes no user document feature or public tool.
 
-Installed-runtime smoke tests previously stalled for 60 seconds on GitHub hosted Windows and macOS because the displayed temporary-directory path differed from its canonical path. The smoke now reuses the canonical path already proven by its ownership check for the MCP allowed root and output paths.
+## Main changes
 
-## Highlights
+- Repository Node test files now run serially so `runtime-projection` cannot replace the shared `plugins/gpt-codex-hwp` tree while installed-runtime smoke tests use it.
+- Hosted-runner temporary-path aliases are normalized to the verified canonical temporary root.
+- Release verification now emits only the first safe phase and TAP ordinal on failure. It never publishes raw errors, user paths, PIDs, environment variables, or document content.
+- A verified runtime is installed atomically outside the managed plugin cache, scoped by full plugin version, platform, architecture, and Node major. Node 22 and Node 24 in one Codex profile do not replace each other's runtime. Cache rehydration reuses the matching runtime, while document operations perform no installation or network access.
+- Worker-only, child-only, and mixed cleanup receipts are aggregated fail-closed, and the runtime verifies zero remaining supervised process trees.
+- Source and generated-runtime locks now use `fast-uri 3.1.5`, `hono 4.13.1`, and `ip-address 10.4.0`; both production audits report zero known vulnerabilities.
+- The Windows PowerShell ACL helper now allows a 15-second cold-start window under host load. The applied DACL and allowed principals are unchanged.
+- Public stable-install guidance now targets v0.2.3 and its default one-shot lifecycle. The default installation does not register a persistent `gpt-codex-hwp` server in `/mcp`.
+- The immutable v0.2.2 tag and release remain unchanged; v0.2.3 uses a new build ID.
 
-- Split Windows x64, macOS arm64, Linux lifecycle, and Security policy into stable required pull-request checks.
-- Pull requests own the 10 MiB smoke and stable platform verification; the post-merge manual/scheduled Compatibility workflow owns only the 100 MiB detect smoke through the public one-shot runtime on each platform.
-- Retained 256 and 512 MiB benchmarks as explicit local engineering experiments without compatibility guarantees.
-- Accepted hosted-runner path aliases during ownership validation while using only the verified canonical temporary root as the runtime boundary.
-- Initialization diagnostics emit only the last allowlisted lifecycle boundary and a bounded stderr byte count. Raw errors, user paths, PIDs, and document content are never emitted.
-- Fixed the history scanner incorrectly treating an empty continuation line in a valid GPG-signed commit as malformed Git history.
-- Kept process start gates, supervisor readiness, termination receipts, and remaining-child verification fail closed.
-- Removed full suites and platform receipts from Compatibility because required CI and the 100 MiB smoke passed on the same commit while only duplicated load tests failed under hosted-runner variance. Immutable release verification retains the full release gate.
-- A failed release 100 MiB preflight emits only a fixed bounded stage and prevents artifact construction and attestation.
-- HWP remains detection/read/preview only, and every generated or edited result remains HWPX.
+## Verification evidence
 
-## User-visible changes from v0.2.1
+- The public v0.2.2 ZIP SHA-256 matched the published `SHA256SUMS` manifest.
+- A fresh-directory cold install passed all 11 required doctor checks, real HWP detection and reading, HWPX generation, and independent validation.
+- The shared Codex v0.2.2 installed-runtime one-shot generated HWPX, validated it, and reported zero remaining supervised descendants.
+- The parallel repository failure was reproduced locally; after restoring runtime dependencies, the affected smoke file passed all 28 tests, confirming a shared-tree race.
+- An isolated Codex-home regression installed the runtime, rebuilt the managed cache without dependencies, reran doctor and real HWPX generation/validation, and retained the exact installation-receipt hash.
+- The previously intermittent cache-rehydration regression passed three consecutive runs after the fix.
+- A regression test now proves that Node 22 and Node 24 resolve to separate runtime paths in one Codex home and that installing one does not alter the other directory.
+- Worker-only, child-only, and mixed one-shot cleanup paths produced valid aggregated receipts with zero remaining supervised process trees.
+- On the final identity, the repository suite reported 453 total tests, 451 passed, 2 expected capability skips, and 0 failed; all 41 source Node test files passed. Python, public tree/history, runtime projection, release artifact, Windows x64, macOS arm64, Linux lifecycle, and Security policy gates also passed.
 
-| Area | v0.2.1 | v0.2.2 | User impact |
-| --- | --- | --- | --- |
-| HWP/HWPX policy | HWP read-only and HWPX write | Unchanged | Existing document workflows remain compatible |
-| Document operations | Nine default MCP tools | Nine internal one-shot contracts retained; optional manual MCP compatibility retains all nine | No document operation was removed |
-| Document-size guidance | A 512 MiB outer ceiling and engine limits existed, but the verified support envelope was unclear | At most 100 MiB is CI-verified; over 100 through 512 MiB is non-guaranteed best effort | The support statement now matches actual evidence |
-| Installed-runtime initialization | A hosted Windows/macOS temporary-path alias could stall verification | Reuses the ownership-verified canonical temporary root | More reliable installation and upgrade verification |
-| Diagnostics and privacy | Limited failure classification | Records only a bounded lifecycle boundary and stderr byte count | Diagnoses failures without user paths, PIDs, or document content |
-| Child-process cleanup | Focused on whether termination completed | Validates registered and remaining process counts | More strictly detects Node children left after document work |
-| Idle lifecycle | A default MCP server could remain active with its host | No default MCP server; one process per operation | Zero persistent Gpt_Codex_HWP Node processes when unused |
+## User resource statement
 
-## User resource-use note
-
-The verified resource claim is intentionally narrow: when unused, this plugin has zero persistent Gpt_Codex_HWP Node processes. No fixed RSS percentage or installation-size reduction is claimed.
-
-## Retained one-shot contracts and optional manual MCP tools
-
-`hwp_detect_format`, `hwp_read`, `hwp_generate_hwpx`, `hwp_validate`, `hwp_render_preview`, `hwp_patch_document`, `hwp_fill_form`, `hwp_create_svg_asset`, `hwp_insert_image`
-
-## Current verification evidence
-
-- Clean public-lineage local scan: the public tree and all reachable Git history passed without personal identity, credential, or private-path findings.
-- The complete repository and source Node suites and the Python safe-edit suite passed.
-- Runtime projection for 119 files, project metadata, and source/public-runtime dependency contracts were verified.
-- The installed-runtime one-shot generated an HWPX, validated it, and confirmed zero remaining supervised descendants.
-- Source and public-runtime `npm audit --omit=dev`: zero known vulnerabilities.
-- Remote repository policy: `compliant` for protected main, immutable tags, and owner-only writes.
-
-Before release, the final candidate must pass Windows x64, macOS arm64, Linux lifecycle, and Security policy; the three-platform 100 MiB production one-shot smoke at the exact merged commit; and release-candidate, artifact, and attestation verification against the immutable `v0.2.2` tag.
+There are zero persistent Gpt_Codex_HWP Node processes while the plugin is idle. Serial repository tests reduce concurrent Node processes in CI and development validation; they do not establish lower fixed RSS or installation size for user document work. No fixed RSS percentage or installation-size reduction is claimed.
 
 ## Installation and upgrade
 
-After the final release is published, pin immutable tag `v0.2.2` instead of the moving `main` branch. Validate the returned `installedPath` and plugin ID, then run from that validated directory:
+When installing v0.2.3, first validate the returned `installedPath` against the path and plugin-identity rules, then run from that path:
 
 ```powershell
-npm ci --omit=dev --ignore-scripts
-npm audit --omit=dev
+node dist/install-runtime.js --json
+node dist/doctor.js --json
 ```
 
-Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that `/mcp` has no default `gpt-codex-hwp` registration, run one document operation and require it to succeed, verify the generated output, and confirm that its one-shot process and its descendants exit. Do not remove an existing working installation until the new installation passes validation.
+The first command must return JSON `code` `RUNTIME_INSTALL_OK`. Fully close and reopen every active Codex CLI and Desktop host. Run one document operation, require it to succeed, verify the generated output, and confirm that the one-shot process and its descendants exit. Document operations never install dependencies automatically; on `RUNTIME_NOT_INSTALLED`, explicitly rerun the installer from the validated `installedPath`. The v0.2.2 direct installation inside the managed cache was not durable across cache rehydration, so keep the older working version until v0.2.3 passes the restart check.
+
+Production dependencies remain at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>`. To clean up after removing a plugin, close every Codex host and manually remove only the exact full-plugin-version directory that is no longer used. This release intentionally provides no automatic recursive deletion command.
 
 ## Compatibility and known limitations
 
-- Development and real-document functional validation were performed on Windows x64.
-- macOS Apple Silicon is a hosted-runner compatibility target, but Codex Desktop and Hancom Office Hangul remain unverified on a physical Mac.
-- HWP 5.x is read-only; HWP 3.x has no real fixture and is not guaranteed.
-- The plugin does not bundle, install, or embed fonts. Rendering and line breaks depend on system fonts.
-- Protected, encrypted, signed, and DRM documents are rejected rather than bypassed.
-- Inline Markdown is capped at 64,000 characters, derived Markdown at 256 MiB, and the serialized MCP result at 8 MiB.
-- Stricter engine policies may apply first, including Kordoc's 100 MiB decompression and 500-entry HWPX limits.
+- Development and real HWP/HWPX validation were performed on Windows x64.
+- macOS Apple Silicon is a compatibility target, but Codex Desktop and Hancom Office Hangul remain unverified on a physical Mac.
+- HWP 5.x is read-only and generated or edited results are HWPX. HWP 3.x has no real fixture and is not guaranteed.
+- Documents through 100 MiB are in the CI-verified envelope. Over 100 MiB through 512 MiB is non-guaranteed best-effort; over 512 MiB is rejected.
+- Protected, encrypted, signed, and DRM documents are not bypassed.
+- Font files are not bundled, installed, or embedded.
 
 ## License and acknowledgements
 
-Project code is released under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and all other third-party components remain under their authors' copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for exact versions, scope, and notices.
+Project code is distributed under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and other third-party components remain under their original copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-These are the final release notes for `v0.2.2`.
+These notes accompany the `v0.2.3` release.

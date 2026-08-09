@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import * as doctorModule from "../src/doctor.js";
+import * as doctorModule from "../src/doctor-main.js";
 
 import {
   DOCTOR_SCHEMA_VERSION,
@@ -14,7 +14,7 @@ import {
   runDoctor,
   type BoundedCommandSpec,
   type DoctorDependencies,
-} from "../src/doctor.js";
+} from "../src/doctor-main.js";
 import { DOCTOR_RUNNER_READY } from "../src/workers/doctor-command-runner.js";
 import {
   superviseDocumentProcessTreeWithForcedTrackerForTest,
@@ -52,7 +52,7 @@ test("doctor contract reports safe required and optional capability results", as
   assert.deepEqual(commands.map(({ command, args }) => [command, args]), [
     ["node", ["npm-cli.js", "--version"]],
     ["python", ["--version"]],
-    ["node", ["npm-cli.js", "ls", "--omit=dev", "--json", "--depth=0"]],
+    ["node", ["npm-cli.js", "ls", "--omit=dev", "--json", "--depth=0", "--install-links=true"]],
   ]);
   for (const command of commands) {
     assert.equal(command.shell, false);
@@ -239,6 +239,29 @@ test("doctor registration probe rejects wrong missing duplicate extra and throwi
 
 test("doctor registration probe lists the actual private in-process MCP registry", async () => {
   assert.deepEqual(await doctorModule.probeRegisteredToolsInProcess(), TOOL_NAMES);
+});
+
+test("doctor rejects registered tool input schema drift", async () => {
+  const fixture = passingDependencies();
+  const catalog = JSON.parse(await readFile(
+    new URL("../examples/oneshot-tool-schemas.json", import.meta.url),
+    "utf8",
+  )) as { tools: Record<string, unknown> };
+  const dependencies = fixture.dependencies as DoctorDependencies & {
+    probeRegisteredToolSchemas?: () => Promise<readonly { readonly name: string; readonly inputSchema: unknown }[]>;
+  };
+  dependencies.probeRegisteredToolSchemas = async () => TOOL_NAMES.map((name) => ({
+    name,
+    inputSchema: name === "hwp_read" ? { type: "object" } : catalog.tools[name],
+  }));
+  dependencies.readJson = async (path) => path === "examples/oneshot-tool-schemas.json"
+    ? structuredClone(catalog)
+    : fixture.readJson(path);
+
+  const report = await runDoctor(dependencies);
+
+  assert.equal(report.ok, false);
+  assert.ok(report.checks.some((check) => check.code === "MCP_TOOL_COUNT_INVALID"));
 });
 
 test("doctor runtime access rejects linked file and directory ancestors without reading outside bytes", async (t) => {
