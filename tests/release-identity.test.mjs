@@ -8,12 +8,12 @@ import { loadProjectMetadata, pluginVersion } from "../scripts/project-metadata.
 
 const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const IMMUTABLE_RELEASES = Object.freeze([
-  "0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.1", "0.2.2", "0.2.3",
+  "0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.2.4",
 ]);
-const PREVIOUS_BUILD_ID = "20260808100029";
-const EXPECTED_BUILD_ID = "20260809212902";
+const PREVIOUS_BUILD_ID = "20260809212902";
+const EXPECTED_BUILD_ID = "20260809232847";
 
-test("release identity derives every 0.2.4 release surface from root metadata", async () => {
+test("release identity derives every 0.2.5 release surface from root metadata", async () => {
   const metadata = await loadProjectMetadata(ROOT);
   const expectedPluginVersion = pluginVersion(metadata);
   const rootPackage = await readJson("package.json");
@@ -34,19 +34,19 @@ test("release identity derives every 0.2.4 release surface from root metadata", 
   ].map(readText));
   const contributing = await readText("CONTRIBUTING.md");
 
-  assert.equal(rootPackage.version, "0.2.4");
+  assert.equal(rootPackage.version, "0.2.5");
   assert.equal(metadata.version, rootPackage.version);
   assert.match(metadata.codexBuildId, /^[0-9]{14}$/u);
   assert.equal(metadata.codexBuildId, EXPECTED_BUILD_ID);
   assert.ok(BigInt(metadata.codexBuildId) > BigInt(PREVIOUS_BUILD_ID));
-  assert.equal(expectedPluginVersion, `0.2.4+codex.${metadata.codexBuildId}`);
+  assert.equal(expectedPluginVersion, `0.2.5+codex.${metadata.codexBuildId}`);
   assert.equal(sourcePackage.version, metadata.version);
   assert.equal(sourceLock.version, metadata.version);
   assert.equal(sourceLock.packages[""].version, metadata.version);
   assert.equal(runtimePackage.version, metadata.version);
   assert.equal(runtimeLock.version, metadata.version);
   assert.equal(runtimeLock.packages[""].version, metadata.version);
-  assert.equal(plugin.version, `0.2.4+codex.${EXPECTED_BUILD_ID}`);
+  assert.equal(plugin.version, `0.2.5+codex.${EXPECTED_BUILD_ID}`);
   assert.match(generated, new RegExp(`version: ${JSON.stringify(metadata.version)}`));
   assert.match(runtimeGenerated, new RegExp(`version: ${JSON.stringify(metadata.version)}`));
 
@@ -69,25 +69,26 @@ test("release identity derives every 0.2.4 release surface from root metadata", 
     assert.ok(!expectedPluginVersion.startsWith(`${immutable}+`));
   }
   for (const document of releaseDocs.slice(0, 4)) {
-    assert.match(document, /v?0\.2\.4/u);
+    assert.match(document, /v?0\.2\.5/u);
   }
-  assert.match(releaseDocs[0], /## v0\.2\.4 릴리즈/u);
-  assert.doesNotMatch(releaseDocs[0], /## v0\.2\.4 릴리즈 후보/u);
-  assert.match(releaseDocs[1], /## v0\.2\.4 Release/u);
-  assert.doesNotMatch(releaseDocs[1], /## v0\.2\.4 Release Candidate/u);
+  assert.match(releaseDocs[0], /## v0\.2\.5 릴리즈/u);
+  assert.doesNotMatch(releaseDocs[0], /## v0\.2\.5 릴리즈 후보/u);
+  assert.match(releaseDocs[1], /## v0\.2\.5 Release/u);
+  assert.doesNotMatch(releaseDocs[1], /## v0\.2\.5 Release Candidate/u);
   assert.match(releaseDocs[2], /상태: 정식 릴리즈/u);
   assert.match(releaseDocs[3], /Status: final release/iu);
+  assert.match(releaseDocs[4], /^## \[0\.2\.5\] - 2026-08-10$/mu);
   assert.match(releaseDocs[4], /^## \[0\.2\.4\] - 2026-08-09$/mu);
   assert.match(releaseDocs[4], /^## \[0\.2\.3\] - 2026-08-08$/mu);
   assert.match(releaseDocs[4], /^## \[0\.2\.2\] -/mu);
   assert.match(releaseDocs[0], /macOS[^\n]+실제 (?:Mac )?기기[^\n]+(?:미검증|아직 검증하지 않았)/u);
   assert.match(releaseDocs[1], /macOS[^\n]+physical Mac[^\n]+unverified/iu);
 
-  const stableKo = markdownSection(releaseDocs[0], "## 안정 버전 v0.2.4 GitHub 설치", "## 설치 및 마이그레이션");
-  const stableEn = markdownSection(releaseDocs[1], "## Stable v0.2.4 installation from GitHub", "## Installation and Migration");
+  const stableKo = markdownSection(releaseDocs[0], "## 안정 버전 v0.2.5 GitHub 설치", "## 설치 및 마이그레이션");
+  const stableEn = markdownSection(releaseDocs[1], "## Stable v0.2.5 installation from GitHub", "## Installation and Migration");
   for (const stable of [stableKo, stableEn]) {
-    assert.match(stable, /--ref v0\.2\.4/u);
-    assert.match(stable, /0\.2\.4\+codex\.20260809212902/u);
+    assert.match(stable, /--ref v0\.2\.5/u);
+    assert.match(stable, /0\.2\.5\+codex\.20260809232847/u);
     assert.match(stable, /dist\/oneshot\.js/u);
     assert.match(stable, /examples\/oneshot-tool-schemas\.json/u);
     assert.match(stable, /dist\/mcp\.js/u);
@@ -98,8 +99,8 @@ test("release identity derives every 0.2.4 release surface from root metadata", 
     assert.doesNotMatch(stable, /npm ci --omit=dev --ignore-scripts/u);
     assert.doesNotMatch(stable, /\.mcp\.json/u);
   }
-  assert.doesNotMatch(releaseDocs[0], /## 로컬 v0\.2\.4 릴리즈 후보 검증/u);
-  assert.doesNotMatch(releaseDocs[1], /## Local v0\.2\.4 release-candidate verification/u);
+  assert.doesNotMatch(releaseDocs[0], /## 로컬 v0\.2\.5 릴리즈 후보 검증/u);
+  assert.doesNotMatch(releaseDocs[1], /## Local v0\.2\.5 release-candidate verification/u);
   assert.match(stableKo, /\/mcp[^\n]+기본[^\n]+등록되지 않/u);
   assert.match(stableEn, /\/mcp[^\n]+no default/iu);
   assert.match(stableKo, /새 작업만으로는 충분하지 않/u);
@@ -120,11 +121,11 @@ test("release identity derives every 0.2.4 release surface from root metadata", 
     assert.match(readme, /성공 후에만|Only after success/iu);
   }
   for (const required of [
-    "git rev-parse 'v0.2.4^{commit}'",
-    "release_ref=v0.2.4",
-    "release_version=0.2.4",
-    "gpt-codex-hwp-0.2.4.zip",
-    "gpt-codex-hwp-0.2.4.spdx.json",
+    "git rev-parse 'v0.2.5^{commit}'",
+    "release_ref=v0.2.5",
+    "release_version=0.2.5",
+    "gpt-codex-hwp-0.2.5.zip",
+    "gpt-codex-hwp-0.2.5.spdx.json",
     "provenance.json",
     "SHA256SUMS",
   ]) assert.ok(contributing.includes(required), `missing release handoff contract: ${required}`);
@@ -160,12 +161,12 @@ test("release identity derives every 0.2.4 release surface from root metadata", 
     assert.doesNotMatch(notes, /44\.\d+\s*MiB|0\.6%/u);
   }
 
-  const unreleased = markdownSection(releaseDocs[4], "## [Unreleased]", "## [0.2.4]");
+  const unreleased = markdownSection(releaseDocs[4], "## [Unreleased]", "## [0.2.5]");
   assert.equal(unreleased.trim(), "## [Unreleased]");
-  const currentRelease = markdownSection(releaseDocs[4], "## [0.2.4]", "## [0.2.3]");
-  assert.match(currentRelease, /stderr byte count within the existing bound/u);
+  const currentRelease = markdownSection(releaseDocs[4], "## [0.2.5]", "## [0.2.4]");
+  assert.match(currentRelease, /bounded per-file runner/u);
   assert.match(currentRelease, /User runtime and tool behavior are unchanged/u);
-  const unpublishedCandidate = markdownSection(releaseDocs[4], "## [0.2.3]", "## [0.2.2]");
+  const unpublishedCandidate = markdownSection(releaseDocs[4], "## [0.2.4]", "## [0.2.3]");
   assert.match(unpublishedCandidate, /unpublished candidate/u);
   assert.match(unpublishedCandidate, /no GitHub Release[\s\S]+distribution assets/iu);
 });

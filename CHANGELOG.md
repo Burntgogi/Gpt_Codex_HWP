@@ -4,10 +4,23 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-10
+
+- Replaced the monolithic release Node test stage with a bounded per-file runner
+  over the exact 26 repository and 41 source test files. Inventory drift fails
+  closed, fixed privacy-safe receipts are preserved, and no tests or coverage
+  were removed.
+- Reused the bounded Windows descendant-tree terminator for every isolated Node
+  and SVG path and now waits for both child close and termination settlement.
+- Made the synthetic Git-history mode-120000 checkout independent of the host's
+  `core.symlinks` setting without weakening the committed-tree policy check.
+- User runtime and tool behavior are unchanged from the v0.2.4 candidate.
+
 ## [0.2.4] - 2026-08-09
 
-- Superseded the immutable, unpublished v0.2.3 candidate; no GitHub Release or
-  distribution assets were created for v0.2.3.
+- Preserved this immutable tag as an unpublished candidate after the hosted
+  Windows release gate exposed another execution-portability boundary; no GitHub Release or distribution assets were created for v0.2.4.
+- Superseded the immutable, unpublished v0.2.3 candidate without publishing it.
 - Made the installed-runtime failure receipt portable by validating its
   environment-dependent stderr byte count within the existing bound instead of
   requiring one exact value. User runtime and tool behavior are unchanged from
@@ -91,7 +104,8 @@ This file records release tags and their publication status. Work under `Unrelea
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...v0.2.2

@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
-  <img alt="Release v0.2.4" src="https://img.shields.io/badge/release-v0.2.4-2EA44F">
+  <img alt="Release v0.2.5" src="https://img.shields.io/badge/release-v0.2.5-2EA44F">
   <img alt="Node.js 22 이상" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
   <a href="LICENSE"><img alt="Apache-2.0 라이선스" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -18,7 +18,7 @@
   <a href="README.md">한국어</a> ·
   <a href="README.en.md">English</a> ·
   <a href="#실제-hwpx-결과">결과 보기</a> ·
-  <a href="#안정-버전-v024-github-설치">빠른 설치</a> ·
+  <a href="#안정-버전-v025-github-설치">빠른 설치</a> ·
   <a href="#형식-지원">지원 범위</a> ·
   <a href="#안전">보안</a>
 </p>
@@ -27,13 +27,13 @@
 
 Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
 
-## v0.2.4 릴리즈
+## v0.2.5 릴리즈
 
-`v0.2.4`는 `v0.2.2`의 문서 기능과 one-shot 도구 9개를 유지하면서 릴리스 Node 테스트를 직렬화하고, Codex 관리 캐시 밖에 검증된 플랫폼별 런타임을 설치해 캐시 재생성 후에도 작동하도록 합니다. hosted Windows의 임시 경로 별칭을 정규화하고, 환경에 따라 달라지는 stderr 바이트 수는 경계 내 값으로 검증해 릴리스 검사를 이식 가능하게 만들었습니다. worker-only·child-only·mixed 종료 영수증은 fail-closed로 집계해 감독된 나머지 프로세스 트리 0개를 확인합니다. 문서 작업 중에는 의존성을 자동 설치하거나 네트워크에 접속하지 않으며, 실패 시 원시 오류·경로·문서 내용을 노출하지 않습니다. `v0.2.3` 후보와 비교해 사용자 런타임이나 도구 동작은 바뀌지 않았습니다. 개발과 실제 문서 검증은 Windows x64 기반으로 수행했으며, macOS Apple Silicon hosted CI는 통과했지만 실제 Mac 기기의 Codex Desktop·한컴오피스 한글 사용은 아직 검증하지 않았습니다.
+`v0.2.5`는 `v0.2.2`에서 준비한 HWP 읽기 전용·HWPX 쓰기 원칙, 명시적 지속 런타임 설치와 one-shot 도구 9개를 그대로 유지합니다. hosted Windows에서 누적 테스트 실행이 불안정했던 릴리스 게이트를 루트 테스트 26개와 소스 테스트 41개의 정확한 전체 목록을 사용하는 파일별 제한·격리 실행으로 바꿨습니다. 목록 차이는 fail-closed로 거부하고, 실패 정보는 고정된 비공개 안전 영수증만 남기며, Windows 하위 프로세스 트리도 제한 시간 안에 종료·회수합니다. 테스트를 삭제하거나 검증 범위를 줄이지 않았고 `v0.2.4` 후보 대비 사용자 런타임·도구·문서 동작은 바뀌지 않았습니다. 개발과 실제 문서 검증은 Windows x64 기반으로 수행했으며, macOS Apple Silicon CI는 현재 HEAD의 성공 영수증으로만 판정합니다. 실제 Mac 기기의 Codex Desktop·한컴오피스 한글 사용은 아직 검증하지 않았습니다.
 
 ## 이전 릴리즈
 
-`v0.2.3`은 불변 태그로 보존한 미게시 후보이며 GitHub Release와 배포 자산은 만들지 않았습니다. `v0.2.2`는 HWP 읽기 전용·HWPX 쓰기, 기본 one-shot 실행과 100 MiB CI 검증 범위를 도입한 이전 공개 안정 릴리즈입니다. 자세한 이력은 [CHANGELOG](CHANGELOG.md)와 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있습니다.
+`v0.2.3`과 `v0.2.4`는 불변 미게시 후보 태그이며, 어느 태그에도 GitHub Release나 배포 자산이 없습니다. `v0.2.2`는 HWP 읽기 전용·HWPX 쓰기, 기본 one-shot 실행과 100 MiB CI 검증 범위를 도입한 이전 공개 안정 릴리즈입니다. 자세한 이력은 [CHANGELOG](CHANGELOG.md)와 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있습니다.
 
 ## 기능
 
@@ -94,19 +94,19 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 `v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 GitHub 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4)를 참조하십시오.
 
-## 안정 버전 v0.2.4 GitHub 설치
+## 안정 버전 v0.2.5 GitHub 설치
 
-`v0.2.4`는 현재 권장 공개 릴리즈입니다. `v0.1.0`부터 `v0.2.2`까지는 과거 릴리스로 유지됩니다. `v0.2.3`은 릴리스 검증의 이식성 문제를 확인한 뒤 불변 태그로만 보존한 미게시 후보이며 GitHub Release와 배포 자산은 없습니다. `v0.2.0`도 게시 전에 철회된 후보입니다. 새 설치는 `v0.2.4` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
+`v0.2.5`는 현재 권장 공개 릴리즈입니다. `v0.1.0`부터 `v0.2.2`까지는 과거 릴리스로 유지됩니다. `v0.2.3`과 `v0.2.4`는 릴리스 검증 이식성 문제를 바로잡는 동안 불변 태그로만 보존한 미게시 후보이며 GitHub Release와 배포 자산은 없습니다. `v0.2.0`도 게시 전에 철회된 후보입니다. 새 설치는 `v0.2.5` 태그를 사용하고 [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오.
 
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
-> `Burntgogi/Gpt_Codex_HWP`의 최신 공개 릴리스 `v0.2.4`를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 명시적 런타임 설치기와 `doctor`를 실행하세요. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 열고 `/mcp`에 기본 `gpt-codex-hwp`가 등록되지 않는지와 문서 작업 후 one-shot 프로세스가 종료되는지 확인해 주세요.
+> `Burntgogi/Gpt_Codex_HWP`의 최신 공개 릴리스 `v0.2.5`를 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 명시적 런타임 설치기와 `doctor`를 실행하세요. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 열고 `/mcp`에 기본 `gpt-codex-hwp`가 등록되지 않는지와 문서 작업 후 one-shot 프로세스가 종료되는지 확인해 주세요.
 
 1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
 2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.4 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.5 --json
 ```
 
 반환된 JSON의 `marketplaceName`이 `gpt-codex-hwp-local`인지 확인합니다.
@@ -118,7 +118,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp@gpt-codex-hwp-local`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 이번 릴리스의 전체 플러그인 버전은 `0.2.4+codex.20260809212902`입니다. 런타임에는 `.codex-plugin/plugin.json`, `runtime-manifest.json`, `package.json`, `package-lock.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, `examples/mcp-manual.json`이 모두 있어야 하고, `.codex-plugin/plugin.json`의 `skills`는 `./skills/`이며 `mcpServers` 속성은 없어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
+4. 설치 JSON의 `pluginId`가 `gpt-codex-hwp@gpt-codex-hwp-local`이고 `version`이 비어 있지 않은지 확인합니다. `installedPath`가 절대 경로이고 실제 디렉터리이며, 경로 끝이 `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` 구조인지 확인합니다. 이번 릴리스의 전체 플러그인 버전은 `0.2.5+codex.20260809232847`입니다. 런타임에는 `.codex-plugin/plugin.json`, `runtime-manifest.json`, `package.json`, `package-lock.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, `examples/mcp-manual.json`이 모두 있어야 하고, `.codex-plugin/plugin.json`의 `skills`는 `./skills/`이며 `mcpServers` 속성은 없어야 합니다. JSON 문자열을 명령으로 평가하거나 예상 밖의 경로에서 npm을 실행하지 않습니다.
 5. 검증한 정확한 경로에서 플랫폼 런타임을 설치하고 진단합니다. Windows x64에서 설치된 운영 의존성은 64 MiB 이하인지 확인합니다.
 
 ```powershell
@@ -173,11 +173,11 @@ codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.2 --json
 $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
 ```
 
-반환된 `version`과 `installedPath`가 v0.2.2의 실제 설치 디렉터리를 가리키는지 검증하고, 공개 v0.2.2 안내의 잠금 파일 설치·doctor·문서 스모크를 완료하십시오. 롤백 성공이 확인되기 전에는 새 런타임을 지우지 마십시오. 성공 후에만 더 이상 사용하지 않는 정확한 `0.2.4+codex.20260809212902` 지속 런타임 디렉터리를 확인해 수동으로 제거합니다.
+반환된 `version`과 `installedPath`가 v0.2.2의 실제 설치 디렉터리를 가리키는지 검증하고, 공개 v0.2.2 안내의 잠금 파일 설치·doctor·문서 스모크를 완료하십시오. 롤백 성공이 확인되기 전에는 새 런타임을 지우지 마십시오. 성공 후에만 더 이상 사용하지 않는 정확한 `0.2.5+codex.20260809232847` 지속 런타임 디렉터리를 확인해 수동으로 제거합니다.
 
 ## 지속 런타임 저장과 제거
 
-v0.2.4의 운영 의존성은 Codex 관리 캐시가 아니라 `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<전체-플러그인-버전>/<platform>-<arch>-node<Node-주버전>`에 저장됩니다. 예를 들어 Windows x64의 Node.js 22 런타임 키는 `win32-x64-node22`입니다. 같은 Codex 프로필에서도 Node 주버전별 런타임은 서로 교체하지 않고 공존합니다.
+v0.2.5의 운영 의존성은 Codex 관리 캐시가 아니라 `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<전체-플러그인-버전>/<platform>-<arch>-node<Node-주버전>`에 저장됩니다. 예를 들어 Windows x64의 Node.js 22 런타임 키는 `win32-x64-node22`입니다. 같은 Codex 프로필에서도 Node 주버전별 런타임은 서로 교체하지 않고 공존합니다.
 
 현재 Windows x64 검증에서 런타임 하나는 약 47~51 MiB였지만 플랫폼과 npm에 따라 달라질 수 있습니다. 플러그인 제거가 이 캐시 밖의 데이터를 자동으로 지운다고 가정하지 마십시오. 정리할 때는 모든 Codex CLI와 Desktop 호스트를 완전히 종료하고, 더 이상 사용하지 않는 정확한 `<전체-플러그인-버전>` 디렉터리만 확인해 수동으로 제거하십시오. 모든 Gpt_Codex_HWP 버전을 제거한 경우에만 상위 `gpt-codex-hwp` 런타임 데이터 디렉터리 전체를 제거할 수 있습니다. 나중에 다시 설치하면 검증된 `installedPath`에서 `node dist/install-runtime.js --json`을 실행해 런타임을 재생성합니다.
 
