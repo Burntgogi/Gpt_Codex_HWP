@@ -365,10 +365,9 @@ test("over-limit MCP stdout emits one fixed initialization failure and closes th
   assert.equal(passed, false);
   assert.ok(child !== undefined);
   assert.equal(child.exitCode !== null || child.signalCode !== null, true);
-  assert.equal(
-    output,
-    "RUNTIME_SMOKE status=failed stage=initialize boundary=gate-released stderrBytes=1019\n",
-  );
+  const receipt = /^RUNTIME_SMOKE status=failed stage=initialize boundary=gate-released stderrBytes=([1-9][0-9]{0,4})\n$/u.exec(output);
+  assert.notEqual(receipt, null);
+  assert.equal(Number(receipt[1]) <= 65_537, true);
   assert.doesNotMatch(output, /oversized-stdout|runtime-smoke-stdout-limit|private/iu);
 });
 

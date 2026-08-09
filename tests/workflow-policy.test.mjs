@@ -690,18 +690,9 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.equal(countMatches(build, /installed-runtime-smoke\.mjs --large-detect 100/gu), 1);
   assert.doesNotMatch(build, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
   assert.deepEqual(steps.filter((step) => step.includes("continue-on-error: true")), []);
-  const diagnostic = requiredStep(steps, "name: Diagnose failed installed-runtime smoke tests");
-  assert.match(diagnostic, /^        if: \$\{\{ failure\(\) && steps\.release_gate\.outcome == 'failure' \}\}$/mu);
-  assert.match(diagnostic, /^        timeout-minutes: 5$/mu);
-  const diagnosticCommand = "node --input-type=module -e \"import { spawn } from 'node:child_process'; import { mkdtemp, rm, writeFile } from 'node:fs/promises'; import { tmpdir } from 'node:os'; import { join } from 'node:path'; let stage='module',root,child,output='',result=false,childCreated=false,childClosed=false,receiptMatch=false,redacted=false,cleanup=false; try { const smoke=await import('./scripts/installed-runtime-smoke.mjs'); stage='root'; root=await mkdtemp(join(tmpdir(),'runtime-smoke-stdout-limit-')); stage='fixture'; const target=join(root,'oversized-stdout.mjs'); await writeFile(target,'process.stdout.write(Buffer.alloc(1024*1024,0x78));setInterval(()=>{},1000);\\n','utf8'); stage='run'; const value=await smoke.runInstalledRuntimeSmoke({runtimeRoot:join(process.cwd(),'plugins','gpt-codex-hwp'),createRuntimeSession:(spec,observers)=>smoke.createDefaultRuntimeSession({...spec,cwd:join(process.cwd(),'packages','gpt-codex-hwp'),args:[target]},observers,{spawnProcess(command,args,options){child=spawn(command,args,options);return child}}),stdout:{write(value){output+=value}},setExitCode(){}}); stage='checks'; result=value===false; childCreated=child!==undefined; childClosed=childCreated&&(child.exitCode!==null||child.signalCode!==null); receiptMatch=output==='RUNTIME_SMOKE status=failed stage=initialize boundary=gate-released stderrBytes=1019\\n'; redacted=!/oversized-stdout|runtime-smoke-stdout-limit|private/iu.test(output); stage='complete'; } catch {} finally { if(child!==undefined&&child.exitCode===null&&child.signalCode===null){try{child.kill();child.stdout?.destroy();child.stderr?.destroy();child.unref?.()}catch{}} if(root!==undefined){try{await rm(root,{recursive:true,force:true});cleanup=true}catch{}} } const passed=result&&childCreated&&childClosed&&receiptMatch&&redacted&&cleanup; console.log('RELEASE_RUNTIME_SMOKE_ASSERTION status='+(passed?'passed':'failed')+' stage='+stage+' result='+result+' childCreated='+childCreated+' childClosed='+childClosed+' receiptMatch='+receiptMatch+' redacted='+redacted+' cleanup='+cleanup); if(!passed) process.exitCode=1;\"";
-  assertExactInlineRun(
-    diagnostic,
-    diagnosticCommand,
-  );
-  assert.doesNotMatch(diagnostic, /run: node --test .*installed-runtime-smoke\.test\.mjs/u);
-  assert.deepEqual(steps.filter((step) => /^        if:/mu.test(step)), [diagnostic]);
+  assert.deepEqual(steps.filter((step) => /^        if:/mu.test(step)), []);
   assert.doesNotMatch(build, /^        shell:/mu);
-  const fullGate = requiredStep(steps, "id: release_gate");
+  const fullGate = requiredStep(steps, "run: npm run release:verify");
   assertExactInlineRun(fullGate, "npm run release:verify");
   assert.doesNotMatch(fullGate, /^        (?:continue-on-error|if|shell):/mu);
   assert.match(build, /npm run release:artifacts/u);
@@ -717,13 +708,11 @@ function assertReleaseWorkflowPolicy(workflow) {
   const canonicalTempStep = build.indexOf("name: Canonicalize Windows temporary root");
   const sourceInstall = build.indexOf("name: Install source dependencies without lifecycle scripts");
   const releaseGate = build.indexOf("npm run release:verify");
-  const releaseDiagnostic = build.indexOf("name: Diagnose failed installed-runtime smoke tests");
   const artifactBuild = build.indexOf("npm run release:artifacts");
   const artifactUpload = build.indexOf("name: gpt-codex-hwp-v${{ inputs.release_version }}-candidate");
   assert.equal(
     exactTag >= 0 && canonicalTempStep > exactTag && sourceInstall > canonicalTempStep && largeEvidence > sourceInstall
-      && largeEvidence < releaseGate && releaseGate < releaseDiagnostic
-      && releaseDiagnostic < artifactBuild && artifactBuild < artifactUpload,
+      && largeEvidence < releaseGate && releaseGate < artifactBuild && artifactBuild < artifactUpload,
     true,
     "large evidence and the full release gate must pass before building or uploading attested subjects",
   );
