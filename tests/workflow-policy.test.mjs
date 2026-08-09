@@ -690,9 +690,17 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.equal(countMatches(build, /installed-runtime-smoke\.mjs --large-detect 100/gu), 1);
   assert.doesNotMatch(build, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
   assert.deepEqual(steps.filter((step) => step.includes("continue-on-error: true")), []);
-  assert.deepEqual(steps.filter((step) => /^        if:/mu.test(step)), []);
+  const diagnostic = requiredStep(steps, "name: Diagnose failed installed-runtime smoke tests");
+  assert.match(diagnostic, /^        if: \$\{\{ failure\(\) && steps\.release_gate\.outcome == 'failure' \}\}$/mu);
+  assert.match(diagnostic, /^        timeout-minutes: 5$/mu);
+  assertExactInlineRun(
+    diagnostic,
+    "node --test --test-concurrency=1 tests/installed-runtime-smoke.test.mjs",
+  );
+  assert.deepEqual(steps.filter((step) => /^        if:/mu.test(step)), [diagnostic]);
   assert.doesNotMatch(build, /^        shell:/mu);
-  const fullGate = requiredStep(steps, "run: npm run release:verify");
+  const fullGate = requiredStep(steps, "id: release_gate");
+  assertExactInlineRun(fullGate, "npm run release:verify");
   assert.doesNotMatch(fullGate, /^        (?:continue-on-error|if|shell):/mu);
   assert.match(build, /npm run release:artifacts/u);
   assert.match(build, /npm run verify:release-artifacts/u);
@@ -707,11 +715,13 @@ function assertReleaseWorkflowPolicy(workflow) {
   const canonicalTempStep = build.indexOf("name: Canonicalize Windows temporary root");
   const sourceInstall = build.indexOf("name: Install source dependencies without lifecycle scripts");
   const releaseGate = build.indexOf("npm run release:verify");
+  const releaseDiagnostic = build.indexOf("name: Diagnose failed installed-runtime smoke tests");
   const artifactBuild = build.indexOf("npm run release:artifacts");
   const artifactUpload = build.indexOf("name: gpt-codex-hwp-v${{ inputs.release_version }}-candidate");
   assert.equal(
     exactTag >= 0 && canonicalTempStep > exactTag && sourceInstall > canonicalTempStep && largeEvidence > sourceInstall
-      && largeEvidence < releaseGate && releaseGate < artifactBuild && artifactBuild < artifactUpload,
+      && largeEvidence < releaseGate && releaseGate < releaseDiagnostic
+      && releaseDiagnostic < artifactBuild && artifactBuild < artifactUpload,
     true,
     "large evidence and the full release gate must pass before building or uploading attested subjects",
   );

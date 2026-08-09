@@ -68,7 +68,12 @@ jobs:
         timeout-minutes: 30
         run: node scripts/installed-runtime-smoke.mjs --large-detect 100
       - name: Run the complete fail-closed release gate
+        id: release_gate
         run: npm run release:verify
+      - name: Diagnose failed installed-runtime smoke tests
+        if: ${{ failure() && steps.release_gate.outcome == 'failure' }}
+        timeout-minutes: 5
+        run: node --test --test-concurrency=1 tests/installed-runtime-smoke.test.mjs
       - name: Build checksummed candidate outputs
         env:
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts
