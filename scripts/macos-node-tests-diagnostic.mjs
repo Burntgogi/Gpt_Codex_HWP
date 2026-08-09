@@ -432,9 +432,11 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     let documentReceipt;
     const testTimeoutMs = boundedTimeout(
       options.testTimeoutMs,
-      file === "document-worker-operations.test.ts"
-        ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
-        : DEFAULT_TEST_TIMEOUT_MS,
+      file === "document-child-client.test.ts"
+        ? DOCUMENT_PROCESS_TEST_TIMEOUT_MS
+        : file === "document-worker-operations.test.ts"
+          ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
+          : DEFAULT_TEST_TIMEOUT_MS,
     );
     const testSkipPattern = profilePlan.skipPatternFor(file);
     try {

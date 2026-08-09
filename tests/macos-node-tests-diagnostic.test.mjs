@@ -113,13 +113,17 @@ test("macOS Node diagnostic accepts capability skips when every executed test pa
   assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=41\n");
 });
 
-test("source Node diagnostic gives only document worker operations the measured extended bound", async () => {
+test("source Node diagnostic gives document lifecycle files their measured extended bounds", async () => {
   let ordinaryTimeout;
+  let documentChildTimeout;
   let documentWorkerTimeout;
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file, fileOptions) => {
       if (file === "allowed-roots.test.ts") ordinaryTimeout = fileOptions?.testTimeoutMs;
+      if (file === "document-child-client.test.ts") {
+        documentChildTimeout = fileOptions?.testTimeoutMs;
+      }
       if (file === "document-worker-operations.test.ts") {
         documentWorkerTimeout = fileOptions?.testTimeoutMs;
       }
@@ -130,6 +134,7 @@ test("source Node diagnostic gives only document worker operations the measured 
   });
   assert.equal(passed, false);
   assert.equal(ordinaryTimeout, 120_000);
+  assert.equal(documentChildTimeout, 300_000);
   assert.equal(documentWorkerTimeout, 600_000);
   assert.equal(output, "MAC_NODE_TEST_FILE file=files.test.ts status=failed\n");
 });
