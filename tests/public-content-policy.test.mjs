@@ -441,6 +441,8 @@ test("Git history document exception requires the allowlisted bytes in a regular
   ];
   for (const [index, { expected, mode, bytes }] of cases.entries()) {
     const root = await temporaryGitRepository(t, `public-history-fixture-blob-${index}-`);
+    // Reproduce a hostile checkout default; the reset below must stay command-scoped.
+    if (mode === "120000") git(root, ["config", "--local", "core.symlinks", "true"]);
     const parent = await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
     const blob = gitInput(root, ["hash-object", "-w", "--stdin"], bytes).trim();
     const rootTree = treeWithEntryAtPath(
@@ -451,7 +453,7 @@ test("Git history document exception requires the allowlisted bytes in a regular
       blob,
     );
     const commit = gitInput(root, ["commit-tree", rootTree, "-p", parent], "fixture blob\n").trim();
-    git(root, ["reset", "--hard", "-q", commit]);
+    git(root, ["-c", "core.symlinks=false", "reset", "--hard", "-q", commit]);
 
     const result = await scanPublicHistory(syntheticHistoryOptions(root));
     if (expected === "passed") {

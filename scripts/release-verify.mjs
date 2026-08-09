@@ -17,6 +17,7 @@ import {
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_STAGE_TIMEOUT_MS = 15 * 60 * 1_000;
+const NODE_TEST_STAGE_TIMEOUT_MS = 20 * 60 * 1_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const VERSION_TIMEOUT_MS = 10_000;
 const VERSION_MAX_OUTPUT_BYTES = 4 * 1024;
@@ -84,7 +85,9 @@ export async function runReleaseVerification(options = {}) {
     throw releaseError("RELEASE_VERIFY_RUNNER_INVALID");
   }
   const runStage = injectedRunner ?? ((stage) => runStageCommand(stage, {
-    timeoutMs: DEFAULT_STAGE_TIMEOUT_MS,
+    timeoutMs: stage.name === "node-tests"
+      ? NODE_TEST_STAGE_TIMEOUT_MS
+      : DEFAULT_STAGE_TIMEOUT_MS,
     maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
     expectedSourceIdentity: beforeIdentity,
   }));
@@ -271,6 +274,11 @@ function failedStageOutcome(stageName, commandIndex, result) {
 
 function selectNodeTestFailureDiagnostic(result) {
   const output = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replaceAll("\r\n", "\n");
+  const isolatedReceipt = output.split("\n").map((line) => line.trim())
+    .findLast((line) => isSafeIsolatedNodeTestReceipt(line));
+  if (isolatedReceipt !== undefined) {
+    return Object.freeze({ kind: "node-tests-runner", receipt: isolatedReceipt });
+  }
   const failure = /^not ok ([1-9][0-9]{0,5}) - /mu.exec(output);
   if (failure !== null) {
     const headers = [...output.matchAll(
@@ -286,6 +294,14 @@ function selectNodeTestFailureDiagnostic(result) {
     kind: "node-tests-runner",
     receipt: `NODE_TEST_RUNNER_${runnerFailureKind(result)}`,
   });
+}
+
+function isSafeIsolatedNodeTestReceipt(value) {
+  return /^WINDOWS_(?:REPOSITORY_TEST_INVENTORY|SOURCE_NODE_DIAGNOSTIC) status=failed$/u.test(value)
+    || /^WINDOWS_REPOSITORY_TEST_CASE case=[a-z0-9-]{1,64} status=failed$/u.test(value)
+    || /^WINDOWS_REPOSITORY_TEST_FILE file=[a-z0-9-]{1,96}\.test\.mjs status=failed$/u.test(value)
+    || /^WINDOWS_NODE_TEST_CASE case=[a-z0-9-]{1,64} status=failed$/u.test(value)
+    || /^WINDOWS_NODE_TEST_FILE file=[a-z0-9-]{1,96}\.test\.ts status=failed$/u.test(value);
 }
 
 function selectDocumentBenchmarkFailureReceipt(result) {
@@ -363,7 +379,8 @@ function normalizedNodeTestDiagnostic(value) {
   if (Object.keys(value).sort().join(",") === "kind,receipt"
     && value.kind === "node-tests-runner"
     && typeof value.receipt === "string"
-    && /^NODE_TEST_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value.receipt)) {
+    && (/^NODE_TEST_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value.receipt)
+      || isSafeIsolatedNodeTestReceipt(value.receipt))) {
     return Object.freeze({ kind: "node-tests-runner", receipt: value.receipt });
   }
   return undefined;
@@ -776,7 +793,10 @@ function releaseStageDefinitions(root, environment) {
       ]),
       fixedCommand("npm", ["run", "build"]),
     ], root, none),
-    npmStage("node-tests", ["test"], root, requiredRhwp),
+    nodeStage("node-tests", [
+      "scripts/windows-node-tests-diagnostic.mjs",
+      "--profile=full",
+    ], root, requiredRhwp),
     npmStage("python-tests", ["run", "test:python"], root, none),
     npmStage("real-hwp", [
       "--prefix",

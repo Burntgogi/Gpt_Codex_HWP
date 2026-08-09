@@ -203,6 +203,39 @@ test("macOS SVG diagnostic output is fixed and redacts invalid diagnostic values
   );
 });
 
+test("Windows SVG failure diagnostic awaits bounded tree termination", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  let output = "";
+  let terminationFinished = false;
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "assets.test.ts",
+    runAssetsCase: async (record) => record.id !== "as03",
+    spawnProcess: () => {
+      queueMicrotask(() => child.stdout.emit("data", "PRIVATE/path"));
+      return child;
+    },
+    terminateTree: async () => {
+      child.emit("close", null, "SIGKILL");
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      terminationFinished = true;
+      return true;
+    },
+    closeTimeoutMs: 25,
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(terminationFinished, true);
+  assert.equal(
+    output,
+    "WINDOWS_SVG_ASSET boundary=diagnostic-failed\n"
+      + "WINDOWS_NODE_TEST_CASE case=as03 status=failed\n",
+  );
+  assert.doesNotMatch(output, /PRIVATE|[\\/]/u);
+});
+
 test("macOS Node diagnostic reports the fixed aggregate id when every assets case passes alone", async () => {
   let output = "";
   let cases = 0;
@@ -1233,6 +1266,7 @@ test("bounded Node runner returns the last allowlisted fixed progress diagnostic
 
 test("bounded Node runner classifies invalid stdout without exposing content", async () => {
   let runnerFailureKind;
+  let terminationFinished = false;
   const child = new EventEmitter();
   child.pid = 12345;
   child.stdout = new PassThrough();
@@ -1240,8 +1274,10 @@ test("bounded Node runner classifies invalid stdout without exposing content", a
   const passed = await executeBoundedNodeTestFile("fixture.test.mjs", {
     repository: true,
     spawnProcess: () => child,
-    terminateTree: () => {
+    terminateTree: async () => {
       child.emit("close", null, "SIGKILL");
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      terminationFinished = true;
       return true;
     },
     closeTimeoutMs: 25,
@@ -1249,6 +1285,7 @@ test("bounded Node runner classifies invalid stdout without exposing content", a
   });
   assert.equal(passed, false);
   assert.equal(runnerFailureKind, "invalid-chunk");
+  assert.equal(terminationFinished, true);
 });
 
 test("bounded Node runner reports definitive failure after provisional progress", async () => {

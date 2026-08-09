@@ -3,6 +3,50 @@ import test from "node:test";
 
 import { runWindowsNodeTestsDiagnostic } from "../scripts/windows-node-tests-diagnostic.mjs";
 
+const FULL_REPOSITORY_TEST_FILES = [
+  "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
+  "governance-docs.test.mjs", "installed-runtime-smoke.test.mjs",
+  "kordoc-runtime-ownership.test.mjs", "macos-node-tests-diagnostic.test.mjs",
+  "macos-posix-controls.test.mjs", "node-memory-gate.test.mjs",
+  "node-phase-a-evidence.test.mjs", "node-test-profiles.test.mjs",
+  "oneshot-process.test.mjs", "platform-receipts.test.mjs",
+  "project-metadata.test.mjs", "public-content-policy.test.mjs",
+  "python-tests-diagnostic.test.mjs", "release-identity.test.mjs",
+  "release-verify.test.mjs", "repository-layout.test.mjs",
+  "restart-safe-runtime.test.mjs", "run-node-memory-qualification.test.mjs",
+  "runtime-projection.test.mjs", "security-boundary-docs.test.mjs",
+  "source-node-tests-isolated.test.mjs", "windows-node-tests-diagnostic.test.mjs",
+  "workflow-policy.test.mjs",
+];
+
+test("full Windows Node diagnostic isolates the exact complete repository inventory", async () => {
+  const observed = [];
+  const passed = await runWindowsNodeTestsDiagnostic({
+    profile: "full",
+    runRepositoryFile: async (file) => { observed.push(file); return true; },
+    runSourceDiagnostic: async () => true,
+    listRepositoryTestFiles: async () => [...FULL_REPOSITORY_TEST_FILES],
+    stdout: { write() {} },
+    setExitCode() {},
+  });
+  assert.equal(passed, true);
+  assert.deepEqual(observed, FULL_REPOSITORY_TEST_FILES);
+});
+
+test("full Windows Node diagnostic fails closed on repository inventory drift", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    profile: "full",
+    runRepositoryFile: async () => true,
+    runSourceDiagnostic: async () => true,
+    listRepositoryTestFiles: async () => FULL_REPOSITORY_TEST_FILES.slice(1),
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_INVENTORY status=failed\n");
+});
+
 test("Windows Node diagnostic reports only the fixed failed repository filename", async () => {
   let output = "";
   let sourceCalls = 0;
@@ -54,7 +98,7 @@ test("Windows Node diagnostic gives only runtime projection a measured extended 
     },
     runRuntimeProjectionDiagnostic: async () => ({
       passed: false,
-      caseId: "rp25",
+      caseId: "rp32",
     }),
     stdout: { write() {} },
     setExitCode() {},
@@ -97,12 +141,12 @@ test("Windows Node diagnostic maps public-content failure to one bounded ordinal
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({
     runRepositoryFile: async (file) => file !== "public-content-policy.test.mjs",
-    runPublicContentDiagnostic: async () => "pc61",
+    runPublicContentDiagnostic: async () => "pc62",
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=pc61 status=failed\n");
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=pc62 status=failed\n");
 });
 
 test("Windows Node diagnostic preserves the bounded metadata stage from the public-content rerun", async () => {
@@ -230,12 +274,12 @@ test("Windows Node diagnostic maps runtime-projection failure to one bounded ord
   let output = "";
   const passed = await runWindowsNodeTestsDiagnostic({
     runRepositoryFile: async (file) => file !== "runtime-projection.test.mjs",
-    runRuntimeProjectionDiagnostic: async () => "rp25",
+    runRuntimeProjectionDiagnostic: async () => "rp32",
     stdout: { write: (value) => { output += value; } },
     setExitCode() {},
   });
   assert.equal(passed, false);
-  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=rp25 status=failed\n");
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=rp32 status=failed\n");
 });
 
 test("Windows Node diagnostic classifies a runtime-projection runner timeout", async () => {
