@@ -73,7 +73,7 @@ jobs:
       - name: Diagnose failed installed-runtime smoke tests
         if: ${{ failure() && steps.release_gate.outcome == 'failure' }}
         timeout-minutes: 5
-        run: node --test --test-concurrency=1 tests/installed-runtime-smoke.test.mjs
+        run: node --input-type=module -e "import { executeBoundedNodeTestFile as run } from './scripts/macos-node-tests-diagnostic.mjs'; let completion='unknown',failure='unknown',reason='unknown',origin='unknown',runner='unknown',ordinal=0; const passed=await run('installed-runtime-smoke.test.mjs',{repository:true,testNamePattern:'^over-limit MCP stdout emits one fixed initialization failure and closes the supervised root',maximumTopLevelTests:29,onCompletionKind:value=>{completion=value},onFailedTopLevelFailureKind:value=>{failure=value},onFailedTopLevelTestCodeReason:value=>{reason=value},onFailedTopLevelAssertionOrigin:value=>{origin=value},onRunnerFailureKind:value=>{runner=value},onFailedTopLevelOrdinal:value=>{ordinal=value}}); console.log('RELEASE_RUNTIME_SMOKE_DIAGNOSTIC status='+(passed?'passed':'failed')+' completion='+completion+' failure='+failure+' reason='+reason+' assertionOrigin='+origin+' runner='+runner+' ordinal='+ordinal); if(!passed) process.exitCode=1;"
       - name: Build checksummed candidate outputs
         env:
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/gpt-codex-hwp-release-artifacts

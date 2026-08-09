@@ -693,10 +693,12 @@ function assertReleaseWorkflowPolicy(workflow) {
   const diagnostic = requiredStep(steps, "name: Diagnose failed installed-runtime smoke tests");
   assert.match(diagnostic, /^        if: \$\{\{ failure\(\) && steps\.release_gate\.outcome == 'failure' \}\}$/mu);
   assert.match(diagnostic, /^        timeout-minutes: 5$/mu);
+  const diagnosticCommand = "node --input-type=module -e \"import { executeBoundedNodeTestFile as run } from './scripts/macos-node-tests-diagnostic.mjs'; let completion='unknown',failure='unknown',reason='unknown',origin='unknown',runner='unknown',ordinal=0; const passed=await run('installed-runtime-smoke.test.mjs',{repository:true,testNamePattern:'^over-limit MCP stdout emits one fixed initialization failure and closes the supervised root',maximumTopLevelTests:29,onCompletionKind:value=>{completion=value},onFailedTopLevelFailureKind:value=>{failure=value},onFailedTopLevelTestCodeReason:value=>{reason=value},onFailedTopLevelAssertionOrigin:value=>{origin=value},onRunnerFailureKind:value=>{runner=value},onFailedTopLevelOrdinal:value=>{ordinal=value}}); console.log('RELEASE_RUNTIME_SMOKE_DIAGNOSTIC status='+(passed?'passed':'failed')+' completion='+completion+' failure='+failure+' reason='+reason+' assertionOrigin='+origin+' runner='+runner+' ordinal='+ordinal); if(!passed) process.exitCode=1;\"";
   assertExactInlineRun(
     diagnostic,
-    "node --test --test-concurrency=1 tests/installed-runtime-smoke.test.mjs",
+    diagnosticCommand,
   );
+  assert.doesNotMatch(diagnostic, /run: node --test .*installed-runtime-smoke\.test\.mjs/u);
   assert.deepEqual(steps.filter((step) => /^        if:/mu.test(step)), [diagnostic]);
   assert.doesNotMatch(build, /^        shell:/mu);
   const fullGate = requiredStep(steps, "id: release_gate");
