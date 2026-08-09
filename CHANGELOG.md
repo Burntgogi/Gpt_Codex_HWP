@@ -1,17 +1,29 @@
 # Changelog
 
-This file records published tags. Work under `Unreleased` is not a release claim.
+This file records release tags and their publication status. Work under `Unreleased` is not a release claim.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-09
+
+- Superseded the immutable, unpublished v0.2.3 candidate; no GitHub Release or
+  distribution assets were created for v0.2.3.
+- Made the installed-runtime failure receipt portable by validating its
+  environment-dependent stderr byte count within the existing bound instead of
+  requiring one exact value. User runtime and tool behavior are unchanged from
+  the v0.2.3 candidate.
+
 ## [0.2.3] - 2026-08-08
 
+- Preserved this immutable tag as an unpublished candidate after the hosted
+  Windows release check exposed a portability-only assertion; no GitHub Release
+  or distribution assets were created.
 - Serialized repository Node test files to prevent shared runtime projection
   races and reduce peak CI process count.
 - Added a bounded first-failure phase and TAP ordinal to release verification
   without exposing raw output, paths, environment variables, or document data.
-- Updated public installation guidance for the stable v0.2.3 one-shot
-  lifecycle and retained all nine internal one-shot contracts.
+- Prepared installation guidance for the candidate one-shot lifecycle and
+  retained all nine internal one-shot contracts.
 - Added an explicit verified runtime installer outside the Codex-managed cache
   so plugin cache rehydration does not remove production dependencies.
 - Canonicalized hosted-runner temporary roots before installed-runtime work.
@@ -79,7 +91,8 @@ This file records published tags. Work under `Unreleased` is not a release claim
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.0...v0.2.1

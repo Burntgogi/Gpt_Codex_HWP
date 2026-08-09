@@ -1,6 +1,6 @@
 {
   "name": "gpt-codex-hwp-repository",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -12,7 +12,7 @@
     "developerName": "Gpt_Codex_HWP contributors",
     "marketplaceName": "gpt-codex-hwp-local",
     "legacyUninstallSelector": "hwp-korean-docs@hwp-local",
-    "codexBuildId": "20260808100029"
+    "codexBuildId": "20260809212902"
   },
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",

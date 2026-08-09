@@ -39,10 +39,10 @@ test("root metadata is validated, frozen, and synchronized", async () => {
 
   assert.equal(metadata.productId, "gpt-codex-hwp");
   assert.equal(metadata.displayName, "Gpt_Codex_HWP");
-  assert.equal(metadata.version, "0.2.3");
+  assert.equal(metadata.version, "0.2.4");
   assert.match(metadata.codexBuildId, /^[0-9]{14}$/u);
-  assert.ok(metadata.codexBuildId > "20260731221916");
-  assert.equal(pluginVersion(metadata), `0.2.3+codex.${metadata.codexBuildId}`);
+  assert.ok(metadata.codexBuildId > "20260808100029");
+  assert.equal(pluginVersion(metadata), `0.2.4+codex.${metadata.codexBuildId}`);
   assert.equal(metadata.legacyUninstallSelector, "hwp-korean-docs@hwp-local");
   assert.equal(Object.isFrozen(metadata), true);
   assert.equal(
@@ -50,7 +50,7 @@ test("root metadata is validated, frozen, and synchronized", async () => {
     `export const PROJECT_METADATA = Object.freeze({\n` +
       `  productId: "gpt-codex-hwp",\n` +
       `  displayName: "Gpt_Codex_HWP",\n` +
-      `  version: "0.2.3",\n` +
+      `  version: "0.2.4",\n` +
       `} as const);\n`,
   );
   await assert.doesNotReject(syncProjectMetadata({ root: ROOT, check: true }));

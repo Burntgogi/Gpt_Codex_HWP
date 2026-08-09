@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
-  <img alt="Release v0.2.3" src="https://img.shields.io/badge/release-v0.2.3-2EA44F">
+  <img alt="Release v0.2.4" src="https://img.shields.io/badge/release-v0.2.4-2EA44F">
   <img alt="Node.js 22 or later" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
   <a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -18,7 +18,7 @@
   <a href="README.md">한국어</a> ·
   <a href="README.en.md">English</a> ·
   <a href="#real-hwpx-output">See the result</a> ·
-  <a href="#stable-v023-installation-from-github">Quick install</a> ·
+  <a href="#stable-v024-installation-from-github">Quick install</a> ·
   <a href="#format-support">Format support</a> ·
   <a href="#safety">Security</a>
 </p>
@@ -27,13 +27,13 @@
 
 Gpt_Codex_HWP is a local Codex plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
-## v0.2.3 Release
+## v0.2.4 Release
 
-`v0.2.3` retains the document behavior and nine one-shot tool contracts from `v0.2.2` while serializing release Node test files and installing a verified platform runtime outside the Codex-managed cache so cache rehydration does not remove it. It canonicalizes hosted-runner temporary paths and fail-closed aggregates worker-only, child-only, and mixed cleanup receipts with zero remaining supervised process trees. Document operations never install dependencies or access the network automatically, and failures expose no raw errors, paths, or document content. Development and real-document validation were performed on Windows x64. macOS Apple Silicon hosted CI passed, while Codex Desktop and Hancom Office Hangul on a physical Mac remain unverified.
+`v0.2.4` retains the document behavior and nine one-shot tool contracts from `v0.2.2` while serializing release Node test files and installing a verified platform runtime outside the Codex-managed cache so cache rehydration does not remove it. It canonicalizes hosted Windows temporary-path aliases and validates environment-dependent stderr byte counts within their bound, making the release check portable. Worker-only, child-only, and mixed cleanup receipts remain fail-closed with zero remaining supervised process trees. Document operations never install dependencies or access the network automatically, and failures expose no raw errors, paths, or document content. User runtime and tool behavior are unchanged from the `v0.2.3` candidate. Development and real-document validation were performed on Windows x64. macOS Apple Silicon hosted CI passed, while Codex Desktop and Hancom Office Hangul on a physical Mac remain unverified.
 
 ## Previous releases
 
-`v0.2.2` is the previous stable release and introduced read-only HWP, HWPX writing, default one-shot execution, and the 100 MiB CI-verified envelope. See the [changelog](CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for retained history.
+`v0.2.3` is an immutable unpublished candidate tag with no GitHub Release or distribution assets. `v0.2.2` is the previous public stable release and introduced read-only HWP, HWPX writing, default one-shot execution, and the 100 MiB CI-verified envelope. See the [changelog](CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for retained history.
 
 ## Features
 
@@ -94,19 +94,19 @@ This project was developed primarily on Windows x64 and validated there. macOS A
 
 The v0.1.4 release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4) for details.
 
-## Stable v0.2.3 installation from GitHub
+## Stable v0.2.4 installation from GitHub
 
-`v0.2.3` is the current recommended public release. `v0.1.0` through `v0.2.2` remain historical releases. The `v0.2.0` tag was withdrawn before publication after a security advisory appeared and was never distributed as a GitHub Release. New installations should pin `v0.2.3` and review the [release notes](RELEASE_NOTES.en.md) first.
+`v0.2.4` is the current recommended public release. `v0.1.0` through `v0.2.2` remain historical releases. `v0.2.3` is an immutable candidate tag preserved after a release-check portability issue was found; it has no GitHub Release or distribution assets. `v0.2.0` was also withdrawn before publication. New installations should pin `v0.2.4` and review the [release notes](RELEASE_NOTES.en.md) first.
 
 A user can ask a Codex agent:
 
-> Install the latest public release `v0.2.3` of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, and run the explicit runtime installer and `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation.
+> Install the latest public release `v0.2.4` of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, and run the explicit runtime installer and `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.3 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.4 --json
 ```
 
 Verify that the returned JSON has `marketplaceName` equal to `gpt-codex-hwp-local`.
@@ -118,7 +118,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. The full plugin version for this release is `0.2.3+codex.20260808100029`. The runtime must contain `.codex-plugin/plugin.json`, `runtime-manifest.json`, `package.json`, `package-lock.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`; `.codex-plugin/plugin.json` must set `skills` to `./skills/` and have no `mcpServers` property. Never evaluate a JSON string as a command or run npm from an unexpected path.
+4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and a non-empty `version`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. The full plugin version for this release is `0.2.4+codex.20260809212902`. The runtime must contain `.codex-plugin/plugin.json`, `runtime-manifest.json`, `package.json`, `package-lock.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`; `.codex-plugin/plugin.json` must set `skills` to `./skills/` and have no `mcpServers` property. Never evaluate a JSON string as a command or run npm from an unexpected path.
 5. From that exact validated path, install and diagnose the platform runtime. On Windows x64, confirm that installed production dependencies are at most 64 MiB.
 
 ```powershell
@@ -173,11 +173,11 @@ codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.2.2 --json
 $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
 ```
 
-Validate that the returned `version` and `installedPath` identify the actual v0.2.2 installation, then complete the published v0.2.2 lockfile, doctor, and document-smoke steps. Keep the new runtime until rollback succeeds. Only after success, manually remove the exact unused `0.2.3+codex.20260808100029` durable-runtime directory.
+Validate that the returned `version` and `installedPath` identify the actual v0.2.2 installation, then complete the published v0.2.2 lockfile, doctor, and document-smoke steps. Keep the new runtime until rollback succeeds. Only after success, manually remove the exact unused `0.2.4+codex.20260809212902` durable-runtime directory.
 
 ## Durable runtime storage and removal
 
-v0.2.3 stores production dependencies at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>`, outside the Codex-managed cache. For example, Node.js 22 on Windows x64 uses the `win32-x64-node22` runtime key. Different Node major versions coexist without replacing each other even when they share one Codex profile.
+v0.2.4 stores production dependencies at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>`, outside the Codex-managed cache. For example, Node.js 22 on Windows x64 uses the `win32-x64-node22` runtime key. Different Node major versions coexist without replacing each other even when they share one Codex profile.
 
 One runtime measured about 47–51 MiB in the current Windows x64 validation, but the actual size varies by platform and npm. Do not assume that removing the plugin also removes this out-of-cache data. Before cleanup, fully close every Codex CLI and Desktop host, verify the exact unused `<full-plugin-version>` directory, and remove only that directory manually. Remove the parent `gpt-codex-hwp` runtime-data directory only after every Gpt_Codex_HWP version has been uninstalled. A later installation recreates the runtime by running `node dist/install-runtime.js --json` from a validated `installedPath`.
 

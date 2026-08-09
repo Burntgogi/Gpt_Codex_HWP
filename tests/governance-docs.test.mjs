@@ -127,12 +127,12 @@ test("governance documentation preserves project and upstream license boundaries
 test("governance documentation records only released versions as released", async () => {
   const changelog = await text("CHANGELOG.md");
   assert.match(changelog, /^## \[Unreleased\]/mu);
-  for (const version of ["0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.1", "0.2.2", "0.2.3"]) {
+  for (const version of ["0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.2.4"]) {
     assert.match(changelog, new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\] - \\d{4}-\\d{2}-\\d{2}$`, "mu"));
   }
   const unreleased = changelog.slice(
     changelog.indexOf("## [Unreleased]"),
-    changelog.indexOf("## [0.2.3]"),
+    changelog.indexOf("## [0.2.4]"),
   );
   assert.doesNotMatch(unreleased, /is released|has been released|published as|배포되었|배포 완료/iu);
 });
@@ -143,8 +143,8 @@ test("stable installation guidance is explicit and restart-safe", async () => {
     text("README.en.md"),
     text("packages/gpt-codex-hwp/skills/gpt-codex-hwp/SKILL.md"),
   ]);
-  const stableKo = section(readmeKo, "## 안정 버전 v0.2.3 GitHub 설치", "## 설치 및 마이그레이션");
-  const stableEn = section(readmeEn, "## Stable v0.2.3 installation from GitHub", "## Installation and Migration");
+  const stableKo = section(readmeKo, "## 안정 버전 v0.2.4 GitHub 설치", "## 설치 및 마이그레이션");
+  const stableEn = section(readmeEn, "## Stable v0.2.4 installation from GitHub", "## Installation and Migration");
   for (const document of [stableKo, stableEn, skill]) {
     assert.match(document, /node dist\/install-runtime\.js --json/u);
     assert.match(document, /RUNTIME_INSTALL_OK/u);
