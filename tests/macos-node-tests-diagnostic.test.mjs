@@ -113,13 +113,17 @@ test("macOS Node diagnostic accepts capability skips when every executed test pa
   assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=41\n");
 });
 
-test("source Node diagnostic gives only document worker operations the measured extended bound", async () => {
+test("source Node diagnostic gives document lifecycle files their measured extended bounds", async () => {
   let ordinaryTimeout;
+  let documentChildTimeout;
   let documentWorkerTimeout;
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file, fileOptions) => {
       if (file === "allowed-roots.test.ts") ordinaryTimeout = fileOptions?.testTimeoutMs;
+      if (file === "document-child-client.test.ts") {
+        documentChildTimeout = fileOptions?.testTimeoutMs;
+      }
       if (file === "document-worker-operations.test.ts") {
         documentWorkerTimeout = fileOptions?.testTimeoutMs;
       }
@@ -130,6 +134,7 @@ test("source Node diagnostic gives only document worker operations the measured 
   });
   assert.equal(passed, false);
   assert.equal(ordinaryTimeout, 120_000);
+  assert.equal(documentChildTimeout, 300_000);
   assert.equal(documentWorkerTimeout, 600_000);
   assert.equal(output, "MAC_NODE_TEST_FILE file=files.test.ts status=failed\n");
 });
@@ -201,6 +206,39 @@ test("macOS SVG diagnostic output is fixed and redacts invalid diagnostic values
     output,
     "MAC_SVG_ASSET boundary=diagnostic-failed\nMAC_NODE_TEST_CASE case=as03 status=failed\n",
   );
+});
+
+test("Windows SVG failure diagnostic awaits bounded tree termination", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  let output = "";
+  let terminationFinished = false;
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: async (file) => file !== "assets.test.ts",
+    runAssetsCase: async (record) => record.id !== "as03",
+    spawnProcess: () => {
+      queueMicrotask(() => child.stdout.emit("data", "PRIVATE/path"));
+      return child;
+    },
+    terminateTree: async () => {
+      child.emit("close", null, "SIGKILL");
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      terminationFinished = true;
+      return true;
+    },
+    closeTimeoutMs: 25,
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(terminationFinished, true);
+  assert.equal(
+    output,
+    "WINDOWS_SVG_ASSET boundary=diagnostic-failed\n"
+      + "WINDOWS_NODE_TEST_CASE case=as03 status=failed\n",
+  );
+  assert.doesNotMatch(output, /PRIVATE|[\\/]/u);
 });
 
 test("macOS Node diagnostic reports the fixed aggregate id when every assets case passes alone", async () => {
@@ -1233,6 +1271,7 @@ test("bounded Node runner returns the last allowlisted fixed progress diagnostic
 
 test("bounded Node runner classifies invalid stdout without exposing content", async () => {
   let runnerFailureKind;
+  let terminationFinished = false;
   const child = new EventEmitter();
   child.pid = 12345;
   child.stdout = new PassThrough();
@@ -1240,8 +1279,10 @@ test("bounded Node runner classifies invalid stdout without exposing content", a
   const passed = await executeBoundedNodeTestFile("fixture.test.mjs", {
     repository: true,
     spawnProcess: () => child,
-    terminateTree: () => {
+    terminateTree: async () => {
       child.emit("close", null, "SIGKILL");
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      terminationFinished = true;
       return true;
     },
     closeTimeoutMs: 25,
@@ -1249,6 +1290,7 @@ test("bounded Node runner classifies invalid stdout without exposing content", a
   });
   assert.equal(passed, false);
   assert.equal(runnerFailureKind, "invalid-chunk");
+  assert.equal(terminationFinished, true);
 });
 
 test("bounded Node runner reports definitive failure after provisional progress", async () => {

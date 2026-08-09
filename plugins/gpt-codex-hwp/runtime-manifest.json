@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
-  "pluginVersion": "0.2.4+codex.20260809212902",
-  "packageLockSha256": "7531944b4710cfb6dc9410438183d521889384dc7fa7381bce46fe8f6d244f12",
+  "pluginVersion": "0.2.5+codex.20260809232847",
+  "packageLockSha256": "541294e5d805173c82a74a6df90fe16d2008c028f836d56f5a2ee26870279f57",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -12,7 +12,7 @@
     {
       "path": ".codex-plugin/plugin.json",
       "size": 1208,
-      "sha256": "8ba554588bbbbe9c8be7e8eac9326d836041214152cd2c539245c175d98c589d"
+      "sha256": "b25dce2c10ba98acb11f15ad24a4c098ef844e1836bff4ae947d946cf197bb0e"
     },
     {
       "path": ".npmrc",
@@ -32,7 +32,7 @@
     {
       "path": "dist/generated/project-metadata.js",
       "size": 140,
-      "sha256": "0483460597da8b4613561d569891565f85958fa32a1a3d297ce11318c4a28964"
+      "sha256": "ad7a55fcc02bc69f813d435e15d77a19eb5b2085c3bdae94083a58d0e2b3742b"
     },
     {
       "path": "dist/install-runtime.js",
@@ -322,12 +322,12 @@
     {
       "path": "package-lock.json",
       "size": 87219,
-      "sha256": "7531944b4710cfb6dc9410438183d521889384dc7fa7381bce46fe8f6d244f12"
+      "sha256": "541294e5d805173c82a74a6df90fe16d2008c028f836d56f5a2ee26870279f57"
     },
     {
       "path": "package.json",
       "size": 615,
-      "sha256": "67fac067437615e80c705bb6206f1568f86787c806c83df89d8462c2739a851e"
+      "sha256": "870a849b83cd93363be81d3de3cc38e6bc18813ee11d686a3f219a4b42e9f179"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

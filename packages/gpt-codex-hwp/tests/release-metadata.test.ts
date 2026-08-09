@@ -235,11 +235,11 @@ test("the staged runtime documents secure agent-assisted GitHub installation", a
     readFile(join(RUNTIME_ROOT, "README.en.md"), "utf8"),
   ]);
   const sections = [
-    extractMarkdownSection(readmes[0], "## 안정 버전 v0.2.4 GitHub 설치"),
-    extractMarkdownSection(readmes[1], "## Stable v0.2.4 installation from GitHub"),
+    extractMarkdownSection(readmes[0], "## 안정 버전 v0.2.5 GitHub 설치"),
+    extractMarkdownSection(readmes[1], "## Stable v0.2.5 installation from GitHub"),
   ];
-  assert.match(readmes[0], /href="#안정-버전-v024-github-설치">빠른 설치</u);
-  assert.match(readmes[1], /href="#stable-v024-installation-from-github">Quick install/u);
+  assert.match(readmes[0], /href="#안정-버전-v025-github-설치">빠른 설치</u);
+  assert.match(readmes[1], /href="#stable-v025-installation-from-github">Quick install/u);
   for (const section of sections) assertSecureAgentInstallSection(section, metadata);
 
   const missingMarketplaceIdentity = sections[0].replace("marketplaceName", "marketplace identity");

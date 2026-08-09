@@ -8,6 +8,7 @@ import {
   resolveNodeTestProfile,
   SOURCE_NODE_TEST_FILES,
 } from "./node-test-profiles.mjs";
+import { terminateProcessTree as terminateReleaseProcessTree } from "./release-verify.mjs";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_ROOT = resolve(PROJECT_ROOT, "packages/gpt-codex-hwp");
@@ -431,9 +432,11 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     let documentReceipt;
     const testTimeoutMs = boundedTimeout(
       options.testTimeoutMs,
-      file === "document-worker-operations.test.ts"
-        ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
-        : DEFAULT_TEST_TIMEOUT_MS,
+      file === "document-child-client.test.ts"
+        ? DOCUMENT_PROCESS_TEST_TIMEOUT_MS
+        : file === "document-worker-operations.test.ts"
+          ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
+          : DEFAULT_TEST_TIMEOUT_MS,
     );
     const testSkipPattern = profilePlan.skipPatternFor(file);
     try {
@@ -1202,6 +1205,8 @@ function executeSvgAssetDiagnostic(options) {
     const chunks = [];
     let testTimer;
     let closeTimer;
+    let childClosed = false;
+    let terminationSettled = false;
     const finish = (value) => {
       if (settled) return;
       settled = true;
@@ -1214,8 +1219,12 @@ function executeSvgAssetDiagnostic(options) {
       if (settled || stopping) return;
       stopping = true;
       clearTimeout(testTimer);
-      try { void options.terminateTree(child); } catch {}
       closeTimer = setTimeout(() => finish("diagnostic-failed"), options.closeTimeoutMs);
+      void Promise.resolve().then(() => options.terminateTree(child)).catch(() => false)
+        .then(() => {
+          terminationSettled = true;
+          if (childClosed) finish("diagnostic-failed");
+        });
     };
     try {
       child = options.spawnProcess(process.execPath, [
@@ -1246,7 +1255,12 @@ function executeSvgAssetDiagnostic(options) {
     });
     child.once("error", stopUnverified);
     child.once("close", (code, signal) => {
-      if (stopping || code !== 0 || signal !== null) {
+      if (stopping) {
+        childClosed = true;
+        if (terminationSettled) finish("diagnostic-failed");
+        return;
+      }
+      if (code !== 0 || signal !== null) {
         finish("diagnostic-failed");
         return;
       }
@@ -1279,6 +1293,8 @@ export function executeBoundedNodeTestFile(file, options = {}) {
     const chunks = [];
     let testTimer;
     let closeTimer;
+    let childClosed = false;
+    let terminationSettled = false;
     let runnerFailureReported = false;
     const reportRunnerFailure = (kind) => {
       if (runnerFailureReported || typeof options.onRunnerFailureKind !== "function") return;
@@ -1298,13 +1314,16 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       reportRunnerFailure(kind);
       stopping = true;
       clearTimeout(testTimer);
-      try { void terminateProcessTree(child); } catch {}
-      if (settled) return;
       closeTimer = setTimeout(() => {
         child?.stdout?.destroy();
         child?.unref?.();
         finish(false);
       }, closeTimeoutMs);
+      void Promise.resolve().then(() => terminateProcessTree(child)).catch(() => false)
+        .then(() => {
+          terminationSettled = true;
+          if (childClosed) finish(false);
+        });
     };
     try {
       const repository = options.repository === true;
@@ -1354,7 +1373,8 @@ export function executeBoundedNodeTestFile(file, options = {}) {
     child.once("error", () => stopUnverified("child-error"));
     child.once("close", (code, signal) => {
       if (stopping) {
-        finish(false);
+        childClosed = true;
+        if (terminationSettled) finish(false);
       } else {
         forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
         forwardFixedDiagnostic(chunks, capturedBytes, options);
@@ -1637,6 +1657,7 @@ function validTapReceipt(chunks, capturedBytes, allowAllSkipped = false) {
 }
 
 function terminateTree(child) {
+  if (process.platform === "win32") return terminateReleaseProcessTree(child);
   const pid = child?.pid;
   if (!Number.isSafeInteger(pid) || pid < 1) return false;
   try { process.kill(-pid, "SIGKILL"); return true; }

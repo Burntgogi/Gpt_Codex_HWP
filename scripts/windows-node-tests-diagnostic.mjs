@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -7,7 +8,7 @@ import {
 } from "./macos-node-tests-diagnostic.mjs";
 import { parseNodeTestProfileArguments } from "./node-test-profiles.mjs";
 
-const REPOSITORY_TEST_FILES = Object.freeze([
+const PR_REPOSITORY_TEST_FILES = Object.freeze([
   "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
   "governance-docs.test.mjs", "kordoc-runtime-ownership.test.mjs",
   "macos-node-tests-diagnostic.test.mjs", "macos-posix-controls.test.mjs",
@@ -16,6 +17,21 @@ const REPOSITORY_TEST_FILES = Object.freeze([
   "release-verify.test.mjs", "repository-layout.test.mjs",
   "runtime-projection.test.mjs", "security-boundary-docs.test.mjs",
   "windows-node-tests-diagnostic.test.mjs", "workflow-policy.test.mjs",
+]);
+const FULL_REPOSITORY_TEST_FILES = Object.freeze([
+  "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
+  "governance-docs.test.mjs", "installed-runtime-smoke.test.mjs",
+  "kordoc-runtime-ownership.test.mjs", "macos-node-tests-diagnostic.test.mjs",
+  "macos-posix-controls.test.mjs", "node-memory-gate.test.mjs",
+  "node-phase-a-evidence.test.mjs", "node-test-profiles.test.mjs",
+  "oneshot-process.test.mjs", "platform-receipts.test.mjs",
+  "project-metadata.test.mjs", "public-content-policy.test.mjs",
+  "python-tests-diagnostic.test.mjs", "release-identity.test.mjs",
+  "release-verify.test.mjs", "repository-layout.test.mjs",
+  "restart-safe-runtime.test.mjs", "run-node-memory-qualification.test.mjs",
+  "runtime-projection.test.mjs", "security-boundary-docs.test.mjs",
+  "source-node-tests-isolated.test.mjs", "windows-node-tests-diagnostic.test.mjs",
+  "workflow-policy.test.mjs",
 ]);
 const DEFAULT_REPOSITORY_TEST_TIMEOUT_MS = 120_000;
 const PUBLIC_CONTENT_TEST_TIMEOUT_MS = 600_000;
@@ -147,8 +163,25 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     ?? executeRuntimeProjectionDiagnostic;
   const runSourceDiagnostic = options.runSourceDiagnostic ?? runMacNodeTestsDiagnostic;
   const profile = options.profile ?? "full";
+  const repositoryTestFiles = profile === "full"
+    ? FULL_REPOSITORY_TEST_FILES
+    : PR_REPOSITORY_TEST_FILES;
 
-  for (const file of REPOSITORY_TEST_FILES) {
+  if (profile === "full") {
+    const listRepositoryTestFiles = options.listRepositoryTestFiles
+      ?? (async () => (await readdir(new URL("../tests/", import.meta.url)))
+        .filter((file) => file.endsWith(".test.mjs")).sort());
+    let discovered;
+    try { discovered = await listRepositoryTestFiles(); } catch { discovered = []; }
+    if (!Array.isArray(discovered) || discovered.length !== repositoryTestFiles.length
+      || discovered.some((file, index) => file !== repositoryTestFiles[index])) {
+      stdout.write("WINDOWS_REPOSITORY_TEST_INVENTORY status=failed\n");
+      setExitCode(1);
+      return false;
+    }
+  }
+
+  for (const file of repositoryTestFiles) {
     let passed = false;
     let publicContentReceipt;
     const testTimeoutMs = file === "public-content-policy.test.mjs"
@@ -218,10 +251,10 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
         try {
           const candidate = publicContentReceipt ?? await runPublicContentDiagnostic();
           if (typeof candidate === "string"
-            && /^pc(?:0[1-9]|[1-5][0-9]|6[01])$/u.test(candidate)) {
+            && /^pc(?:0[1-9]|[1-5][0-9]|6[0-2])$/u.test(candidate)) {
             caseId = candidate;
           } else if (candidate !== null && typeof candidate === "object") {
-            if (/^(?:pc(?:0[1-9]|[1-5][0-9]|6[01])|public-content-(?:aggregate|rerun-passed))$/u
+            if (/^(?:pc(?:0[1-9]|[1-5][0-9]|6[0-2])|public-content-(?:aggregate|rerun-passed))$/u
               .test(candidate.caseId)) {
               caseId = candidate.caseId;
             }
@@ -263,10 +296,10 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
         try {
           const candidate = await runRuntimeProjectionDiagnostic();
           if (typeof candidate === "string"
-            && /^rp(?:0[1-9]|1[0-9]|2[0-5])$/u.test(candidate)) {
+            && /^rp(?:0[1-9]|[12][0-9]|3[0-2])$/u.test(candidate)) {
             caseId = candidate;
           } else if (candidate !== null && typeof candidate === "object") {
-            if (/^(?:rp(?:0[1-9]|1[0-9]|2[0-5])|runtime-projection-(?:aggregate|rerun-passed))$/u
+            if (/^(?:rp(?:0[1-9]|[12][0-9]|3[0-2])|runtime-projection-(?:aggregate|rerun-passed))$/u
               .test(candidate.caseId)) {
               caseId = candidate.caseId;
             }
@@ -289,7 +322,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
   }
 
   stdout.write(
-    `WINDOWS_REPOSITORY_TEST_FILES status=passed files=${REPOSITORY_TEST_FILES.length}\n`,
+    `WINDOWS_REPOSITORY_TEST_FILES status=passed files=${repositoryTestFiles.length}\n`,
   );
   try {
     return await runSourceDiagnostic({
@@ -341,7 +374,7 @@ async function executePublicContentDiagnostic() {
   const passed = await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
     repository: true,
     testTimeoutMs: PUBLIC_CONTENT_TEST_TIMEOUT_MS,
-    maximumTopLevelTests: 61,
+    maximumTopLevelTests: 62,
     onCompletionKind: (value) => { completionKind = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
@@ -396,7 +429,7 @@ async function executeRuntimeProjectionDiagnostic() {
   const passed = await executeBoundedNodeTestFile("runtime-projection.test.mjs", {
     repository: true,
     testTimeoutMs: RUNTIME_PROJECTION_TEST_TIMEOUT_MS,
-    maximumTopLevelTests: 25,
+    maximumTopLevelTests: 32,
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
   });

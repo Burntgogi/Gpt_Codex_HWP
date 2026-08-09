@@ -19,7 +19,7 @@ import {
 
 const PRODUCT = "gpt-codex-hwp";
 const MARKETPLACE = "gpt-codex-hwp-local";
-const PLUGIN_VERSION = "0.2.4+codex.20260809212902";
+const PLUGIN_VERSION = "0.2.5+codex.20260809232847";
 const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
 const TOOL_NAMES = [
   "hwp_create_svg_asset",
@@ -317,11 +317,11 @@ async function createInstallerFixture(
   ]);
   const packageBytes = jsonBytes({
     name: PRODUCT,
-    version: "0.2.4",
+    version: "0.2.5",
     type: "module",
     dependencies: { zod: "3.25.76" },
   });
-  const lockBytes = jsonBytes({ name: PRODUCT, version: "0.2.4", lockfileVersion: 3, packages: {} });
+  const lockBytes = jsonBytes({ name: PRODUCT, version: "0.2.5", lockfileVersion: 3, packages: {} });
   files.set("package.json", packageBytes);
   files.set("package-lock.json", lockBytes);
   for (const [path, bytes] of files) {
@@ -357,7 +357,7 @@ function createNpmRunner(commands: RuntimeCommandSpec[]) {
     return {
       code: 0,
       stdout: spec.args.includes("ls")
-        ? jsonBytes({ name: PRODUCT, version: "0.2.4", dependencies: { zod: { version: "3.25.76" } } })
+        ? jsonBytes({ name: PRODUCT, version: "0.2.5", dependencies: { zod: { version: "3.25.76" } } })
         : Buffer.alloc(0),
       stderr: Buffer.alloc(0),
       timedOut: false,

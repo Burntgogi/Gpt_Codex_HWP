@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import {
   collectReleaseSourceIdentity,
   createCanonicalReleaseTemp,
+  formatReleaseStageDiagnostic,
   REQUIRED_RELEASE_STAGES,
   runCli,
   runReleaseArtifactsStage,
@@ -1027,6 +1028,40 @@ test("Node test stage maps a silent nonzero child to one fixed runner receipt", 
   });
 });
 
+test("Node test stage preserves only an allowlisted isolated-runner failure receipt", async () => {
+  const receipt = "WINDOWS_REPOSITORY_TEST_CASE case=pc16 status=failed";
+  const result = await runStageCommand(
+    nodeStage(
+      "node-tests",
+      `process.stdout.write("PRIVATE/path/document.hwpx\\n${receipt}\\n"); process.exit(9)`,
+    ),
+    { timeoutMs: 2_000, maxOutputBytes: 1_024 },
+  );
+
+  assert.deepEqual(result, {
+    status: "failed",
+    diagnostic: { kind: "node-tests-runner", receipt },
+  });
+  for (const allowed of [
+    receipt,
+    "WINDOWS_REPOSITORY_TEST_INVENTORY status=failed",
+    "WINDOWS_REPOSITORY_TEST_FILE file=public-content-policy.test.mjs status=failed",
+    "WINDOWS_NODE_TEST_CASE case=dc09 status=failed",
+    "WINDOWS_NODE_TEST_FILE file=document-worker-client.test.ts status=failed",
+    "WINDOWS_SOURCE_NODE_DIAGNOSTIC status=failed",
+  ]) {
+    assert.equal(formatReleaseStageDiagnostic({
+      kind: "node-tests-runner",
+      receipt: allowed,
+    }), allowed);
+  }
+  assert.equal(formatReleaseStageDiagnostic({
+    kind: "node-tests-runner",
+    receipt: "WINDOWS_NODE_TEST_FILE file=PRIVATE/document.hwpx status=failed",
+  }), undefined);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
+});
+
 test("release verification reports a bounded large-document diagnostic out of band", async () => {
   const diagnostics = [];
   const receipt = await runReleaseVerification({
@@ -1526,8 +1561,8 @@ function expectedStageCommands() {
     },
     {
       name: "node-tests",
-      tool: "npm",
-      args: ["test"],
+      tool: "node",
+      args: ["scripts/windows-node-tests-diagnostic.mjs", "--profile=full"],
       commands: undefined,
       env: { HWP_REQUIRE_RHWP: "1" },
       evidence: noEvidence,
