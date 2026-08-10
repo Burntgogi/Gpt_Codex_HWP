@@ -761,6 +761,8 @@ test("dependency automation is immutable, scheduled, and issue-only", async () =
   assert.doesNotMatch(workflow, /^\s*(?:contents|pull-requests|actions|checks|packages):\s*write$/mu);
   assert.doesNotMatch(workflow, /pull_request|auto-merge|automerge|git\s+(?:commit|push|checkout\s+-b)/iu);
   assert.equal(countMatches(workflow, /^\s+persist-credentials: false$/gmu), 1);
+  assert.equal(countMatches(job, /^\s+package-manager-cache: false$/gmu), 1,
+    "dependency audit must disable setup-node automatic npm caching");
   assert.equal(countMatches(workflow, /^      issues: write$/gmu), 1);
   const issueTokenName = ["GH", "TOKEN"].join("_");
   assert.equal(
