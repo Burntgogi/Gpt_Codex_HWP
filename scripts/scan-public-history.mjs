@@ -6,6 +6,7 @@ import {
   classifyPublicContent,
   classifyPublicLabel,
   formatPublicFindings,
+  isApprovedOwnerEmail,
   isApprovedOwnerIdentity,
   isPrivateRepositoryPath,
   publicFinding,
@@ -21,6 +22,9 @@ const MAX_OBJECTS = 100_000;
 const MAX_PATH_ASSOCIATIONS = 500_000;
 const NEUTRAL_EMAIL = "codex@local";
 const NEUTRAL_NAME = "Codex";
+const GITHUB_EMAIL = "noreply@github.com";
+const GITHUB_NAME = "GitHub";
+const OWNER_ALIAS_NAME = "Serio_ai";
 
 const FROZEN_RELEASE_TAGS = Object.freeze({
   "v0.1.0": {
@@ -395,6 +399,8 @@ function parseIdentity(value) {
 
 function identityAllowed(identity, objectId, neutralObjectAllowlist) {
   return isApprovedOwnerIdentity(identity.name, identity.email)
+    || (identity.name === OWNER_ALIAS_NAME && isApprovedOwnerEmail(identity.email))
+    || (identity.name === GITHUB_NAME && identity.email === GITHUB_EMAIL)
     || (identity.name === NEUTRAL_NAME && identity.email === NEUTRAL_EMAIL
       && neutralObjectAllowlist.has(objectId));
 }
