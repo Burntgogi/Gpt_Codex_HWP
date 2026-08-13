@@ -755,6 +755,23 @@ test("Git history privacy allows only the approved owner and exact neutral immut
   assert.match(ownerCommit, /^[a-f0-9]{40}$/u);
 });
 
+test("Git history allows only exact owner alias and GitHub identities", async (t) => {
+  const root = await temporaryGitRepository(t, "public-history-github-identity-");
+  await commitFile(root, "owner.txt", "safe\n", "owner", OWNER_EMAIL);
+  await commitFile(root, "alias.txt", "safe\n", "alias", OWNER_EMAIL, "Serio_ai");
+  await commitFile(root, "github.txt", "safe\n", "github", "noreply@github.com", "GitHub");
+  let result = await scanPublicHistory(syntheticHistoryOptions(root));
+  assert.equal(result.findings.length, 0);
+
+  const wrongAlias = await commitFile(root, "wrong-alias.txt", "safe\n", "wrong alias", "other@example.com", "Serio_ai");
+  const wrongGitHub = await commitFile(root, "wrong-github.txt", "safe\n", "wrong github", OWNER_EMAIL, "GitHub");
+  result = await scanPublicHistory(syntheticHistoryOptions(root));
+  for (const objectId of [wrongAlias, wrongGitHub]) {
+    assert.ok(result.findings.some((finding) => finding.objectId === objectId
+      && finding.category === "personal identity"));
+  }
+});
+
 test("Git history privacy fails closed for shallow and malformed Git operations", async (t) => {
   const source = await temporaryGitRepository(t, "public-history-source-");
   await commitFile(source, "safe.txt", "safe\n", "safe", OWNER_EMAIL);
