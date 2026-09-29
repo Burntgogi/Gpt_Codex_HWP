@@ -1,28 +1,30 @@
-# Gpt_Codex_HWP v0.2.6 Release Candidate Notes
+# Gpt_Codex_HWP v0.2.6 Release Notes
 
-- Status: unpublished release candidate
+- Status: final release
 - Date: 2026-09-29
-- Validation baseline: local Windows x64 checks; hosted platform CI in progress; physical Mac unverified
+- Validation baseline: local Windows x64 checks; hosted Windows x64, macOS arm64, and Linux CI passed; physical Mac unverified
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
 ## Overview
 
-v0.2.6 is a candidate that updates the vulnerable packages in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18). It retains v0.2.5's read-only HWP policy, HWPX writing, nine internal one-shot tool contracts, and explicit durable runtime installation. This candidate has no GitHub Release or distribution assets yet, so public installation guidance still points to v0.2.5.
+v0.2.6 updates the packages reported in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18). It retains v0.2.5's read-only HWP policy, HWPX writing, nine internal one-shot tools, and explicit runtime installation.
 
 ## Main changes
 
 - Updated the direct dependencies @xmldom/xmldom to 0.9.12 and sharp to 0.35.5.
 - Updated the source and generated runtime locks to fast-uri 3.1.7, hono 4.13.11, qs 6.16.0, and ip-address 10.7.2.
-- HWPX font integrity output now uses requireWellFormed: true. It removes the parsed XML declaration before serialization and restores a UTF-8 declaration so valid documents continue to work.
-- The new plugin version 0.2.6+codex.20260929182230 keeps its runtime separate. The v0.2.5 tag and assets are unchanged.
+- HWPX font integrity output now uses `requireWellFormed: true` during XML serialization. It removes the parsed XML declaration and restores a UTF-8 declaration to produce valid documents.
+- Dependency audit reporting now includes every advisory for a package. The same advisory in both locks, or multiple fix suggestions for it, no longer creates duplicate rows.
+- Plugin version 0.2.6+codex.20260929182230 keeps its runtime separate. The v0.2.5 tag and assets are unchanged.
 
-## Candidate verification
+## Release verification
 
 - On Node.js 22.22.2/npm 10.9.7, production npm audit returned zero known vulnerabilities for both source and distribution locks.
 - Of 459 repository Node tests, 457 passed and two were skipped for Windows environment restrictions, with zero failures. All 53 policy tests passed.
 - Of 106 focused XML, protection, image, and runtime tests, 104 passed and two were skipped for environment restrictions. The generated runtime check and installed-runtime nine-tool smoke also passed.
-- The immutable-tag full release gate, attestation, and post-publication restart check remain to be run after candidate approval.
+- Windows x64, macOS arm64, and Linux CI and security policy checks passed on PR #19 and the follow-up PR #20. The v0.2.6 ZIP, SPDX, provenance, and checksums were independently verified locally.
+- Distribution assets come only from the same run that passes the full immutable-tag release gate and attestation. After installation, restart the host and verify one document operation.
 
 ## User resource statement
 
@@ -30,7 +32,7 @@ There are zero persistent Gpt_Codex_HWP Node processes while the plugin is idle.
 
 ## Installation and upgrade
 
-After publication, validate the returned installedPath against the path and plugin-identity rules before installing v0.2.6 from that path:
+After installing the v0.2.6 plugin, validate the returned installedPath against the path and plugin-identity rules. Install production dependencies and check status from that path:
 
     node dist/install-runtime.js --json
     node dist/doctor.js --json
