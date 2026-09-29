@@ -236,23 +236,23 @@ test("the staged runtime documents secure agent-assisted GitHub installation", a
     readFile(join(RUNTIME_ROOT, "README.en.md"), "utf8"),
   ]);
   const sections = [
-    extractMarkdownSection(readmes[0], "## 안정 버전 v0.2.6 GitHub 설치"),
-    extractMarkdownSection(readmes[1], "## Stable v0.2.6 installation from GitHub"),
+    extractMarkdownSection(readmes[0], "## 안정 버전 v0.2.7 GitHub 설치"),
+    extractMarkdownSection(readmes[1], "## Stable v0.2.7 installation from GitHub"),
   ];
-  assert.match(readmes[0], /href="#안정-버전-v026-github-설치">빠른 설치</u);
-  assert.match(readmes[1], /href="#stable-v026-installation-from-github">Quick install/u);
-  for (const section of sections) assertSecureAgentInstallSection(section, metadata, "v0.2.6");
+  assert.match(readmes[0], /href="#안정-버전-v027-github-설치">빠른 설치</u);
+  assert.match(readmes[1], /href="#stable-v027-installation-from-github">Quick install/u);
+  for (const section of sections) assertSecureAgentInstallSection(section, metadata, "v0.2.7");
 
   const missingMarketplaceIdentity = sections[0].replace("marketplaceName", "marketplace identity");
   assert.throws(
-    () => assertSecureAgentInstallSection(missingMarketplaceIdentity, metadata, "v0.2.6"),
+    () => assertSecureAgentInstallSection(missingMarketplaceIdentity, metadata, "v0.2.7"),
     /marketplaceName/u,
   );
   const pinnedRelease = /--ref\s+(v\d+\.\d+\.\d+)/u.exec(sections[0])?.[1];
   assert.ok(pinnedRelease, "the Korean install section must contain its pinned release");
   const staleRelease = sections[0].replaceAll(pinnedRelease, "v0.1.3");
   assert.throws(
-    () => assertSecureAgentInstallSection(staleRelease, metadata, "v0.2.6"),
+    () => assertSecureAgentInstallSection(staleRelease, metadata, "v0.2.7"),
     /verified release tag/u,
   );
 });
