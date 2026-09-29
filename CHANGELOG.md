@@ -4,13 +4,17 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
-- Prepared the v0.2.6 dependency security candidate for issue #18. Updated
+## [0.2.6] - 2026-09-29
+
+- Fixed the dependency advisories reported in issue #18. Updated
   @xmldom/xmldom, sharp, fast-uri, hono, qs, and ip-address in the source
   and generated-runtime dependency graphs; both production audits now report
   zero known vulnerabilities.
 - Enabled well-formed XML serialization for the HWPX font-integrity path while
   preserving valid UTF-8 XML declarations and the existing document contract.
-- Assigned a new plugin build identity so this candidate cannot reuse the
+- Fixed dependency audit reporting so it includes every advisory without
+  duplicate rows across source and runtime locks.
+- Assigned a new plugin build identity so this release cannot reuse the
   published v0.2.5 runtime directory.
 
 ## [0.2.5] - 2026-08-10
@@ -113,7 +117,8 @@ This file records release tags and their publication status. Work under `Unrelea
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.2...v0.2.3
