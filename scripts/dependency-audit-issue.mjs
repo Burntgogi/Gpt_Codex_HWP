@@ -43,8 +43,13 @@ export async function runDependencyAuditIssue({
       throw auditError("AUDIT_RESULT_INVALID");
     for (const [name, vulnerability] of Object.entries(vulnerabilities)) {
       for (const item of advisoryRecords(name, vulnerability, lock)) {
-        const { package: packageName, current, patched, link } = item.record;
-        records.set(`${packageName}\0${current}\0${patched}\0${link}`, item.record);
+        const { package: packageName, current, link } = item.record;
+        const key = `${packageName}\0${current}\0${link}`;
+        const previous = records.get(key);
+        records.set(key, previous === undefined ? item.record : Object.freeze({
+          ...previous,
+          patched: mergePatchSuggestions(previous.patched, item.record.patched),
+        }));
         if (records.size > MAX_ADVISORY_RECORDS) throw auditError("ADVISORY_RECORD_LIMIT");
       }
     }
@@ -173,31 +178,28 @@ export function advisoryRecords(name, vulnerability, lock) {
     || vulnerability.nodes.length > MAX_ADVISORY_RECORDS) throw auditError("ADVISORY_NODE_INVALID");
   if (lock?.packages === null || typeof lock?.packages !== "object" || Array.isArray(lock.packages))
     throw auditError("ADVISORY_NODE_INVALID");
-  const patched = patchedVersion(packageName, vulnerability.fixAvailable);
-  const rawLink = (Array.isArray(vulnerability.via) ? vulnerability.via : [])
-    .find((value) => value && typeof value === "object" && typeof value.url === "string")?.url
-    ?? `https://www.npmjs.com/package/${encodeURIComponent(packageName)}`;
-  const link = advisoryUrl(rawLink);
+  const patched = patchSuggestion(packageName, vulnerability.fixAvailable);
+  const links = advisoryLinks(packageName, vulnerability.via);
+  if (links.length * vulnerability.nodes.length > MAX_ADVISORY_RECORDS)
+    throw auditError("ADVISORY_RECORD_LIMIT");
   const seen = new Set();
-  const validated = vulnerability.nodes.map((node) => {
+  const validated = vulnerability.nodes.flatMap((node) => {
     const exactNode = exactLockNode(packageName, node);
     if (seen.has(exactNode) || !Object.hasOwn(lock.packages, exactNode)) throw auditError("ADVISORY_NODE_INVALID");
     seen.add(exactNode);
     const entry = lock.packages[exactNode];
     if (entry === null || typeof entry !== "object" || Array.isArray(entry) || typeof entry.version !== "string")
       throw auditError("ADVISORY_NODE_INVALID");
-    const record = Object.freeze({
-      package: packageName,
-      current: packageVersion(entry.version, "CURRENT"),
-      patched,
-      link,
-    });
-    return Object.freeze({ node: exactNode, record });
+    const current = packageVersion(entry.version, "CURRENT");
+    return links.map((link) => Object.freeze({
+      node: exactNode,
+      record: Object.freeze({ package: packageName, current, patched, link }),
+    }));
   });
   const displayed = new Map();
   for (const item of validated) {
-    const { package: displayedPackage, current, patched: displayedPatched, link: displayedLink } = item.record;
-    const key = `${displayedPackage}\0${current}\0${displayedPatched}\0${displayedLink}`;
+    const { package: displayedPackage, current, link: displayedLink } = item.record;
+    const key = `${displayedPackage}\0${current}\0${displayedLink}`;
     if (!displayed.has(key)) displayed.set(key, item);
   }
   return Object.freeze([...displayed.values()]);
@@ -222,11 +224,40 @@ function exactLockNode(name, value) {
   return value;
 }
 
-function patchedVersion(name, fixAvailable) {
+function advisoryLinks(name, via) {
+  if (via === undefined) return [advisoryUrl(`https://www.npmjs.com/package/${encodeURIComponent(name)}`)];
+  if (!Array.isArray(via) || via.length > MAX_ADVISORY_RECORDS)
+    throw auditError("ADVISORY_VIA_INVALID");
+  const links = via.map((value) => {
+    if (typeof value === "string") {
+      const parent = packageIdentity(value);
+      if (parent === name) throw auditError("ADVISORY_VIA_INVALID");
+      return advisoryUrl(`https://www.npmjs.com/package/${encodeURIComponent(parent)}`);
+    }
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      throw auditError("ADVISORY_VIA_INVALID");
+    return advisoryUrl(value.url);
+  });
+  if (links.length === 0) links.push(advisoryUrl(`https://www.npmjs.com/package/${encodeURIComponent(name)}`));
+  return [...new Set(links)];
+}
+
+function patchSuggestion(name, fixAvailable) {
+  if (fixAvailable === true) return "npm fix available; version unspecified";
   if (fixAvailable !== null && typeof fixAvailable === "object" && !Array.isArray(fixAvailable)) {
-    if (fixAvailable.name !== name) return "owner review required";
-    return packageVersion(fixAvailable.version, "PATCHED");
+    const target = packageIdentity(fixAvailable.name);
+    const version = packageVersion(fixAvailable.version, "PATCHED");
+    return versionField(target === name
+      ? `npm suggests ${version}`
+      : `npm suggests ${target}@${version}`, "PATCHED");
   }
+  return "owner review required";
+}
+
+function mergePatchSuggestions(left, right) {
+  if (left === right) return left;
+  if (left === "npm fix available; version unspecified" && right.startsWith("npm suggests ")) return right;
+  if (right === "npm fix available; version unspecified" && left.startsWith("npm suggests ")) return left;
   return "owner review required";
 }
 

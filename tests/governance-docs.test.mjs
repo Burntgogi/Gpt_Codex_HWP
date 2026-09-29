@@ -257,7 +257,7 @@ test("governance documentation dependency issue contains only bounded safe colum
   assert.deepEqual(record, {
     package: "esbuild",
     current: "0.27.3",
-    patched: "owner review required",
+    patched: "npm suggests indirect-parent@9.9.9",
     link: "https://github.com/advisories/GHSA-test",
   });
   const body = renderIssueBody([{
@@ -268,7 +268,7 @@ test("governance documentation dependency issue contains only bounded safe colum
   assert.equal(body, [
     "| Package | Current | Patched | Link |",
     "| --- | --- | --- | --- |",
-    "| esbuild | 0.27.3 | owner review required | https://github.com/advisories/GHSA-test |",
+    "| esbuild | 0.27.3 | npm suggests indirect-parent@9.9.9 | https://github.com/advisories/GHSA-test |",
   ].join("\n"));
   assert.doesNotMatch(body, /secret|severity|low/u);
   assert.throws(
@@ -469,9 +469,13 @@ test("governance documentation advisory records bind every exact scoped lock nod
     fixAvailable: { name, version: "2.0.0" },
     via: ["transitive", { range: "<99.0.0", url: "https://github.com/advisories/GHSA-test" }],
   }, lock);
-  assert.deepEqual(items.map((item) => item.record.current), ["1.0.0", "1.5.0"]);
-  assert.deepEqual(items.map((item) => item.record.patched), ["2.0.0", "2.0.0"]);
-  assert.deepEqual(items.map((item) => item.node), nodes);
+  assert.deepEqual(items.map((item) => item.record.current), ["1.0.0", "1.0.0", "1.5.0", "1.5.0"]);
+  assert.deepEqual(items.map((item) => item.record.patched), Array(4).fill("npm suggests 2.0.0"));
+  assert.deepEqual(items.map((item) => item.node), [nodes[0], nodes[0], nodes[1], nodes[1]]);
+  assert.deepEqual(items.slice(0, 2).map((item) => item.record.link), [
+    "https://www.npmjs.com/package/transitive",
+    "https://github.com/advisories/GHSA-test",
+  ]);
   const sameVersionLock = { packages: {
     [nodes[0]]: { version: "1.0.0" },
     [nodes[1]]: { version: "1.0.0" },
@@ -481,6 +485,10 @@ test("governance documentation advisory records bind every exact scoped lock nod
   }, sameVersionLock);
   assert.equal(deduplicated.length, 1);
   assert.equal(deduplicated[0].record.current, "1.0.0");
+  assert.equal(deduplicated[0].record.patched, "npm suggests 2.0.0");
+  assert.throws(() => module.advisoryRecords(name, {
+    name, nodes: [nodes[0]], fixAvailable: true, via: [name],
+  }, lock), { code: "ADVISORY_VIA_INVALID" });
   for (const badNode of [
     "node_modules/other",
     "../node_modules/@scope/pkg",
@@ -504,6 +512,80 @@ test("governance documentation advisory records bind every exact scoped lock nod
   }, { packages: { [nodes[0]]: { version: "workspace:*" } } }), {
     code: "ADVISORY_CURRENT_INVALID",
   });
+});
+
+test("dependency audit reports every advisory once across source and runtime", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  const name = "@xmldom/xmldom";
+  const links = [
+    "https://github.com/advisories/GHSA-6gmq-8vp8-gcm6",
+    "https://github.com/advisories/GHSA-6mj3-qw4j-hgrw",
+  ];
+  const vulnerability = (fixAvailable) => ({
+    name,
+    nodes: [`node_modules/${name}`],
+    fixAvailable,
+    via: links.map((url) => ({ name, url })),
+  });
+  const reports = [
+    { vulnerabilities: { [name]: vulnerability(true) } },
+    { vulnerabilities: { [name]: vulnerability({ name, version: "0.9.12" }) } },
+  ];
+  let audits = 0;
+  let posted;
+  const result = await module.runDependencyAuditIssue({
+    root: ROOT,
+    environment: {
+      GH_REPOSITORY: "owner/repository",
+      [["GH", "TOKEN"].join("_")]: githubAuthorization().token,
+    },
+    runProcess: async () => ({
+      code: 1,
+      stdout: Buffer.from(JSON.stringify(reports[audits++])),
+      stderr: Buffer.alloc(0),
+      overflow: false,
+      timedOut: false,
+      terminationFailed: false,
+    }),
+    fetchImpl: async (_url, options = {}) => {
+      if (options.method === "POST") {
+        posted = JSON.parse(options.body);
+        return jsonResponse({ number: 18 }, 201);
+      }
+      return jsonResponse([]);
+    },
+  });
+  assert.deepEqual(result, { records: 2, issue: "created" });
+  assert.equal(audits, 2);
+  const rows = posted.body.split("\n").filter((line) => line.startsWith(`| ${name} |`));
+  assert.equal(rows.length, 2);
+  for (const link of links) {
+    assert.ok(rows.some((row) => row.includes(`| npm suggests 0.9.12 | ${link} |`)));
+  }
+});
+
+test("dependency audit never closes an issue after a partial audit failure", async () => {
+  const module = await import("../scripts/dependency-audit-issue.mjs");
+  let audits = 0;
+  let githubRequests = 0;
+  await assert.rejects(module.runDependencyAuditIssue({
+    root: ROOT,
+    environment: {
+      GH_REPOSITORY: "owner/repository",
+      [["GH", "TOKEN"].join("_")]: githubAuthorization().token,
+    },
+    runProcess: async () => ({
+      code: audits++ === 0 ? 0 : 2,
+      stdout: Buffer.from('{"vulnerabilities":{}}'),
+      stderr: Buffer.alloc(0),
+      overflow: false,
+      timedOut: false,
+      terminationFailed: false,
+    }),
+    fetchImpl: async () => { githubRequests += 1; return jsonResponse([]); },
+  }), { code: "AUDIT_COMMAND_FAILED" });
+  assert.equal(audits, 2);
+  assert.equal(githubRequests, 0);
 });
 
 test("governance documentation audit uses shared bounded process receipts authoritatively", async () => {
