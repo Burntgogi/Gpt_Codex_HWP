@@ -4,6 +4,15 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+- Prepared the v0.2.6 dependency security candidate for issue #18. Updated
+  @xmldom/xmldom, sharp, fast-uri, hono, qs, and ip-address in the source
+  and generated-runtime dependency graphs; both production audits now report
+  zero known vulnerabilities.
+- Enabled well-formed XML serialization for the HWPX font-integrity path while
+  preserving valid UTF-8 XML declarations and the existing document contract.
+- Assigned a new plugin build identity so this candidate cannot reuse the
+  published v0.2.5 runtime directory.
+
 ## [0.2.5] - 2026-08-10
 
 - Replaced the monolithic release Node test stage with a bounded per-file runner

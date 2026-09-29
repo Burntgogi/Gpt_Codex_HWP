@@ -1,69 +1,51 @@
-# Gpt_Codex_HWP v0.2.5 Release Notes
+# Gpt_Codex_HWP v0.2.6 Release Candidate Notes
 
-- Status: final release
-- Date: 2026-08-10
-- Validation baseline: Windows x64 development and real-document checks; physical Mac unverified
+- Status: unpublished release candidate
+- Date: 2026-09-29
+- Validation baseline: local Windows x64 checks; hosted platform CI in progress; physical Mac unverified
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
 ## Overview
 
-v0.2.5 retains v0.2.2's read-only HWP policy, HWPX writing, explicit durable runtime installation outside the Codex-managed cache, and all nine internal one-shot tool contracts. The immutable `v0.2.3` and `v0.2.4` tags remain unpublished candidates after release-gate execution portability issues were found on hosted Windows; neither tag has a GitHub Release or distribution assets. v0.2.5 runs the same complete coverage through bounded per-file isolation. User runtime, tools, and document behavior are unchanged from the v0.2.4 candidate.
+v0.2.6 is a candidate that updates the vulnerable packages in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18). It retains v0.2.5's read-only HWP policy, HWPX writing, nine internal one-shot tool contracts, and explicit durable runtime installation. This candidate has no GitHub Release or distribution assets yet, so public installation guidance still points to v0.2.5.
 
 ## Main changes
 
-- The release Node gate runs the exact complete inventory of 26 root and 41 source test files through bounded per-file isolation. No tests or coverage were removed; missing, duplicate, or unexpected files fail closed.
-- Each file has bounded output, execution, and shutdown. Failures expose only allowlisted fixed receipts, never raw TAP, errors, user paths, PIDs, environment variables, or document content.
-- Bounded shutdown on Windows reuses the existing descendant-tree terminator and waits for both child close and termination completion. The same rule covers every isolation path, including generic Node and SVG diagnostics.
-- Synthetic Git-history symlink-mode validation no longer depends on the host's `core.symlinks` setting. Only the temporary checkout command is made portable; the committed tree's `120000` mode remains under test.
-- Hosted-runner temporary-path aliases are normalized to the verified canonical temporary root, and environment- and path-length-dependent stderr counts retain their existing `1` through `65,537` bound.
-- A verified runtime is installed atomically outside the managed plugin cache, scoped by full plugin version, platform, architecture, and Node major. Node 22 and Node 24 in one Codex profile do not replace each other's runtime. Cache rehydration reuses the matching runtime, while document operations perform no installation or network access.
-- Worker-only, child-only, and mixed cleanup receipts are aggregated fail-closed, and the runtime verifies zero remaining supervised process trees.
-- Source and generated-runtime locks now use `fast-uri 3.1.5`, `hono 4.13.1`, and `ip-address 10.4.0`; both production audits report zero known vulnerabilities.
-- The Windows PowerShell ACL helper now allows a 15-second cold-start window under host load. The applied DACL and allowed principals are unchanged.
-- Public stable-install guidance now targets v0.2.5 and its default one-shot lifecycle. The default installation does not register a persistent `gpt-codex-hwp` server in `/mcp`.
-- The public v0.2.2 release and unpublished v0.2.3 and v0.2.4 candidate tags remain unchanged; v0.2.5 uses a new build ID.
+- Updated the direct dependencies @xmldom/xmldom to 0.9.12 and sharp to 0.35.5.
+- Updated the source and generated runtime locks to fast-uri 3.1.7, hono 4.13.11, qs 6.16.0, and ip-address 10.7.2.
+- HWPX font integrity output now uses requireWellFormed: true. It removes the parsed XML declaration before serialization and restores a UTF-8 declaration so valid documents continue to work.
+- The new plugin version 0.2.6+codex.20260929182230 keeps its runtime separate. The v0.2.5 tag and assets are unchanged.
 
-## Verification evidence
+## Candidate verification
 
-- The public v0.2.2 ZIP SHA-256 matched the published `SHA256SUMS` manifest.
-- A fresh-directory cold install passed all 11 required doctor checks, real HWP detection and reading, HWPX generation, and independent validation.
-- The shared Codex v0.2.2 installed-runtime one-shot generated HWPX, validated it, and reported zero remaining supervised descendants.
-- The parallel repository failure was reproduced locally; after restoring runtime dependencies, the affected smoke file passed all 28 tests, confirming a shared-tree race.
-- An isolated Codex-home regression installed the runtime, rebuilt the managed cache without dependencies, reran doctor and real HWPX generation/validation, and retained the exact installation-receipt hash.
-- The previously intermittent cache-rehydration regression passed three consecutive runs after the fix.
-- A regression test now proves that Node 22 and Node 24 resolve to separate runtime paths in one Codex home and that installing one does not alter the other directory.
-- Worker-only, child-only, and mixed one-shot cleanup paths produced valid aggregated receipts with zero remaining supervised process trees.
-- The local authoritative runner passed all 26 root and 41 source Node test files on the final identity. Release artifact build, upload, and attestation run only after the complete release gate succeeds for the same immutable tag.
+- On Node.js 22.22.2/npm 10.9.7, production npm audit returned zero known vulnerabilities for both source and distribution locks.
+- Of 459 repository Node tests, 457 passed and two were skipped for Windows environment restrictions, with zero failures. All 53 policy tests passed.
+- Of 106 focused XML, protection, image, and runtime tests, 104 passed and two were skipped for environment restrictions. The generated runtime check and installed-runtime nine-tool smoke also passed.
+- The immutable-tag full release gate, attestation, and post-publication restart check remain to be run after candidate approval.
 
 ## User resource statement
 
-There are zero persistent Gpt_Codex_HWP Node processes while the plugin is idle. Serial repository tests reduce concurrent Node processes in CI and development validation; they do not establish lower fixed RSS or installation size for user document work. No fixed RSS percentage or installation-size reduction is claimed.
+There are zero persistent Gpt_Codex_HWP Node processes while the plugin is idle. This dependency update does not claim a lower fixed RSS or installation size.
 
 ## Installation and upgrade
 
-When installing v0.2.5, first validate the returned `installedPath` against the path and plugin-identity rules, then run from that path:
+After publication, validate the returned installedPath against the path and plugin-identity rules before installing v0.2.6 from that path:
 
-```powershell
-node dist/install-runtime.js --json
-node dist/doctor.js --json
-```
+    node dist/install-runtime.js --json
+    node dist/doctor.js --json
 
-The first command must return JSON `code` `RUNTIME_INSTALL_OK`. Fully close and reopen every active Codex CLI and Desktop host. Run one document operation, require it to succeed, verify the generated output, and confirm that the one-shot process and its descendants exit. Document operations never install dependencies automatically; on `RUNTIME_NOT_INSTALLED`, explicitly rerun the installer from the validated `installedPath`. The v0.2.2 direct installation inside the managed cache was not durable across cache rehydration, so keep the older working version until v0.2.5 passes the restart check.
+The first command must return JSON code RUNTIME_INSTALL_OK. Fully close and reopen every active Codex CLI and Desktop host. Run one document operation, require it to succeed, verify the generated output, and confirm that the one-shot process and its descendants exit. Document operations never install dependencies automatically; on RUNTIME_NOT_INSTALLED, explicitly rerun the installer from the validated installedPath. Keep the older working version until verification succeeds.
 
-Production dependencies remain at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>`. To clean up after removing a plugin, close every Codex host and manually remove only the exact full-plugin-version directory that is no longer used. This release intentionally provides no automatic recursive deletion command.
+Production dependencies remain at $CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>. Manually clean up an older runtime only after confirming that its exact version directory is no longer used.
 
 ## Compatibility and known limitations
 
-- Development and real HWP/HWPX validation were performed on Windows x64.
-- macOS Apple Silicon is a compatibility target, but Codex Desktop and Hancom Office Hangul remain unverified on a physical Mac.
-- HWP 5.x is read-only and generated or edited results are HWPX. HWP 3.x has no real fixture and is not guaranteed.
+- Development and related feature validation were performed on Windows x64. macOS Apple Silicon is a compatibility target, but Codex Desktop and Hancom Office Hangul remain unverified on a physical Mac.
+- HWP 5.x is read-only; generated or edited results are HWPX. HWP 3.x has no real fixture and is not guaranteed.
 - Documents through 100 MiB are in the CI-verified envelope. Over 100 MiB through 512 MiB is non-guaranteed best-effort; over 512 MiB is rejected.
-- Protected, encrypted, signed, and DRM documents are not bypassed.
-- Font files are not bundled, installed, or embedded.
+- Protected, encrypted, signed, and DRM documents are not bypassed. Font files are not bundled, installed, or embedded.
 
 ## License and acknowledgements
 
 Project code is distributed under Apache-2.0. Kordoc, rhwp, hwpx-editing-skill, and other third-party components remain under their original copyrights and licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-These notes accompany the `v0.2.5` release.
