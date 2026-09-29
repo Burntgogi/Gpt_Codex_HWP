@@ -4,7 +4,7 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
-## [0.2.6] - 2026-09-29
+## [0.2.7] - 2026-09-29
 
 - Fixed the dependency advisories reported in issue #18. Updated
   @xmldom/xmldom, sharp, fast-uri, hono, qs, and ip-address in the source
@@ -16,6 +16,15 @@ This file records release tags and their publication status. Work under `Unrelea
   duplicate rows across source and runtime locks.
 - Assigned a new plugin build identity so this release cannot reuse the
   published v0.2.5 runtime directory.
+
+## [0.2.6] - 2026-09-29
+
+- Preserved this immutable tag as an unpublished candidate. Its GitHub squash
+  commit did not meet the release artifact builder's author and committer
+  identity requirement, so the release gate stopped before attestation.
+  No GitHub Release or distribution assets were published for v0.2.6.
+- The dependency and document fixes were carried into v0.2.7 without changing
+  their behavior.
 
 ## [0.2.5] - 2026-08-10
 
@@ -117,7 +126,8 @@ This file records release tags and their publication status. Work under `Unrelea
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.3...v0.2.4
