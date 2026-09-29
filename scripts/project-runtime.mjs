@@ -79,7 +79,7 @@ const FORBIDDEN_EXTENSIONS = new Set([
   ".p12", ".pem", ".pfx",
 ]);
 const SWAP_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
-const SHARP_VERSION = "0.35.3";
+const SHARP_VERSION = "0.35.5";
 const SHARP_FREEBSD_WASM = "@img/sharp-freebsd-wasm32";
 const SHARP_WEBCONTAINERS_WASM = "@img/sharp-webcontainers-wasm32";
 const SHARP_WASM = "@img/sharp-wasm32";
@@ -446,7 +446,7 @@ export function projectSharpWasmCpuConstraint(sourceLock) {
   requireAbsentSharpMetadata(wasm, "cpu");
   requireAbsentSharpMetadata(wasm, "os");
   requireAbsentSharpMetadata(wasm, "libc");
-  requireExactSharpDependencies(wasm, { "@emnapi/runtime": "^1.11.1" });
+  requireExactSharpDependencies(wasm, { "@emnapi/runtime": "^1.11.3" });
 
   requireSharpOptionalRecord(emnapi);
   requireAbsentSharpMetadata(emnapi, "cpu");
@@ -469,7 +469,7 @@ export function projectSharpWasmCpuConstraint(sourceLock) {
     [`node_modules/${SHARP_WEBCONTAINERS_WASM}`, "dependencies", SHARP_VERSION],
   ]);
   requireExactReverseParents(packages, "@emnapi/runtime", [
-    [`node_modules/${SHARP_WASM}`, "dependencies", "^1.11.1"],
+    [`node_modules/${SHARP_WASM}`, "dependencies", "^1.11.3"],
   ]);
   requireExactReverseParents(packages, "tslib", [
     ["node_modules/@emnapi/runtime", "dependencies", "^2.4.0"],

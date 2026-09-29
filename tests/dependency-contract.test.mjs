@@ -32,11 +32,11 @@ const EXPECTED_EXCLUDED_PACKAGES = Object.freeze([
 ]);
 const EXPECTED_DEPENDENCIES = Object.freeze({
   "@modelcontextprotocol/sdk": "1.29.0",
-  "@xmldom/xmldom": "0.9.10",
+  "@xmldom/xmldom": "0.9.12",
   cfb: "1.2.2",
   jszip: "3.10.1",
   kordoc: LOCAL_KORDOC_SPECIFIER,
-  sharp: "0.35.3",
+  sharp: "0.35.5",
   zod: "3.25.76",
 });
 const EXPECTED_OPTIONAL_DEPENDENCIES = Object.freeze({ "@rhwp/core": "0.7.17" });
@@ -47,7 +47,7 @@ const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
 });
 const EXPECTED_OVERRIDES = Object.freeze({
   "@hono/node-server": "2.0.11",
-  "fast-uri": "3.1.5",
+  "fast-uri": "3.1.7",
 });
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
@@ -107,10 +107,12 @@ test("dependency contract resolves patched production dependencies and projects 
   for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
     const lock = await readJson(join(root, "package-lock.json"));
     locks.set(label, lock);
-    assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.3", label);
-    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.5", label);
-    assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.1", label);
-    assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.4.0", label);
+    assert.equal(lock.packages?.["node_modules/@xmldom/xmldom"]?.version, "0.9.12", label);
+    assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.5", label);
+    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.7", label);
+    assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.11", label);
+    assert.equal(lock.packages?.["node_modules/qs"]?.version, "6.16.0", label);
+    assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.7.2", label);
   }
 
   assert.deepEqual(

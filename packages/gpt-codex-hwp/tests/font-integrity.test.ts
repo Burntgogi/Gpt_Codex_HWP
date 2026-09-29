@@ -123,6 +123,9 @@ test("normalizer changes only invalid script references to zero", async () => {
     ["hanja", "japanese", "other", "symbol", "user"],
   );
   assert.deepEqual((await inspectHwpxFontReferences(result.bytes)).issues, []);
+  const normalizedZip = await JSZip.loadAsync(result.bytes);
+  const normalizedHeader = await normalizedZip.file("Contents/header.xml")?.async("string");
+  assert.match(normalizedHeader ?? "", /^<\?xml version="1\.0" encoding="UTF-8"\?>\n/u);
   assert.deepEqual(await typographySnapshot(result.bytes), beforeTypography);
   assert.deepEqual(
     await unchangedEntrySnapshot(result.bytes),

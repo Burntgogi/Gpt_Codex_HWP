@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
   "pluginVersion": "0.2.5+codex.20260809232847",
-  "packageLockSha256": "541294e5d805173c82a74a6df90fe16d2008c028f836d56f5a2ee26870279f57",
+  "packageLockSha256": "c370170d9f184b65258b3a11155a187328a3c2ba66d349e5d335ba68c14f118a",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -101,8 +101,8 @@
     },
     {
       "path": "dist/shared/hwpx-font-integrity.js",
-      "size": 14533,
-      "sha256": "139924d8c488e33a750c5cf8f9582a2455b194d0bf171bb536dc20ba319c19bb"
+      "size": 14927,
+      "sha256": "3da557ade94743387a102fd6c65a2739538d2d94edd4d21c530a0593d7eb4e17"
     },
     {
       "path": "dist/shared/image-normalization.js",
@@ -321,13 +321,13 @@
     },
     {
       "path": "package-lock.json",
-      "size": 87219,
-      "sha256": "541294e5d805173c82a74a6df90fe16d2008c028f836d56f5a2ee26870279f57"
+      "size": 87221,
+      "sha256": "c370170d9f184b65258b3a11155a187328a3c2ba66d349e5d335ba68c14f118a"
     },
     {
       "path": "package.json",
       "size": 615,
-      "sha256": "870a849b83cd93363be81d3de3cc38e6bc18813ee11d686a3f219a4b42e9f179"
+      "sha256": "e90c414c8ad0fd47a0eb39a780b3821229dc6dbbb1e0ee52b0385b2a916dda0d"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

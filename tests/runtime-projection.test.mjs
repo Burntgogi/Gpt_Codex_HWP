@@ -163,7 +163,7 @@ test("Sharp WASM projection validates the exact source graph before mutation", a
   const sourceLock = JSON.parse(await readFile(join(SOURCE, "package-lock.json"), "utf8"));
   const mutations = [
     ["missing root", (lock) => { delete lock.packages[""]; }],
-    ["root Sharp spec", (lock) => { lock.packages[""].dependencies.sharp = "^0.35.3"; }],
+    ["root Sharp spec", (lock) => { lock.packages[""].dependencies.sharp = "^0.35.5"; }],
     ["Sharp version", (lock) => { lock.packages["node_modules/sharp"].version = "0.35.2"; }],
     ["Sharp FreeBSD edge", (lock) => { delete lock.packages["node_modules/sharp"].optionalDependencies["@img/sharp-freebsd-wasm32"]; }],
     ["Sharp WebContainer edge", (lock) => { lock.packages["node_modules/sharp"].optionalDependencies["@img/sharp-webcontainers-wasm32"] = "0.35.2"; }],
@@ -179,8 +179,8 @@ test("Sharp WASM projection validates the exact source graph before mutation", a
     ["emnapi optional marker", (lock) => { lock.packages["node_modules/@emnapi/runtime"].optional = false; }],
     ["emnapi tslib edge", (lock) => { delete lock.packages["node_modules/@emnapi/runtime"].dependencies.tslib; }],
     ["tslib optional marker", (lock) => { delete lock.packages["node_modules/tslib"].optional; }],
-    ["unexpected WASM reverse parent", (lock) => { lock.packages["node_modules/zod"].dependencies = { "@img/sharp-wasm32": "0.35.3" }; }],
-    ["unexpected emnapi reverse parent", (lock) => { lock.packages["node_modules/zod"].optionalDependencies = { "@emnapi/runtime": "^1.11.1" }; }],
+    ["unexpected WASM reverse parent", (lock) => { lock.packages["node_modules/zod"].dependencies = { "@img/sharp-wasm32": "0.35.5" }; }],
+    ["unexpected emnapi reverse parent", (lock) => { lock.packages["node_modules/zod"].optionalDependencies = { "@emnapi/runtime": "^1.11.3" }; }],
     ["unexpected tslib reverse parent", (lock) => { lock.packages["node_modules/zod"].dependencies = { tslib: "^2.4.0" }; }],
   ];
 
@@ -200,8 +200,8 @@ test("Sharp WASM projection validates the exact source graph before mutation", a
 });
 
 for (const [target, specifier] of [
-  ["@img/sharp-wasm32", "0.35.3"],
-  ["@emnapi/runtime", "^1.11.1"],
+  ["@img/sharp-wasm32", "0.35.5"],
+  ["@emnapi/runtime", "^1.11.3"],
   ["tslib", "^2.4.0"],
 ]) {
   test(`Sharp WASM projection rejects an unexpected peer reverse parent of ${target}`, async () => {
@@ -222,7 +222,7 @@ test("Sharp WASM projection rejects an unexpected devDependency reverse parent",
   const sourceLock = JSON.parse(await readFile(join(SOURCE, "package-lock.json"), "utf8"));
   const candidate = structuredClone(sourceLock);
   candidate.packages["node_modules/zod"].devDependencies = {
-    "@emnapi/runtime": "^1.11.1",
+    "@emnapi/runtime": "^1.11.3",
   };
   const before = JSON.stringify(candidate);
 
@@ -258,7 +258,7 @@ test("peer-parent Sharp graph fails projection without promoted partial output",
   const original = await readFile(lockPath, "utf8");
   const lock = JSON.parse(original);
   lock.packages["node_modules/zod"].peerDependencies = {
-    "@emnapi/runtime": "^1.11.1",
+    "@emnapi/runtime": "^1.11.3",
   };
   const output = join(temporaryRoot, "invalid-sharp-graph-output");
   try {
