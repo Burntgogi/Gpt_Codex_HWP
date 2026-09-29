@@ -128,12 +128,12 @@ Kordoc, rhwp, hwpx-editing-skill, or another third-party component.
 
 ## Release publication handoff
 
-Create the immutable `v0.2.5` tag only at the exact intended 40-character commit SHA. Resolve that SHA with `git rev-parse 'v0.2.5^{commit}'`, then run `release-verify.yml` with these exact inputs:
+After owner review and candidate checks, create the immutable `v0.2.6` tag only at the exact intended 40-character commit SHA. Resolve that SHA with `git rev-parse 'v0.2.6^{commit}'`, then run `release-verify.yml` with these exact inputs:
 
 ```text
-release_ref=v0.2.5
-expected_release_sha=<the exact 40-character output of git rev-parse v0.2.5^{commit}>
-release_version=0.2.5
+release_ref=v0.2.6
+expected_release_sha=<the exact 40-character output of git rev-parse v0.2.6^{commit}>
+release_version=0.2.6
 ```
 
-Publish only after both build and attestation jobs succeed. Use only `gpt-codex-hwp-0.2.5.zip`, `gpt-codex-hwp-0.2.5.spdx.json`, `provenance.json`, and `SHA256SUMS` from the same workflow artifact. Never rebuild, repackage, or substitute local files for those verified outputs.
+Publish only after both build and attestation jobs succeed. Use only `gpt-codex-hwp-0.2.6.zip`, `gpt-codex-hwp-0.2.6.spdx.json`, `provenance.json`, and `SHA256SUMS` from the same workflow artifact. Never rebuild, repackage, or substitute local files for those verified outputs.

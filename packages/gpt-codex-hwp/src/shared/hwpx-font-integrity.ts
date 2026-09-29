@@ -167,7 +167,13 @@ export async function normalizeGeneratedFontReferences(
       });
     }
 
-    zip.file(HEADER_PATH, new XMLSerializer().serializeToString(document));
+    const declaration = document.firstChild;
+    const hasXmlDeclaration = declaration?.nodeType === 7 && declaration.nodeName === "xml";
+    if (hasXmlDeclaration) document.removeChild(declaration);
+    const serialized = new XMLSerializer().serializeToString(document, { requireWellFormed: true });
+    zip.file(HEADER_PATH, hasXmlDeclaration
+      ? `<?xml version="1.0" encoding="UTF-8"?>\n${serialized}`
+      : serialized);
     const mimetype = zip.file("mimetype");
     if (mimetype !== null) {
       zip.file("mimetype", await mimetype.async("string"), {

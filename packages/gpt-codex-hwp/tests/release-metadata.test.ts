@@ -60,8 +60,9 @@ test("bilingual release documentation states the same release boundary", async (
 
   assert.match(koReadme, /\[한국어 릴리즈 노트\]\(RELEASE_NOTES\.md\)/u);
   assert.match(enReadme, /\[English release notes\]\(RELEASE_NOTES\.en\.md\)/u);
+  for (const document of [koReadme, enReadme]) assert.match(document, /v0\.2\.5/u);
+  for (const document of [koNotes, enNotes]) assert.match(document, new RegExp(escapeRegExp(tag), "u"));
   for (const document of [koReadme, enReadme, koNotes, enNotes]) {
-    assert.match(document, new RegExp(escapeRegExp(tag), "u"));
     assert.match(document, /HWP_READ_ONLY|읽기 전용|read-only/iu);
     assert.match(document, /HWPX/u);
     assert.match(document, /Windows x64/u);
@@ -240,18 +241,18 @@ test("the staged runtime documents secure agent-assisted GitHub installation", a
   ];
   assert.match(readmes[0], /href="#안정-버전-v025-github-설치">빠른 설치</u);
   assert.match(readmes[1], /href="#stable-v025-installation-from-github">Quick install/u);
-  for (const section of sections) assertSecureAgentInstallSection(section, metadata);
+  for (const section of sections) assertSecureAgentInstallSection(section, metadata, "v0.2.5");
 
   const missingMarketplaceIdentity = sections[0].replace("marketplaceName", "marketplace identity");
   assert.throws(
-    () => assertSecureAgentInstallSection(missingMarketplaceIdentity, metadata),
+    () => assertSecureAgentInstallSection(missingMarketplaceIdentity, metadata, "v0.2.5"),
     /marketplaceName/u,
   );
   const pinnedRelease = /--ref\s+(v\d+\.\d+\.\d+)/u.exec(sections[0])?.[1];
   assert.ok(pinnedRelease, "the Korean install section must contain its pinned release");
   const staleRelease = sections[0].replaceAll(pinnedRelease, "v0.1.3");
   assert.throws(
-    () => assertSecureAgentInstallSection(staleRelease, metadata),
+    () => assertSecureAgentInstallSection(staleRelease, metadata, "v0.2.5"),
     /verified release tag/u,
   );
 });
@@ -385,12 +386,13 @@ function assertNoCompletedMacOsSupportClaim(document: string): void {
 function assertSecureAgentInstallSection(
   section: string,
   metadata: Awaited<ReturnType<typeof loadProjectMetadata>>,
+  publishedTag: string,
 ): void {
   const referencedTags = [...section.matchAll(/--ref\s+(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/gu)]
     .map((match) => match[1]!);
   assert.equal(referencedTags.length, 1, "the marketplace source must pin exactly one version tag");
   const recommendedTag = referencedTags[0]!;
-  assert.equal(recommendedTag, `v${metadata.version}`, "the marketplace source must pin the current verified release tag");
+  assert.equal(recommendedTag, publishedTag, "the marketplace source must pin the current verified release tag");
   const requiredText = [
     "Burntgogi/Gpt_Codex_HWP",
     `--ref ${recommendedTag}`,

@@ -1058,12 +1058,12 @@ async function assertSharpRuntimeSelection(runtimeRoot) {
     }
   }
 
-  await assertInstalledPackage(runtimeRoot, "sharp", "0.35.3");
+  await assertInstalledPackage(runtimeRoot, "sharp", "0.35.5");
   const nativeCandidates = sharpNativeCandidates();
   const installedCandidates = [];
   for (const packageName of nativeCandidates) {
     try {
-      await assertInstalledPackage(runtimeRoot, packageName, "0.35.3");
+      await assertInstalledPackage(runtimeRoot, packageName, "0.35.5");
       installedCandidates.push(packageName);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
