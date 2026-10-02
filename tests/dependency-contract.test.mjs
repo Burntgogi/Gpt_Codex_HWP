@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -36,6 +37,7 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   cfb: "1.2.2",
   jszip: "3.10.1",
   kordoc: LOCAL_KORDOC_SPECIFIER,
+  "markdown-it": "14.3.1",
   sharp: "0.35.5",
   zod: "3.25.76",
 });
@@ -47,7 +49,7 @@ const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
 });
 const EXPECTED_OVERRIDES = Object.freeze({
   "@hono/node-server": "2.0.11",
-  "fast-uri": "3.1.7",
+  "fast-uri": "3.1.8",
 });
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
@@ -109,7 +111,8 @@ test("dependency contract resolves patched production dependencies and projects 
     locks.set(label, lock);
     assert.equal(lock.packages?.["node_modules/@xmldom/xmldom"]?.version, "0.9.12", label);
     assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.5", label);
-    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.7", label);
+    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.8", label);
+    assert.equal(lock.packages?.["node_modules/markdown-it"]?.version, "14.3.1", label);
     assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.11", label);
     assert.equal(lock.packages?.["node_modules/qs"]?.version, "6.16.0", label);
     assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.7.2", label);
@@ -129,6 +132,16 @@ test("dependency contract resolves patched production dependencies and projects 
   );
   for (const path of ["node_modules/@emnapi/runtime", "node_modules/tslib"]) {
     assert.equal(Object.hasOwn(locks.get("runtime").packages[path], "cpu"), false, path);
+  }
+});
+
+test("installed URI normalization folds percent-encoded uppercase hosts", () => {
+  const requireSource = createRequire(join(SOURCE, "package.json"));
+  const uri = requireSource("fast-uri");
+  for (const reference of ["//%41.com", "//A.com", "//a.com"]) {
+    assert.equal(uri.parse(reference).host, "a.com");
+    assert.equal(uri.normalize(reference), "//a.com");
+    assert.equal(uri.equal(reference, "//a.com"), true);
   }
 });
 

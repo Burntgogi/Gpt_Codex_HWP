@@ -4,6 +4,13 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+- Update source and generated-runtime dependencies to fast-uri 3.1.8 and
+  markdown-it 14.3.1 for GHSA-hrr3-gc8f-f4qj and GHSA-253c-mchw-3w2r.
+- Record runtime preparation failures and fixed, redacted process failure
+  reasons in CI smoke and release diagnostics. Intermittent Windows failures
+  are still under investigation; this change makes subsequent failures
+  distinguishable without exposing raw process output.
+
 ## [0.2.7] - 2026-09-29
 
 - Fixed the dependency advisories reported in issue #18. Updated

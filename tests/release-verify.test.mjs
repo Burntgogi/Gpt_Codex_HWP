@@ -971,6 +971,34 @@ test("large-document smoke stage preserves only its bounded failure receipt", as
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
 });
 
+test("large-document smoke stage preserves only allowlisted process failure reasons", async () => {
+  const receipt = "LARGE_DOCUMENT_SMOKE status=failed stage=runtime-install reason=nonzero";
+  const result = await runStageCommand(
+    nodeStage("document-benchmark", `process.stdout.write(${JSON.stringify(receipt + "\n")}); process.exit(7)`),
+    { timeoutMs: 2_000, maxOutputBytes: 1_024 },
+  );
+  assert.deepEqual(result, {
+    status: "failed",
+    diagnostic: { kind: "document-benchmark", command: 1, receipt },
+  });
+  for (const reason of ["timeout", "output-limit", "cleanup", "signal", "nonzero", "stderr", "stdout", "invalid-result"]) {
+    const diagnostic = {
+      kind: "document-benchmark", command: 1,
+      receipt: `LARGE_DOCUMENT_SMOKE status=failed stage=runtime-install reason=${reason}`,
+    };
+    assert.equal(
+      formatReleaseStageDiagnostic(diagnostic),
+      `DOCUMENT_BENCHMARK_FIRST_FAILURE command=1 ${diagnostic.receipt}`,
+    );
+  }
+  for (const reason of ["PRIVATE/path", "secret", "timeout PRIVATE_STDERR", "timeout\nPRIVATE/path"]) {
+    assert.equal(formatReleaseStageDiagnostic({
+      kind: "document-benchmark", command: 1,
+      receipt: `LARGE_DOCUMENT_SMOKE status=failed stage=runtime-install reason=${reason}`,
+    }), undefined);
+  }
+});
+
 test("document benchmark stage maps a silent nonzero child to one fixed runner receipt", async () => {
   const result = await runStageCommand(
     nodeStage("document-benchmark", "process.exit(9)"),
