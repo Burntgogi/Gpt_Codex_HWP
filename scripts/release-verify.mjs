@@ -27,6 +27,7 @@ const RELEASE_CLEANUP_RESERVE_MS = 10_000;
 const TOOL_COUNT = 9;
 const executeFile = promisify(execFile);
 const GIT_IDENTITY_PATTERN = /^[a-f0-9]{40}$/u;
+const LARGE_DOCUMENT_FAILURE_PATTERN = /^LARGE_DOCUMENT_SMOKE status=failed stage=[a-z0-9-]+(?: reason=(?:timeout|output-limit|cleanup|signal|nonzero|stderr|stdout|invalid-result))?$/u;
 
 export const REQUIRED_RELEASE_STAGES = Object.freeze([
   "metadata",
@@ -309,7 +310,7 @@ function selectDocumentBenchmarkFailureReceipt(result) {
     .split(/\r?\n/u)
     .map((line) => line.trim());
   const patterns = [
-    /^LARGE_DOCUMENT_SMOKE status=failed stage=[a-z0-9-]+$/u,
+    LARGE_DOCUMENT_FAILURE_PATTERN,
     /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u,
     /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u,
     /^BENCHMARK_CASE_FAILURE phase=(?:facade|snapshot|detect|probe|unknown) engineCode=[A-Z_]+ stage=[a-zA-Z0-9-]+$/u,
@@ -350,7 +351,7 @@ function normalizedDocumentBenchmarkDiagnostic(value) {
 }
 
 function isSafeDocumentBenchmarkReceipt(value) {
-  return /^LARGE_DOCUMENT_SMOKE status=failed stage=[a-z0-9-]+$/u.test(value)
+  return LARGE_DOCUMENT_FAILURE_PATTERN.test(value)
     || /^BENCHMARK_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value)
     || /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u.test(value)
     || /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u.test(value)

@@ -180,21 +180,33 @@ export function assertOneShotProcessCleanup(result) {
   });
 }
 
+class RuntimeProcessFailure extends Error {
+  constructor(reason) {
+    super("One-shot process failed.");
+    this.reason = reason;
+  }
+}
+
 function assertSuccessfulOneShotProcess(result, verifyStdout = true) {
-  if (result?.code !== 0 || result.signal !== null || result.overflow !== false
-    || result.timedOut !== false || result.terminationFailed !== false
-    || !Buffer.isBuffer(result.stderr) || result.stderr.length !== 0
-    || !Buffer.isBuffer(result.stdout)
-    || (verifyStdout && result.stdout.toString("utf8") !== "ONESHOT_OK\n")) {
-    throw new Error("One-shot process failed.");
+  if ((!Number.isInteger(result?.code) && result?.code !== null)
+    || (result.signal !== null && typeof result.signal !== "string")
+    || typeof result.overflow !== "boolean" || typeof result.timedOut !== "boolean"
+    || typeof result.terminationFailed !== "boolean"
+    || !Buffer.isBuffer(result.stderr) || !Buffer.isBuffer(result.stdout)) {
+    throw new RuntimeProcessFailure("invalid-result");
+  }
+  if (result.terminationFailed) throw new RuntimeProcessFailure("cleanup");
+  if (result.timedOut) throw new RuntimeProcessFailure("timeout");
+  if (result.overflow) throw new RuntimeProcessFailure("output-limit");
+  if (result.signal !== null) throw new RuntimeProcessFailure("signal");
+  if (result.code !== 0) throw new RuntimeProcessFailure("nonzero");
+  if (result.stderr.length !== 0) throw new RuntimeProcessFailure("stderr");
+  if (verifyStdout && result.stdout.toString("utf8") !== "ONESHOT_OK\n") {
+    throw new RuntimeProcessFailure("stdout");
   }
 }
 
 export async function runInstalledOneShotSmoke(options = {}) {
-  const prepared = options.runtimeRoot === undefined && options.runProcess === undefined
-    ? await prepareRestartSafeRuntime()
-    : undefined;
-  const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const createTemporaryRoot = options.createTemporaryRoot
@@ -207,7 +219,16 @@ export async function runInstalledOneShotSmoke(options = {}) {
   let catalog;
   let report;
   let failure;
+  let failureReason;
+  let prepared;
   try {
+    if (options.prepareRuntime !== undefined
+      || (options.runtimeRoot === undefined && options.runProcess === undefined)) {
+      stage = "runtime-install";
+      prepared = await (options.prepareRuntime ?? prepareRestartSafeRuntime)();
+    }
+    stage = "runtime";
+    const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
     const entry = join(runtimeRoot, "dist", "oneshot.js");
     const entryMetadata = await lstat(entry);
     if (!entryMetadata.isFile() || entryMetadata.isSymbolicLink()) {
@@ -343,8 +364,9 @@ export async function runInstalledOneShotSmoke(options = {}) {
       stderrBytes: 0,
       remainingDescendantCount: cleanupReceipt.remainingDescendantCount,
     });
-  } catch {
+  } catch (error) {
     failure = stage;
+    if (error instanceof RuntimeProcessFailure) failureReason = error.reason;
   } finally {
     if (cleanupRoot !== undefined) {
       try {
@@ -359,7 +381,8 @@ export async function runInstalledOneShotSmoke(options = {}) {
   }
 
   if (failure !== undefined || report === undefined) {
-    stdout.write(`RUNTIME_SMOKE status=failed stage=${failure ?? "unknown"}\n`);
+    const diagnostic = failureReason === undefined ? "" : ` reason=${failureReason}`;
+    stdout.write(`RUNTIME_SMOKE status=failed stage=${failure ?? "unknown"}${diagnostic}\n`);
     setExitCode(1);
     return false;
   }
@@ -371,10 +394,6 @@ export async function runInstalledOneShotSmoke(options = {}) {
 }
 
 export async function runInstalledLargeDocumentSmoke(options = {}) {
-  const prepared = options.runtimeRoot === undefined && options.runProcess === undefined
-    ? await prepareRestartSafeRuntime()
-    : undefined;
-  const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
   const stdout = options.stdout ?? process.stdout;
   const setExitCode = options.setExitCode ?? ((code) => { process.exitCode = code; });
   const createTemporaryRoot = options.createTemporaryRoot
@@ -391,7 +410,16 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
   let cleanupRoot;
   let report;
   let failure;
+  let failureReason;
+  let prepared;
   try {
+    if (options.prepareRuntime !== undefined
+      || (options.runtimeRoot === undefined && options.runProcess === undefined)) {
+      stage = "runtime-install";
+      prepared = await (options.prepareRuntime ?? prepareRestartSafeRuntime)();
+    }
+    stage = "runtime";
+    const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
     if (requestedMiB !== 100) throw new Error("invalid supported size");
     const entry = join(runtimeRoot, "dist", "oneshot.js");
     const entryMetadata = await lstat(entry);
@@ -464,8 +492,9 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
       sourceUnchanged: true,
       remainingDescendantCount: cleanupReceipt.remainingDescendantCount,
     });
-  } catch {
+  } catch (error) {
     failure = stage;
+    if (error instanceof RuntimeProcessFailure) failureReason = error.reason;
   } finally {
     if (cleanupRoot !== undefined) {
       try {
@@ -476,7 +505,8 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
   }
 
   if (failure !== undefined || report === undefined) {
-    stdout.write(`LARGE_DOCUMENT_SMOKE status=failed stage=${failure ?? "unknown"}\n`);
+    const diagnostic = failureReason === undefined ? "" : ` reason=${failureReason}`;
+    stdout.write(`LARGE_DOCUMENT_SMOKE status=failed stage=${failure ?? "unknown"}${diagnostic}\n`);
     setExitCode(1);
     return false;
   }
@@ -499,8 +529,8 @@ export async function prepareRestartSafeRuntime(options = {}) {
       codexHome,
       "plugins", "cache", metadata.marketplaceName, metadata.productId, pluginVersion(metadata),
     );
-    await buildRuntime({ root: projectRoot, outputRoot: managedRoot });
-    const result = await runBoundedProcess(process.execPath, [
+    await (options.buildRuntime ?? buildRuntime)({ root: projectRoot, outputRoot: managedRoot });
+    const result = await (options.runProcess ?? runBoundedProcess)(process.execPath, [
       join(managedRoot, "dist", "install-runtime.js"), "--json",
     ], {
       cwd: managedRoot,
