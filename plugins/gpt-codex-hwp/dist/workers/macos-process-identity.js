@@ -1,7 +1,21 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { MAX_TRACKED_PROCESS_IDENTITIES, } from "./posix-process-records.js";
+import { pythonCommandCandidates, resolvePythonCommand } from "../shared/python-command.js";
 const execFileAsync = promisify(execFile);
+// Resolved once per process from the same trusted absolute locations as the
+// image helper, so a Homebrew python3 is preferred over the /usr/bin/python3
+// stub that may prompt for the Command Line Tools.
+let macosPythonCommand;
+function resolveMacosPython() {
+    macosPythonCommand ??= resolvePythonCommand(pythonCommandCandidates("darwin"))
+        .then((python) => {
+        if (python === undefined)
+            throw new Error("macOS process identity requires Python 3");
+        return python.command;
+    });
+    return macosPythonCommand;
+}
 const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
 export async function snapshotMacosPsRecords() {
     const result = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,rss="], { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" });
@@ -240,7 +254,7 @@ print(json.dumps(out, separators=(",", ":")))
 export async function macosKernelIdentities(pids = []) {
     if (pids.length > MAX_TRACKED_PROCESS_IDENTITIES)
         throw new Error("macOS PID limit exceeded");
-    const result = await execFileAsync("/usr/bin/python3", ["-c", MACOS_LIBPROC_IDENTITY_SCRIPT, ...pids.map(String)], { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" });
+    const result = await execFileAsync(await resolveMacosPython(), ["-c", MACOS_LIBPROC_IDENTITY_SCRIPT, ...pids.map(String)], { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" });
     const value = JSON.parse(String(result.stdout));
     if (!Array.isArray(value) || value.length > MAX_TRACKED_PROCESS_IDENTITIES) {
         throw new Error("invalid macOS identity receipt");

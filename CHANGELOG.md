@@ -60,6 +60,14 @@ This file records release tags and their publication status. Work under `Unrelea
 - Allow work-in-progress entries under Unreleased in the release identity
   test, refresh stale README statements, extend `.gitignore`, and mark the
   generated runtime as generated for GitHub.
+- Split `document-child-client.ts` (3,756 lines) into Windows Job
+  supervisor, POSIX telemetry, macOS identity, and shared primitive modules
+  without behavior changes.
+- Resolve the Python used for macOS process identity from the same trusted
+  locations as the image helper, preferring Homebrew over the
+  `/usr/bin/python3` stub.
+- Assign a new plugin build identity (`0.2.7+codex.20261008050000`) so the
+  changed runtime cannot reuse the published v0.2.7 runtime directory.
 
 ## [0.2.7] - 2026-09-29
 

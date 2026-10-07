@@ -10,8 +10,8 @@ const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)))
 const IMMUTABLE_RELEASES = Object.freeze([
   "0.1.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.2.4", "0.2.5", "0.2.6",
 ]);
-const PREVIOUS_BUILD_ID = "20260809232847";
-const EXPECTED_BUILD_ID = "20260929182230";
+const PREVIOUS_BUILD_ID = "20260929182230";
+const EXPECTED_BUILD_ID = "20261008050000";
 
 test("release identity derives every 0.2.7 surface from root metadata", async () => {
   const metadata = await loadProjectMetadata(ROOT);

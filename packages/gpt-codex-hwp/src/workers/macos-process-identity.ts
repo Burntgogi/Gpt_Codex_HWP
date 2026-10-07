@@ -7,7 +7,23 @@ import {
   type RetainedPosixProcess,
 } from "./posix-process-records.js";
 
+import { pythonCommandCandidates, resolvePythonCommand } from "../shared/python-command.js";
+
 const execFileAsync = promisify(execFile);
+
+// Resolved once per process from the same trusted absolute locations as the
+// image helper, so a Homebrew python3 is preferred over the /usr/bin/python3
+// stub that may prompt for the Command Line Tools.
+let macosPythonCommand: Promise<string> | undefined;
+
+function resolveMacosPython(): Promise<string> {
+  macosPythonCommand ??= resolvePythonCommand(pythonCommandCandidates("darwin"))
+    .then((python) => {
+      if (python === undefined) throw new Error("macOS process identity requires Python 3");
+      return python.command;
+    });
+  return macosPythonCommand;
+}
 const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
 
 interface MacosPsRecord {
@@ -297,7 +313,7 @@ export async function macosKernelIdentities(
 ): Promise<ReadonlyMap<number, MacosKernelIdentity>> {
   if (pids.length > MAX_TRACKED_PROCESS_IDENTITIES) throw new Error("macOS PID limit exceeded");
   const result = await execFileAsync(
-    "/usr/bin/python3",
+    await resolveMacosPython(),
     ["-c", MACOS_LIBPROC_IDENTITY_SCRIPT, ...pids.map(String)],
     { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" },
   );
