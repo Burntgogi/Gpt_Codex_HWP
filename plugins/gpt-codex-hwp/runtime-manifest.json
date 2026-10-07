@@ -120,6 +120,11 @@
       "sha256": "a8cca33e602c7c34a87de4a2561bc07c77fabf15db15ac5bd778c3df9bec2ce9"
     },
     {
+      "path": "dist/shared/markdown-underscore.js",
+      "size": 1895,
+      "sha256": "efcec2a66f35f254b2ece1c4e569fe1189ab12e91ef53791b96e730dfe617f0f"
+    },
+    {
       "path": "dist/shared/output.js",
       "size": 23432,
       "sha256": "12a46809121273d72aef7f6e3af6e0a8db4534f5ca979a91f4836f53eed37b9b"
@@ -266,8 +271,8 @@
     },
     {
       "path": "dist/workers/document-compute-backend.js",
-      "size": 30450,
-      "sha256": "83f8342d27b50f88abbe93b77f3fb86f30bc32457606b43f34056ecf3b22e285"
+      "size": 31657,
+      "sha256": "dc20d485b1cd1540521891406ab371115e2e65ac1a3c0bf226db4c203b50b717"
     },
     {
       "path": "dist/workers/document-errors.js",

@@ -68,6 +68,13 @@ This file records release tags and their publication status. Work under `Unrelea
   `/usr/bin/python3` stub.
 - Assign a new plugin build identity (`0.2.7+codex.20261008050000`) so the
   changed runtime cannot reuse the published v0.2.7 runtime directory.
+- Keep underscores inside identifiers such as `Gpt_Codex_HWP` and
+  `hwp_detect_format` when generating HWPX. Kordoc treated them as emphasis
+  and dropped the underscores; generation now escapes intraword underscores
+  the way CommonMark reads them. Patching was unaffected and is unchanged.
+- Preview HWPX that has no Hancom layout cache, such as documents this plugin
+  generates, through synthetic reflow with a warning instead of failing with
+  `ENGINE_CRASH` when `reflow` is not given.
 
 ## [0.2.7] - 2026-09-29
 

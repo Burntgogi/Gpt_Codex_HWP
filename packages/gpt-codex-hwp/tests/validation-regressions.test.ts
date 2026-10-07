@@ -116,3 +116,33 @@ function directElements(parent: Element, localName: string): Element[] {
   }
   return result;
 }
+
+test("generation keeps underscores inside identifiers instead of turning them into emphasis", async () => {
+  const bs = String.fromCharCode(92);
+  const { escapeIntrawordUnderscores } = await import("../src/shared/markdown-underscore.js");
+  assert.equal(escapeIntrawordUnderscores("Gpt_Codex_HWP"), `Gpt${bs}_Codex${bs}_HWP`);
+  assert.equal(escapeIntrawordUnderscores("a__b 한글_식별자"), `a${bs}_${bs}_b 한글${bs}_식별자`);
+  for (const unchanged of [
+    "_italic_ and __bold__ at word boundaries",
+    "`hwp_read` in code",
+    "see https://example.com/a_b_c and <https://x.test/a_b>",
+    "[link](https://example.com/a_b)",
+    `already${bs}_escaped`,
+  ]) assert.equal(escapeIntrawordUnderscores(unchanged), unchanged);
+  assert.equal(
+    escapeIntrawordUnderscores("```\nsnake_case_code\n```\nsnake_case"),
+    `\`\`\`\nsnake_case_code\n\`\`\`\nsnake${bs}_case`,
+  );
+
+  const { markdownToHwpx } = await import("kordoc");
+  const JSZip = (await import("jszip")).default;
+  const source = "# Gpt_Codex_HWP\n\n| 도구 | 값 |\n| --- | --- |\n| hwp_detect_format | x_y_z |\n\n_강조_ 유지";
+  const zip = await JSZip.loadAsync(await markdownToHwpx(escapeIntrawordUnderscores(source)));
+  const xml = await zip.file("Contents/section0.xml")!.async("string");
+  const text = [...xml.matchAll(/<hp:t>([^<]*)<\/hp:t>/gu)].map((match) => match[1]).join("");
+  for (const identifier of ["Gpt_Codex_HWP", "hwp_detect_format", "x_y_z"]) {
+    assert.ok(text.includes(identifier), identifier);
+  }
+  assert.ok(!text.includes(bs), "no escape characters reach the document");
+  assert.ok(text.includes("강조") && !text.includes("_강조_"), "boundary emphasis still parses");
+});
