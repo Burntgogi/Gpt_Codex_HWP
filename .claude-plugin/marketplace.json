@@ -13,6 +13,12 @@
       "source": "./plugins/gpt-codex-hwp",
       "description": "Read Korean HWP/HWPX documents and safely create, edit, validate, and preview HWPX.",
       "category": "productivity"
+    },
+    {
+      "name": "korean-official-doc",
+      "source": "./plugins/korean-official-doc",
+      "description": "Optional companion: lint Korean official document (공문서) drafts against the statutory formatting rules.",
+      "category": "productivity"
     }
   ]
 }

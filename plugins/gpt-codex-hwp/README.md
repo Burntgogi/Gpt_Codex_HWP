@@ -204,12 +204,13 @@ Claude Code 경로는 Windows x64에서 격리된 `CLAUDE_CONFIG_DIR`에 설치�
 
 ## 함께 쓰면 좋은 스킬 (선택)
 
-다음 두 스킬은 필수 의존성이 아닙니다. 설치하지 않아도 Gpt_Codex_HWP의 모든 도구가 동작합니다. 설치를 맡은 에이전트는 런타임 설치가 끝난 뒤 사용자에게 한 번만 권하고, 사용자가 동의한 경우에만 각 저장소의 설치 안내를 따릅니다. 거절하면 다시 묻지 않습니다.
+다음 스킬은 필수 의존성이 아닙니다. 설치하지 않아도 Gpt_Codex_HWP의 모든 도구가 동작합니다. 설치를 맡은 에이전트는 런타임 설치가 끝난 뒤 사용자에게 한 번만 권하고, 사용자가 동의한 경우에만 각 저장소의 설치 안내를 따릅니다. 거절하면 다시 묻지 않습니다.
 
 | 스킬 | 쓰임새 | Codex | Claude Code |
 | --- | --- | --- | --- |
 | [AI Slop 탈곡기](https://github.com/Burntgogi/ai-slop-thresher) | HWPX로 만들기 전 한국어 초안의 AI 말투와 과잉 설명을 다듬습니다. | `codex plugin marketplace add Burntgogi/ai-slop-thresher` 후 `codex plugin add ai-slop-thresher@ai-slop-thresher` | `/plugin marketplace add Burntgogi/ai-slop-thresher` 후 `/plugin install ai-slop-thresher@ai-slop-thresher` |
 | [kar-plain](https://github.com/Burntgogi/kar-plain) | 주제를 글, 다이어그램, 웹 페이지, 영상으로 설명합니다. 문서의 설명 단락과 도식 초안에 씁니다. | 저장소의 수동 설치(`~/.agents/skills`) 안내 | `/plugin marketplace add Burntgogi/kar-plain` 후 `/plugin install kar-plain@kar-plain` |
+| [공문서 작성 규칙](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/plugins/korean-official-doc/skills/korean-official-doc/SKILL.md) (`korean-official-doc`) | 공문서 Markdown 초안의 날짜·시각·금액 표기, 항목 기호 순서, 붙임, 「끝」 표시를 법령 근거와 함께 오프라인으로 점검합니다. 공공기관 문서를 쓰는 사용자에게 권합니다. | 같은 마켓플레이스에서 `codex plugin add korean-official-doc@gpt-codex-hwp-local` | 같은 마켓플레이스에서 `/plugin install korean-official-doc@gpt-codex-hwp-local` |
 
 각 저장소의 최신 릴리스 태그와 설치 안내를 먼저 확인하십시오. 위 명령은 2026-10-08 기준입니다.
 

@@ -40,6 +40,7 @@
     "test:policy": "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
     "test": "npm run test:repository && npm run test:source",
-    "test:python": "npm --prefix packages/gpt-codex-hwp run test:python"
+    "test:python": "npm --prefix packages/gpt-codex-hwp run test:python",
+    "test:official-doc": "node --test tests/korean-official-doc/lint-official-doc.test.mjs"
   }
 }

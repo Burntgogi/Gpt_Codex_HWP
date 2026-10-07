@@ -1,0 +1,32 @@
+{
+  "name": "korean-official-doc",
+  "version": "0.1.0",
+  "description": "Check Korean official document drafts against the statutory formatting rules before generating HWPX.",
+  "author": {
+    "name": "Gpt_Codex_HWP contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "korean",
+    "official-document",
+    "gongmun",
+    "hwpx",
+    "lint"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "공문서 작성 규칙",
+    "shortDescription": "Lint 공문서 drafts for dates, amounts, items, and 끝.",
+    "longDescription": "Deterministic, offline checks of Markdown drafts against 「행정업무의 운영 및 혁신에 관한 규정」 and its 시행규칙: date and time notation, amounts with a Hangul reading, item symbol order, attachments, and the 끝 mark. Optional companion to Gpt_Codex_HWP.",
+    "developerName": "Gpt_Codex_HWP contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "이 공문 초안이 작성 규칙에 맞는지 점검해줘.",
+      "이 기안문의 날짜와 금액 표기를 고쳐줘."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

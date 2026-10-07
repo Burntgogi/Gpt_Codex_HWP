@@ -42,6 +42,7 @@ test("source package declares only approved direct dependencies", async () => {
     "cfb",
     "jszip",
     "kordoc",
+    "markdown-it",
     "sharp",
     "zod",
   ]);

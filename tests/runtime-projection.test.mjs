@@ -1019,9 +1019,22 @@ test("Claude Code marketplace and plugin manifests stay aligned with the Codex r
   const claudePlugin = JSON.parse(await readFile(join(runtimeRoot, ".claude-plugin", "plugin.json"), "utf8"));
 
   assert.equal(marketplace.name, rootPackage.config.marketplaceName);
-  assert.equal(marketplace.plugins.length, 1);
+  const codexMarketplace = JSON.parse(await readFile(join(ROOT, ".agents", "plugins", "marketplace.json"), "utf8"));
+  assert.deepEqual(
+    marketplace.plugins.map((entry) => [entry.name, entry.source]),
+    codexMarketplace.plugins.map((entry) => [entry.name, entry.source.path]),
+    "Codex and Claude Code marketplaces list the same plugins",
+  );
   assert.equal(marketplace.plugins[0].name, metadata.productId);
   assert.equal(marketplace.plugins[0].source, `./plugins/${metadata.productId}`);
+  for (const entry of marketplace.plugins.slice(1)) {
+    const root = join(ROOT, entry.source);
+    const codex = JSON.parse(await readFile(join(root, ".codex-plugin", "plugin.json"), "utf8"));
+    const claude = JSON.parse(await readFile(join(root, ".claude-plugin", "plugin.json"), "utf8"));
+    assert.equal(codex.name, entry.name);
+    assert.equal(claude.name, entry.name);
+    assert.equal(claude.version, codex.version, `${entry.name} manifests share one version`);
+  }
 
   assert.equal(claudePlugin.name, metadata.productId);
   assert.equal(claudePlugin.version, pluginVersion(metadata));

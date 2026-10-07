@@ -31,6 +31,11 @@ This file records release tags and their publication status. Work under `Unrelea
   override proxy-addr to 2.0.8 (GHSA-jqcg-44mw-7w3h). The plugin uses neither
   the OAuth client nor an HTTP server, but the production audit gate now
   passes again.
+- Add the optional `korean-official-doc` plugin to both marketplaces: an
+  offline, dependency-free linter for 공문서 Markdown drafts that checks date,
+  time, and amount notation, item-symbol order, 붙임, and the 「끝」 mark with
+  citations to 「행정업무의 운영 및 혁신에 관한 규정」 and its 시행규칙.
+  Gpt_Codex_HWP recommends it after installation but never installs it.
 
 ## [0.2.7] - 2026-09-29
 
