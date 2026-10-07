@@ -58,7 +58,7 @@ before(async () => {
 });
 
 after(async () => {
-  await rm(tmpRoot, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5 });
 });
 
 test("backend status reports a missing dynamic import without throwing", async () => {

@@ -70,7 +70,7 @@ before(async () => {
 });
 
 after(async () => {
-  await rm(sandbox, { recursive: true, force: true });
+  await rm(sandbox, { recursive: true, force: true, maxRetries: 5 });
 });
 
 afterEach(() => {

@@ -101,8 +101,8 @@
     },
     {
       "path": "dist/shared/hwpx-font-integrity.js",
-      "size": 14755,
-      "sha256": "8a144b1e56adce38d2dfcd1fee6259a15281d74dc4c994658047f64862f533d6"
+      "size": 14999,
+      "sha256": "d6438b6cab90ead16262d5ec784de94cafaa412c7383b337e530a40db9298bcb"
     },
     {
       "path": "dist/shared/image-normalization.js",
@@ -130,19 +130,14 @@
       "sha256": "fabc54f48afb1c65c53bae8a2d2a2e3a39bffb4b331a1ca7d3bc4d48d6fb8edc"
     },
     {
-      "path": "dist/shared/path-policy.js",
-      "size": 223,
-      "sha256": "e89ff5f2905094fcc7ecef5959192d054b1103729794c045c99f713ed8297cb7"
-    },
-    {
       "path": "dist/shared/paths.js",
-      "size": 8255,
-      "sha256": "8b3a758e575955608b461decf234bc2221dc165f78b57074825ed0f16c6b68e6"
+      "size": 5481,
+      "sha256": "295b61f3f95d7deefe3d818c3474756de7a9c6a8f26ac77f1da142720889f34f"
     },
     {
       "path": "dist/shared/protection.js",
-      "size": 9092,
-      "sha256": "466b4e22de890fda76b3b3922418006f5a93530e3ef2e137f8e437b545321f75"
+      "size": 9213,
+      "sha256": "841e2626bd874de9a0db1a228b76651f8544457c7d2a4136dd2a618bbbdf3467"
     },
     {
       "path": "dist/shared/python-command.js",
@@ -183,6 +178,11 @@
       "path": "dist/shared/xml-policy.js",
       "size": 3231,
       "sha256": "03979a9297ce215e082fa9f24ccb701862e2a5e343841f665bda4f0ab1c8207a"
+    },
+    {
+      "path": "dist/shared/zip-bounded-read.js",
+      "size": 1759,
+      "sha256": "387c29bdd106eca4d3ef737f71a6c66fae92e3107be811bf5d60ea4ca8411f57"
     },
     {
       "path": "dist/shared/zip-preflight.js",

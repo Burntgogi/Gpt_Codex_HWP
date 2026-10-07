@@ -268,7 +268,7 @@ test("one-shot publishes one successful existing tool result", async () => {
       assert.equal((await stat(responsePath)).mode & 0o077, 0);
     }
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -298,7 +298,7 @@ test("one-shot preflights a response collision before mutating tools dispatch", 
     await assert.rejects(readFile(svgPath), { code: "ENOENT" });
     await assert.rejects(readFile(pngPath), { code: "ENOENT" });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -319,7 +319,7 @@ test("one-shot publishes a tool error with exit one", async () => {
     );
     assert.equal(JSON.parse(await readFile(responsePath, "utf8")).isError, true);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -349,7 +349,7 @@ test("one-shot never overwrites a response and rejects oversized requests", asyn
     );
     await assert.rejects(readFile(newResponsePath), { code: "ENOENT" });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -379,6 +379,6 @@ test("one-shot rejects a symbolic-link request", async (context) => {
     );
     await assert.rejects(readFile(responsePath), { code: "ENOENT" });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });

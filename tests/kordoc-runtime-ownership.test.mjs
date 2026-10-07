@@ -48,7 +48,7 @@ test("Kordoc output creation race never deletes an unowned sentinel", async () =
     assert.equal(barrierEntered, true);
     assert.equal(await readFile(sentinelPath, "utf8"), "unowned sentinel\n");
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
+    await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -85,7 +85,7 @@ test("Kordoc builder remains compatible without a file-system hook", async () =>
     throw new Error(`KORDOC_DEFAULT_${stage}`);
   } finally {
     try {
-      await rm(temporaryRoot, { recursive: true, force: true });
+      await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
     } catch {
       throw new Error("KORDOC_DEFAULT_CLEANUP");
     }
@@ -94,7 +94,7 @@ test("Kordoc builder remains compatible without a file-system hook", async () =>
 
 test("Kordoc verifier bounds files and empty directories in one streamed entry budget", async (t) => {
   const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-kordoc-entry-budget-" });
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const vendor = join(temporaryRoot, "vendor");
   await cp(join(ROOT, "packages", "gpt-codex-hwp", "vendor", "kordoc-core"), vendor, {
     recursive: true,
@@ -112,7 +112,7 @@ test("Kordoc verifier bounds files and empty directories in one streamed entry b
 
 test("shared Kordoc verifier rejects every pinned provenance and tree-record deviation", async (t) => {
   const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-kordoc-provenance-" });
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const vendor = join(temporaryRoot, "vendor");
   await cp(join(ROOT, "packages", "gpt-codex-hwp", "vendor", "kordoc-core"), vendor, {
     recursive: true,

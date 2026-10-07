@@ -199,7 +199,7 @@ async function createRuntimeFixture(
   options: Readonly<{ durable?: boolean; versionDirectory?: string }> = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bootstrap-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const codexHome = join(root, "codex-home");
   const managedRoot = join(
     codexHome,

@@ -91,7 +91,7 @@ before(async () => {
 });
 
 after(async () => {
-  if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+  if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
 });
 
 test("runtime projection is skill-only by default and preserves manual MCP", async () => {
@@ -474,7 +474,7 @@ test("projection refuses plans specs and temporary evidence nested below an allo
       );
       await assert.rejects(lstat(output), { code: "ENOENT" });
     } finally {
-      await rm(sourceDirectory, { recursive: true, force: true });
+      await rm(sourceDirectory, { recursive: true, force: true, maxRetries: 5 });
     }
   }
 });
@@ -547,7 +547,7 @@ test("root runtime fixtures canonicalize an injected aliased temp parent", async
     parent: alias.path,
     prefix: "root-runtime-fixture-",
   });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   assert.equal(dirname(root), alias.canonicalParent);
   const output = join(root, "runtime");
   await assert.doesNotReject(buildRuntime({ root: ROOT, outputRoot: output }));
@@ -657,7 +657,7 @@ test("comparison ignores only actual top-level node_modules", async () => {
       await rm(extra, { force: true });
     }
   } finally {
-    await rm(join(actualRoot, "node_modules"), { recursive: true, force: true });
+    await rm(join(actualRoot, "node_modules"), { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -764,7 +764,7 @@ test("atomic projection refuses pre-existing unowned stage and backup paths", as
   );
   assert.equal((await lstat(stage)).isDirectory(), true);
 
-  await rm(stage, { recursive: true, force: true });
+  await rm(stage, { recursive: true, force: true, maxRetries: 5 });
   await mkdir(output);
   await writeFile(join(output, "old.txt"), "old runtime\n", "utf8");
   const backup = join(temporaryRoot, ".collision-output.backup-collision");
@@ -785,14 +785,14 @@ async function temporaryDirectoryAlias(t, prefix) {
   try {
     await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
   } catch (error) {
-    await rm(base, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true, maxRetries: 5 });
     if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes(error?.code)) {
       t.skip(`directory aliases are unavailable (${error.code})`);
       return undefined;
     }
     throw error;
   }
-  t.after(async () => rm(base, { recursive: true, force: true }));
+  t.after(async () => rm(base, { recursive: true, force: true, maxRetries: 5 }));
   return { canonicalParent: await realpath(canonicalParent), path };
 }
 
@@ -875,8 +875,8 @@ test("failed promotion rollback preserves staged and backup projection evidence"
     assert.equal((await lstat(join(stage, "dist", "mcp.js"))).isFile(), true);
     assert.equal(await readFile(join(backup, "old.txt"), "utf8"), "old runtime\n");
   } finally {
-    await rm(stage, { recursive: true, force: true });
-    await rm(backup, { recursive: true, force: true });
+    await rm(stage, { recursive: true, force: true, maxRetries: 5 });
+    await rm(backup, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -921,7 +921,7 @@ test("backup cleanup failure keeps the committed new runtime and old backup evid
     assert.equal(await readFile(join(backup, "old.txt"), "utf8"), "old runtime\n");
     await assert.rejects(lstat(stage), { code: "ENOENT" });
   } finally {
-    await rm(backup, { recursive: true, force: true });
+    await rm(backup, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -969,7 +969,7 @@ test("partially deleted backup is never promoted after cleanup failure", async (
     );
     await assert.rejects(lstat(stage), { code: "ENOENT" });
   } finally {
-    await rm(backup, { recursive: true, force: true });
+    await rm(backup, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 

@@ -196,7 +196,7 @@ test("default installed runtime smoke invokes the real compiled one-shot and ver
 test("large-document smoke defaults to the 10 MiB verified tier through the compiled one-shot detect path", async (t) => {
   assert.equal(typeof smokeModule.runInstalledLargeDocumentSmoke, "function");
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-large-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   let output = "";
   const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
     createTemporaryRoot: async () => root,
@@ -255,7 +255,7 @@ test("large-document smoke rejects sizes outside the 10 and 100 MiB tiers", asyn
 
 test("large-document smoke fails closed when detection changes the source", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-large-mutated-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   let output = "";
   const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
     sizeMiB: 100,
@@ -342,7 +342,7 @@ test("one-shot cleanup accepts worker-only and mixed cleanup but rejects mismatc
 
 test("initialization failure emits only the last bounded lifecycle boundary and stderr count", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-initialize-boundary-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -385,7 +385,7 @@ test("Windows identity snapshots ignore only the non-process PID zero record", (
 test("supervisor establishment rejection closes the still-gated owned root before returning", async (t) => {
   assert.equal(typeof smokeModule.createSupervisedStdioTransport, "function");
   const root = await mkdtemp(join(tmpdir(), "runtime-smoke-gated-rejection-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const marker = join(root, "target-started.txt");
   const target = join(root, "target.mjs");
   await writeFile(target, `await import("node:fs/promises").then(({writeFile})=>writeFile(${JSON.stringify(marker)},"started"));setInterval(()=>{},1000);\n`, "utf8");
@@ -446,7 +446,7 @@ test("MCP stdout budget rejects per-frame and aggregate overflow before bufferin
 test("over-limit MCP stdout emits one fixed initialization failure and closes the supervised root", async (t) => {
   assert.equal(typeof smokeModule.createDefaultRuntimeSession, "function");
   const root = await mkdtemp(join(tmpdir(), "runtime-smoke-stdout-limit-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const target = join(root, "oversized-stdout.mjs");
   await writeFile(
     target,
@@ -497,7 +497,7 @@ test("owned temporary-root validation accepts a canonicalized ancestor alias", a
 
 test("installed runtime smoke uses the exact manifest command and one bounded Sharp PNG path", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-fixture-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await mkdir(join(runtimeRoot, "dist"));
   await writeFile(join(runtimeRoot, "dist", "mcp.js"), "", "utf8");
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
@@ -570,7 +570,7 @@ test("installed runtime smoke uses the exact manifest command and one bounded Sh
 
 test("installed runtime smoke rejects any manifest command drift before MCP initialization", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-manifest-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "npm", args: ["start"], cwd: "." },
@@ -591,7 +591,7 @@ test("installed runtime smoke rejects any manifest command drift before MCP init
 
 test("installed runtime smoke verifies root and descendants and removes outputs after call and close failures", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-failure-fixture-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -642,7 +642,7 @@ test("list, result, and close failures still take a final snapshot and verify tr
   ];
   for (const { fault, expectedStage, expectedQueries } of cases) {
     const runtimeRoot = await mkdtemp(join(tmpdir(), `runtime-smoke-${fault}-fixture-`));
-    t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+    t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
       mcpServers: {
         "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -703,7 +703,7 @@ test("list, result, and close failures still take a final snapshot and verify tr
 
 test("call failure still captures a late descendant and invokes verified supervisor termination", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-late-fixture-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -752,7 +752,7 @@ test("call failure still captures a late descendant and invokes verified supervi
 
 test("unverified supervisor termination fails closed without leaking identity details", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-unverified-fixture-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -802,7 +802,7 @@ test("unverified supervisor termination fails closed without leaking identity de
 
 test("a valid supervisor receipt cannot hide a captured surviving identity", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-survivor-fixture-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -844,7 +844,7 @@ test("a valid supervisor receipt cannot hide a captured surviving identity", asy
 test("initialized cleanup rejects a gated-root-only receipt and an inventory missing its root", async (t) => {
   for (const fault of ["gated-receipt", "missing-root"]) {
     const runtimeRoot = await mkdtemp(join(tmpdir(), `runtime-smoke-${fault}-fixture-`));
-    t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+    t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
       mcpServers: {
         "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -890,7 +890,7 @@ test("initialized cleanup rejects a gated-root-only receipt and an inventory mis
 
 test("bounded asset reads reject oversized regular files before allocating their contents", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runtime-smoke-bounded-read-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const oversized = join(root, "oversized.bin");
   await writeFile(oversized, Buffer.alloc(1_025));
   assert.equal(typeof smokeModule.readBoundedRegularFile, "function");
@@ -903,7 +903,7 @@ test("bounded asset reads reject oversized regular files before allocating their
 test("oversized SVG and PNG outputs emit only fixed asset failures and still verify cleanup", async (t) => {
   for (const kind of ["svg", "png"]) {
     const runtimeRoot = await mkdtemp(join(tmpdir(), `runtime-smoke-${kind}-limit-fixture-`));
-    t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+    t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
       mcpServers: {
         "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -957,8 +957,8 @@ test("oversized SVG and PNG outputs emit only fixed asset failures and still ver
 test("installed runtime smoke refuses an unowned temporary root without deleting it", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-unowned-fixture-"));
   const unownedRoot = await mkdtemp(join(tmpdir(), "unowned-runtime-smoke-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  t.after(() => rm(unownedRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
+  t.after(() => rm(unownedRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -981,7 +981,7 @@ test("installed runtime smoke refuses an unowned temporary root without deleting
 
 test("installed runtime smoke rejects schema drift before a tool call with a fixed stage", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-schema-fixture-"));
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
   await writeManualMcpManifest(runtimeRoot, JSON.stringify({
     mcpServers: {
       "gpt-codex-hwp": { command: "node", args: EXACT_RUNTIME_ARGS, cwd: "." },
@@ -1016,9 +1016,9 @@ test("installed runtime smoke rejects a linked temporary-root alias without dele
   const runtimeRoot = await mkdtemp(join(tmpdir(), "runtime-smoke-link-fixture-"));
   const target = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-link-target-"));
   const alias = join(tmpdir(), `gpt-codex-hwp-runtime-smoke-link-${randomUUID()}`);
-  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
-  t.after(() => rm(alias, { recursive: true, force: true }));
-  t.after(() => rm(target, { recursive: true, force: true }));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5 }));
+  t.after(() => rm(alias, { recursive: true, force: true, maxRetries: 5 }));
+  t.after(() => rm(target, { recursive: true, force: true, maxRetries: 5 }));
   try {
     await symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
   } catch {

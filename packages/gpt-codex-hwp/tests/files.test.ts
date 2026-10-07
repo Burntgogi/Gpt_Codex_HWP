@@ -29,7 +29,7 @@ import {
 
 test("bounded file read uses one exact allocation and preserves source bytes", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-bounded-exact-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const path = join(root, "source.bin");
   const expected = Buffer.from([1, 2, 3, 4, 5]);
   await writeFile(path, expected);
@@ -49,7 +49,7 @@ test("bounded file read uses one exact allocation and preserves source bytes", a
 
 test("bounded file read supports an empty exact buffer", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-bounded-empty-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const path = join(root, "empty.bin");
   await writeFile(path, new Uint8Array());
   const allocations: number[] = [];
@@ -65,7 +65,7 @@ test("bounded file read supports an empty exact buffer", async (t) => {
 
 test("bounded file read rejects 512 MiB plus one from stat before allocation", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-bounded-limit-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const path = join(root, "oversized-private.bin");
   const handle = await open(path, "wx");
   try {
@@ -94,7 +94,7 @@ test("bounded file read rejects 512 MiB plus one from stat before allocation", a
 
 test("bounded file read accepts only regular files and redacts the path", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-bounded-regular-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
 
   await assert.rejects(
     readFileBounded(root, "source document"),
@@ -141,7 +141,7 @@ test("direct bounded reads reject linked control paths while ordinary reads reta
       "safe",
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -175,14 +175,14 @@ test("direct bounded reads reject a same-target link replacement after reading",
         && ["INVALID_FILE_TYPE", "SOURCE_CHANGED"].includes(error.code),
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
 for (const scenario of ["grow", "shrink", "replace", "delete"] as const) {
   test(`bounded file read rejects source ${scenario} after its positional read`, async (t) => {
     const root = await mkdtemp(join(tmpdir(), `hwp-bounded-${scenario}-`));
-    t.after(async () => rm(root, { recursive: true, force: true }));
+    t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
     const path = join(root, "sensitive-source.bin");
     const moved = join(root, "moved.bin");
     const expected = Buffer.from("private document bytes", "utf8");
@@ -215,7 +215,7 @@ for (const scenario of ["grow", "shrink", "replace", "delete"] as const) {
 
 test("bounded file read redacts missing native paths and invalid option errors", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-bounded-errors-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const missing = join(root, "personal-secret-name.hwpx");
 
   await assert.rejects(
@@ -257,7 +257,7 @@ test("bounded file read source has no chunk list, concatenation, or full-copy sl
 
 test("bounded file read rejects a FIFO without waiting for a writer", { skip: process.platform === "win32" }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-bounded-fifo-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const path = join(root, "source.fifo");
   await execFileAsync("mkfifo", [path], { timeout: 5_000, maxBuffer: 8_192 });
   const result = readFileBounded(path, "source document");

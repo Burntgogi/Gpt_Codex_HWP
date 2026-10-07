@@ -76,7 +76,7 @@ test("code, inline code, and URLs are never linted", () => {
 
 test("CLI prints JSON, honors --strict, and rejects bad usage", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "official-doc-lint-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const draft = join(root, "draft.md");
   await writeFile(draft, "2026년 1월 2일\n", "utf8");
   const capture = () => {

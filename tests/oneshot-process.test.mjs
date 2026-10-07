@@ -174,7 +174,7 @@ test("bounded process termination removes an in-flight one-shot tree", { timeout
 async function createFixture(t, name, request) {
   const root = await mkdtemp(join(tmpdir(), `gpt-codex-hwp-oneshot-process-${name}-`));
   await chmod(root, 0o700);
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   return {
     root,
     request,

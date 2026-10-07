@@ -88,7 +88,7 @@ test("read worker safety opens one worker snapshot and sends no path to the engi
     assert.equal((metadata[0] as { protection: { status: string } }).protection.status, "requires-engine-validation");
     assert.equal(digest(await readFile(sourcePath)), sha256);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -114,7 +114,7 @@ test("read worker safety uses shallow unknown metadata without starting an engin
     assert.equal(result.structuredContent?.format, "unknown");
     assert.equal(calls, 0);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -154,7 +154,7 @@ test("read worker safety returns stable isolate errors and the next call still s
     assert.equal(succeeded.isError, false);
     assert.equal(succeeded.structuredContent?.markdown, "복구됨");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -184,7 +184,7 @@ test("read worker safety uses a fresh real worker below the threshold and cleans
     assert.match(result.payload.markdown, /실제 워커/u);
     assert.equal(result.snapshotMetadata.sha256, digest(await readFile(sourcePath)));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -236,7 +236,7 @@ test("read worker safety keeps preview requests path-free and preserves exclusiv
     assert.deepEqual(await readFile(outputPath), sentinel);
     assert.equal(digest(await readFile(sourcePath)), digest(source));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -284,7 +284,7 @@ test("real isolate maps exact-unknown ZIP and OLE candidates to stable tool form
         (error as { code?: string }).code === "ENOENT");
     }
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -305,7 +305,7 @@ test("detect restores a bounded stable warning for exact-unknown containers", as
     assert.equal(warning, "The ZIP container is not a supported HWPX document.");
     assert.ok(Buffer.byteLength(String(warning), "utf8") <= 256);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -363,7 +363,7 @@ test("read worker safety routes an above-threshold valid HWPX through the real s
     assert.deepEqual(await readdir(snapshotRoot), []);
     assert.deepEqual(await readdir(resultRoot), []);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -436,7 +436,7 @@ test("parent streams a branded render spool with metadata without materializing 
     assert.equal(sourceVerifications, 1);
     assert.deepEqual(await readdir(resultRoot), []);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -595,7 +595,7 @@ test("render spool validation and cancellation create no output and always clean
     await assertMissing(descriptorPath);
     assert.deepEqual(await readdir(resultRoot), []);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -687,7 +687,7 @@ test("preview releases each taken render spool exactly once across every termina
 
     assert.deepEqual(await readdir(resultRoot), []);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -848,7 +848,7 @@ test("inline and spooled render writers enforce the same expected directory iden
         }
         assert.deepEqual(await readdir(resultRoot), []);
       } finally {
-        await rm(root, { recursive: true, force: true });
+        await rm(root, { recursive: true, force: true, maxRetries: 5 });
       }
     });
   }
@@ -935,7 +935,7 @@ test("validated render spool preserves an existing output without partial replac
     assert.deepEqual(await readFile(outputPath), sentinel);
     assert.deepEqual(await readdir(resultRoot), []);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -972,7 +972,7 @@ test("MCP cancellation reaches the spooled preview exclusive-open boundary", { t
     await assertMissing(outputPath);
     assert.deepEqual(await readdir(resultRoot), []);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1111,7 +1111,7 @@ async function sourceSwapFixture(label: string): Promise<{
     sourcePath,
     outputDir: join(root, "prepared-output"),
     replacement: new Uint8Array(await markdownToHwpx(`# ${label} replacement`)),
-    async cleanup() { await rm(root, { recursive: true, force: true }); },
+    async cleanup() { await rm(root, { recursive: true, force: true, maxRetries: 5 }); },
   };
 }
 

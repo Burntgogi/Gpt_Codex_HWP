@@ -248,7 +248,7 @@ test("dependency contract keeps exactly nine public runtime tools", async () => 
 
 test("installed dependency verifier accepts only the canonical Kordoc link", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-dependency-contract-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const nodeModules = join(root, "node_modules");
   const vendor = join(root, "vendor", "kordoc-core");
   await mkdir(nodeModules, { recursive: true });
@@ -285,7 +285,7 @@ test("installed dependency verifier accepts only the canonical Kordoc link", asy
 
 test("installed dependency verifier accepts only an exact durable-runtime Kordoc copy", async (t) => {
   const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-copied-kordoc-" });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const vendor = join(root, "vendor", "kordoc-core");
   const installed = join(root, "node_modules", "kordoc");
   await cp(join(SOURCE, "vendor", "kordoc-core"), vendor, { recursive: true });
@@ -310,7 +310,7 @@ test("installed dependency verifier accepts only an exact durable-runtime Kordoc
 
 test("source-only dependency verification needs no installed runtime and rejects bad source trees", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-source-dependencies-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const source = join(root, "packages", "gpt-codex-hwp");
   const nodeModules = join(source, "node_modules");
   const vendor = join(source, "vendor", "kordoc-core");

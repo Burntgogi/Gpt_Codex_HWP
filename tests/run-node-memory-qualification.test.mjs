@@ -63,7 +63,7 @@ async function createRepository(root) {
 
 test("qualification orchestrator binds a clean exact HEAD and emits privacy-safe receipts", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-memory-qualification-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const { controlRevision, candidateRevision } = await createRepository(root);
   const fixture = completePassingFixture({ controlRevision, candidateRevision });
   const inputRoot = join(root, "qualification-inputs");
@@ -160,7 +160,7 @@ test("qualification environment drops inherited credentials and keeps runtime es
 
 test("prepared qualification creates an exact private spec and removes its control worktree", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-memory-prepared-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const { controlRevision } = await createRepository(root);
   const candidateRevision = await git(root, "rev-parse", "HEAD");
   const decisionPath = join(root, "qualification", "decision.json");

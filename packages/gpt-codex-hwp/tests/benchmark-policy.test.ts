@@ -1192,7 +1192,7 @@ test("macOS arm64 normal HWPX becomes READY before the real worker result", {
   timeout: 30_000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-macos-worker-probe-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "normal-probe.hwpx");
   await generatePaddedHwpx({ outputPath: sourcePath, requestedBytes: 128 * 1024 });
   const source = await readFile(sourcePath);
@@ -1274,7 +1274,7 @@ test("benchmark policy requires a non-aliased output beneath a Git-ignored direc
   }
 
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-benchmark-policy-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const alias = join(root, "alias");
   const target = join(REPOSITORY_ROOT, ".superpowers", "benchmarks");
   await mkdir(target, { recursive: true });
@@ -1301,7 +1301,7 @@ test("benchmark policy gives the parent an owned case directory and bounded clea
 
 test("benchmark policy streams a valid exact bounded HWPX with unreferenced stored padding", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-benchmark-generate-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const outputPath = join(root, "sample.hwpx");
   const requestedBytes = 10 * 1024 * 1024;
   const result = await generatePaddedHwpx({ outputPath, requestedBytes });

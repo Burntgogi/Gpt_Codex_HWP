@@ -15,7 +15,7 @@ const HEADER_NAMESPACE = "http://www.hancom.co.kr/hwpml/2011/head";
 
 test("hwp_validate rejects every audited font-structure reproduction", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-font-validation-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const raw = new Uint8Array(await markdownToHwpx("# 검증\n\n본문"));
   const valid = (await normalizeGeneratedFontReferences(raw)).bytes;
 

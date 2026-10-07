@@ -126,7 +126,7 @@ test("qualification returns stable No-Go gates for valid measured failures", () 
 
 test("decision CLI creates once, verifies, and emits a fixed receipt", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-memory-gate-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const outputPath = join(root, "nested", "decision.json");
   let output = "";
   const io = { stdout: { write(value) { output += value; } } };
@@ -154,7 +154,7 @@ test("decision CLI creates once, verifies, and emits a fixed receipt", async (t)
 
 test("evaluate CLI returns 0 for Go, 1 for No-Go, and 2 for invalid evidence", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-memory-evaluate-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const io = {
     stdout: { write() {} },
     stderr: { write() {} },

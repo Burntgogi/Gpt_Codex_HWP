@@ -1,5 +1,6 @@
 import CFB from "cfb";
 import { parsePolicyXml, xmlLocalName } from "./xml-policy.js";
+import { readZipEntryBounded } from "./zip-bounded-read.js";
 import { loadBoundedHwpxZip, } from "./zip-preflight.js";
 const HWP_FILE_HEADER_MINIMUM_BYTES = 40;
 const HWP_FILE_HEADER_FLAGS_OFFSET = 36;
@@ -140,7 +141,7 @@ export async function inspectExactHwpxProtection(bytes, loadZip) {
     }
     let manifestBytes;
     try {
-        manifestBytes = await manifest.async("uint8array");
+        manifestBytes = await readZipEntryBounded(manifest, MAX_PROTECTION_MANIFEST_BYTES, "HWPX protection manifest");
     }
     catch (error) {
         return {

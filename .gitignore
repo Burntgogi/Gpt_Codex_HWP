@@ -28,6 +28,16 @@ local.config.*
 *.local.config.*
 .local/
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+# Agent-local settings (project skills live under plugins/, not here)
+.claude/
+
+# Logs and incremental build state
+*.log
+npm-debug.log*
+*.tsbuildinfo
 
 # Worktrees, dependencies, caches, and test output
 .worktrees/

@@ -268,7 +268,7 @@ test("installed runtime npm invocation resolver is injectable without environmen
 
 test("compact runtime tree measurement emits only fixed diagnostic stages", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-measure-tree-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   await mkdir(join(root, "nested"));
   await writeFile(join(root, "nested", "file.txt"), "fixed");
   const stages: string[] = [];
@@ -311,7 +311,7 @@ test("compact runtime derives only package-owned bin links from the lockfile", (
 
 test("compact runtime accepts only a bin link anchored to its package target", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bin-link-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const target = join(root, "node_modules", "owned", "bin", "tool.js");
   const link = join(root, "node_modules", ".bin", "owned-tool");
   const outside = join(root, "outside.js");
@@ -417,7 +417,7 @@ test("compact command, npm, and tool children receive one scrubbed environment",
   const root = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-compact-env-",
   });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const probePath = join(root, "compact-environment-probe.cjs");
   const evidencePath = join(root, "compact-environment-evidence.ndjson");
   await writeFile(probePath, [
@@ -1005,7 +1005,7 @@ test("compact runtime tools receive an owned verified HWP copy", async (t) => {
   assert.equal(typeof copyVerifiedHwpFixture, "function");
 
   const root = await mkdtemp(join(tmpdir(), "compact-owned-copy-test-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "public-source.hwp");
   const ownedRoot = join(root, "owned");
   const sourceBytes = Buffer.from("verified public HWP fixture bytes", "utf8");
@@ -1148,7 +1148,7 @@ test("owned HWP copy post-hashes the source even when destination verification f
   assert.equal(typeof copyVerifiedHwpFixture, "function");
 
   const root = await mkdtemp(join(tmpdir(), "compact-copy-posthash-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const targetRoot = join(root, "owned");
   const sourcePath = join(root, "source.hwp");
   const sourceBytes = Buffer.from("source post-hash evidence", "utf8");
@@ -1280,7 +1280,7 @@ test("classic HWP preview smoke uses the actual isolated runtime route", async (
   assert.equal(typeof verifyClassicHwpPreview, "function");
 
   const root = await mkdtemp(join(tmpdir(), "compact-rhwp-preview-test-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sampleHwpPath = join(root, "owned-copy.hwp");
   const outputSvgPath = join(root, "classic-preview.svg");
   const sampleBytes = Buffer.from("classic HWP bytes", "utf8");
@@ -1323,7 +1323,7 @@ test("classic HWP preview smoke rejects non-rhwp or non-SVG evidence", async (t)
   assert.equal(typeof verifyClassicHwpPreview, "function");
 
   const root = await mkdtemp(join(tmpdir(), "compact-rhwp-reject-test-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sampleHwpPath = join(root, "owned-copy.hwp");
   const outputSvgPath = join(root, "classic-preview.svg");
   const expectedSha256 = createHash("sha256").update("unchanged").digest("hex");
@@ -1361,7 +1361,7 @@ test("compact integrity hashing rejects a fixture above 512 MiB without exposing
   assert.equal(typeof sha256File, "function");
 
   const root = await mkdtemp(join(tmpdir(), "compact-hash-limit-test-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const oversizedPath = join(root, `private-${randomUUID()}.hwp`);
   await writeFile(oversizedPath, "x");
   await truncate(oversizedPath, 512 * 1024 * 1024 + 1);
@@ -1501,7 +1501,7 @@ test("compact runtime staging canonicalizes an injected temporary parent", async
   const alias = await temporaryDirectoryAlias(t, "compact-runtime-parent-");
   if (alias === undefined) return;
   const root = await createCompactRuntimeTemp!(alias.path);
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   assert.equal(dirname(root), alias.canonicalParent);
 });
 
@@ -1549,14 +1549,14 @@ async function temporaryDirectoryAlias(
   try {
     await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
   } catch (error) {
-    await rm(base, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true, maxRetries: 5 });
     if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
       t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
       return undefined;
     }
     throw error;
   }
-  t.after(async () => rm(base, { recursive: true, force: true }));
+  t.after(async () => rm(base, { recursive: true, force: true, maxRetries: 5 }));
   return { canonicalParent: await realpath(canonicalParent), path };
 }
 

@@ -1,26 +1,12 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-import { access, link, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, parse as parsePath, resolve } from "node:path";
+import { isAbsolute, join, parse as parsePath, resolve } from "node:path";
 import test from "node:test";
 
 import {
-  assertSafeZipEntryName,
-  prepareOutputPath,
   resolveLocalPath,
-  resolveSourceAndOutputPaths,
   setPermittedNetworkRoots,
 } from "../src/shared/paths.js";
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 test("resolveLocalPath rejects empty paths and resolves relative paths", () => {
   assert.throws(() => resolveLocalPath("", "source_path"), /source_path.*empty/i);
@@ -135,87 +121,4 @@ test("resolveLocalPath maps the macOS /tmp and /var system aliases into /private
   assert.equal(resolveLocalPath("/tmp/gpt-codex-hwp/out.hwpx", "output_path"), "/private/tmp/gpt-codex-hwp/out.hwpx");
   assert.equal(resolveLocalPath("/var/folders/x/out.hwpx", "output_path"), "/private/var/folders/x/out.hwpx");
   assert.equal(resolveLocalPath("/tmpfiles/out.hwpx", "output_path"), "/tmpfiles/out.hwpx");
-});
-
-test("assertSafeZipEntryName accepts package-relative entries", () => {
-  assert.equal(
-    assertSafeZipEntryName("Contents/section0.xml"),
-    "Contents/section0.xml",
-  );
-  assert.equal(
-    assertSafeZipEntryName("BinData\\image001.png"),
-    "BinData/image001.png",
-  );
-});
-
-test("assertSafeZipEntryName rejects empty, absolute, and traversal entries", () => {
-  const unsafeNames = [
-    "",
-    "   ",
-    "../secret.txt",
-    "Contents/../secret.txt",
-    "..\\secret.txt",
-    "/absolute/path.xml",
-    "C:/absolute/path.xml",
-    "C:\\absolute\\path.xml",
-    "\\\\server\\share\\file.xml",
-    "Contents/\0section.xml",
-  ];
-
-  for (const name of unsafeNames) {
-    assert.throws(() => assertSafeZipEntryName(name), /ZIP entry/i, name);
-  }
-});
-
-test("source and output paths must be distinct", () => {
-  const samePath = join(tmpdir(), "same-document.hwpx");
-  assert.throws(
-    () => resolveSourceAndOutputPaths(samePath, samePath),
-    /source_path and output_path must be different/i,
-  );
-
-  if (process.platform === "win32") {
-    assert.throws(
-      () => resolveSourceAndOutputPaths(samePath, samePath.toUpperCase()),
-      /source_path and output_path must be different/i,
-    );
-  }
-});
-
-test("prepareOutputPath creates only the output parent directories", async () => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-paths-"));
-  const sourcePath = join(root, "missing-source-parent", "source.hwpx");
-  const outputPath = join(root, "created-output-parent", "nested", "result.hwpx");
-
-  try {
-    const resolved = await prepareOutputPath(sourcePath, outputPath);
-
-    assert.deepEqual(resolved, {
-      sourcePath: resolve(sourcePath),
-      outputPath: resolve(outputPath),
-    });
-    assert.equal(await pathExists(dirname(resolved.sourcePath)), false);
-    assert.equal(await pathExists(dirname(resolved.outputPath)), true);
-    assert.equal(await pathExists(resolved.outputPath), false);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("prepareOutputPath rejects a hard-link alias of the source", async () => {
-  const root = await mkdtemp(join(tmpdir(), "hwp-path-alias-"));
-  const sourcePath = join(root, "source.hwpx");
-  const outputPath = join(root, "output-alias.hwpx");
-
-  try {
-    await writeFile(sourcePath, "original document");
-    await link(sourcePath, outputPath);
-
-    await assert.rejects(
-      prepareOutputPath(sourcePath, outputPath),
-      /source_path and output_path must be different/i,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
 });

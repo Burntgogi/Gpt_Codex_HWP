@@ -94,7 +94,7 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for exact usage scopes, p
 
 This project was developed primarily on Windows x64 and validated there. macOS Apple Silicon plugin-runtime CI is configured, but it must not be described as passed or validated until a successful receipt for the current HEAD exists. Actual use with Codex Desktop and Hancom Office Hangul on macOS remains unverified. macOS remains a compatibility target. Full macOS support is not claimed.
 
-The v0.1.4 release passed 330 of 334 Node tests with 4 expected platform/privilege skips and 0 failures, all 16 Python tests, and a production audit with 0 known vulnerabilities. See the [v0.1.4 GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4) for details.
+Per-release test and audit results are recorded in each [GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases) note.
 
 ## Stable v0.2.7 installation from GitHub
 
@@ -271,7 +271,7 @@ $env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
 export GPT_CODEX_HWP_ALLOWED_ROOTS='["/Volumes/TeamDocs"]'
 ```
 
-An empty array, malformed JSON, a relative or duplicate path, a missing root, a file, or a linked root makes MCP startup fail closed. Configuration is bounded to 16,384 UTF-8 bytes, 32 roots, and 4,096 characters per item. When configured, the same realpath-resolved policy covers source HWP/HWPX files, Markdown and image inputs, generated/patched/filled/image-inserted HWPX files, Markdown/SVG/PNG/preview/extracted-image outputs, and output directories. A denial returns only `PATH_OUTSIDE_ALLOWED_ROOTS`; it does not disclose the raw setting or rejected absolute path.
+An empty array, malformed JSON, a relative or duplicate path, a missing root, a file, or a linked root makes a one-shot call fail closed before any tool runs, and makes manual MCP startup fail closed. Configuration is bounded to 16,384 UTF-8 bytes, 32 roots, and 4,096 characters per item. When configured, the same realpath-resolved policy covers source HWP/HWPX files, Markdown and image inputs, generated/patched/filled/image-inserted HWPX files, Markdown/SVG/PNG/preview/extracted-image outputs, and output directories. A denial returns only `PATH_OUTSIDE_ALLOWED_ROOTS`; it does not disclose the raw setting or rejected absolute path.
 
 Internal large-document spools use a separate unpredictable, owner-only directory under the plugin-selected OS temporary root. Their location cannot be supplied through MCP or configuration, only inherited handles are passed to child processes, and cleanup runs in `finally`. The spool is an independent internal trust namespace, not a user-root exception. `allowed_roots` reduces accidental or agent-driven path escape; it is not complete isolation from a hostile process running as the same OS user. Node.js cannot portably provide Linux `openat2` or Windows handle-relative atomic guarantees for every filesystem race. Process high-risk documents under a separate least-privilege account, VM, or container boundary.
 

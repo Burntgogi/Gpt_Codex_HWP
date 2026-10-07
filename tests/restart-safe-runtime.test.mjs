@@ -18,7 +18,7 @@ const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.
 
 test("durable runtime survives managed cache rehydration without another install", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-restart-safe-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const codexHome = join(temporaryRoot, "codex-home");
   const metadata = await loadProjectMetadata(ROOT);
   const version = pluginVersion(metadata);
@@ -40,7 +40,7 @@ test("durable runtime survives managed cache rehydration without another install
   const receiptPath = join(durableRoot, "install-receipt.json");
   const receiptHash = sha256(await readFile(receiptPath));
 
-  await rm(managedRoot, { recursive: true, force: true });
+  await rm(managedRoot, { recursive: true, force: true, maxRetries: 5 });
   await buildRuntime({ root: ROOT, outputRoot: managedRoot, swapId: "restart-safe-second" });
   assert.equal(await exists(join(managedRoot, "node_modules")), false);
 

@@ -49,6 +49,17 @@ This file records release tags and their publication status. Work under `Unrelea
   canonical form instead of rejecting them as linked paths.
 - Document that macOS process supervision uses Python, and give doctor a
   macOS-specific remediation for `PYTHON_UNAVAILABLE`.
+- Count the bytes a ZIP entry actually decompresses to when reading the
+  protection manifest, header.xml, and sections, instead of trusting the
+  size declared in the ZIP headers.
+- Remove unused source (`path-policy.ts`, three test-only path helpers, and
+  `scripts/verify-runtime-diff.mjs`).
+- Stabilize hosted test runs: retry recursive cleanup, align ACL helper
+  timeouts with the product, wait for the CIM process monitor before
+  starting the helper, and give desktop CI jobs a 90-minute budget.
+- Allow work-in-progress entries under Unreleased in the release identity
+  test, refresh stale README statements, extend `.gitignore`, and mark the
+  generated runtime as generated for GitHub.
 
 ## [0.2.7] - 2026-09-29
 

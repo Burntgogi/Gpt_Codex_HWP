@@ -177,7 +177,7 @@ test("check mode reports METADATA_DRIFT without rewriting the generated file", a
 
 async function createFixture(t) {
   const fixture = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-metadata-"));
-  t.after(() => rm(fixture, { recursive: true, force: true }));
+  t.after(() => rm(fixture, { recursive: true, force: true, maxRetries: 5 }));
   await writeJson(join(fixture, "package.json"), BASE_ROOT_PACKAGE);
   return fixture;
 }

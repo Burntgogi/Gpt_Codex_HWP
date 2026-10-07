@@ -232,7 +232,7 @@ test("release verification binds schema 2 receipts to independent source identit
 
 test("release source identity ignores replacement refs and hostile Git selectors", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-identity-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const git = async (...args) => {
     const { execFile } = await import("node:child_process");
     return await new Promise((resolvePromise, reject) => {
@@ -618,7 +618,7 @@ test("release artifacts stage preserves late temp evidence after its deadline", 
 
 test("release artifacts stage preserves a real temp after an expired deadline", async (t) => {
   const owned = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-expired-"));
-  t.after(() => rm(owned, { recursive: true, force: true }));
+  t.after(() => rm(owned, { recursive: true, force: true, maxRetries: 5 }));
   const result = await runReleaseArtifactsStage({
     name: "release-artifacts", kind: "release-artifacts", cwd: ROOT, env: {},
   }, {
@@ -633,7 +633,7 @@ test("release artifacts stage preserves a real temp after an expired deadline", 
 
 test("release temp cleanup quarantines first and never deletes a swapped replacement", async (t) => {
   const parent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-cleanup-race-"));
-  t.after(() => rm(parent, { recursive: true, force: true }));
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 5 }));
   const owned = join(parent, "owned");
   const savedOwned = join(parent, "saved-owned");
   await mkdir(owned);
@@ -661,7 +661,7 @@ test("release temp cleanup quarantines first and never deletes a swapped replace
 
 test("release temp cleanup preserves a file swapped after quarantine", async (t) => {
   const parent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-file-race-"));
-  t.after(() => rm(parent, { recursive: true, force: true }));
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 5 }));
   const owned = join(parent, "owned");
   const artifacts = join(owned, "artifacts");
   const savedArtifact = join(parent, "saved-provenance.json");
@@ -690,7 +690,7 @@ test("release temp cleanup preserves a file swapped after quarantine", async (t)
 
 test("release temp cleanup follows platform path case semantics", async (t) => {
   const parent = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-case-"));
-  t.after(() => rm(parent, { recursive: true, force: true }));
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 5 }));
   const owned = join(parent, "owned");
   await mkdir(owned);
   const info = await lstat(owned);
@@ -713,8 +713,8 @@ test("release temp cleanup accepts a canonical ancestor alias", async (t) => {
   const alias = join(aliasParent, "temp-alias");
   t.after(async () => {
     try { await unlink(alias); } catch {}
-    await rm(aliasParent, { recursive: true, force: true });
-    await rm(realParent, { recursive: true, force: true });
+    await rm(aliasParent, { recursive: true, force: true, maxRetries: 5 });
+    await rm(realParent, { recursive: true, force: true, maxRetries: 5 });
   });
   try {
     await symlink(realParent, alias, process.platform === "win32" ? "junction" : "dir");
@@ -746,10 +746,10 @@ test("release artifact staging canonicalizes a temporary-directory ancestor alia
   const alias = join(aliasParent, "temp-alias");
   let created;
   t.after(async () => {
-    if (created !== undefined) await rm(created, { recursive: true, force: true });
+    if (created !== undefined) await rm(created, { recursive: true, force: true, maxRetries: 5 });
     try { await unlink(alias); } catch {}
-    await rm(aliasParent, { recursive: true, force: true });
-    await rm(realParent, { recursive: true, force: true });
+    await rm(aliasParent, { recursive: true, force: true, maxRetries: 5 });
+    await rm(realParent, { recursive: true, force: true, maxRetries: 5 });
   });
   try {
     await symlink(realParent, alias, process.platform === "win32" ? "junction" : "dir");
@@ -1148,7 +1148,7 @@ test("release verification reports a bounded Node test diagnostic out of band", 
 
 test("composite stage commands execute sequentially", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-sequence-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const marker = join(root, "sequence.txt");
   const first = [
     "-e",
@@ -1181,7 +1181,7 @@ test("composite stage commands execute sequentially", async (t) => {
 
 test("composite stage commands fail fast before later commands", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-fail-fast-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const firstMarker = join(root, "first.txt");
   const forbiddenMarker = join(root, "must-not-run.txt");
 
@@ -1216,7 +1216,7 @@ test("composite stage commands fail fast before later commands", async (t) => {
 
 test("composite stage fails closed when its final verification command fails", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-final-failure-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const installedMarker = join(root, "installed.txt");
   const verifiedMarker = join(root, "verification-ran.txt");
 
@@ -1271,7 +1271,7 @@ test("composite stage shares one aggregate output bound across commands", async 
 
 test("composite stage shares one aggregate timeout across commands", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-total-timeout-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const firstMarker = join(root, "first.txt");
   const started = Date.now();
 
@@ -1423,7 +1423,7 @@ test("POSIX process-tree termination preserves TERM-delay-KILL ordering", async 
 
 test("stage command requires one passed and zero skipped focused test", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-release-oracle-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const testPath = join(root, "oracle.test.mjs");
   const evidence = Object.freeze({
     kind: "node-test-summary",

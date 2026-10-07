@@ -614,7 +614,7 @@ test("governance documentation lock read is bounded and rejects an open-time swa
   const module = await import("../scripts/dependency-audit-issue.mjs");
   assert.equal(typeof module.readAuditLock, "function");
   const root = await createCanonicalTemporaryDirectory({ prefix: "governance-lock-" });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const directory = join(root, "packages", "gpt-codex-hwp");
   await mkdir(directory, { recursive: true });
   const lockPath = join(directory, "package-lock.json");
@@ -638,7 +638,7 @@ test("governance lock fixtures canonicalize an injected aliased temp parent", as
     parent: alias.path,
     prefix: "governance-lock-",
   });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   assert.equal(dirname(root), alias.canonicalParent);
   const directory = join(root, "packages", "gpt-codex-hwp");
   await mkdir(directory, { recursive: true });
@@ -678,13 +678,13 @@ async function temporaryDirectoryAlias(t, prefix) {
   try {
     await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
   } catch (error) {
-    await rm(base, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true, maxRetries: 5 });
     if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes(error?.code)) {
       t.skip(`directory aliases are unavailable (${error.code})`);
       return undefined;
     }
     throw error;
   }
-  t.after(async () => rm(base, { recursive: true, force: true }));
+  t.after(async () => rm(base, { recursive: true, force: true, maxRetries: 5 }));
   return { canonicalParent: await realpath(canonicalParent), path };
 }

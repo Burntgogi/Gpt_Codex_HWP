@@ -158,8 +158,10 @@ test("release identity derives every 0.2.7 surface from root metadata", async ()
     assert.doesNotMatch(notes, /44\.\d+\s*MiB|0\.6%/u);
   }
 
+  // Unreleased may record work in progress but must never claim a release.
   const unreleased = markdownSection(releaseDocs[4], "## [Unreleased]", "## [0.2.7]");
-  assert.equal(unreleased.trim(), "## [Unreleased]");
+  assert.match(unreleased, /^## \[Unreleased\]/u);
+  assert.doesNotMatch(unreleased, /is released|has been released|published as|배포되었|배포 완료/iu);
   const currentRelease = markdownSection(releaseDocs[4], "## [0.2.7]", "## [0.2.6]");
   assert.match(currentRelease, /dependency advisories reported in issue #18/u);
   assert.match(currentRelease, /well-formed XML serialization/u);

@@ -476,9 +476,9 @@ before(async () => {
 
 after(async () => {
   for (const path of generatedPaths) {
-    await rm(path, { recursive: true, force: true });
+    await rm(path, { recursive: true, force: true, maxRetries: 5 });
   }
-  await rm(tmpRoot, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5 });
 });
 
 test("hwp_detect_format refines the generated ZIP container to HWPX", async () => {

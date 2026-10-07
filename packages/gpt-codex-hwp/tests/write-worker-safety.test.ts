@@ -101,7 +101,7 @@ test("write worker safety routes generation through one path-free facade request
     assert.equal(await readFile(previewPath, "utf8"), previewSvg);
     assert.equal(result.structuredContent?.preview_svg_path, previewPath);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -139,7 +139,7 @@ test("write worker safety opens one immutable snapshot for validation and sends 
     assert.doesNotMatch(JSON.stringify(calls[0]), /(?:file|source|output|spool|image)[_-]?path/iu);
     assert.equal(digest(await readFile(sourcePath)), digest(source));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -220,7 +220,7 @@ test("write worker safety routes patch through one snapshot and preserves operat
     assert.equal(digest(await readFile(outputPath)), digest(patched));
     assert.equal(digest(await readFile(sourcePath)), digest(source));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -300,7 +300,7 @@ test("write worker safety routes fill through one snapshot and preserves matched
     assert.equal(digest(await readFile(outputPath)), digest(filled));
     assert.equal(digest(await readFile(sourcePath)), digest(source));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -413,7 +413,7 @@ for (const mode of ["after-paragraph", "seal-anchor"] as const) {
       assert.equal(digest(await readFile(sourcePath)), digest(source));
       assert.equal(digest(await readFile(imagePath)), digest(image));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 }
@@ -462,7 +462,7 @@ test("authorized inline HWPX bytes remain immutable when the exposed engine payl
 
     assert.equal(digest(await readFile(outputPath)), digest(original));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -512,7 +512,7 @@ test("generation validates preview metadata before opening either output", async
     await assert.rejects(readFile(outputPath), { code: "ENOENT" });
     await assert.rejects(readFile(previewPath), { code: "ENOENT" });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -592,7 +592,7 @@ test("the common HWPX mutation writer rechecks cancellation after source verific
     }
   } finally {
     await ownedSnapshot.cleanup();
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 

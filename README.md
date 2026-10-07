@@ -94,7 +94,7 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 이 프로젝트는 주로 Windows x64에서 개발하고 실제 검증했습니다. macOS Apple Silicon 플러그인 런타임 CI는 구성되어 있지만, 현재 HEAD에 대한 성공 영수증이 확인되기 전에는 이 CI를 통과 또는 검증 완료로 표현하지 않습니다. 실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정은 검증하지 않았습니다. 따라서 macOS는 호환 대상이며 macOS 완전 지원을 주장하지 않습니다.
 
-`v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 GitHub 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4)를 참조하십시오.
+릴리스별 테스트·감사 결과는 각 [GitHub 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases)의 노트에 기록합니다.
 
 ## 안정 버전 v0.2.7 GitHub 설치
 
@@ -271,7 +271,7 @@ $env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
 export GPT_CODEX_HWP_ALLOWED_ROOTS='["/Volumes/TeamDocs"]'
 ```
 
-빈 배열, 잘못된 JSON, 상대 경로, 중복 루트, 존재하지 않는 루트, 파일 또는 링크 루트가 있으면 MCP 서버가 시작 단계에서 닫힌 상태로 실패합니다. 값은 UTF-8 기준 16,384바이트, 루트 32개, 항목당 4,096자로 제한됩니다. 설정된 경우 원본 HWP/HWPX, Markdown·이미지 입력, 생성·패치·양식·이미지 삽입 HWPX, Markdown·SVG·PNG·미리보기·추출 이미지와 출력 디렉터리 모두 실경로 확인 뒤 같은 정책을 적용합니다. 거부 결과는 `PATH_OUTSIDE_ALLOWED_ROOTS`만 반환하며 설정값이나 거부된 절대 경로를 노출하지 않습니다.
+빈 배열, 잘못된 JSON, 상대 경로, 중복 루트, 존재하지 않는 루트, 파일 또는 링크 루트가 있으면 one-shot 호출은 도구를 실행하기 전에, 수동 MCP 서버는 시작 단계에서 닫힌 상태로 실패합니다. 값은 UTF-8 기준 16,384바이트, 루트 32개, 항목당 4,096자로 제한됩니다. 설정된 경우 원본 HWP/HWPX, Markdown·이미지 입력, 생성·패치·양식·이미지 삽입 HWPX, Markdown·SVG·PNG·미리보기·추출 이미지와 출력 디렉터리 모두 실경로 확인 뒤 같은 정책을 적용합니다. 거부 결과는 `PATH_OUTSIDE_ALLOWED_ROOTS`만 반환하며 설정값이나 거부된 절대 경로를 노출하지 않습니다.
 
 대용량 처리용 내부 스풀은 사용자 루트 설정을 받지 않는 별도의 예측 불가능한 OS 임시 디렉터리에 소유자 전용 권한으로 만들고, 자식 프로세스에는 상속된 핸들만 전달하며 `finally`에서 제거합니다. 따라서 스풀은 사용자 허용 루트의 예외가 아니라 독립된 내부 신뢰 영역입니다. `allowed_roots`는 에이전트의 실수나 경로 이탈을 줄이는 방어선이며, 같은 OS 사용자 권한으로 실행되는 악성 프로세스를 완전히 격리하지는 못합니다. Node.js는 모든 파일시스템에서 Linux `openat2`나 Windows 핸들 상대 경로와 같은 원자적 보장을 이식성 있게 제공하지 않으므로, 높은 위험의 문서는 별도 저권한 계정·VM·컨테이너 같은 OS 격리에서 처리하십시오.
 

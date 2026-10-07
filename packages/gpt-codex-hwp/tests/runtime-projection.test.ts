@@ -26,7 +26,7 @@ test("public runtime projection stages only branded executable files", { timeout
   const root = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-runtime-suite-",
   });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const output = join(root, "runtime");
   const result = await buildRuntime({ root: REPOSITORY_ROOT, outputRoot: output });
   const metadata = await loadProjectMetadata(REPOSITORY_ROOT);
@@ -163,7 +163,7 @@ test("package runtime projection refuses plans specs and temporary evidence belo
     const outputRoot = await createCanonicalTemporaryDirectory({
       prefix: `gpt-codex-hwp-runtime-forbidden-${segment}-`,
     });
-    t.after(async () => rm(outputRoot, { recursive: true, force: true }));
+    t.after(async () => rm(outputRoot, { recursive: true, force: true, maxRetries: 5 }));
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(sourcePath, "must not ship\n", "utf8");
     try {
@@ -172,7 +172,7 @@ test("package runtime projection refuses plans specs and temporary evidence belo
         new RegExp(`Forbidden runtime path was staged: assets/${segment}/`, "u"),
       );
     } finally {
-      await rm(sourceDirectory, { recursive: true, force: true });
+      await rm(sourceDirectory, { recursive: true, force: true, maxRetries: 5 });
     }
   }
 });
@@ -188,7 +188,7 @@ test("package runtime projection rejects forbidden filename tokens without subst
     const outputRoot = await createCanonicalTemporaryDirectory({
       prefix: `gpt-codex-hwp-runtime-forbidden-filename-${index}-`,
     });
-    t.after(async () => rm(outputRoot, { recursive: true, force: true }));
+    t.after(async () => rm(outputRoot, { recursive: true, force: true, maxRetries: 5 }));
     await writeFile(sourcePath, "must not ship\n", { encoding: "utf8", flag: "wx" });
     try {
       await assert.rejects(
@@ -209,7 +209,7 @@ test("package runtime projection rejects forbidden filename tokens without subst
   const binaryOutputRoot = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-runtime-allowed-binary-filename-",
   });
-  t.after(async () => rm(binaryOutputRoot, { recursive: true, force: true }));
+  t.after(async () => rm(binaryOutputRoot, { recursive: true, force: true, maxRetries: 5 }));
   try {
     await assert.rejects(
       buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(binaryOutputRoot, "runtime") }),
@@ -236,7 +236,7 @@ test("package runtime projection rejects forbidden filename tokens without subst
   const outputRoot = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-runtime-allowed-filenames-",
   });
-  t.after(async () => rm(outputRoot, { recursive: true, force: true }));
+  t.after(async () => rm(outputRoot, { recursive: true, force: true, maxRetries: 5 }));
   const output = join(outputRoot, "runtime");
   try {
     await assert.doesNotReject(buildRuntime({ root: REPOSITORY_ROOT, outputRoot: output }));
@@ -255,7 +255,7 @@ test("package runtime fixtures canonicalize an injected aliased temp parent", as
     parent: alias.path,
     prefix: "package-runtime-fixture-",
   });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   assert.equal(dirname(root), alias.canonicalParent);
   const output = join(root, "runtime");
   await assert.doesNotReject(buildRuntime({ root: REPOSITORY_ROOT, outputRoot: output }));
@@ -265,7 +265,7 @@ test("owned projection cleanup removes a failed stage and permits retry", { time
   const root = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-runtime-retry-",
   });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const output = join(root, "owned-output");
   const swapId = "injected-promotion-failure";
   const stage = join(root, `.${basename(output)}.stage-${swapId}`);
@@ -306,7 +306,7 @@ test("pre-existing unowned projection evidence is never removed", async (t) => {
   const root = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-runtime-unowned-",
   });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const output = join(root, "user-output");
   const swapId = "unowned-evidence";
   const stage = join(root, `.${basename(output)}.stage-${swapId}`);
@@ -344,13 +344,13 @@ async function temporaryDirectoryAlias(
   try {
     await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
   } catch (error) {
-    await rm(base, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true, maxRetries: 5 });
     if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
       t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
       return undefined;
     }
     throw error;
   }
-  t.after(async () => rm(base, { recursive: true, force: true }));
+  t.after(async () => rm(base, { recursive: true, force: true, maxRetries: 5 }));
   return { canonicalParent: await realpath(canonicalParent), path };
 }

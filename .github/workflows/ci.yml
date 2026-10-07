@@ -15,7 +15,7 @@ jobs:
   windows:
     name: Windows x64
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
@@ -82,7 +82,7 @@ jobs:
   macos:
     name: macOS arm64
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     env:

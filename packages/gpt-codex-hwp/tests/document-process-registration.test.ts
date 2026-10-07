@@ -1340,7 +1340,7 @@ test("registration coordinator rejects the first byte beyond the exact 16KiB cha
 
 test("document child gate blocks payload until exact START and preserves entry arguments", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-start-gate-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPath = join(temporaryRoot, "marker.json");
   const payloadArgument = `payload-${randomUUID()}`;
   const child = spawnGatedFixture(markerPath, payloadArgument);
@@ -1363,7 +1363,7 @@ test("document child gate blocks payload until exact START and preserves entry a
 
 test("document child gate accepts representative split START writes on the same fd 7 pipe", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-start-gate-split-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const cases = [
     ["prefix", [DOCUMENT_START_FRAME.slice(0, 1), DOCUMENT_START_FRAME.slice(1)]],
     ["newline", [DOCUMENT_START_FRAME.slice(0, 7), DOCUMENT_START_FRAME.slice(7, -1), "\n"]],
@@ -1394,7 +1394,7 @@ test("document child gate accepts representative split START writes on the same 
 
 test("document child gate exits on an extra post-START byte after payload evaluation", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-start-gate-post-start-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPath = join(temporaryRoot, "marker.json");
   const child = spawnGatedFixture(markerPath, "post-start-extra-byte");
   t.after(() => terminate(child));
@@ -1418,7 +1418,7 @@ test("document child gate exits on an extra post-START byte after payload evalua
 
 test("document child gate rejects EOF partial extended and incorrect START without payload evaluation", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-start-gate-invalid-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const cases = [
     ["eof", Buffer.alloc(0)],
     ["partial", Buffer.from(DOCUMENT_START_FRAME.slice(0, -1))],
@@ -1441,7 +1441,7 @@ test("document child gate rejects EOF partial extended and incorrect START witho
 
 test("document child registration accepts a matching ACK and closes channels before payload", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-accepted-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPath = join(temporaryRoot, "marker.json");
   const payloadArgument = `registered-${randomUUID()}`;
   const child = spawnGatedFixture(markerPath, payloadArgument, "both");
@@ -1488,7 +1488,7 @@ test("document child registration accepts a matching ACK and closes channels bef
 
 test("document child registration remains gated across delayed ACK and START delivery", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-delayed-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPath = join(temporaryRoot, "marker.json");
   const payloadArgument = `delayed-${randomUUID()}`;
   const child = spawnGatedFixture(markerPath, payloadArgument, "both");
@@ -1523,7 +1523,7 @@ test("document child registration remains gated across delayed ACK and START del
 
 test("document child registration rejects rejected and wrong-nonce ACKs before payload", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-rejected-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
 
   for (const ackCase of ["rejected", "wrong-nonce"] as const) {
     const markerPath = join(temporaryRoot, `${ackCase}.json`);
@@ -1551,7 +1551,7 @@ test("document child registration rejects rejected and wrong-nonce ACKs before p
 
 test("document child registration rejects concatenated ACK frames before payload", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-concatenated-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPath = join(temporaryRoot, "payload.json");
   const child = spawnGatedFixture(markerPath, "concatenated", "both");
   t.after(() => terminate(child));
@@ -1584,7 +1584,7 @@ test("document child registration rejects concatenated ACK frames before payload
 
 test("document child registration rejects an inert acknowledgement peer", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-mismatch-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPath = join(temporaryRoot, "marker.json");
   const child = spawnGatedFixture(markerPath, "fd8-only", "registration-only");
   t.after(() => terminate(child));
@@ -1628,7 +1628,7 @@ function classifyDescriptorMismatchStderr(stderr: string): string {
 
 test("registration descriptor ownership produces clean EOF after case and bootstrap exit", { timeout: 15_000 }, async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-eof-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPath = join(temporaryRoot, "payload.json");
   const caseChild = spawnRegistrationCase([
     "--descriptor-case",
@@ -1770,7 +1770,7 @@ test("registration sequential transport completes two real bootstrap ACK handsha
       terminate(caseChild);
       enterDiagnosticStage("TERMINATE_COMPLETE");
       enterDiagnosticStage("CLEANUP_BEGIN");
-      await rm(temporaryRoot, { recursive: true, force: true });
+      await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
       enterDiagnosticStage("CLEANUP_COMPLETE");
     } catch {
       throw new Error(`DOCUMENT_SEQUENTIAL_${diagnosticStage}`);
@@ -1780,7 +1780,7 @@ test("registration sequential transport completes two real bootstrap ACK handsha
 
 test("registration overlapping real bootstraps fail before either payload and leave both PIDs absent", { timeout: 20_000 }, async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-overlap-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const markerPrefix = join(temporaryRoot, "payload");
   const identityBarrierPath = join(temporaryRoot, "identity-entered");
   const caseChild = spawnRegistrationCase([
@@ -1833,7 +1833,7 @@ test("registration overlapping real bootstraps fail before either payload and le
 
 test("registration stale prior ACK never dispatches the next bootstrap payload", { timeout: 20_000 }, async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-stale-ack-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const payloadMarkerPath = join(temporaryRoot, "payload.txt");
   const firstAckBarrierPath = join(temporaryRoot, "first-ack-enqueued");
   const caseChild = spawnRegistrationCase([
@@ -1997,7 +1997,7 @@ test("post-snapshot registration race rejects a reparented bootstrap before payl
     return;
   }
   const temporaryRoot = await mkdtemp(join(tmpdir(), "document-registration-race-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const pidLogPath = join(temporaryRoot, "pids.txt");
   const payloadMarkerPath = join(temporaryRoot, "payload.txt");
   const caseChild = spawnRegistrationCase([

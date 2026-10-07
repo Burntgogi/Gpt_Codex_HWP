@@ -159,7 +159,7 @@ test("Windows and macOS required jobs implement the bounded PR profile in exact 
   for (const [label, section, platform, arch, profile] of jobs) {
     assert.match(section, new RegExp(`process\\.platform[^\\n]+[\"']${platform}[\"']`, "u"), `${label} platform assertion`);
     assert.match(section, new RegExp(`process\\.arch[^\\n]+[\"']${arch}[\"']`, "u"), `${label} architecture assertion`);
-    assert.match(section, /^    timeout-minutes: 60$/mu, `${label} bounded job timeout`);
+    assert.match(section, /^    timeout-minutes: 90$/mu, `${label} bounded job timeout`);
     assertFastDesktopPrJobBoundary(section, {
       profile,
       nodeDiagnosticCommand: profile === "test:pr"
@@ -599,7 +599,7 @@ test("release verification canonicalizes an aliased Windows temporary root", asy
   await mkdir(target);
   t.after(async () => {
     try { await unlink(alias); } catch {}
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   });
   try {
     await symlink(target, alias, process.platform === "win32" ? "junction" : "dir");

@@ -296,7 +296,7 @@ async function createInstallerFixture(
   doctor = { exitCode: 0, report: doctorReport(9, true) },
 ) {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-installer-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const codexHome = join(root, "codex-home");
   const managedRoot = join(codexHome, "plugins", "cache", MARKETPLACE, PRODUCT, PLUGIN_VERSION);
   const files = new Map<string, Buffer>([

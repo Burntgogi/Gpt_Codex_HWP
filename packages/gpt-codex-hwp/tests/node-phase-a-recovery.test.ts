@@ -42,7 +42,7 @@ test("recovery fails when RSS or an identity remains after two seconds", async (
 
 test("recovery CLI writes one privacy-safe 100 MiB receipt exclusively", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-recovery-cli-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const output = join(root, "recovery.json");
   const receipt = {
     schemaVersion: 1,

@@ -104,6 +104,11 @@ test("security boundary documentation repository exclusions cover private and ge
     "node_modules/package/index.js",
     "private-document.hwp",
     "private-document.hwpx",
+    ".claude/settings.local.json",
+    ".vscode/settings.json",
+    ".idea/workspace.xml",
+    "npm-debug.log",
+    "packages/gpt-codex-hwp/tsconfig.tsbuildinfo",
   ];
 
   for (const path of ignored) {

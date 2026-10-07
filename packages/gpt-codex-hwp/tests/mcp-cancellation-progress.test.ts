@@ -168,7 +168,7 @@ test("MCP cancellation reaches the preview exclusive-open boundary", async (t) =
     throw error;
   } finally {
     try {
-      await rm(directory, { recursive: true, force: true });
+      await rm(directory, { recursive: true, force: true, maxRetries: 5 });
     } catch (error: unknown) {
       t.diagnostic("MCP_PREVIEW_CANCELLATION_FAILURE_CLEANUP");
       throw error;
@@ -207,7 +207,7 @@ test("MCP cancellation precedes read output_dir creation with zero images", asyn
     assert.match(JSON.stringify(result), /REQUEST_CANCELLED/u);
     await assert.rejects(access(outputDir));
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -323,7 +323,7 @@ test("MCP cancellation before the authorization boundary creates no output", asy
     releaseValidation();
     await client.close();
     await server.close();
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -734,7 +734,7 @@ function isolatedCancellationFacade(
     },
     async cleanup() {
       if (spoolRoot !== undefined) {
-        await rm(spoolRoot, { recursive: true, force: true });
+        await rm(spoolRoot, { recursive: true, force: true, maxRetries: 5 });
       }
     },
   };
@@ -835,7 +835,7 @@ function createOwnedInput() {
     fd,
     cleanup() {
       try { closeSync(fd); } catch {}
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true, maxRetries: 5 });
     },
   };
 }

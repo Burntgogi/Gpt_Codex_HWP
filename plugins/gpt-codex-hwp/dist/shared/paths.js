@@ -1,6 +1,5 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
-import { mkdir, realpath, stat } from "node:fs/promises";
-import { dirname, join, parse as parsePath, resolve } from "node:path";
+import { join, parse as parsePath, resolve } from "node:path";
 // Windows UNC roots (\\server\share) explicitly configured as allowed roots.
 // Other network paths are rejected so a document cannot steer the agent into
 // an SMB connection to an arbitrary host.
@@ -132,72 +131,4 @@ function assertSafeWindowsPath(path, label) {
             throw new UnsafeWindowsPathError(label, `reserved DOS device name ${component} is not accepted`);
         }
     }
-}
-export function assertSafeZipEntryName(entryName) {
-    if (typeof entryName !== "string" || entryName.trim().length === 0) {
-        throw new Error("ZIP entry name must not be empty.");
-    }
-    if (entryName.includes("\0")) {
-        throw new Error("ZIP entry name must not contain null bytes.");
-    }
-    const normalizedName = entryName.replaceAll("\\", "/");
-    if (normalizedName.startsWith("/") || /^[A-Za-z]:/.test(normalizedName)) {
-        throw new Error("ZIP entry name must be package-relative.");
-    }
-    if (normalizedName.split("/").includes("..")) {
-        throw new Error("ZIP entry name must not contain directory traversal.");
-    }
-    return normalizedName;
-}
-export function resolveSourceAndOutputPaths(sourcePath, outputPath) {
-    const resolvedSourcePath = resolveLocalPath(sourcePath, "source_path");
-    const resolvedOutputPath = resolveLocalPath(outputPath, "output_path");
-    const comparableSourcePath = comparablePath(resolvedSourcePath);
-    const comparableOutputPath = comparablePath(resolvedOutputPath);
-    if (comparableSourcePath === comparableOutputPath) {
-        throw new Error("source_path and output_path must be different.");
-    }
-    return {
-        sourcePath: resolvedSourcePath,
-        outputPath: resolvedOutputPath,
-    };
-}
-export async function prepareOutputPath(sourcePath, outputPath) {
-    const resolvedPaths = resolveSourceAndOutputPaths(sourcePath, outputPath);
-    const [sourceIdentity, outputIdentity] = await Promise.all([
-        getExistingPathIdentity(resolvedPaths.sourcePath),
-        getExistingPathIdentity(resolvedPaths.outputPath),
-    ]);
-    if (sourceIdentity !== undefined &&
-        outputIdentity !== undefined &&
-        (comparablePath(sourceIdentity.realPath) ===
-            comparablePath(outputIdentity.realPath) ||
-            (sourceIdentity.device === outputIdentity.device &&
-                sourceIdentity.inode === outputIdentity.inode))) {
-        throw new Error("source_path and output_path must be different.");
-    }
-    await mkdir(dirname(resolvedPaths.outputPath), { recursive: true });
-    return resolvedPaths;
-}
-async function getExistingPathIdentity(path) {
-    try {
-        const [resolvedRealPath, stats] = await Promise.all([
-            realpath(path),
-            stat(path, { bigint: true }),
-        ]);
-        return {
-            realPath: resolvedRealPath,
-            device: stats.dev,
-            inode: stats.ino,
-        };
-    }
-    catch (error) {
-        if (error.code === "ENOENT") {
-            return undefined;
-        }
-        throw error;
-    }
-}
-function comparablePath(path) {
-    return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
 }

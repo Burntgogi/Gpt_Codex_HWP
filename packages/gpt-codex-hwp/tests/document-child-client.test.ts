@@ -551,7 +551,7 @@ for (const scenario of [
         spawned.kill("SIGKILL");
       }
       owned.cleanup();
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 }
@@ -645,7 +645,7 @@ test("document child late supervisor proof releases provisional startup retentio
       spawned.kill("SIGKILL");
     }
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -720,7 +720,7 @@ test("document child late mode 2 gated-root receipt releases retention without P
   } finally {
     releaseTypedError?.();
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -819,7 +819,7 @@ for (const scenario of [
         spawned.kill("SIGKILL");
       }
       owned.cleanup();
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 }
@@ -885,7 +885,7 @@ for (const callbackMode of ["success", "error"] as const) {
         retainedStartTransport?.listenerCount("error") === baselineErrorListeners);
     } finally {
       owned.cleanup();
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 }
@@ -944,7 +944,7 @@ test("document request stdin retains owner-lifetime error handling after its end
     await waitFor(() => retainedInput?.listenerCount("error") === 0);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1000,7 +1000,7 @@ test("document child start gate rejection closes fd7 without START or payload di
       spawned.kill("SIGKILL");
     }
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1263,7 +1263,7 @@ test("parent lifeline removes a registered detached child group after forced par
       }
       try { process.kill(pid, "SIGKILL"); } catch {}
     }
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1607,7 +1607,7 @@ test("document child client detects a real constrained fatal V8 OOM from stderr"
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1778,7 +1778,7 @@ test("forced Windows tracker directly cleans a live descendant tree without a pr
     for (const pid of observedPids) {
       try { process.kill(pid, "SIGKILL"); } catch {}
     }
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1847,7 +1847,7 @@ test("forced Windows tracker remains cleanup-only and never opens document paylo
     assert.equal(existsSync(markerPath), false);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1900,7 +1900,7 @@ test("Windows child refuses framed request dispatch when supervision is unavaila
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1941,7 +1941,7 @@ test("document child client captures async spawn errors while supervisor readine
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1979,7 +1979,7 @@ test("document child start gate prevents payload OOM before supervisor readiness
     await waitFor(() => snapshot.cleanupCalls === 1 && readdirSync(root).length === 0);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -2008,7 +2008,7 @@ test("document child start gate maps supervisor readiness failure before payload
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -2051,7 +2051,7 @@ test("document child start gate keeps supervisor rejection unverified after an e
     assert.ok(readdirSync(root).length >= 1);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -2084,7 +2084,7 @@ test("supervisor readiness pre-spawn deadline returns timeout without creating a
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -2149,7 +2149,7 @@ test("supervisor readiness post-spawn abort retains ownership until typed author
   } finally {
     spawned?.kill("SIGKILL");
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -2206,7 +2206,7 @@ test("root exit cannot release ownership before an independent full-tree GONE re
       try { process.kill(descendantPid, "SIGKILL"); } catch {}
     }
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -2253,7 +2253,7 @@ test("document child client does not mask a failed tree termination as timeout",
   } finally {
     spawned?.kill("SIGKILL");
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4031,7 +4031,7 @@ test("document child client includes gate wait in the request deadline", async (
   } finally {
     firstOwned.cleanup();
     secondOwned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4080,7 +4080,7 @@ test("document child client includes private spool and spawn time before framed 
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4170,7 +4170,7 @@ test("document child client verifies parent-owned fd 5 spools for content-bearin
     }
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4194,7 +4194,7 @@ test("document child client verifies a 9 MiB spool without control-channel paylo
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4224,7 +4224,7 @@ test("document child client rejects tampered spool size and hash and cleans owne
       assert.deepEqual(readdirSync(root), []);
     } finally {
       owned.cleanup();
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5 });
     }
   }
 });
@@ -4259,7 +4259,7 @@ test("output spool cleanup retries after quarantine unlink failure", async () =>
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4293,7 +4293,7 @@ test("output spool cleanup retries after quarantine rmdir failure", async () => 
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4313,7 +4313,7 @@ test("document child client rejects oversized inline declaration and cleans outp
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4336,7 +4336,7 @@ test("document child client rejects a 9 MiB control frame before payload allocat
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4405,7 +4405,7 @@ test("document child client closes the spawn-to-listener abort gap", async () =>
     await waitFor(() => snapshot.cleanupCalls === 1 && readdirSync(root).length === 0);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4442,7 +4442,7 @@ test("document child client does not spawn when aborted during output spool crea
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4471,7 +4471,7 @@ test("startup failure preserves abort when abort precedes the deadline", async (
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4500,7 +4500,7 @@ test("startup failure preserves deadline when deadline precedes a later abort", 
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4528,7 +4528,7 @@ test("spawn failure preserves an abort observed inside spawnFactory", async () =
     assert.deepEqual(readdirSync(root), []);
   } finally {
     owned.cleanup();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -4694,7 +4694,7 @@ function createOwnedFiles() {
       try { closeSync(inputFd); } catch {}
       try { closeSync(outputFd); } catch {}
       try { closeSync(imageFd); } catch {}
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true, maxRetries: 5 });
     },
   };
 }
