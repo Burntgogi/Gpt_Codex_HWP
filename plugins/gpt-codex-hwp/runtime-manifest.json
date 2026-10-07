@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
   "pluginVersion": "0.2.7+codex.20260929182230",
-  "packageLockSha256": "f1e2d1c293b3428530ced6f23597bd246c06eb5e6d778c2041e80052f60cb497",
+  "packageLockSha256": "84ea09a61cf0fd99cdcdef8cda3300af2f344042c8f5e5a4b1e661e408e12acd",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -331,13 +331,13 @@
     },
     {
       "path": "package-lock.json",
-      "size": 87378,
-      "sha256": "f1e2d1c293b3428530ced6f23597bd246c06eb5e6d778c2041e80052f60cb497"
+      "size": 87489,
+      "sha256": "84ea09a61cf0fd99cdcdef8cda3300af2f344042c8f5e5a4b1e661e408e12acd"
     },
     {
       "path": "package.json",
-      "size": 671,
-      "sha256": "997319d863c9547e540ef5a0bb3a0a5c8888689c457e544dba3c0035eecb85d7"
+      "size": 670,
+      "sha256": "33681e275d6378aac64c331ee9c155eebf568f96692796eb443a362bc379419c"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

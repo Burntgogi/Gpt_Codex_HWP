@@ -46,7 +46,7 @@ test("source package declares only approved direct dependencies", async () => {
     "sharp",
     "zod",
   ]);
-  assert.deepEqual(sourcePackage.optionalDependencies, { "@rhwp/core": "0.7.17" });
+  assert.deepEqual(sourcePackage.optionalDependencies, { "@rhwp/core": "0.8.7" });
 });
 
 test("source lock contains no root-repository link from prefixed installs", async () => {

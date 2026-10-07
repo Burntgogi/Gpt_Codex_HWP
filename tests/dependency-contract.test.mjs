@@ -41,7 +41,7 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   sharp: "0.35.5",
   zod: "3.25.76",
 });
-const EXPECTED_OPTIONAL_DEPENDENCIES = Object.freeze({ "@rhwp/core": "0.7.17" });
+const EXPECTED_OPTIONAL_DEPENDENCIES = Object.freeze({ "@rhwp/core": "0.8.7" });
 const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
   "@types/node": "22.20.1",
   tsx: "4.23.1",

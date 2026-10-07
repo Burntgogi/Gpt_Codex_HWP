@@ -36,6 +36,9 @@ This file records release tags and their publication status. Work under `Unrelea
   time, and amount notation, item-symbol order, 붙임, and the 「끝」 mark with
   citations to 「행정업무의 운영 및 혁신에 관한 규정」 and its 시행규칙.
   Gpt_Codex_HWP recommends it after installation but never installs it.
+- Update the optional @rhwp/core preview and parsing fallback from 0.7.17 to
+  0.8.7 (MIT). The APIs this plugin calls are unchanged; the HWP fixture,
+  rhwp backend, read-worker, and installed-runtime checks pass.
 
 ## [0.2.7] - 2026-09-29
 

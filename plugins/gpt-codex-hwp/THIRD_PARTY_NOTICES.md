@@ -54,10 +54,11 @@ Thank you to the Kordoc maintainer and contributors for the document runtime on 
 ## rhwp
 
 - Repository: <https://github.com/edwardkim/rhwp>
-- Version: `@rhwp/core` `0.7.17` (`v0.7.17`)
+- Version: `@rhwp/core` `0.8.7` (`v0.8.7`)
 - Copyright: `Copyright (c) 2025-2026 Edward Kim`
 - License: MIT
 - Use in this project: optional HWP/HWPX parsing and preview fallback for read-only document workflows.
+- Note: the npm package ships no font files. Its WebAssembly module embeds a generated table of glyph-width metrics used to approximate layout; upstream marks the table's provenance as unverified.
 
 Thank you to Edward Kim and the rhwp contributors for making this optional Rust/Wasm document path available.
 

@@ -40,7 +40,7 @@
     "node": ">=22"
   },
   "optionalDependencies": {
-    "@rhwp/core": "0.7.17"
+    "@rhwp/core": "0.8.7"
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
