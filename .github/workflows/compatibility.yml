@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   windows:
-    name: Windows 100 MiB compatibility
+    name: Windows 10 MiB compatibility
     runs-on: windows-2025
     timeout-minutes: 60
     permissions:
@@ -43,12 +43,12 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Run Windows 100 MiB production-path smoke
+      - name: Run Windows 10 MiB production-path smoke
         timeout-minutes: 30
-        run: node scripts/installed-runtime-smoke.mjs --large-detect 100
+        run: node scripts/installed-runtime-smoke.mjs --large-detect 10
 
   linux:
-    name: Linux 100 MiB compatibility
+    name: Linux 10 MiB compatibility
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -72,12 +72,12 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Run Linux 100 MiB production-path smoke
+      - name: Run Linux 10 MiB production-path smoke
         timeout-minutes: 30
-        run: node scripts/installed-runtime-smoke.mjs --large-detect 100
+        run: node scripts/installed-runtime-smoke.mjs --large-detect 10
 
   macos:
-    name: macOS 100 MiB compatibility
+    name: macOS 10 MiB compatibility
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -101,9 +101,9 @@ jobs:
       - name: Install source dependencies without lifecycle scripts
         timeout-minutes: 10
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
-      - name: Run macOS 100 MiB production-path smoke
+      - name: Run macOS 10 MiB production-path smoke
         timeout-minutes: 30
-        run: node scripts/installed-runtime-smoke.mjs --large-detect 100
+        run: node scripts/installed-runtime-smoke.mjs --large-detect 10
 
   macos_bp16_stability:
     name: macOS bp16 stability ${{ matrix.attempt }} of 20

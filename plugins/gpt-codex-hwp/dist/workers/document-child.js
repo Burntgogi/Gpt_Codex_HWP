@@ -121,7 +121,8 @@ async function runImageHelper(request, sourceSize, image, occurrence) {
         imageInput.on("error", () => undefined);
         imageInput.end(Buffer.from(image));
         helper.once("error", rejectPromise);
-        helper.once("exit", (code) => {
+        // "close" fires after stdout is fully drained; "exit" can precede it.
+        helper.once("close", (code) => {
             if (code === 0 && outputBytes <= 64 * 1024 && errorBytes <= 64 * 1024) {
                 try {
                     resolvePromise(afterParagraphMetadata(Buffer.concat(outputChunks)));

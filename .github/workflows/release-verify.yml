@@ -63,10 +63,10 @@ jobs:
           git config --local user.name "Gpt_Codex_HWP contributors"
           git config --local user.email "224273819+Burntgogi@users.noreply.github.com"
           git remote set-url origin "https://github.com/Burntgogi/Gpt_Codex_HWP.git"
-      - name: Run release 100 MiB production-path smoke
+      - name: Run release 10 MiB production-path smoke
         id: large
         timeout-minutes: 30
-        run: node scripts/installed-runtime-smoke.mjs --large-detect 100
+        run: node scripts/installed-runtime-smoke.mjs --large-detect 10
       - name: Run the complete fail-closed release gate
         run: npm run release:verify
       - name: Build checksummed candidate outputs

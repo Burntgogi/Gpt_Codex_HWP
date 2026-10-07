@@ -74,7 +74,7 @@ Thank you to the modelcontextprotocol maintainers and contributors for the TypeS
 ## xmldom
 
 - Repository: <https://github.com/xmldom/xmldom>
-- Version: `@xmldom/xmldom` `0.9.10` (`0.9.10`)
+- Version: `@xmldom/xmldom` `0.9.12` (`0.9.12`)
 - Copyright: `Copyright 2019 - present Christopher J. Brody and other contributors, as listed in: https://github.com/xmldom/xmldom/graphs/contributors`; `Copyright 2012 - 2017 @jindw and other contributors, as listed in: https://github.com/xmldom/xmldom/graphs/contributors`
 - License: MIT
 - Use in this project: parsing, inspecting, modifying, and serializing HWPX XML for font-integrity checks and image insertion.
@@ -101,13 +101,24 @@ Thank you to SheetJS LLC and the js-cfb contributors for the compound-file imple
 
 Thank you to Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso, and all JSZip contributors for the ZIP implementation.
 
+## markdown-it
+
+- Repository: <https://github.com/markdown-it/markdown-it>
+- Version: `14.3.1` (`14.3.1`)
+- Copyright: `Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.`
+- License: MIT
+- Registry integrity: `sha512-4Ej49aYTDFIQ+uBkfX8GBvJGccoARxxPep+7aWTs55ozbjQJpW9M26Fe53vnGgvLeVzva/amzjQQaQu9w0vMhA==`
+- Use in this project: Markdown parsing inside the vendored Kordoc Core runtime; declared directly so the runtime lock pins the patched version.
+
+Thank you to Vitaly Puzrin, Alex Kocharin, and the markdown-it contributors for the CommonMark parser.
+
 ## fast-uri
 
 - Repository: <https://github.com/fastify/fast-uri>
-- Version: `3.1.4` (`v3.1.4`)
+- Version: `3.1.8` (`v3.1.8`)
 - Copyright: `Copyright (c) 2011-2021, Gary Court`; `Copyright (c) 2021-present The Fastify team`
 - License: BSD-3-Clause
-- Registry integrity: `sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw==`
+- Registry integrity: `sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==`
 - Use in this project: URI parsing used transitively by the JSON schema validator in the runtime dependency graph.
 
 Thank you to the Fastify team and fast-uri contributors for the URI implementation.
@@ -115,10 +126,10 @@ Thank you to the Fastify team and fast-uri contributors for the URI implementati
 ## Sharp
 
 - Repository: <https://github.com/lovell/sharp>
-- Version: `0.35.3` (`v0.35.3`)
-- Copyright: the upstream `v0.35.3` `LICENSE` contains no project-specific copyright notice; its official `package.json` names Lovell Fuller as author
+- Version: `0.35.5` (`v0.35.5`)
+- Copyright: the upstream `v0.35.5` `LICENSE` contains no project-specific copyright notice; its official `package.json` names Lovell Fuller as author
 - License: Apache-2.0
-- Registry integrity: `sha512-ej0zVHuZGHCiABXcNxeYhpRnPNPAcvbG8RMdBAhDAxLKkCRVSpK3Iyu7qbqw3JMzoj0REeM6f3tJLtVwl0023Q==`
+- Registry integrity: `sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g==`
 - Use in this project: bounded SVG rasterization, PNG metadata validation, and safe image conversion before HWPX insertion.
 
 Thank you to Lovell Fuller and the Sharp contributors for the cross-platform image-processing runtime.

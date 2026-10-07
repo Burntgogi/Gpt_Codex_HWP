@@ -57,6 +57,7 @@ const READ_ONLY_RUNTIME_FILES = [
   "scripts/kordoc-runtime-verifier.mjs",
 ];
 const GENERATED_FILES = [
+  ".claude-plugin/plugin.json",
   ".codex-plugin/plugin.json",
   "examples/mcp-manual.json",
   "examples/oneshot-tool-schemas.json",
@@ -1008,3 +1009,24 @@ async function sha256(path) {
 function comparePaths(left, right) {
   return left.localeCompare(right, "en");
 }
+
+test("Claude Code marketplace and plugin manifests stay aligned with the Codex runtime", async () => {
+  const metadata = await loadProjectMetadata(ROOT);
+  const rootPackage = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+  const marketplace = JSON.parse(await readFile(join(ROOT, ".claude-plugin", "marketplace.json"), "utf8"));
+  const runtimeRoot = join(ROOT, "plugins", metadata.productId);
+  const codexPlugin = JSON.parse(await readFile(join(runtimeRoot, ".codex-plugin", "plugin.json"), "utf8"));
+  const claudePlugin = JSON.parse(await readFile(join(runtimeRoot, ".claude-plugin", "plugin.json"), "utf8"));
+
+  assert.equal(marketplace.name, rootPackage.config.marketplaceName);
+  assert.equal(marketplace.plugins.length, 1);
+  assert.equal(marketplace.plugins[0].name, metadata.productId);
+  assert.equal(marketplace.plugins[0].source, `./plugins/${metadata.productId}`);
+
+  assert.equal(claudePlugin.name, metadata.productId);
+  assert.equal(claudePlugin.version, pluginVersion(metadata));
+  assert.equal(claudePlugin.version, codexPlugin.version);
+  for (const key of ["mcpServers", "hooks", "lspServers", "skills", "dependencies"]) {
+    assert.equal(Object.hasOwn(claudePlugin, key), false, `Claude manifest must not declare ${key}`);
+  }
+});

@@ -193,13 +193,12 @@ test("default installed runtime smoke invokes the real compiled one-shot and ver
   assert.match(output, /^RUNTIME_SMOKE status=passed tools=9 hwpxBytes=\d+ hwpx=passed stderrBytes=0 remainingDescendants=0\n$/u);
 });
 
-test("large-document smoke uses the compiled one-shot detect path and proves the source unchanged", async (t) => {
+test("large-document smoke defaults to the 10 MiB verified tier through the compiled one-shot detect path", async (t) => {
   assert.equal(typeof smokeModule.runInstalledLargeDocumentSmoke, "function");
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-runtime-smoke-large-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   let output = "";
   const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
-    sizeMiB: 100,
     createTemporaryRoot: async () => root,
     generateSource: async ({ outputPath, requestedBytes }) => {
       const handle = await open(outputPath, "wx", 0o600);
@@ -213,7 +212,7 @@ test("large-document smoke uses the compiled one-shot detect path and proves the
         isError: false,
         structuredContent: {
           format: "hwpx",
-          details: { file_size_bytes: 100 * 1024 * 1024 },
+          details: { file_size_bytes: 10 * 1024 * 1024 },
         },
       }), { flag: "wx", mode: 0o600 });
       return {
@@ -234,11 +233,24 @@ test("large-document smoke uses the compiled one-shot detect path and proves the
   });
 
   assert.notEqual(receipt, false, output);
-  assert.equal(receipt.requestedMiB, 100);
+  assert.equal(receipt.requestedMiB, 10);
   assert.equal(receipt.format, "hwpx");
   assert.equal(receipt.sourceUnchanged, true);
   assert.equal(receipt.remainingDescendantCount, 0);
-  assert.match(output, /^LARGE_DOCUMENT_SMOKE status=passed requestedMiB=100 actualBytes=\d+ format=hwpx sourceUnchanged=true remainingDescendants=0\n$/u);
+  assert.match(output, /^LARGE_DOCUMENT_SMOKE status=passed requestedMiB=10 actualBytes=\d+ format=hwpx sourceUnchanged=true remainingDescendants=0\n$/u);
+});
+
+test("large-document smoke rejects sizes outside the 10 and 100 MiB tiers", async () => {
+  let output = "";
+  const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
+    sizeMiB: 256,
+    runtimeRoot: tmpdir(),
+    runProcess: async () => { throw new Error("must not run"); },
+    stdout: { write(value) { output += value; return true; } },
+    setExitCode() {},
+  });
+  assert.equal(receipt, false);
+  assert.match(output, /^LARGE_DOCUMENT_SMOKE status=failed stage=runtime\n$/u);
 });
 
 test("large-document smoke fails closed when detection changes the source", async (t) => {

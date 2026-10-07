@@ -10,6 +10,12 @@ This file records release tags and their publication status. Work under `Unrelea
   reasons in CI smoke and release diagnostics. Intermittent Windows failures
   are still under investigation; this change makes subsequent failures
   distinguishable without exposing raw process output.
+- Lower the CI-verified document tier from 100 MiB to 10 MiB. Most Hangul
+  documents finish around 1 MiB, so the weekly Compatibility workflow and the
+  release gate now run the 10 MiB production one-shot smoke. Documents over
+  10 MiB through the unchanged 512 MiB safety ceiling are theoretically
+  supported but not verified size by size; `--large-detect 100` remains an
+  optional local experiment.
 
 ## [0.2.7] - 2026-09-29
 

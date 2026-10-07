@@ -50,21 +50,23 @@ npm run release:verify
 ```
 
 Pull requests use the 10 MiB smoke case. The weekly and manually dispatched
-`Compatibility` workflow requires one fresh, passed 100 MiB receipt on each
+`Compatibility` workflow requires one fresh, passed 10 MiB receipt on each
 platform path. Immutable release verification generates and validates the same
-single passed 100 MiB evidence before the complete release gate, artifact
-verification, checksums, and attestation. The 256 and 512 MiB cases are
+single passed 10 MiB evidence before the complete release gate, artifact
+verification, checksums, and attestation. The 100, 256, and 512 MiB cases are
 explicit local experiments only and must run sequentially as described in
 [Development](docs/DEVELOPMENT.md). The
 synthetic benchmark exercises the size-handling, isolation, cleanup, and
 recovery path; it does not prove every document format or MCP operation at the
 requested size.
 
-Valid documents up to and including 100 MiB are in the CI-verified support
-envelope, subject to malformed-archive rejection, decompression and resource
-policies, and allowed-root policy. Documents over 100 MiB through the 512 MiB
-safety ceiling are best-effort and carry no compatibility guarantee. Files over
-512 MiB are rejected.
+Most Hangul documents finish around 1 MiB and rarely exceed 10 MiB, so the
+size policy has two tiers. Valid documents up to and including 10 MiB are the
+default, CI-verified support tier, subject to malformed-archive rejection,
+decompression and resource policies, and allowed-root policy. Documents over
+10 MiB through the 512 MiB safety ceiling are theoretically supported: they use
+the same code path, but no hosted job verifies them size by size and they carry
+no compatibility guarantee. Files over 512 MiB are rejected.
 
 ## CI verification ownership
 
@@ -81,7 +83,7 @@ Python suite, and executes exactly the 10 MiB document smoke. Windows uses
 `Linux lifecycle` retains the bounded registration, document-child, and
 benchmark-policy suite. `Security policy` separately owns repository and
 dependency policy. The scheduled/manual Compatibility workflow installs source
-and public-runtime dependencies, then runs only the exact 100 MiB production
+and public-runtime dependencies, then runs only the exact 10 MiB production
 one-shot smoke on Windows x64, Linux x64, and macOS arm64. Stable Node, Python,
 runtime, and platform profiles remain in required CI; full release-candidate,
 artifact, and attestation verification remains in the immutable release gate.
@@ -90,14 +92,14 @@ The optional `run_bp16_stability` dispatch input creates 20 independent
 `macos-15` jobs, each running the exact `bp16` case once. Enable it only after
 production process-cleanup semantics change. Scheduled runs never enable it,
 and receipt, profile, documentation, or workflow-only changes do not justify
-it. The 256 and 512 MiB experiments remain outside every hosted compatibility
+it. The 100, 256, and 512 MiB experiments remain outside every hosted compatibility
 or release gate.
 
-If release 100 MiB preflight fails, the failed job still runs one 10 MiB probe,
-the supported-evidence validator, and the Windows hosted-boundary classifier.
-Those bounded diagnostics cannot restore success, and candidate construction or
-attestation does not run. Duplicate manual verification for the same immutable
-tag and SHA is serialized without cancelling an execution that already started.
+If the release 10 MiB preflight fails, the job stops there: the complete
+release gate, candidate construction, and attestation do not run, and no
+follow-up diagnostic can restore success. Duplicate manual verification for the
+same immutable tag and SHA is serialized without cancelling an execution that
+already started.
 
 PR concurrency is scoped by workflow plus PR number or ref. Compatibility
 concurrency additionally includes the event name: a newer scheduled run may

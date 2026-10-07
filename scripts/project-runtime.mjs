@@ -236,6 +236,10 @@ async function stageRuntime({ projectRoot, stage, subprocessEnvironment }) {
   );
 
   await writeJsonExclusive(join(stage, ".codex-plugin", "plugin.json"), renderPluginManifest(metadata, rootPackage.license));
+  await writeJsonExclusive(
+    join(stage, ".claude-plugin", "plugin.json"),
+    renderClaudePluginManifest(metadata, rootPackage.license),
+  );
   await writeJsonExclusive(join(stage, "examples", "mcp-manual.json"), renderMcpConfiguration(metadata));
   const runtimePackage = renderRuntimePackage(metadata, rootPackage.license, sourcePackage);
   await writeJsonExclusive(join(stage, "package.json"), runtimePackage);
@@ -354,6 +358,22 @@ function renderPluginManifest(metadata, license) {
       composerIcon: "./assets/gpt-codex-hwp-icon-64.png",
       logo: "./assets/gpt-codex-hwp-icon.png",
     },
+  };
+}
+
+// Claude Code reads the same plugin directory. Skills are discovered from
+// ./skills/ automatically, and no MCP server is registered by default.
+export function renderClaudePluginManifest(metadata, license) {
+  return {
+    name: metadata.productId,
+    version: pluginVersion(metadata),
+    description:
+      "Read and preview Korean HWP files, and create, edit, validate, and preview HWPX documents in Claude Code.",
+    author: { name: metadata.developerName },
+    homepage: "https://github.com/Burntgogi/Gpt_Codex_HWP",
+    repository: "https://github.com/Burntgogi/Gpt_Codex_HWP",
+    license,
+    keywords: ["hwp", "hwpx", "hancom", "hangul", "korean-documents"],
   };
 }
 

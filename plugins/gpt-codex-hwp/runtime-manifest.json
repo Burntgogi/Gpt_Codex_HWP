@@ -61,8 +61,8 @@
     },
     {
       "path": "dist/runtime-bootstrap.js",
-      "size": 18763,
-      "sha256": "f61859bcee2d8a7bb7fd0d1208c44c341b028d46e44c84195661318c412217c9"
+      "size": 19380,
+      "sha256": "093d25289f5a8e63bcccb788ff5a8df16388f6e0cd616b757743b29e024ffbd3"
     },
     {
       "path": "dist/shared/allowed-roots.js",
@@ -251,8 +251,8 @@
     },
     {
       "path": "dist/workers/document-child.js",
-      "size": 14667,
-      "sha256": "66508cf8ffdbd447736931863a577299a2de41442b74dfbd6891e8de9f29fb9e"
+      "size": 14747,
+      "sha256": "fc471dbcc549948d301bbe072b34c8910ab9eb7185da25dc67df5db1dd76ca0f"
     },
     {
       "path": "dist/workers/document-compute-backend.js",

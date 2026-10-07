@@ -406,7 +406,7 @@ test("CI diagnostics are bounded, profile-preserving, and scoped to their failed
   assert.doesNotMatch(linux, /continue-on-error|node-tests-diagnostic|python-tests-diagnostic/iu);
 });
 
-test("scheduled and manual compatibility owns only the 100 MiB production boundary", async () => {
+test("scheduled and manual compatibility owns only the 10 MiB production boundary", async () => {
   const workflow = await readFile(COMPATIBILITY_WORKFLOW_PATH, "utf8");
   assertCompatibilityWorkflowPolicy(workflow);
 });
@@ -441,21 +441,21 @@ test("compatibility workflow policy rejects trigger, size, duplication, and stab
       "attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]",
     ],
     ["fail-fast stability", "      fail-fast: false", "      fail-fast: true"],
-    ["hosted experimental size", "--large-detect 100", "--large-detect 256"],
+    ["hosted experimental size", "--large-detect 10", "--large-detect 256"],
     [
       "duplicate large smoke",
-      "run: node scripts/installed-runtime-smoke.mjs --large-detect 100",
-      "run: node scripts/installed-runtime-smoke.mjs --large-detect 100 && node scripts/installed-runtime-smoke.mjs --large-detect 100",
+      "run: node scripts/installed-runtime-smoke.mjs --large-detect 10",
+      "run: node scripts/installed-runtime-smoke.mjs --large-detect 10 && node scripts/installed-runtime-smoke.mjs --large-detect 10",
     ],
     [
       "direct runtime install",
-      "      - name: Run Windows 100 MiB production-path smoke",
-      "      - run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev\n      - name: Run Windows 100 MiB production-path smoke",
+      "      - name: Run Windows 10 MiB production-path smoke",
+      "      - run: npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev\n      - name: Run Windows 10 MiB production-path smoke",
     ],
     [
       "continued large smoke",
-      "      - name: Run Windows 100 MiB production-path smoke\n        timeout-minutes: 30",
-      "      - name: Run Windows 100 MiB production-path smoke\n        continue-on-error: true\n        timeout-minutes: 30",
+      "      - name: Run Windows 10 MiB production-path smoke\n        timeout-minutes: 30",
+      "      - name: Run Windows 10 MiB production-path smoke\n        continue-on-error: true\n        timeout-minutes: 30",
     ],
     [
       "mutable upload action",
@@ -482,7 +482,7 @@ test("standard compatibility jobs reject duplicate suites, receipts, diagnostics
   ];
   for (const [job, next] of [["windows", "linux"], ["linux", "macos"], ["macos", "macos_bp16_stability"]]) {
     const section = jobSection(workflow, job, next);
-    const marker = section.match(/^      - name: Run .+ 100 MiB production-path smoke$/mu)?.[0];
+    const marker = section.match(/^      - name: Run .+ 10 MiB production-path smoke$/mu)?.[0];
     assert.ok(marker, `${job} smoke marker`);
     for (const command of commands) {
       const mutatedSection = section.replace(
@@ -495,8 +495,8 @@ test("standard compatibility jobs reject duplicate suites, receipts, diagnostics
   }
 
   const bypassed = workflow.replace(
-    "run: node scripts/installed-runtime-smoke.mjs --large-detect 100",
-    "run: node scripts/installed-runtime-smoke.mjs --large-detect 100 || true",
+    "run: node scripts/installed-runtime-smoke.mjs --large-detect 10",
+    "run: node scripts/installed-runtime-smoke.mjs --large-detect 10 || true",
   );
   assert.throws(() => assertCompatibilityWorkflowPolicy(bypassed));
 });
@@ -686,8 +686,8 @@ function assertReleaseWorkflowPolicy(workflow) {
   const large = requiredStep(steps, "id: large");
   assert.match(large, /^        timeout-minutes: 30$/mu);
   assert.doesNotMatch(large, /continue-on-error|^        if:|^        shell:/mu);
-  assertExactInlineRun(large, "node scripts/installed-runtime-smoke.mjs --large-detect 100");
-  assert.equal(countMatches(build, /installed-runtime-smoke\.mjs --large-detect 100/gu), 1);
+  assertExactInlineRun(large, "node scripts/installed-runtime-smoke.mjs --large-detect 10");
+  assert.equal(countMatches(build, /installed-runtime-smoke\.mjs --large-detect 10(?!\d)/gu), 1);
   assert.doesNotMatch(build, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
   assert.deepEqual(steps.filter((step) => step.includes("continue-on-error: true")), []);
   assert.deepEqual(steps.filter((step) => /^        if:/mu.test(step)), []);
@@ -703,7 +703,7 @@ function assertReleaseWorkflowPolicy(workflow) {
   assert.match(build, /SHA256SUMS/u);
   assert.match(build, /actions\/upload-artifact@/u);
   assert.match(build, /^          path: \$\{\{ runner\.temp \}\}\/gpt-codex-hwp-release-artifacts\/$/mu);
-  const largeEvidence = build.indexOf("node scripts/installed-runtime-smoke.mjs --large-detect 100");
+  const largeEvidence = build.indexOf("node scripts/installed-runtime-smoke.mjs --large-detect 10");
   const exactTag = build.indexOf("name: Assert exact immutable release tag");
   const canonicalTempStep = build.indexOf("name: Canonicalize Windows temporary root");
   const sourceInstall = build.indexOf("name: Install source dependencies without lifecycle scripts");
@@ -729,13 +729,13 @@ function assertReleaseWorkflowPolicy(workflow) {
   assertPinnedActions(workflow);
 }
 
-test("release policy rejects non-100 smoke, bypasses, and duplicate source installs", async () => {
+test("release policy rejects non-10 smoke, bypasses, and duplicate source installs", async () => {
   const workflow = await readFile(RELEASE_WORKFLOW_PATH, "utf8");
   const mutations = [
     ["cancel duplicate", workflow.replace("cancel-in-progress: false", "cancel-in-progress: true")],
     ["large continue", workflow.replace("        id: large", "        id: large\n        continue-on-error: true")],
-    ["unsupported size", workflow.replace("--large-detect 100", "--large-detect 256")],
-    ["smoke suffix bypass", workflow.replace("--large-detect 100", "--large-detect 100 || true")],
+    ["unsupported size", workflow.replace("--large-detect 10", "--large-detect 256")],
+    ["smoke suffix bypass", workflow.replace("--large-detect 10", "--large-detect 10 || true")],
     ["gate bypass", workflow.replace("      - name: Run the complete fail-closed release gate", "      - name: Run the complete fail-closed release gate\n        if: always()")],
     ["custom shell", workflow.replace("        id: large", "        id: large\n        shell: bash -c \"source {0}; exit 0\"")],
     ["duplicate source install", workflow.replace("      - name: Install source dependencies without lifecycle scripts", "      - run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp\n      - name: Install source dependencies without lifecycle scripts")],
@@ -810,20 +810,20 @@ function assertCompatibilityWorkflowPolicy(workflow) {
   const linux = jobSection(workflow, "linux", "macos");
   const macos = jobSection(workflow, "macos", "macos_bp16_stability");
   const stability = jobSection(workflow, "macos_bp16_stability");
-  assert100MiBCompatibilityJob(windows, {
-    label: "Windows 100 MiB compatibility",
+  assert10MiBCompatibilityJob(windows, {
+    label: "Windows 10 MiB compatibility",
     runner: "windows-2025",
     platform: "win32",
     arch: "x64",
   });
-  assert100MiBCompatibilityJob(linux, {
-    label: "Linux 100 MiB compatibility",
+  assert10MiBCompatibilityJob(linux, {
+    label: "Linux 10 MiB compatibility",
     runner: "ubuntu-24.04",
     platform: "linux",
     arch: "x64",
   });
-  assert100MiBCompatibilityJob(macos, {
-    label: "macOS 100 MiB compatibility",
+  assert10MiBCompatibilityJob(macos, {
+    label: "macOS 10 MiB compatibility",
     runner: "macos-15",
     platform: "darwin",
     arch: "arm64",
@@ -858,12 +858,12 @@ function assertCompatibilityWorkflowPolicy(workflow) {
   assert.equal(countMatches(workflow, /^\s+include-hidden-files: true$/gmu), 0);
 }
 
-function assert100MiBCompatibilityJob(section, options) {
+function assert10MiBCompatibilityJob(section, options) {
   assert.match(section, new RegExp(`^    name: ${escapeRegExp(options.label)}$`, "mu"));
   assert.match(section, new RegExp(`^    runs-on: ${escapeRegExp(options.runner)}$`, "mu"));
   assert.match(section, /^    timeout-minutes: 60$/mu);
   assert.match(section, /^    permissions:\r?\n      contents: read$/mu);
-  assert100MiBIdentityBoundary(section, options.platform, options.arch);
+  assert10MiBIdentityBoundary(section, options.platform, options.arch);
   assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix packages\/gpt-codex-hwp(?:\s|$)/gu), 1);
   assert.equal(countMatches(section, /npm ci --ignore-scripts --prefix plugins\/gpt-codex-hwp(?:\s|$)/gu), 0);
   assert.doesNotMatch(section, /npm (?:--prefix packages\/gpt-codex-hwp )?run build(?:\s|$)|git config --local|git remote set-url/u);
@@ -871,13 +871,13 @@ function assert100MiBCompatibilityJob(section, options) {
   const steps = workflowStepSections(section);
   const large = requiredInlineRunStep(
     steps,
-    "node scripts/installed-runtime-smoke.mjs --large-detect 100",
+    "node scripts/installed-runtime-smoke.mjs --large-detect 10",
   );
   assertNoStepShell(large);
-  assertExactSupported100Step(large);
-  assertOnlySupported100Commands(section);
+  assertExactSupported10Step(large);
+  assertOnlySupported10Commands(section);
   assert.doesNotMatch(section, /HWP_BENCH_|benchmark:documents|document-engine-benchmark/u);
-  assert.equal(steps.at(-1), large, `${options.label} 100 MiB smoke must be final`);
+  assert.equal(steps.at(-1), large, `${options.label} 10 MiB smoke must be final`);
   assert.match(large, /^        timeout-minutes: 30$/mu);
   assert.doesNotMatch(large, /^        (?:continue-on-error|if):/mu);
   assert.deepEqual(
@@ -931,7 +931,7 @@ function assertMacBp16StabilityJob(section) {
   );
 }
 
-function assert100MiBIdentityBoundary(section, platform, arch) {
+function assert10MiBIdentityBoundary(section, platform, arch) {
   assert.match(section, /^      EXPECTED_HEAD_SHA: \$\{\{ github\.sha \}\}$/mu);
   assert.match(section, /^      EXPECTED_SOURCE_REPOSITORY: \$\{\{ github\.repository \}\}$/mu);
   assert.doesNotMatch(section, /HWP_REQUIRE_RHWP|fetch-depth:/u);
@@ -956,22 +956,22 @@ function assertCompatibilityIdentityBoundary(section, platform, arch) {
   assert.match(section, /process\.env\.EXPECTED_SOURCE_REPOSITORY[^\n]+Burntgogi\/Gpt_Codex_HWP/u);
 }
 
-function assertExactSupported100Step(step) {
-  const command = "node scripts/installed-runtime-smoke.mjs --large-detect 100";
+function assertExactSupported10Step(step) {
+  const command = "node scripts/installed-runtime-smoke.mjs --large-detect 10";
   assertExactInlineRun(step, command);
   assert.deepEqual(
     workflowRunCommands(step).filter(isDocumentBenchmarkCommand),
     [command],
-    "100 MiB production-path smoke must be exact and unique",
+    "10 MiB production-path smoke must be exact and unique",
   );
 }
 
-function assertOnlySupported100Commands(section) {
-  const command = "node scripts/installed-runtime-smoke.mjs --large-detect 100";
+function assertOnlySupported10Commands(section) {
+  const command = "node scripts/installed-runtime-smoke.mjs --large-detect 10";
   assert.deepEqual(
     workflowRunCommands(section).filter(isDocumentBenchmarkCommand),
     [command],
-    "compatibility permits exactly one canonical 100 MiB production-path smoke",
+    "compatibility permits exactly one canonical 10 MiB production-path smoke",
   );
 }
 

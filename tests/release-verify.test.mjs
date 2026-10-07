@@ -398,7 +398,7 @@ test("release large-document stage always uses the production one-shot path", as
     HWP_BENCH_LARGE_EVIDENCE: ".superpowers/benchmarks/custom-supported-100.json",
   });
   assert.equal(stage.tool, "node");
-  assert.deepEqual(stage.args, ["scripts/installed-runtime-smoke.mjs", "--large-detect", "100"]);
+  assert.deepEqual(stage.args, ["scripts/installed-runtime-smoke.mjs", "--large-detect", "10"]);
   assert.equal(stage.commands, undefined);
   assert.deepEqual(stage.env, {});
 });
@@ -1545,7 +1545,7 @@ function expectedStageCommands() {
   const documentBenchmark = {
     name: "document-benchmark",
     tool: "node",
-    args: ["scripts/installed-runtime-smoke.mjs", "--large-detect", "100"],
+    args: ["scripts/installed-runtime-smoke.mjs", "--large-detect", "10"],
     commands: undefined,
     env: {},
     evidence: noEvidence,
