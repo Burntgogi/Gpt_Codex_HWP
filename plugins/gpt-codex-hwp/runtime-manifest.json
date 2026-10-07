@@ -21,8 +21,8 @@
     },
     {
       "path": "dist/doctor-main.js",
-      "size": 43236,
-      "sha256": "203c3011c81004780c468dfdc8f173eb60728017d5a6cbb23a63c9efb7bb8c16"
+      "size": 43448,
+      "sha256": "ba06d5dbe9adc6a4b1b3eea19b2c109e629e0bf224d45311687618f8d4b464bb"
     },
     {
       "path": "dist/doctor.js",
@@ -66,8 +66,8 @@
     },
     {
       "path": "dist/shared/allowed-roots.js",
-      "size": 8789,
-      "sha256": "92e5ae6c20a391b00496c6c88041b5b5b9023d419813b9a9d6d7126a2a591f92"
+      "size": 9278,
+      "sha256": "16a979f93ac49858b1b745522f96dfd34ec827eabfdf3f958011cdcaba1a7de3"
     },
     {
       "path": "dist/shared/document-contract.js",
@@ -121,13 +121,13 @@
     },
     {
       "path": "dist/shared/markdown-underscore.js",
-      "size": 1895,
-      "sha256": "efcec2a66f35f254b2ece1c4e569fe1189ab12e91ef53791b96e730dfe617f0f"
+      "size": 8040,
+      "sha256": "0ea72d6702f5bbd78b3ebe34d63eb51c8407489cf8663986d916456a2bffdff2"
     },
     {
       "path": "dist/shared/output.js",
-      "size": 23432,
-      "sha256": "12a46809121273d72aef7f6e3af6e0a8db4534f5ca979a91f4836f53eed37b9b"
+      "size": 25192,
+      "sha256": "4fca38d8801365cd6cb10c6c648f3170932fc4d6a52fa4c441abd3ce437e9130"
     },
     {
       "path": "dist/shared/owned-bytes.js",
@@ -136,8 +136,8 @@
     },
     {
       "path": "dist/shared/paths.js",
-      "size": 5481,
-      "sha256": "295b61f3f95d7deefe3d818c3474756de7a9c6a8f26ac77f1da142720889f34f"
+      "size": 7232,
+      "sha256": "87acacf8ea9c5b4f571f93ef74854be29ee448dc14d4277ab444f8a8a56ffa12"
     },
     {
       "path": "dist/shared/protection.js",
@@ -146,8 +146,8 @@
     },
     {
       "path": "dist/shared/python-command.js",
-      "size": 1922,
-      "sha256": "e68cb0266042cc89ab47d04e9f32079f5febe3f39fa196e6752bda4b23a9b30d"
+      "size": 3861,
+      "sha256": "dd146b901296bea55faae90189da3c8bfb25243a950482c7726ed27b60b41e5a"
     },
     {
       "path": "dist/shared/resource-limits.js",
@@ -251,8 +251,8 @@
     },
     {
       "path": "dist/workers/document-child-client.js",
-      "size": 56299,
-      "sha256": "4dda6fadcb3df16653b79d97412e656847a93dbd7fa07f2762150a0e4ae29bae"
+      "size": 56445,
+      "sha256": "e5b987222d766480c4d847637013e0333c0736119b8b8c43a5993873209fee6b"
     },
     {
       "path": "dist/workers/document-child-start-gate.js",
@@ -266,13 +266,13 @@
     },
     {
       "path": "dist/workers/document-child.js",
-      "size": 15212,
-      "sha256": "2ee6dd103ec761b0aea58d213180cd816a7841004a62f9dbc7527e80f5b0782d"
+      "size": 15399,
+      "sha256": "a2bf842f04fc755ced9b947e7655c73e92e5038bba8f11da74e360cb1fe7a556"
     },
     {
       "path": "dist/workers/document-compute-backend.js",
-      "size": 31444,
-      "sha256": "ff84249254670ff851effa1d31036f714a4c06a4402fa0f68cc005370f922407"
+      "size": 31996,
+      "sha256": "82611d9764913b2ad563b49386b7af8b467a90003cb6c9c9c34ef4134f8237f5"
     },
     {
       "path": "dist/workers/document-errors.js",

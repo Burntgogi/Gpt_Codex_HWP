@@ -134,15 +134,79 @@ test("generation keeps underscores inside identifiers instead of turning them in
     `\`\`\`\nsnake_case_code\n\`\`\`\nsnake${bs}_case`,
   );
 
+  // Blocks Kordoc keeps verbatim are not escaped: HTML tables and closed $$ math.
+  const htmlTable = "<table><tr><td colspan=\"2\">Gpt_Codex_HWP</td></tr>\n<tr><td>hwp_read</td><td>x</td></tr></table>";
+  assert.equal(escapeIntrawordUnderscores(htmlTable), htmlTable);
+  const singleMath = `$$${bs}text{total_cost} = a_bc$$`;
+  assert.equal(escapeIntrawordUnderscores(singleMath), singleMath);
+  const multiMath = `$$\n${bs}text{total_cost}\n= a_bc\n$$\nafter_math`;
+  assert.equal(escapeIntrawordUnderscores(multiMath), `$$\n${bs}text{total_cost}\n= a_bc\n$$\nafter${bs}_math`);
+  assert.equal(escapeIntrawordUnderscores("$$ open_math\n\nnext_line"), `$$ open${bs}_math\n\nnext${bs}_line`,
+    "unclosed math is an ordinary paragraph for Kordoc");
+  assert.equal(escapeIntrawordUnderscores("$$x_1$$ see snake_case"), `$$x_1$$ see snake${bs}_case`,
+    "text after a closing $$ is an ordinary paragraph");
+  assert.equal(escapeIntrawordUnderscores("$$\na_b\ny$$ and foo_bar"), `$$\na_b\ny$$ and foo${bs}_bar`);
+  assert.equal(escapeIntrawordUnderscores("$$ a_b\n    ```\n$$"), `$$ a${bs}_b\n    \`\`\`\n$$`,
+    "an indented fence ends the math scan as it does in Kordoc");
+  assert.equal(escapeIntrawordUnderscores("<table>Gpt_Codex_HWP</table>"), `<table>Gpt${bs}_Codex${bs}_HWP</table>`,
+    "a table without cells falls back to a paragraph in Kordoc");
+  assert.equal(escapeIntrawordUnderscores("<table><tr><td>a_b</td></tr>"), `<table><tr><td>a${bs}_b</td></tr>`,
+    "an unclosed table falls back to a paragraph in Kordoc");
+
+  // Tables Kordoc cannot render fall back to an inline-Markdown paragraph.
+  assert.equal(escapeIntrawordUnderscores("<table><tr><td>a_b_c</td></table>"), `<table><tr><td>a${bs}_b${bs}_c</td></table>`,
+    "a row without </tr> is not a rendered table");
+  assert.equal(escapeIntrawordUnderscores("<table><tr><td>a_b_c</tr></table>"), `<table><tr><td>a${bs}_b${bs}_c</tr></table>`,
+    "a cell without </td> is not a rendered table");
+  assert.equal(escapeIntrawordUnderscores("<table>\n$$a_b_c$$\n</table>"), `<table>\n$$a${bs}_b${bs}_c$$\n</table>`,
+    "lines inside a fallback block are escaped without nested block detection");
+  assert.equal(escapeIntrawordUnderscores("<table>\n`my_var\nfoo_bar`\n</table>"), "<table>\n`my_var\nfoo_bar`\n</table>",
+    "a code span that crosses lines in a fallback block stays verbatim");
+  assert.equal(escapeIntrawordUnderscores("``echo `get_user_name` ``"), `\`\`echo \`get${bs}_user${bs}_name\` \`\``,
+    "Kordoc reads single-backtick spans, so `echo ` is code and get_user_name is plain text");
+  assert.equal(escapeIntrawordUnderscores("a `` b_c"), `a \`\` b${bs}_c`,
+    "an empty backtick pair is not a code span");
+
   const { markdownToHwpx } = await import("kordoc");
   const JSZip = (await import("jszip")).default;
-  const source = "# Gpt_Codex_HWP\n\n| 도구 | 값 |\n| --- | --- |\n| hwp_detect_format | x_y_z |\n\n_강조_ 유지";
-  const zip = await JSZip.loadAsync(await markdownToHwpx(escapeIntrawordUnderscores(source)));
+  const { copyPreviewText } = await import("../src/shared/markdown-underscore.js");
+  const source = [
+    "# Gpt_Codex_HWP",
+    "",
+    "| 도구 | 값 |",
+    "| --- | --- |",
+    "| hwp_detect_format | x_y_z |",
+    "",
+    htmlTable,
+    "",
+    "_강조_ 유지, a__b, total_cost",
+    "",
+    `$$${bs}text{total${bs}_cost}$$`,
+    "",
+    "```",
+    `my${bs}_var`,
+    "```",
+    "",
+    // Long enough that Kordoc's 1024-character PrvText cut lands mid-text.
+    Array.from({ length: 80 }, (_, index) => `item_${index}_value`).join(" "),
+  ].join("\n");
+  const escapedSource = escapeIntrawordUnderscores(source);
+  const reference = new Uint8Array(await markdownToHwpx(source));
+  const generated = await copyPreviewText(new Uint8Array(await markdownToHwpx(escapedSource)), reference);
+  const referencePreview = await (await JSZip.loadAsync(reference)).file("Preview/PrvText.txt")!.async("string");
+  const zip = await JSZip.loadAsync(generated);
   const xml = await zip.file("Contents/section0.xml")!.async("string");
   const text = [...xml.matchAll(/<hp:t>([^<]*)<\/hp:t>/gu)].map((match) => match[1]).join("");
-  for (const identifier of ["Gpt_Codex_HWP", "hwp_detect_format", "x_y_z"]) {
+  for (const identifier of ["Gpt_Codex_HWP", "hwp_detect_format", "x_y_z", "hwp_read", "a__b"]) {
     assert.ok(text.includes(identifier), identifier);
   }
-  assert.ok(!text.includes(bs), "no escape characters reach the document");
+  for (const escaped of ["Gpt", "hwp", "x", "a", "item", "total"].map((word) => `${word}${bs}_`)) {
+    assert.ok(!text.includes(escaped), `no added escape reaches the body or HTML table cells: ${escaped}`);
+  }
   assert.ok(text.includes("강조") && !text.includes("_강조_"), "boundary emphasis still parses");
+  const previewText = await zip.file("Preview/PrvText.txt")!.async("string");
+  assert.equal(previewText, referencePreview, "PrvText.txt equals the unescaped generation exactly");
+  assert.ok(previewText.includes(`${bs}text{total${bs}_cost}`), "author-written escapes in math stay");
+  assert.ok(previewText.includes("Gpt_Codex_HWP") && previewText.includes("x_y_z"), previewText);
+  assert.equal((await zip.file("mimetype")!.async("string")).trim(), "application/hwp+zip");
 });

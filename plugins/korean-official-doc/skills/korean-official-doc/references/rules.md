@@ -10,11 +10,11 @@ Summaries below are written in this project's own words.
 | Linter rule | Severity | Requirement | Basis |
 | --- | --- | --- | --- |
 | `date` | warn | Write dates in numbers; omit 연·월·일 and put a period in their place. A special reason may justify another form. | 규정 제7조제5항 |
-| `time` | warn | Write times on the 24-hour clock; omit 시·분 and separate them with a colon. Same exception as dates. | 규정 제7조제5항 |
+| `time` | warn | Write times on the 24-hour clock; omit 시·분 and separate them with a colon. Same exception as dates. 오전·새벽·아침, 오후·낮·저녁, and 밤 (1 to 5 o'clock after midnight, 6 to 11 in the evening) are converted; a bare 1 to 12 o'clock gets no suggestion because it is ambiguous. | 규정 제7조제5항 |
 | `amount` | warn | Write an amount in Arabic numerals and repeat it in Hangul inside parentheses right after the number. | 시행규칙 제2조제2항 |
 | `item-order` | warn | Mark items in the order 1. → 가. → 1) → 가) → (1) → (가) → ① → ㉮; special symbols such as □, ○, -, · may be used when needed. | 시행규칙 제2조제1항 |
 | `item-sequence` | warn | Within one level, numbers ascend and Hangul follows 가나다 order. | 시행규칙 제2조제1항 |
-| `attachment` | warn | When something is attached, write 「붙임」 on the line after the body and give each attachment's name and quantity; several attachments are itemized. | 시행규칙 제4조제4항 |
+| `attachment` | warn | When something is attached, write 「붙임」 on the line after the body and give each attachment's name and quantity; several attachments are itemized, and that numbering starts again at 1. | 시행규칙 제4조제4항 |
 | `end-mark` | warn | Leave one character of space after the last character of the body (or of the 붙임) and write 「끝」. A table that ends the document gets 「끝」 below it, or 「이하 빈칸」 in the next cell when the table is not filled. | 시행규칙 제4조제5항 |
 | `end-mark-spacing` | warn | The space before 「끝」 is required. | 시행규칙 제4조제5항 |
 | `date-style` | info | `2026. 10. 8.` with a space after each period and a final period is the common form; the decree itself only requires the period. | convention |

@@ -830,12 +830,31 @@ test("a write failure after reservation leaves only empty placeholders and says 
       (error: unknown) => {
         assert.ok(error instanceof OutputPlaceholderLeftError);
         assert.equal(error.code, "ENOSPC");
-        assert.match(error.message, /disk full.*empty placeholder files remain at 2 output paths/su);
+        assert.deepEqual(error.release, { emptied: 1, possiblyPartial: 0, complete: 0, neverWritten: 1 });
+        assert.match(error.message, /disk full.*1 emptied, 1 never written/su);
         return true;
       },
     );
-    assert.equal((await stat(first)).size, 0, "partially written output is emptied");
+    assert.equal((await stat(first)).size, 0, "the written output is emptied through its handle");
     assert.equal((await stat(second)).size, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("a failure before any output is written keeps the original error", async () => {
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-prewrite-",
+  });
+  try {
+    const original = Object.assign(new Error("identity changed"), { code: "PATH_ALIAS" });
+    await assert.rejects(
+      writeFilesExclusively(
+        [{ path: join(root, "only.hwpx"), data: "content" }],
+        { unitTestBeforeWrite: () => { throw original; } } as never,
+      ),
+      (error: unknown) => error === original,
+    );
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }

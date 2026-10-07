@@ -1316,17 +1316,20 @@ function normalizeDeadline(value) {
     }
     return value;
 }
+export const MINIMAL_CHILD_ENVIRONMENT_KEYS = Object.freeze([
+    "SystemRoot",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    // Lets the child find the per-user Windows py.exe launcher.
+    "LOCALAPPDATA",
+]);
 function minimalChildEnvironment() {
     const result = {};
-    for (const key of [
-        "SystemRoot",
-        "WINDIR",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "LANG",
-        "LC_ALL",
-    ]) {
+    for (const key of MINIMAL_CHILD_ENVIRONMENT_KEYS) {
         const value = process.env[key];
         if (value !== undefined)
             result[key] = value;

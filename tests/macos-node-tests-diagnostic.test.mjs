@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
+  benchmarkFileTimeout,
   classifyNodeTestCompletion,
   executeBoundedNodeTestFile,
   failedTopLevelFailureKind,
@@ -146,12 +147,19 @@ test("source Node diagnostic gives files with long per-test timeouts a larger fi
       timeouts.set(file, fileOptions?.testTimeoutMs);
       return true;
     },
-    runBenchmarkFile: async () => ({ passed: true }),
+    runBenchmarkFile: async (fileOptions) => {
+      timeouts.set("benchmark-policy.test.ts", fileOptions?.testTimeoutMs);
+      return { passed: true };
+    },
     stdout: { write() {} },
     setExitCode() {},
   });
   assert.equal(passed, true);
   assert.equal(timeouts.get("allowed-roots.test.ts"), 120_000);
+  assert.equal(timeouts.get("benchmark-policy.test.ts"), 300_000);
+  assert.equal(benchmarkFileTimeout({ testTimeoutMs: 300_000 }, {}), 300_000);
+  assert.equal(benchmarkFileTimeout({}, {}), 120_000);
+  assert.equal(benchmarkFileTimeout({}, { testTimeoutMs: 90_000 }), 90_000);
   assert.equal(timeouts.get("mcp-smoke.test.ts"), 300_000);
   assert.equal(timeouts.get("mcp-cancellation-progress.test.ts"), 300_000);
   assert.equal(timeouts.get("read-worker-safety.test.ts"), 600_000);

@@ -95,3 +95,38 @@ test("CLI prints JSON, honors --strict, and rejects bad usage", async (t) => {
   assert.equal(await main([draft, "--profile", "unknown"], capture()), 2);
   assert.equal(await main([join(root, "missing.md")], capture()), 2);
 });
+
+test("an itemized 붙임 block starts its own numbering after a numbered body", () => {
+  const draft = "1. 관련: 지침\n2. 위 호와 관련하여 보고합니다.\n\n붙임  1. 계획서 1부.\n      2. 명단 1부.  끝.\n";
+  assert.deepEqual(rulesOf(draft), []);
+  assert.deepEqual(rulesOf("내용입니다.\n\n붙임  1. 계획서 1부.\n      3. 명단 1부.  끝.\n"), ["4:item-sequence"]);
+  assert.deepEqual(rulesOf("1. 개요\n붙임과 같이 보고합니다.\n2. 계획\n", { profile: "general" }), [],
+    "a sentence that starts with 붙임 does not restart the outline");
+  assert.deepEqual(rulesOf("1. 개요\n2. 계획\n\n붙임\n  1. 계획서 1부.\n  2. 명단 1부.  끝.\n"), []);
+});
+
+test("a 금 that ends a compound noun is not taken as the amount prefix", () => {
+  const report = lintOfficialDocument("지원금 5,000,000원을 지급하고 상금 300,000원을 준다.\n", { profile: "general" });
+  assert.deepEqual(
+    report.findings.filter((entry) => entry.rule === "amount").map((entry) => [entry.text, entry.suggestion]),
+    [["5,000,000원", "5,000,000원(오백만원)"], ["300,000원", "300,000원(삼십만원)"]],
+  );
+});
+
+test("time-of-day words convert to the right 24-hour value and bare hours are not guessed", () => {
+  const report = lintOfficialDocument("저녁 7시, 밤 9시까지, 밤 12시, 낮 2시, 새벽 5시, 3시 회의, 15시, 밤 1시, 저녁 12시\n", { profile: "general" });
+  assert.deepEqual(
+    report.findings.map((entry) => [entry.text, entry.suggestion]),
+    [
+      ["저녁 7시", "19:00"],
+      ["밤 9시", "21:00"],
+      ["밤 12시", "00:00"],
+      ["낮 2시", "14:00"],
+      ["새벽 5시", "05:00"],
+      ["3시", undefined],
+      ["15시", "15:00"],
+      ["밤 1시", "01:00"],
+      ["저녁 12시", "00:00"],
+    ],
+  );
+});

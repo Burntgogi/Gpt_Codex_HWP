@@ -238,7 +238,8 @@ It does not grant protection from a hostile document or a same-user process;
 run untrusted inputs under an appropriate least-privilege OS account or sandbox.
 
 Public-release verification runs
-`node scripts/installed-runtime-smoke.mjs --large-detect 100` directly. Local
+`node scripts/installed-runtime-smoke.mjs --large-detect 10` directly;
+`--large-detect 100` is only an optional local experiment. Local
 RSS receipts and the historical `HWP_BENCH_*` controls remain engineering
 tools and cannot satisfy or bypass the public release gate.
 

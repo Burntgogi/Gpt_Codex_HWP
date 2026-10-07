@@ -7,7 +7,12 @@ import {
   HwpxAnchorResolutionError,
   resolveHwpxAnchorOccurrence,
 } from "../src/shared/hwpx-anchor.js";
-import { pythonCommandCandidates, resolvePythonCommand } from "../src/shared/python-command.js";
+import {
+  MINIMUM_HELPER_PYTHON,
+  pythonCommandCandidates,
+  pythonVersionAtLeast,
+  resolvePythonCommand,
+} from "../src/shared/python-command.js";
 import { imageHelperFailureCode } from "../src/workers/image-helper-errors.js";
 
 test("ambiguous anchor resolution stops before reading a later section", async () => {
@@ -113,6 +118,28 @@ test("Python resolution skips missing candidates and reports absence", async () 
     await resolvePythonCommand([{ command: "/definitely/missing/python3", argsPrefix: [] }, existing]),
     existing,
   );
+});
+
+test("helper Python resolution skips interpreters older than the doctor minimum", async () => {
+  assert.deepEqual([...MINIMUM_HELPER_PYTHON], [3, 10]);
+  assert.equal(pythonVersionAtLeast("Python 3.10.0", MINIMUM_HELPER_PYTHON), true);
+  assert.equal(pythonVersionAtLeast("Python 3.9.6", MINIMUM_HELPER_PYTHON), false);
+  assert.equal(pythonVersionAtLeast("Python 4.0.1", MINIMUM_HELPER_PYTHON), true);
+  assert.equal(pythonVersionAtLeast(undefined, MINIMUM_HELPER_PYTHON), false);
+
+  const old = { command: process.execPath, argsPrefix: ["old"] };
+  const current = { command: process.execPath, argsPrefix: ["current"] };
+  const probeVersion = async (candidate: { argsPrefix: readonly string[] }) =>
+    candidate.argsPrefix[0] === "old" ? "Python 3.9.6" : "Python 3.12.1";
+  assert.equal(
+    await resolvePythonCommand([old, current], { minimumVersion: MINIMUM_HELPER_PYTHON, probeVersion }),
+    current,
+  );
+  assert.equal(
+    await resolvePythonCommand([old], { minimumVersion: MINIMUM_HELPER_PYTHON, probeVersion }),
+    undefined,
+  );
+  assert.equal(await resolvePythonCommand([old, current]), old, "without a minimum the first existing one wins");
 });
 
 function lazyArchive(firstSectionText: string): {

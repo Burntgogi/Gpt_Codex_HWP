@@ -410,13 +410,16 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
   });
   const runProcess = options.runProcess ?? runBoundedProcess;
   const requestedMiB = options.sizeMiB ?? DEFAULT_LARGE_DETECT_SIZE_MIB;
-  let stage = "runtime";
+  let stage = "size";
   let cleanupRoot;
   let report;
   let failure;
   let failureReason;
   let prepared;
   try {
+    // Reject an unsupported size before installing or touching any runtime.
+    if (!LARGE_DETECT_SIZES_MIB.includes(requestedMiB)) throw new Error("invalid supported size");
+    stage = "runtime";
     if (options.prepareRuntime !== undefined
       || (options.runtimeRoot === undefined && options.runProcess === undefined)) {
       stage = "runtime-install";
@@ -424,7 +427,6 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
     }
     stage = "runtime";
     const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
-    if (!LARGE_DETECT_SIZES_MIB.includes(requestedMiB)) throw new Error("invalid supported size");
     const entry = join(runtimeRoot, "dist", "oneshot.js");
     const entryMetadata = await lstat(entry);
     if (!entryMetadata.isFile() || entryMetadata.isSymbolicLink()) {

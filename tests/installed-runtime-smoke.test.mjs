@@ -241,16 +241,20 @@ test("large-document smoke defaults to the 10 MiB verified tier through the comp
 });
 
 test("large-document smoke rejects sizes outside the 10 and 100 MiB tiers", async () => {
-  let output = "";
-  const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
-    sizeMiB: 256,
-    runtimeRoot: tmpdir(),
-    runProcess: async () => { throw new Error("must not run"); },
-    stdout: { write(value) { output += value; return true; } },
-    setExitCode() {},
-  });
-  assert.equal(receipt, false);
-  assert.match(output, /^LARGE_DOCUMENT_SMOKE status=failed stage=runtime\n$/u);
+  for (const sizeMiB of [256, 512, 1, 0]) {
+    let output = "";
+    let prepared = 0;
+    const receipt = await smokeModule.runInstalledLargeDocumentSmoke({
+      sizeMiB,
+      prepareRuntime: async () => { prepared += 1; throw new Error("must not prepare"); },
+      runProcess: async () => { throw new Error("must not run"); },
+      stdout: { write(value) { output += value; return true; } },
+      setExitCode() {},
+    });
+    assert.equal(receipt, false, String(sizeMiB));
+    assert.equal(prepared, 0, "an unsupported size is rejected before any runtime work");
+    assert.match(output, /^LARGE_DOCUMENT_SMOKE status=failed stage=size\n$/u);
+  }
 });
 
 test("large-document smoke fails closed when detection changes the source", async (t) => {

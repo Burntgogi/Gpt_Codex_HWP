@@ -6,7 +6,7 @@ import { BoundedFrameDecoder, encodeBoundedJsonFrame, parseBoundedJsonFrame } fr
 import { encodeDocumentResultSpool, documentResultSpoolMetadata, initializeDocumentComputeBackend, isRhwpCapabilityError, } from "./document-compute-backend.js";
 import { DOCUMENT_ENGINE_ERROR_MESSAGES, createDocumentEngineRunError, isDocumentEngineRunError, normalizeDocumentEngineError, } from "./document-errors.js";
 import { imageHelperFailureCode } from "./image-helper-errors.js";
-import { resolvePythonCommand } from "../shared/python-command.js";
+import { MINIMUM_HELPER_PYTHON, resolvePythonCommand } from "../shared/python-command.js";
 import { DOCUMENT_PROTOCOL_VERSION, MAX_CHILD_INLINE_RESULT_BYTES, MAX_CHILD_REQUEST_FRAME_BYTES, MAX_DOCUMENT_ENGINE_RESULT_BYTES, createInlineDocumentResultEvent, measureDocumentResultByteLength, resultSpoolEncoding, validateDocumentResultSpoolMetadata, validateWireDocumentRequest, } from "./document-protocol.js";
 const CONTROL_DESCRIPTOR = 6;
 const OUTPUT_DESCRIPTOR = 5;
@@ -72,7 +72,9 @@ async function runAfterParagraphInsert(request, backend) {
 }
 async function runImageHelper(request, sourceSize, image, occurrence) {
     const script = fileURLToPath(new URL("../../scripts/hwpx-safe-edit/insert_image.py", import.meta.url));
-    const python = await resolvePythonCommand();
+    const python = await resolvePythonCommand(undefined, {
+        minimumVersion: MINIMUM_HELPER_PYTHON,
+    });
     if (python === undefined)
         throw createDocumentEngineRunError("PYTHON_NOT_FOUND");
     const command = python.command;
@@ -283,6 +285,8 @@ function minimalPythonEnvironment() {
         "TMPDIR",
         "LANG",
         "LC_ALL",
+        // The py.exe launcher reads its per-user configuration from here.
+        "LOCALAPPDATA",
     ]) {
         const value = process.env[key];
         if (value !== undefined)

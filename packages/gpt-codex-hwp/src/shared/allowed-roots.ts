@@ -9,7 +9,9 @@ import {
 } from "node:path";
 
 import {
+  clearDerivedNetworkRoots,
   isWindowsNetworkPath,
+  permitDerivedNetworkPath,
   resolveLocalPath,
   setPermittedNetworkRoots,
 } from "./paths.js";
@@ -110,11 +112,13 @@ export function setActiveAllowedRootsPolicy(policy: AllowedRootsPolicy): void {
   }
   activePolicy = policy;
   setPermittedNetworkRoots(policy.networkRoots ?? []);
+  clearDerivedNetworkRoots();
 }
 
 export function resetActiveAllowedRootsPolicy(): void {
   activePolicy = unrestrictedPolicy;
   setPermittedNetworkRoots([]);
+  clearDerivedNetworkRoots();
 }
 
 export function authorizeExistingPath(path: string): Promise<string> {
@@ -132,13 +136,18 @@ function createUnrestrictedPolicy(): AllowedRootsPolicy {
     async authorizeExistingPath(path: string): Promise<string> {
       const resolved = resolveLocalPath(path);
       try {
-        return await realpath(resolved);
+        const canonical = await realpath(resolved);
+        // A mapped network drive the caller named resolves to its UNC share;
+        // later checks of that canonical spelling must still pass.
+        permitDerivedNetworkPath(resolved, canonical);
+        return canonical;
       } catch {
         return resolved;
       }
     },
     async authorizeFuturePath(path: string): Promise<string> {
-      return resolveLocalPath(path);
+      // Future paths are outputs; a mapped share's UNC spelling is not writable.
+      return resolveLocalPath(path, "output_path");
     },
   });
 }

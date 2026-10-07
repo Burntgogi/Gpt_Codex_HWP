@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 /**
@@ -33,15 +34,58 @@ export function pythonCommandCandidates(platform = process.platform, env = proce
         { command: "/usr/local/bin/python3", argsPrefix: [] },
     ]);
 }
-export async function resolvePythonCommand(candidates = pythonCommandCandidates()) {
+/** The image helper and doctor both require at least this version. */
+export const MINIMUM_HELPER_PYTHON = Object.freeze([3, 10]);
+const versionCache = new Map();
+function probeVersionOnce(candidate) {
+    const key = [candidate.command, ...candidate.argsPrefix].join("\u0000");
+    let pending = versionCache.get(key);
+    if (pending === undefined) {
+        pending = new Promise((resolvePromise) => {
+            execFile(candidate.command, [...candidate.argsPrefix, "--version"], {
+                encoding: "utf8",
+                timeout: 5_000,
+                windowsHide: true,
+                maxBuffer: 4 * 1024,
+            }, (error, stdout, stderr) => {
+                resolvePromise(error === null ? `${stdout}\n${stderr}` : undefined);
+            });
+        });
+        versionCache.set(key, pending);
+        // Cache only answers; a slow cold start or transient failure is retried.
+        void pending.then((output) => {
+            if (output === undefined)
+                versionCache.delete(key);
+        });
+    }
+    return pending;
+}
+export function pythonVersionAtLeast(output, minimum) {
+    const match = /Python\s+(\d+)\.(\d+)/u.exec(output ?? "");
+    if (match === null)
+        return false;
+    const [major, minor] = [Number(match[1]), Number(match[2])];
+    return major > minimum[0] || (major === minimum[0] && minor >= minimum[1]);
+}
+/**
+ * Returns the first trusted interpreter that exists and, when a minimum is
+ * given, reports at least that version. The doctor applies the same list and
+ * the same minimum, so its verdict matches what the image helper will run.
+ */
+export async function resolvePythonCommand(candidates = pythonCommandCandidates(), options = {}) {
     for (const candidate of candidates) {
         try {
-            if ((await stat(candidate.command)).isFile())
-                return candidate;
+            if (!(await stat(candidate.command)).isFile())
+                continue;
         }
         catch {
-            // Try the next trusted location.
+            continue; // Try the next trusted location.
         }
+        if (options.minimumVersion === undefined)
+            return candidate;
+        const output = await (options.probeVersion ?? probeVersionOnce)(candidate);
+        if (pythonVersionAtLeast(output, options.minimumVersion))
+            return candidate;
     }
     return undefined;
 }

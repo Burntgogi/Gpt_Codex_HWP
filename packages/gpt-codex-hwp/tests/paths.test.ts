@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { isAbsolute, join, parse as parsePath, resolve } from "node:path";
 import test from "node:test";
 
 import {
+  permitDerivedNetworkPath,
   resolveLocalPath,
   setPermittedNetworkRoots,
 } from "../src/shared/paths.js";
@@ -93,6 +95,83 @@ test("resolveLocalPath rejects Windows UNC paths unless an allowed root permits 
   for (const input of ["\\\\server\\share\\other\\a.hwp", "\\\\server\\share\\docs-evil\\a.hwp"]) {
     assert.throws(() => resolveLocalPath(input, "file_path"), isNetworkRejection, input);
   }
+});
+
+test("resolveLocalPath rejects an unpermitted UNC path before touching the filesystem", {
+  skip: process.platform !== "win32",
+}, async (t) => {
+  const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
+  const { syncBuiltinESMExports } = createRequire(import.meta.url)("node:module") as typeof import("node:module");
+  const touched: string[] = [];
+  const originalLstat = fs.lstatSync;
+  const originalRealpath = fs.realpathSync.native;
+  fs.lstatSync = ((path: string, ...rest: unknown[]) => {
+    touched.push(String(path));
+    return (originalLstat as (...args: unknown[]) => unknown)(path, ...rest);
+  }) as typeof fs.lstatSync;
+  fs.realpathSync.native = ((path: string, ...rest: unknown[]) => {
+    touched.push(String(path));
+    return (originalRealpath as (...args: unknown[]) => unknown)(path, ...rest);
+  }) as typeof fs.realpathSync.native;
+  syncBuiltinESMExports();
+  t.after(() => {
+    fs.lstatSync = originalLstat;
+    fs.realpathSync.native = originalRealpath;
+    syncBuiltinESMExports();
+  });
+
+  assert.throws(
+    () => resolveLocalPath("\\\\attacker.invalid\\share\\A~1\\x.hwpx", "file_path"),
+    (error: unknown) => String(error).includes("network (UNC)"),
+  );
+  assert.deepEqual(touched.filter((path) => path.toLowerCase().includes("attacker.invalid")), []);
+});
+
+test("a mapped drive's canonical UNC share is accepted only after its drive spelling resolved to it", {
+  skip: process.platform !== "win32",
+}, () => {
+  const share = "\\\\nas-mapped-test\\team";
+  assert.throws(() => resolveLocalPath(`${share}\\docs\\a.hwpx`, "file_path"), /network \(UNC\)/u);
+  permitDerivedNetworkPath(`${share}\\docs\\a.hwpx`, `${share}\\docs\\a.hwpx`);
+  assert.throws(() => resolveLocalPath(`${share}\\docs\\a.hwpx`, "file_path"), /network \(UNC\)/u,
+    "a UNC spelling cannot grant itself access");
+  permitDerivedNetworkPath("Z:\\docs\\a.hwpx", `${share}\\docs\\a.hwpx`);
+  assert.equal(resolveLocalPath(`${share}\\other\\b.hwpx`, "file_path"), `${share}\\other\\b.hwpx`);
+  for (const label of ["output_path", "output_dir", "output_svg_path"]) {
+    assert.throws(() => resolveLocalPath(`${share}\\out.hwpx`, label), /network \(UNC\)/u,
+      `a share reached through a mapped drive is not writable (${label})`);
+  }
+  assert.throws(() => resolveLocalPath("\\\\nas-mapped-test\\other-share\\c.hwpx", "file_path"), /network \(UNC\)/u);
+});
+
+test("the unrestricted policy re-authorizes a mapped drive's UNC realpath", {
+  skip: process.platform !== "win32",
+}, async (t) => {
+  const require = createRequire(import.meta.url);
+  const fsPromises = require("node:fs/promises") as typeof import("node:fs/promises");
+  const { syncBuiltinESMExports } = require("node:module") as typeof import("node:module");
+  const { authorizeExistingPath, resetActiveAllowedRootsPolicy } = await import("../src/shared/allowed-roots.js");
+  resetActiveAllowedRootsPolicy();
+  const mapped = "Q:\\mapped-wire-test\\a.hwpx";
+  const canonical = "\\\\nas-wire-test\\team\\mapped-wire-test\\a.hwpx";
+  const originalRealpath = fsPromises.realpath;
+  // Answer both spellings here so the test never resolves the made-up host.
+  fsPromises.realpath = (async (path: string) => {
+    const lowered = String(path).toLowerCase();
+    if (lowered === mapped.toLowerCase() || lowered === canonical.toLowerCase()) return canonical;
+    return originalRealpath(path);
+  }) as typeof fsPromises.realpath;
+  syncBuiltinESMExports();
+  t.after(() => {
+    fsPromises.realpath = originalRealpath;
+    syncBuiltinESMExports();
+  });
+
+  assert.throws(() => resolveLocalPath(canonical, "file_path"), /network \(UNC\)/u,
+    "before the drive spelling resolves, the share is not permitted");
+  assert.equal(await authorizeExistingPath(mapped), canonical);
+  assert.equal(await authorizeExistingPath(canonical), canonical,
+    "the snapshot's re-authorization of the canonical spelling succeeds");
 });
 
 test("resolveLocalPath expands Windows 8.3 short names that contain no links", {

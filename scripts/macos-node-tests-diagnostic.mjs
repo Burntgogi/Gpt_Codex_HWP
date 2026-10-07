@@ -383,7 +383,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? ((fileOptions = {}) => executeBenchmarkPolicyDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
       terminateTree: options.terminateTree ?? terminateTree,
-      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      testTimeoutMs: benchmarkFileTimeout(fileOptions, options),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testSkipPattern: fileOptions.testSkipPattern,
       onSpawn: onTestFileSpawn,
@@ -452,6 +452,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       if (file === "benchmark-policy.test.ts" && typeof runBenchmarkFile === "function") {
         benchmarkReceipt = await runBenchmarkFile({
           testSkipPattern,
+          testTimeoutMs,
           profile: profilePlan.name,
           onSpawn: onTestFileSpawn,
         });
@@ -1283,6 +1284,12 @@ function executeSvgAssetDiagnostic(options) {
     });
     testTimer = setTimeout(stopUnverified, options.testTimeoutMs);
   });
+}
+
+/** The per-file budget computed by the runner wins over the default. */
+export function benchmarkFileTimeout(fileOptions = {}, runnerOptions = {}) {
+  return fileOptions.testTimeoutMs
+    ?? boundedTimeout(runnerOptions.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS);
 }
 
 export function executeBoundedNodeTestFile(file, options = {}) {

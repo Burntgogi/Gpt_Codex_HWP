@@ -5016,3 +5016,7 @@ function countingSignal(): {
   });
   return { signal, counts };
 }
+
+test("the document child environment passes LOCALAPPDATA so the per-user py.exe is found", () => {
+  assert.ok(childClientModule.MINIMAL_CHILD_ENVIRONMENT_KEYS.includes("LOCALAPPDATA"));
+});

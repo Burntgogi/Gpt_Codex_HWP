@@ -242,15 +242,22 @@ async function executeOperation(
       };
     }
     case "generateHwpx": {
-      const { escapeIntrawordUnderscores } = await import(
+      const { copyPreviewText, escapeIntrawordUnderscores } = await import(
         "../shared/markdown-underscore.js"
       );
-      const generated = await kordoc.markdownToHwpx(
-        escapeIntrawordUnderscores(request.input.markdown),
-        request.options.preset === undefined
-          ? undefined
-          : { gongmun: { preset: request.options.preset } },
-      );
+      const generateOptions = request.options.preset === undefined
+        ? undefined
+        : { gongmun: { preset: request.options.preset } };
+      const escaped = escapeIntrawordUnderscores(request.input.markdown);
+      let generated: Uint8Array = new Uint8Array(await kordoc.markdownToHwpx(escaped, generateOptions));
+      if (escaped !== request.input.markdown) {
+        // Kordoc builds Preview/PrvText.txt from raw block text; take it from a
+        // generation of the unescaped Markdown so no escape reaches it.
+        const reference = new Uint8Array(
+          await kordoc.markdownToHwpx(request.input.markdown, generateOptions),
+        );
+        generated = await copyPreviewText(generated, reference);
+      }
       const { normalizeGeneratedFontReferences } = await import(
         "../shared/hwpx-font-integrity.js"
       );

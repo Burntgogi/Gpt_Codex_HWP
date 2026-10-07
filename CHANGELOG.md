@@ -41,9 +41,10 @@ This file records release tags and their publication status. Work under `Unrelea
   rhwp backend, read-worker, and installed-runtime checks pass.
 - Report a fixed, path-free reason with one-shot exit 2
   (`ONESHOT_INVOCATION_ERROR reason=REQUEST_INVALID` and similar).
-- When a write fails after outputs were reserved, empty the reserved files
-  through their own handles so no truncated document survives, and say that
-  an empty placeholder remains at the output path.
+- When a write fails after outputs were reserved, empty the files whose
+  writing started through their own handles so no truncated document
+  survives, and report what remains at the output paths (emptied, never
+  written, complete, or possibly partial). Files are never removed by name.
 - Accept Windows 8.3 short-name paths that contain no links and the macOS
   `/tmp`, `/var`, and `/etc` system aliases by rewriting them to their
   canonical form instead of rejecting them as linked paths.
@@ -76,6 +77,18 @@ This file records release tags and their publication status. Work under `Unrelea
   plugin generates, without `reflow: true` now returns the actionable
   `PREVIEW_REFLOW_REQUIRED` instead of `ENGINE_CRASH`. Approximate synthetic
   layout stays an explicit opt-in.
+- Fix issues found by an adversarial review of this branch: decide on UNC
+  paths before any filesystem access (8.3 expansion could otherwise contact
+  the host); keep reading documents from mapped network drives, whose realpath is a
+  UNC share (writing to them is still refused, as before);
+  report reserved outputs accurately after a failed write; pass
+  `LOCALAPPDATA` to the document child so the per-user `py.exe` is found;
+  select the helper Python by the same 3.10 rule doctor uses; leave HTML
+  tables and closed `$$` math unescaped and restore identifiers in
+  `Preview/PrvText.txt`; forward the larger per-file budget to the benchmark
+  runner; reject unsupported smoke sizes in their own `size` stage; and fix
+  the official-document linter for itemized 붙임, compound nouns ending in 금,
+  and 저녁/밤/새벽 times.
 
 ## [0.2.7] - 2026-09-29
 

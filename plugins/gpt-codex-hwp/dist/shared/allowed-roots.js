@@ -1,6 +1,6 @@
 import { lstat, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, parse as parsePath, relative, resolve, sep, } from "node:path";
-import { isWindowsNetworkPath, resolveLocalPath, setPermittedNetworkRoots, } from "./paths.js";
+import { clearDerivedNetworkRoots, isWindowsNetworkPath, permitDerivedNetworkPath, resolveLocalPath, setPermittedNetworkRoots, } from "./paths.js";
 const MAX_CONFIGURATION_BYTES = 16_384;
 const MAX_ROOTS = 32;
 const MAX_ROOT_CHARACTERS = 4_096;
@@ -69,10 +69,12 @@ export function setActiveAllowedRootsPolicy(policy) {
     }
     activePolicy = policy;
     setPermittedNetworkRoots(policy.networkRoots ?? []);
+    clearDerivedNetworkRoots();
 }
 export function resetActiveAllowedRootsPolicy() {
     activePolicy = unrestrictedPolicy;
     setPermittedNetworkRoots([]);
+    clearDerivedNetworkRoots();
 }
 export function authorizeExistingPath(path) {
     return activePolicy.authorizeExistingPath(path);
@@ -87,14 +89,19 @@ function createUnrestrictedPolicy() {
         async authorizeExistingPath(path) {
             const resolved = resolveLocalPath(path);
             try {
-                return await realpath(resolved);
+                const canonical = await realpath(resolved);
+                // A mapped network drive the caller named resolves to its UNC share;
+                // later checks of that canonical spelling must still pass.
+                permitDerivedNetworkPath(resolved, canonical);
+                return canonical;
             }
             catch {
                 return resolved;
             }
         },
         async authorizeFuturePath(path) {
-            return resolveLocalPath(path);
+            // Future paths are outputs; a mapped share's UNC spelling is not writable.
+            return resolveLocalPath(path, "output_path");
         },
     });
 }

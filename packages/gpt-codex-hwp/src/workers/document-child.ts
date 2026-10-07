@@ -20,7 +20,7 @@ import {
   type DocumentEnginePublicError,
 } from "./document-errors.js";
 import { imageHelperFailureCode } from "./image-helper-errors.js";
-import { resolvePythonCommand } from "../shared/python-command.js";
+import { MINIMUM_HELPER_PYTHON, resolvePythonCommand } from "../shared/python-command.js";
 import {
   DOCUMENT_PROTOCOL_VERSION,
   MAX_CHILD_INLINE_RESULT_BYTES,
@@ -128,7 +128,9 @@ async function runImageHelper(
     "../../scripts/hwpx-safe-edit/insert_image.py",
     import.meta.url,
   ));
-  const python = await resolvePythonCommand();
+  const python = await resolvePythonCommand(undefined, {
+    minimumVersion: MINIMUM_HELPER_PYTHON,
+  });
   if (python === undefined) throw createDocumentEngineRunError("PYTHON_NOT_FOUND");
   const command = python.command;
   const args = [...python.argsPrefix, script, "--descriptor-mode"];
@@ -352,6 +354,8 @@ function minimalPythonEnvironment(): NodeJS.ProcessEnv {
     "TMPDIR",
     "LANG",
     "LC_ALL",
+    // The py.exe launcher reads its per-user configuration from here.
+    "LOCALAPPDATA",
   ]) {
     const value = process.env[key];
     if (value !== undefined) result[key] = value;

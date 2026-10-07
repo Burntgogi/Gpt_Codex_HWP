@@ -160,22 +160,42 @@ function lintDates(lines, findings) {
 }
 
 function lintTimes(lines, findings) {
-  const pattern = /(?:(오전|오후)\s*)?(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?(?=$|[\s,.)~]|부터|까지|에)/gu;
+  const pattern = /(?:(오전|오후|새벽|아침|낮|저녁|밤)\s*)?(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?(?=$|[\s,.)~]|부터|까지|에)/gu;
   lines.forEach((line, index) => {
     for (const match of line.matchAll(pattern)) {
+      const marker = match[1];
       let hour = Number(match[2]);
       const minute = match[3] === undefined ? 0 : Number(match[3]);
       if (hour > 24 || minute > 59) continue;
-      if (match[1] === "오후" && hour < 12) hour += 12;
-      if (match[1] === "오전" && hour === 12) hour = 0;
+      if (marker === "오후") {
+        if (hour < 12) hour += 12;
+      } else if (marker === "저녁") {
+        if (hour < 12) hour += 12;
+        else if (hour === 12) hour = 0; // 저녁 12시 is midnight, not noon.
+      } else if (marker === "밤") {
+        // 밤 1시 to 5시 are after midnight; 밤 6시 to 11시 are evening.
+        if (hour === 12) hour = 0;
+        else if (hour >= 6 && hour < 12) hour += 12;
+      } else if (marker === "낮") {
+        if (hour < 12 && hour <= 6) hour += 12;
+      } else if (marker === "오전" || marker === "새벽" || marker === "아침") {
+        if (hour === 12) hour = 0;
+      }
+      // Without a time-of-day word, 1 to 12 o'clock is ambiguous, so the
+      // finding states the rule without guessing a 24-hour value.
+      const ambiguous = marker === undefined && hour >= 1 && hour <= 12;
       findings.push(finding(
         "time",
         "warn",
         index,
         match.index,
         match[0],
-        "시각은 24시각제 숫자로 쓰고 시·분 글자 대신 쌍점으로 구분합니다.",
-        `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+        ambiguous
+          ? "시각은 24시각제 숫자로 쓰고 시·분 글자 대신 쌍점으로 구분합니다. 오전·오후를 확인해 00:00 형식으로 고치십시오."
+          : "시각은 24시각제 숫자로 쓰고 시·분 글자 대신 쌍점으로 구분합니다.",
+        ambiguous
+          ? undefined
+          : `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
       ));
     }
   });
@@ -183,7 +203,8 @@ function lintTimes(lines, findings) {
 
 function lintAmounts(lines, findings) {
   // "원" followed by these syllables starts another word (원칙, 원장, …).
-  const pattern = /(금\s?)?(?<![\d,.])(\d{1,3}(?:,\d{3})+|\d+)(\s?)원(?![칙장인문본리래활고격형단])(?!\s?\(\s?금?\s?[일이삼사오육칠팔구십백천만억조영]+\s?원\s?\))/gu;
+  // A leading 금 counts only as its own word, not as the end of 지원금 or 상금.
+  const pattern = /((?<!\p{L})금\s?)?(?<![\d,.])(\d{1,3}(?:,\d{3})+|\d+)(\s?)원(?![칙장인문본리래활고격형단])(?!\s?\(\s?금?\s?[일이삼사오육칠팔구십백천만억조영]+\s?원\s?\))/gu;
   lines.forEach((line, index) => {
     for (const match of line.matchAll(pattern)) {
       const digits = match[2].replaceAll(",", "");
@@ -220,7 +241,17 @@ function lintItems(lines, findings) {
   let stack = [];
   lines.forEach((line, index) => {
     if (line.trim().length === 0) return;
-    const { offset, text } = stripListPrefix(line);
+    const stripped = stripListPrefix(line);
+    let { offset, text } = stripped;
+    // 붙임 starts its own outline: "붙임  1. 계획서 1부." then "2. 명단 1부."
+    // Only a bare 붙임 header or one followed by an item marker counts, not a
+    // sentence such as "붙임과 같이 보고합니다".
+    const attachment = /^붙\s?임(?:\s*$|\s+(?=(?:\d{1,3}|[가-하])[.)]\s))/u.exec(text);
+    if (attachment !== null) {
+      stack = [];
+      offset += attachment[0].length;
+      text = text.slice(attachment[0].length);
+    }
     if (/^[□■○●◦◎\-·•*+]\s/u.test(text)) return; // permitted special symbols
     let level = -1;
     let match;

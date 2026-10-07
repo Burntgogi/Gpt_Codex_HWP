@@ -71,7 +71,7 @@ HWPX is the supported authoring format. To revise a binary HWP, read it with `hw
 - Node.js 22 or later
 - Windows x64 or macOS Apple Silicon
 - Python 3.10 or later in a standard location for `after-paragraph` image insertion. PATH is not searched: Windows uses `%SystemRoot%\py.exe` or the per-user `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`; macOS tries `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, then the Command Line Tools `python3`; Linux uses `/usr/bin/python3` or `/usr/local/bin/python3`.
-- On macOS the supervised document child also uses Python to identify processes, so image insertion (either mode) and documents over 64 MiB need Xcode Command Line Tools (`xcode-select --install`) or Homebrew `python3`. Without them, `/usr/bin/python3` may open an installer prompt and the operation can fail.
+- On macOS the supervised document child also uses Python to identify processes, so image insertion (either mode) and documents over 64 MiB need a python3. The Xcode Command Line Tools (`xcode-select --install`) python3 is enough for that, but `after-paragraph` insertion needs 3.10 or newer, for example Homebrew `python3`. The image helper uses the first trusted interpreter that reports 3.10 or newer, and doctor applies the same rule. Without them, `/usr/bin/python3` may open an installer prompt and the operation can fail.
 - An environment with Codex plugin marketplace commands
 
 Without Python, only the Python-backed image insertion mode fails with `PYTHON_NOT_FOUND`; the other tools remain available.

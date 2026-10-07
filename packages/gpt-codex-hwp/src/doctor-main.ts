@@ -28,7 +28,11 @@ import {
   DOCTOR_RUNNER_READY,
   DOCTOR_RUNNER_SCHEMA_VERSION,
 } from "./workers/doctor-command-runner.js";
-import { pythonCommandCandidates } from "./shared/python-command.js";
+import {
+  MINIMUM_HELPER_PYTHON,
+  pythonCommandCandidates,
+  pythonVersionAtLeast,
+} from "./shared/python-command.js";
 
 export const DOCTOR_SCHEMA_VERSION = 1;
 
@@ -54,7 +58,7 @@ const unsafeDoctorStartupRetentions = new Set<ChildProcess>();
 // ctypes) to identify processes, so image insertion of either mode and
 // sources over 64 MiB need it, not only after-paragraph insertion.
 const MACOS_PYTHON_REMEDIATION =
-  "Install Xcode Command Line Tools (xcode-select --install) or Homebrew python3; on macOS image insertion and documents over 64 MiB require it.";
+  "Install Python 3.10 or newer, for example Homebrew python3, for after-paragraph image insertion. On macOS, image insertion and documents over 64 MiB also need a python3 for process supervision; the Xcode Command Line Tools python3 is enough for that but may be older than 3.10.";
 
 const REMEDIATION = Object.freeze({
   node: "Install a supported Node.js release and retry the diagnostic.",
@@ -1137,8 +1141,8 @@ function cleanVersion(value: string): string | undefined {
 }
 
 function isSupportedPython(version: string): boolean {
-  const [major, minor] = version.split(".").map(Number);
-  return major === 3 && minor !== undefined && minor >= 10;
+  // Same rule the image helper applies when it selects an interpreter.
+  return pythonVersionAtLeast(`Python ${version}`, MINIMUM_HELPER_PYTHON);
 }
 
 function object(value: unknown): Record<string, unknown> {

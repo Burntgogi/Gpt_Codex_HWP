@@ -82,24 +82,90 @@ export class OutputConflictError extends Error {
   }
 }
 
+/** What a failed exclusive write left at each reserved output path. */
+export interface FailedOutputRelease {
+  /** Files whose writing started and that were emptied through their handle. */
+  readonly emptied: number;
+  /** Files whose writing started and could not be emptied, so may be partial. */
+  readonly possiblyPartial: number;
+  /** Files that were fully written and closed before a later file failed. */
+  readonly complete: number;
+  /** Reserved files that were never written. */
+  readonly neverWritten: number;
+}
+
 /**
- * A write failed after the outputs were reserved. The reserved files were
- * emptied through their own handles and remain as empty placeholders.
+ * A write failed after outputs were reserved. Reserved files are never removed
+ * by pathname (that races with a concurrent replacement), so the message
+ * reports only what this process knows about each reserved file.
  */
 export class OutputPlaceholderLeftError extends Error {
   readonly code: string;
+  readonly release: FailedOutputRelease;
 
-  constructor(cause: unknown, placeholderCount: number) {
+  constructor(cause: unknown, release: FailedOutputRelease) {
     const reason = cause instanceof Error ? cause.message : String(cause);
+    const parts = [
+      release.emptied > 0 ? `${release.emptied} emptied` : undefined,
+      release.neverWritten > 0 ? `${release.neverWritten} never written` : undefined,
+      release.complete > 0 ? `${release.complete} complete` : undefined,
+      release.possiblyPartial > 0 ? `${release.possiblyPartial} possibly partial` : undefined,
+    ].filter((part): part is string => part !== undefined);
     super(
-      `${reason} The output was not written; ${placeholderCount === 1
-        ? "an empty placeholder file remains at the output path"
-        : `empty placeholder files remain at ${placeholderCount} output paths`}. Remove it before retrying.`,
+      `${reason} The output was not completed. Files may remain at the output paths (${parts.join(", ")}); check and remove them before retrying.`,
       { cause },
     );
     this.name = "OutputPlaceholderLeftError";
     this.code = errorCode(cause, "OUTPUT_WRITE_FAILED");
+    this.release = Object.freeze({ ...release });
   }
+}
+
+interface ReservationProgress {
+  started: boolean;
+  closed: boolean;
+}
+
+async function releaseFailedReservations(
+  reservations: readonly ReservedOutput[],
+  progress: readonly ReservationProgress[],
+): Promise<FailedOutputRelease> {
+  let emptied = 0;
+  let possiblyPartial = 0;
+  let complete = 0;
+  let neverWritten = 0;
+  await Promise.all(reservations.map(async (reservation, index) => {
+    const state = progress[index]!;
+    // A handle is closed only after every write finished, so a closed file is
+    // complete; it cannot be emptied any more through its handle.
+    if (state.closed) {
+      complete += 1;
+      return;
+    }
+    if (state.started) {
+      try {
+        await reservation.handle.truncate(0);
+        emptied += 1;
+      } catch {
+        possiblyPartial += 1;
+      }
+    } else {
+      neverWritten += 1;
+    }
+    await reservation.handle.close().catch(() => undefined);
+  }));
+  return { emptied, possiblyPartial, complete, neverWritten };
+}
+
+async function rethrowAfterFailedWrite(
+  error: unknown,
+  reservations: readonly ReservedOutput[],
+  progress: readonly ReservationProgress[],
+): Promise<never> {
+  const release = await releaseFailedReservations(reservations, progress);
+  // Failures before any write keep their original error, as before.
+  if (release.emptied + release.possiblyPartial + release.complete === 0) throw error;
+  throw new OutputPlaceholderLeftError(error, release);
 }
 
 export class PathAliasError extends Error {
@@ -158,7 +224,7 @@ export async function writeFilesExclusively(
   );
 
   const reservations: ReservedOutput[] = [];
-  let writing = false;
+  const progress: ReservationProgress[] = [];
   try {
     await options.beforeOpen?.();
     for (const [index, file] of resolvedFiles.entries()) {
@@ -187,6 +253,7 @@ export async function writeFilesExclusively(
         };
         await assertReservedOutputIdentity(reservation, directory, directoryPlan);
         reservations.push(reservation);
+        progress.push({ started: false, closed: false });
         await options.unitTestAfterOpen?.(file.path, index);
       } catch (error: unknown) {
         await handle.close().catch(() => undefined);
@@ -196,33 +263,25 @@ export async function writeFilesExclusively(
       }
     }
 
-    writing = true;
     for (const [index, reservation] of reservations.entries()) {
       const directory = outputDirectoryForPath(reservation.path, directoryPlan);
       await assertReservedOutputIdentity(reservation, directory, directoryPlan);
       await options.unitTestBeforeWrite?.(reservation.path, index);
+      progress[index]!.started = true;
       await reservation.handle.writeFile(resolvedFiles[index]!.data);
     }
-    for (const reservation of reservations) {
+    for (const [index, reservation] of reservations.entries()) {
       await reservation.handle.close();
+      progress[index]!.closed = true;
     }
 
     return resolvedFiles.map((file) => file.path);
   } catch (error: unknown) {
     // Do not unlink by pathname after a failed write. Even an inode check
     // followed by unlink has a replacement race on Windows. Instead, empty the
-    // files through the handles we own so no truncated document survives, and
-    // tell the caller that empty placeholders remain.
-    await Promise.all(
-      reservations.map(async (reservation) => {
-        if (writing) await reservation.handle.truncate(0).catch(() => undefined);
-        await reservation.handle.close().catch(() => undefined);
-      }),
-    );
-    if (writing && reservations.length > 0) {
-      throw new OutputPlaceholderLeftError(error, reservations.length);
-    }
-    throw error;
+    // started files through the handles we own so no truncated document
+    // survives, and report what remains.
+    return rethrowAfterFailedWrite(error, reservations, progress);
   }
 }
 
@@ -323,6 +382,8 @@ export async function writeFileRangeExclusively(
   await assertPlannedDirectoryIdentity(directory, directoryPlan);
   await assertFuturePathStillAuthorized(resolvedOutput);
 
+  const reservations: ReservedOutput[] = [];
+  const progress: ReservationProgress[] = [];
   let handle: FileHandle;
   try {
     handle = await open(resolvedOutput, "wx");
@@ -341,17 +402,24 @@ export async function writeFileRangeExclusively(
       device: created.dev,
       inode: created.ino,
     };
+    reservations.push(reservation);
+    progress.push({ started: false, closed: false });
     await assertReservedOutputIdentity(reservation, directory, directoryPlan);
     await options.unitTestAfterOpen?.(resolvedOutput, 0);
+    progress[0]!.started = true;
     await copyRangeToHandle(handle, input, () =>
       assertReservedOutputIdentity(reservation, directory, directoryPlan)
     );
     await handle.close();
+    progress[0]!.closed = true;
     return resolvedOutput;
   } catch (error: unknown) {
-    await handle.close().catch(() => undefined);
+    if (reservations.length === 0) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
     // Match writeFilesExclusively: never pathname-delete a possibly replaced file.
-    throw error;
+    return rethrowAfterFailedWrite(error, reservations, progress);
   }
 }
 
@@ -398,7 +466,7 @@ export async function writeFileRangeAndFilesExclusively(
   );
 
   const reservations: ReservedOutput[] = [];
-  let writing = false;
+  const progress: ReservationProgress[] = [];
   try {
     await options.beforeOpen?.();
     for (const [index, file] of resolvedFiles.entries()) {
@@ -425,6 +493,7 @@ export async function writeFileRangeAndFilesExclusively(
         };
         await assertReservedOutputIdentity(reservation, directory, directoryPlan);
         reservations.push(reservation);
+        progress.push({ started: false, closed: false });
         await options.unitTestAfterOpen?.(file.path, index);
       } catch (error: unknown) {
         await handle.close().catch(() => undefined);
@@ -432,12 +501,12 @@ export async function writeFileRangeAndFilesExclusively(
       }
     }
 
-    writing = true;
     const rangeReservation = reservations[0]!;
     const rangeDirectory = outputDirectoryForPath(
       rangeReservation.path,
       directoryPlan,
     );
+    progress[0]!.started = true;
     await copyRangeToHandle(rangeReservation.handle, input, () =>
       assertReservedOutputIdentity(
         rangeReservation,
@@ -451,23 +520,18 @@ export async function writeFileRangeAndFilesExclusively(
         outputDirectoryForPath(reservations[index]!.path, directoryPlan),
         directoryPlan,
       );
+      progress[index]!.started = true;
       await reservations[index]!.handle.writeFile(
         (resolvedFiles[index] as { data: string | Uint8Array }).data,
       );
     }
-    for (const reservation of reservations) await reservation.handle.close();
+    for (const [index, reservation] of reservations.entries()) {
+      await reservation.handle.close();
+      progress[index]!.closed = true;
+    }
     return resolvedFiles.map((file) => file.path);
   } catch (error: unknown) {
-    await Promise.all(
-      reservations.map(async (reservation) => {
-        if (writing) await reservation.handle.truncate(0).catch(() => undefined);
-        await reservation.handle.close().catch(() => undefined);
-      }),
-    );
-    if (writing && reservations.length > 0) {
-      throw new OutputPlaceholderLeftError(error, reservations.length);
-    }
-    throw error;
+    return rethrowAfterFailedWrite(error, reservations, progress);
   }
 }
 

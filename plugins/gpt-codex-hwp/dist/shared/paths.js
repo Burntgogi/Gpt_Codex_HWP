@@ -4,32 +4,71 @@ import { join, parse as parsePath, resolve } from "node:path";
 // Other network paths are rejected so a document cannot steer the agent into
 // an SMB connection to an arbitrary host.
 let permittedNetworkRootKeys = Object.freeze([]);
+// Shares reached through a drive letter the caller named (a mapped network
+// drive). realpath reports them in UNC form, and re-authorizing that canonical
+// spelling must not fail.
+const derivedNetworkRootKeys = new Set();
+const MAX_DERIVED_NETWORK_ROOTS = 32;
 export function setPermittedNetworkRoots(roots) {
     permittedNetworkRootKeys = Object.freeze(roots.filter(isWindowsNetworkPath).map(networkRootKey));
 }
 export function isWindowsNetworkPath(path) {
     return /^\\\\(?![.?]\\)[^\\]/u.test(path.replaceAll("/", "\\"));
 }
+/**
+ * Records that a caller-named local drive path resolved to a UNC share, so the
+ * canonical UNC spelling of that share passes later checks. Ignored unless the
+ * local spelling is not a network path and the canonical one is.
+ */
+export function permitDerivedNetworkPath(localSpelling, canonical) {
+    if (process.platform !== "win32" || isWindowsNetworkPath(localSpelling)
+        || !isWindowsNetworkPath(canonical))
+        return;
+    if (derivedNetworkRootKeys.size >= MAX_DERIVED_NETWORK_ROOTS)
+        return;
+    derivedNetworkRootKeys.add(networkRootKey(parsePath(resolve(canonical)).root));
+}
 function networkRootKey(path) {
     const key = resolve(path).normalize("NFC").toLocaleLowerCase("en-US");
     return key.endsWith("\\") ? key : `${key}\\`;
+}
+export function clearDerivedNetworkRoots() {
+    derivedNetworkRootKeys.clear();
+}
+function assertNetworkPathPermitted(path, label) {
+    if (!isWindowsNetworkPath(path))
+        return;
+    const key = networkRootKey(path);
+    if (permittedNetworkRootKeys.some((root) => key.startsWith(root)))
+        return;
+    // A share reached through a mapped drive stays readable only: every output
+    // path is resolved under an output label first, which never uses it.
+    if (!/output/iu.test(label)) {
+        for (const root of derivedNetworkRootKeys)
+            if (key.startsWith(root))
+                return;
+    }
+    throw new UnsafeWindowsPathError(label, "network (UNC) paths are not accepted unless an allowed root permits them");
 }
 export function resolveLocalPath(localPath, label = "path", options = {}) {
     if (typeof localPath !== "string" || localPath.trim().length === 0) {
         throw new Error(`${label} must not be empty.`);
     }
-    if (process.platform === "win32") {
-        assertSafeWindowsPath(localPath, label);
-    }
-    const resolved = canonicalizeKnownAliases(resolve(localPath));
-    if (process.platform === "win32") {
+    if (process.platform !== "win32")
+        return canonicalizeKnownAliases(resolve(localPath));
+    assertSafeWindowsPath(localPath, label);
+    const lexical = resolve(localPath);
+    assertSafeWindowsPath(lexical, label);
+    // Decide on network paths before any filesystem access: expanding an 8.3
+    // name below would otherwise contact the host named in the path.
+    if (options.allowNetwork !== true)
+        assertNetworkPathPermitted(lexical, label);
+    const resolved = canonicalizeKnownAliases(lexical);
+    if (resolved !== lexical) {
         assertSafeWindowsPath(resolved, label);
-        if (isWindowsNetworkPath(resolved) && options.allowNetwork !== true) {
-            const key = networkRootKey(resolved);
-            if (!permittedNetworkRootKeys.some((root) => key.startsWith(root))) {
-                throw new UnsafeWindowsPathError(label, "network (UNC) paths are not accepted unless an allowed root permits them");
-            }
-        }
+        permitDerivedNetworkPath(lexical, resolved);
+        if (options.allowNetwork !== true)
+            assertNetworkPathPermitted(resolved, label);
     }
     return resolved;
 }
