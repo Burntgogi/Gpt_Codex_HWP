@@ -17,6 +17,7 @@ import { markdownToHwpx } from "kordoc";
 import type { DocumentEngineFacade } from "../src/shared/document-engine.js";
 import { prepareDocumentRenderOutput } from "../src/shared/document-render-output.js";
 import {
+  OutputPlaceholderLeftError,
   captureExistingOutputDirectoryIdentity,
   preflightExclusiveOutput,
   writeFileRangeAndFilesExclusively,
@@ -804,3 +805,38 @@ function authorizedHwpxResult({
     async cleanup() { cleaned = true; },
   };
 }
+
+test("a write failure after reservation leaves only empty placeholders and says so", async () => {
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-placeholder-",
+  });
+  const first = join(root, "first.hwpx");
+  const second = join(root, "second.svg");
+  try {
+    await assert.rejects(
+      writeFilesExclusively(
+        [
+          { path: first, data: "complete first output" },
+          { path: second, data: "second output" },
+        ],
+        {
+          unitTestBeforeWrite: (_path: string, index: number) => {
+            if (index === 1) {
+              throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+            }
+          },
+        } as never,
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof OutputPlaceholderLeftError);
+        assert.equal(error.code, "ENOSPC");
+        assert.match(error.message, /disk full.*empty placeholder files remain at 2 output paths/su);
+        return true;
+      },
+    );
+    assert.equal((await stat(first)).size, 0, "partially written output is emptied");
+    assert.equal((await stat(second)).size, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});

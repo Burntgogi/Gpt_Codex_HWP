@@ -33,6 +33,10 @@ const KORDOC_FILE_LIMIT_BYTES = 16 * 1024 * 1024;
 const KORDOC_FILE_COUNT_LIMIT = 512;
 const KORDOC_TOTAL_LIMIT_BYTES = 64 * 1024 * 1024;
 const unsafeDoctorStartupRetentions = new Set();
+// On macOS the supervised document child also uses Python (libproc via
+// ctypes) to identify processes, so image insertion of either mode and
+// sources over 64 MiB need it, not only after-paragraph insertion.
+const MACOS_PYTHON_REMEDIATION = "Install Xcode Command Line Tools (xcode-select --install) or Homebrew python3; on macOS image insertion and documents over 64 MiB require it.";
 const REMEDIATION = Object.freeze({
     node: "Install a supported Node.js release and retry the diagnostic.",
     npm: "Install npm for the active Node.js runtime and retry the diagnostic.",
@@ -170,7 +174,9 @@ async function pythonCheck(dependencies) {
             return check("PYTHON_OK", true, false, { version });
         }
     }
-    return check("PYTHON_UNAVAILABLE", false, false, { remediation: REMEDIATION.python });
+    return check("PYTHON_UNAVAILABLE", false, false, {
+        remediation: process.platform === "darwin" ? MACOS_PYTHON_REMEDIATION : REMEDIATION.python,
+    });
 }
 async function projectMetadataCheck(dependencies) {
     try {

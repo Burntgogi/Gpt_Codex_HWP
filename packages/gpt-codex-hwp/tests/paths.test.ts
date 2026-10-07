@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { realpathSync } from "node:fs";
 import { access, link, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse as parsePath, resolve } from "node:path";
@@ -106,6 +107,34 @@ test("resolveLocalPath rejects Windows UNC paths unless an allowed root permits 
   for (const input of ["\\\\server\\share\\other\\a.hwp", "\\\\server\\share\\docs-evil\\a.hwp"]) {
     assert.throws(() => resolveLocalPath(input, "file_path"), isNetworkRejection, input);
   }
+});
+
+test("resolveLocalPath expands Windows 8.3 short names that contain no links", {
+  skip: process.platform !== "win32",
+}, (t) => {
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  const shortForm = `${parsePath(programFiles).root}PROGRA~1`;
+  let expanded: string;
+  try {
+    expanded = realpathSync.native(shortForm);
+  } catch {
+    t.skip("8.3 short names are disabled on this volume");
+    return;
+  }
+  assert.equal(
+    resolveLocalPath(`${shortForm}\\gpt-codex-hwp\\out.hwpx`, "output_path"),
+    join(expanded, "gpt-codex-hwp", "out.hwpx"),
+  );
+  const missing = `${parsePath(programFiles).root}NOSUCH~9\\out.hwpx`;
+  assert.equal(resolveLocalPath(missing, "output_path"), resolve(missing));
+});
+
+test("resolveLocalPath maps the macOS /tmp and /var system aliases into /private", {
+  skip: process.platform !== "darwin",
+}, () => {
+  assert.equal(resolveLocalPath("/tmp/gpt-codex-hwp/out.hwpx", "output_path"), "/private/tmp/gpt-codex-hwp/out.hwpx");
+  assert.equal(resolveLocalPath("/var/folders/x/out.hwpx", "output_path"), "/private/var/folders/x/out.hwpx");
+  assert.equal(resolveLocalPath("/tmpfiles/out.hwpx", "output_path"), "/tmpfiles/out.hwpx");
 });
 
 test("assertSafeZipEntryName accepts package-relative entries", () => {

@@ -21,8 +21,8 @@
     },
     {
       "path": "dist/doctor-main.js",
-      "size": 42774,
-      "sha256": "8c85dde661cb136e820adfcbe02a290ac7503638fae0c7f89670ea103bf6cb6d"
+      "size": 43236,
+      "sha256": "203c3011c81004780c468dfdc8f173eb60728017d5a6cbb23a63c9efb7bb8c16"
     },
     {
       "path": "dist/doctor.js",
@@ -51,8 +51,8 @@
     },
     {
       "path": "dist/oneshot-main.js",
-      "size": 10182,
-      "sha256": "d795140472c5d20f1f26ce1fb4bd5e8804e7ceae3f48b5530f37d62fef40469f"
+      "size": 11347,
+      "sha256": "8568b99bd38771c0fb02ca1dfa8c90f511f635d9ecf2860faf0cb796a7a1c8ea"
     },
     {
       "path": "dist/oneshot.js",
@@ -121,8 +121,8 @@
     },
     {
       "path": "dist/shared/output.js",
-      "size": 21911,
-      "sha256": "06b63c42bab60a4bbd5f819089e3204435ce56bd7e2bf2e54ea55385901d1031"
+      "size": 23432,
+      "sha256": "12a46809121273d72aef7f6e3af6e0a8db4534f5ca979a91f4836f53eed37b9b"
     },
     {
       "path": "dist/shared/owned-bytes.js",
@@ -136,8 +136,8 @@
     },
     {
       "path": "dist/shared/paths.js",
-      "size": 5966,
-      "sha256": "d6b780cb31d535b0ad0fd6b914069d06ab474dabc6216b9b678c2ed831585562"
+      "size": 8255,
+      "sha256": "8b3a758e575955608b461decf234bc2221dc165f78b57074825ed0f16c6b68e6"
     },
     {
       "path": "dist/shared/protection.js",

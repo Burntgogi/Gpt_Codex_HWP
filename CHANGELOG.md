@@ -39,6 +39,16 @@ This file records release tags and their publication status. Work under `Unrelea
 - Update the optional @rhwp/core preview and parsing fallback from 0.7.17 to
   0.8.7 (MIT). The APIs this plugin calls are unchanged; the HWP fixture,
   rhwp backend, read-worker, and installed-runtime checks pass.
+- Report a fixed, path-free reason with one-shot exit 2
+  (`ONESHOT_INVOCATION_ERROR reason=REQUEST_INVALID` and similar).
+- When a write fails after outputs were reserved, empty the reserved files
+  through their own handles so no truncated document survives, and say that
+  an empty placeholder remains at the output path.
+- Accept Windows 8.3 short-name paths that contain no links and the macOS
+  `/tmp`, `/var`, and `/etc` system aliases by rewriting them to their
+  canonical form instead of rejecting them as linked paths.
+- Document that macOS process supervision uses Python, and give doctor a
+  macOS-specific remediation for `PYTHON_UNAVAILABLE`.
 
 ## [0.2.7] - 2026-09-29
 

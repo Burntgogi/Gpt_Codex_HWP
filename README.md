@@ -71,6 +71,7 @@ HWPX는 이 프로젝트의 정식 작성 형식입니다. 바이너리 HWP를 �
 - Node.js 22 이상
 - Windows x64 또는 macOS Apple Silicon
 - `after-paragraph` 이미지 삽입에는 표준 위치에 설치된 Python 3.10 이상. PATH는 탐색하지 않습니다. Windows는 `%SystemRoot%\py.exe` 또는 사용자 설치 `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`, macOS는 `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, Command Line Tools의 `python3` 순, Linux는 `/usr/bin/python3`, `/usr/local/bin/python3`을 사용합니다.
+- macOS에서는 문서 처리 자식 프로세스의 감독에도 Python을 씁니다. 그림 삽입(두 모드 모두)과 64 MiB를 넘는 문서에는 Xcode Command Line Tools(`xcode-select --install`) 또는 Homebrew `python3`가 필요합니다. 없으면 `/usr/bin/python3`가 설치 안내 창을 띄우고 해당 작업이 실패할 수 있습니다.
 - Codex 플러그인 마켓플레이스 명령을 사용할 수 있는 환경
 
 Python이 없으면 Python 기반 이미지 삽입 모드만 `PYTHON_NOT_FOUND`로 실패하며 다른 도구는 계속 사용할 수 있습니다.

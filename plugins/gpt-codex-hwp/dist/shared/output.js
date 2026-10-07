@@ -10,6 +10,21 @@ export class OutputConflictError extends Error {
         this.name = "OutputConflictError";
     }
 }
+/**
+ * A write failed after the outputs were reserved. The reserved files were
+ * emptied through their own handles and remain as empty placeholders.
+ */
+export class OutputPlaceholderLeftError extends Error {
+    code;
+    constructor(cause, placeholderCount) {
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        super(`${reason} The output was not written; ${placeholderCount === 1
+            ? "an empty placeholder file remains at the output path"
+            : `empty placeholder files remain at ${placeholderCount} output paths`}. Remove it before retrying.`, { cause });
+        this.name = "OutputPlaceholderLeftError";
+        this.code = errorCode(cause, "OUTPUT_WRITE_FAILED");
+    }
+}
 export class PathAliasError extends Error {
     code = "PATH_ALIAS";
     constructor(message) {
@@ -41,6 +56,7 @@ export async function writeFilesExclusively(files, options = {}) {
     }
     const directoryPlan = await prepareOutputDirectoryPlan(resolvedFiles.map((file) => file.path), options.expectedDirectoryIdentities ?? [], options.unitTestDirectoryIdentityCheck);
     const reservations = [];
+    let writing = false;
     try {
         await options.beforeOpen?.();
         for (const [index, file] of resolvedFiles.entries()) {
@@ -77,9 +93,11 @@ export async function writeFilesExclusively(files, options = {}) {
                 throw error;
             }
         }
+        writing = true;
         for (const [index, reservation] of reservations.entries()) {
             const directory = outputDirectoryForPath(reservation.path, directoryPlan);
             await assertReservedOutputIdentity(reservation, directory, directoryPlan);
+            await options.unitTestBeforeWrite?.(reservation.path, index);
             await reservation.handle.writeFile(resolvedFiles[index].data);
         }
         for (const reservation of reservations) {
@@ -88,10 +106,18 @@ export async function writeFilesExclusively(files, options = {}) {
         return resolvedFiles.map((file) => file.path);
     }
     catch (error) {
-        await Promise.all(reservations.map((reservation) => reservation.handle.close().catch(() => undefined)));
         // Do not unlink by pathname after a failed write. Even an inode check
-        // followed by unlink has a replacement race on Windows. A partial orphan
-        // is safer than deleting a concurrent replacement owned by another actor.
+        // followed by unlink has a replacement race on Windows. Instead, empty the
+        // files through the handles we own so no truncated document survives, and
+        // tell the caller that empty placeholders remain.
+        await Promise.all(reservations.map(async (reservation) => {
+            if (writing)
+                await reservation.handle.truncate(0).catch(() => undefined);
+            await reservation.handle.close().catch(() => undefined);
+        }));
+        if (writing && reservations.length > 0) {
+            throw new OutputPlaceholderLeftError(error, reservations.length);
+        }
         throw error;
     }
 }
@@ -208,6 +234,7 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
     }
     const directoryPlan = await prepareOutputDirectoryPlan(resolvedFiles.map((file) => file.path), options.expectedDirectoryIdentities ?? [], options.unitTestDirectoryIdentityCheck);
     const reservations = [];
+    let writing = false;
     try {
         await options.beforeOpen?.();
         for (const [index, file] of resolvedFiles.entries()) {
@@ -242,6 +269,7 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
                 throw error;
             }
         }
+        writing = true;
         const rangeReservation = reservations[0];
         const rangeDirectory = outputDirectoryForPath(rangeReservation.path, directoryPlan);
         await copyRangeToHandle(rangeReservation.handle, input, () => assertReservedOutputIdentity(rangeReservation, rangeDirectory, directoryPlan));
@@ -254,7 +282,14 @@ export async function writeFileRangeAndFilesExclusively(outputPath, input, compa
         return resolvedFiles.map((file) => file.path);
     }
     catch (error) {
-        await Promise.all(reservations.map((reservation) => reservation.handle.close().catch(() => undefined)));
+        await Promise.all(reservations.map(async (reservation) => {
+            if (writing)
+                await reservation.handle.truncate(0).catch(() => undefined);
+            await reservation.handle.close().catch(() => undefined);
+        }));
+        if (writing && reservations.length > 0) {
+            throw new OutputPlaceholderLeftError(error, reservations.length);
+        }
         throw error;
     }
 }

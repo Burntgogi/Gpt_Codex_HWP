@@ -28,6 +28,7 @@ export interface ExclusiveOutputOptions {
   expectedDirectoryIdentities?: readonly OutputDirectoryIdentity[];
   /** Unit-test-only hook for deterministic post-open identity races. */
   unitTestAfterOpen?: (path: string, index: number) => void | Promise<void>;
+  unitTestBeforeWrite?: (path: string, index: number) => void | Promise<void>;
   /** Unit-test-only identity seam; production callers must leave this unset. */
   unitTestDirectoryIdentityCheck?: (
     directory: OutputDirectoryIdentity,
@@ -78,6 +79,26 @@ export class OutputConflictError extends Error {
   constructor(path: string) {
     super(`Refusing to overwrite an existing output path: ${path}`);
     this.name = "OutputConflictError";
+  }
+}
+
+/**
+ * A write failed after the outputs were reserved. The reserved files were
+ * emptied through their own handles and remain as empty placeholders.
+ */
+export class OutputPlaceholderLeftError extends Error {
+  readonly code: string;
+
+  constructor(cause: unknown, placeholderCount: number) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `${reason} The output was not written; ${placeholderCount === 1
+        ? "an empty placeholder file remains at the output path"
+        : `empty placeholder files remain at ${placeholderCount} output paths`}. Remove it before retrying.`,
+      { cause },
+    );
+    this.name = "OutputPlaceholderLeftError";
+    this.code = errorCode(cause, "OUTPUT_WRITE_FAILED");
   }
 }
 
@@ -137,6 +158,7 @@ export async function writeFilesExclusively(
   );
 
   const reservations: ReservedOutput[] = [];
+  let writing = false;
   try {
     await options.beforeOpen?.();
     for (const [index, file] of resolvedFiles.entries()) {
@@ -174,9 +196,11 @@ export async function writeFilesExclusively(
       }
     }
 
+    writing = true;
     for (const [index, reservation] of reservations.entries()) {
       const directory = outputDirectoryForPath(reservation.path, directoryPlan);
       await assertReservedOutputIdentity(reservation, directory, directoryPlan);
+      await options.unitTestBeforeWrite?.(reservation.path, index);
       await reservation.handle.writeFile(resolvedFiles[index]!.data);
     }
     for (const reservation of reservations) {
@@ -185,14 +209,19 @@ export async function writeFilesExclusively(
 
     return resolvedFiles.map((file) => file.path);
   } catch (error: unknown) {
-    await Promise.all(
-      reservations.map((reservation) =>
-        reservation.handle.close().catch(() => undefined),
-      ),
-    );
     // Do not unlink by pathname after a failed write. Even an inode check
-    // followed by unlink has a replacement race on Windows. A partial orphan
-    // is safer than deleting a concurrent replacement owned by another actor.
+    // followed by unlink has a replacement race on Windows. Instead, empty the
+    // files through the handles we own so no truncated document survives, and
+    // tell the caller that empty placeholders remain.
+    await Promise.all(
+      reservations.map(async (reservation) => {
+        if (writing) await reservation.handle.truncate(0).catch(() => undefined);
+        await reservation.handle.close().catch(() => undefined);
+      }),
+    );
+    if (writing && reservations.length > 0) {
+      throw new OutputPlaceholderLeftError(error, reservations.length);
+    }
     throw error;
   }
 }
@@ -369,6 +398,7 @@ export async function writeFileRangeAndFilesExclusively(
   );
 
   const reservations: ReservedOutput[] = [];
+  let writing = false;
   try {
     await options.beforeOpen?.();
     for (const [index, file] of resolvedFiles.entries()) {
@@ -402,6 +432,7 @@ export async function writeFileRangeAndFilesExclusively(
       }
     }
 
+    writing = true;
     const rangeReservation = reservations[0]!;
     const rangeDirectory = outputDirectoryForPath(
       rangeReservation.path,
@@ -428,10 +459,14 @@ export async function writeFileRangeAndFilesExclusively(
     return resolvedFiles.map((file) => file.path);
   } catch (error: unknown) {
     await Promise.all(
-      reservations.map((reservation) =>
-        reservation.handle.close().catch(() => undefined)
-      ),
+      reservations.map(async (reservation) => {
+        if (writing) await reservation.handle.truncate(0).catch(() => undefined);
+        await reservation.handle.close().catch(() => undefined);
+      }),
     );
+    if (writing && reservations.length > 0) {
+      throw new OutputPlaceholderLeftError(error, reservations.length);
+    }
     throw error;
   }
 }

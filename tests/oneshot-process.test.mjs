@@ -65,7 +65,7 @@ test("compiled one-shot generates one valid HWPX and never overwrites a response
     requestPath: collisionRequestPath,
     responsePath: collisionResponsePath,
   });
-  assertProcessReceipt(collision, 2, "", "ONESHOT_INVOCATION_ERROR\n");
+  assertProcessReceipt(collision, 2, "", "ONESHOT_INVOCATION_ERROR reason=RESPONSE_PATH_REJECTED\n");
   assert.equal(await readFile(collisionResponsePath, "utf8"), "sentinel");
   await assert.rejects(lstat(collisionOutputPath), { code: "ENOENT" });
   assert.deepEqual(await readFile(fixture.responsePath), responseBytes);
@@ -118,7 +118,7 @@ test("compiled one-shot rejects malformed JSON without publishing a response", {
   await writeFile(fixture.requestPath, fixture.request, { flag: "wx", mode: 0o600 });
 
   const result = await runFixture(fixture);
-  assertProcessReceipt(result, 2, "", "ONESHOT_INVOCATION_ERROR\n");
+  assertProcessReceipt(result, 2, "", "ONESHOT_INVOCATION_ERROR reason=REQUEST_INVALID\n");
   await assert.rejects(lstat(fixture.responsePath), { code: "ENOENT" });
 });
 
@@ -156,7 +156,7 @@ test("compiled one-shot handles SIGTERM through bounded graceful cancellation", 
   ]);
   assert.deepEqual(
     { code: result.code, signal: result.signal, stdout: result.stdout, stderr: result.stderr },
-    { code: 2, signal: null, stdout: "", stderr: "ONESHOT_INVOCATION_ERROR\n" },
+    { code: 2, signal: null, stdout: "", stderr: "ONESHOT_INVOCATION_ERROR reason=CANCELLED\n" },
   );
   await assert.rejects(lstat(fixture.responsePath), { code: "ENOENT" });
   await assert.rejects(lstat(fixture.outputPath), { code: "ENOENT" });
