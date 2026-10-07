@@ -1706,8 +1706,8 @@ test("hwp_render_preview without reflow or with false fails clearly and creates 
       const details = structuredDetails(result);
 
       assert.equal(result.isError, true);
-      assert.equal(typeof details.code, "string");
-      assert.ok(String(details.error).length > 0);
+      assert.equal(details.code, "PREVIEW_REFLOW_REQUIRED");
+      assert.match(String(details.error), /reflow/u);
       assert.equal(await pathExists(outputPath), false);
     });
   }

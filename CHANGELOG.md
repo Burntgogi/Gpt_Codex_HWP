@@ -72,9 +72,10 @@ This file records release tags and their publication status. Work under `Unrelea
   `hwp_detect_format` when generating HWPX. Kordoc treated them as emphasis
   and dropped the underscores; generation now escapes intraword underscores
   the way CommonMark reads them. Patching was unaffected and is unchanged.
-- Preview HWPX that has no Hancom layout cache, such as documents this plugin
-  generates, through synthetic reflow with a warning instead of failing with
-  `ENGINE_CRASH` when `reflow` is not given.
+- Previewing HWPX that has no Hancom layout cache, such as documents this
+  plugin generates, without `reflow: true` now returns the actionable
+  `PREVIEW_REFLOW_REQUIRED` instead of `ENGINE_CRASH`. Approximate synthetic
+  layout stays an explicit opt-in.
 
 ## [0.2.7] - 2026-09-29
 

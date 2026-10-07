@@ -271,13 +271,13 @@
     },
     {
       "path": "dist/workers/document-compute-backend.js",
-      "size": 31657,
-      "sha256": "dc20d485b1cd1540521891406ab371115e2e65ac1a3c0bf226db4c203b50b717"
+      "size": 31444,
+      "sha256": "ff84249254670ff851effa1d31036f714a4c06a4402fa0f68cc005370f922407"
     },
     {
       "path": "dist/workers/document-errors.js",
-      "size": 7965,
-      "sha256": "4f0ab541ccaf4de161f1140c215529c2b07c7108735d7084c236870fc070af9d"
+      "size": 8147,
+      "sha256": "747ae5a4b6640015ab67c47b824ba29fffe7081cedf70fd004e09446da273d0b"
     },
     {
       "path": "dist/workers/document-execution-policy.js",

@@ -99,14 +99,13 @@ test("document worker operations use only bytes for HWPX generation, parse, rend
   );
   assert.match(rendered.svg, /^\s*<svg\b/iu);
 
-  // Generated HWPX has no Hancom layout cache; an unspecified reflow must
-  // still preview through synthetic reflow instead of failing.
-  const defaultRendered = await client.run(
-    request("render"),
-    workerSnapshot(generated.bytes.slice(0)),
+  // Generated HWPX has no Hancom layout cache; without an explicit reflow the
+  // engine reports an actionable code instead of crashing.
+  await assert.rejects(
+    client.run(request("render"), workerSnapshot(generated.bytes.slice(0))),
+    (error: unknown) => typeof error === "object" && error !== null && "code" in error
+      && error.code === "PREVIEW_REFLOW_REQUIRED",
   );
-  assert.match(defaultRendered.svg, /^\s*<svg\b/iu);
-  assert.ok(defaultRendered.metadata.warnings.some((warning: string) => /linesegarray/u.test(warning)));
 
   const edited = parsed.markdown.replace("Worker synthetic", "Worker updated");
   assert.notEqual(edited, parsed.markdown);

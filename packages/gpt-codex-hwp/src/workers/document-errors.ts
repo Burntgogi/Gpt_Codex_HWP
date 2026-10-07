@@ -23,6 +23,7 @@ export const DOCUMENT_ENGINE_ERROR_CODES = [
   "UNSAFE_SVG",
   "PYTHON_NOT_FOUND",
   "IMAGE_INSERTION_FAILED",
+  "PREVIEW_REFLOW_REQUIRED",
 ] as const;
 
 export type DocumentEngineErrorCode =
@@ -61,6 +62,8 @@ export const DOCUMENT_ENGINE_ERROR_MESSAGES: Readonly<
   PYTHON_NOT_FOUND:
     "Python 3.10 or newer was not found in a trusted location; after-paragraph image insertion is unavailable.",
   IMAGE_INSERTION_FAILED: "The image helper could not insert the image into the HWPX document.",
+  PREVIEW_REFLOW_REQUIRED:
+    "The HWPX has no Hancom layout cache (linesegarray); retry with reflow set to true for an approximate synthetic layout.",
 };
 
 export const DOCUMENT_ENGINE_STAGES = [
