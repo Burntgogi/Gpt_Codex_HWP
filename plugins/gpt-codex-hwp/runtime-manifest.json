@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
   "pluginVersion": "0.2.7+codex.20260929182230",
-  "packageLockSha256": "c51d4f940ead1a3a280a544db0d34fda122fd2b19375e0661bc1202e3f58f6ba",
+  "packageLockSha256": "f1e2d1c293b3428530ced6f23597bd246c06eb5e6d778c2041e80052f60cb497",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -21,8 +21,8 @@
     },
     {
       "path": "dist/doctor-main.js",
-      "size": 42911,
-      "sha256": "5ccaac8f1229cc77a0f3727056f01b7bc5966a294a4315bd6018830040c8039f"
+      "size": 42774,
+      "sha256": "8c85dde661cb136e820adfcbe02a290ac7503638fae0c7f89670ea103bf6cb6d"
     },
     {
       "path": "dist/doctor.js",
@@ -66,8 +66,8 @@
     },
     {
       "path": "dist/shared/allowed-roots.js",
-      "size": 8527,
-      "sha256": "b41b85f5efa3686735d742a688e897c95ec3e43bab9ace65ee931cc4925382d9"
+      "size": 8789,
+      "sha256": "92e5ae6c20a391b00496c6c88041b5b5b9023d419813b9a9d6d7126a2a591f92"
     },
     {
       "path": "dist/shared/document-contract.js",
@@ -96,13 +96,13 @@
     },
     {
       "path": "dist/shared/hwpx-anchor.js",
-      "size": 2945,
-      "sha256": "15d3fece5b224b77d5ff3ba6ca0b5f3ce7c7f155b956db62fe21ee749531d2fc"
+      "size": 3087,
+      "sha256": "3759868063e93a8ef366b46d5c55a4557a868e405ceab93a5906b4eb93e63f7b"
     },
     {
       "path": "dist/shared/hwpx-font-integrity.js",
-      "size": 14927,
-      "sha256": "3da557ade94743387a102fd6c65a2739538d2d94edd4d21c530a0593d7eb4e17"
+      "size": 14755,
+      "sha256": "8a144b1e56adce38d2dfcd1fee6259a15281d74dc4c994658047f64862f533d6"
     },
     {
       "path": "dist/shared/image-normalization.js",
@@ -136,13 +136,18 @@
     },
     {
       "path": "dist/shared/paths.js",
-      "size": 4750,
-      "sha256": "286a3cbbd4bc889d8c4a81298c835efeda5d636e8ee4cca5f5627f98a033e087"
+      "size": 5966,
+      "sha256": "d6b780cb31d535b0ad0fd6b914069d06ab474dabc6216b9b678c2ed831585562"
     },
     {
       "path": "dist/shared/protection.js",
       "size": 9092,
       "sha256": "466b4e22de890fda76b3b3922418006f5a93530e3ef2e137f8e437b545321f75"
+    },
+    {
+      "path": "dist/shared/python-command.js",
+      "size": 1922,
+      "sha256": "e68cb0266042cc89ab47d04e9f32079f5febe3f39fa196e6752bda4b23a9b30d"
     },
     {
       "path": "dist/shared/resource-limits.js",
@@ -251,8 +256,8 @@
     },
     {
       "path": "dist/workers/document-child.js",
-      "size": 14747,
-      "sha256": "fc471dbcc549948d301bbe072b34c8910ab9eb7185da25dc67df5db1dd76ca0f"
+      "size": 15212,
+      "sha256": "2ee6dd103ec761b0aea58d213180cd816a7841004a62f9dbc7527e80f5b0782d"
     },
     {
       "path": "dist/workers/document-compute-backend.js",
@@ -261,8 +266,8 @@
     },
     {
       "path": "dist/workers/document-errors.js",
-      "size": 7681,
-      "sha256": "339200967262dd92dfb2a7b98a772e275a0d85943a5d6f24b63f90a3b699b303"
+      "size": 7965,
+      "sha256": "4f0ab541ccaf4de161f1140c215529c2b07c7108735d7084c236870fc070af9d"
     },
     {
       "path": "dist/workers/document-execution-policy.js",
@@ -300,6 +305,11 @@
       "sha256": "07459231d881addf577628ab42a77d43749a3ab12412991a8dbccc3cbd8f6656"
     },
     {
+      "path": "dist/workers/image-helper-errors.js",
+      "size": 1142,
+      "sha256": "e2f16812ed7726a863486bac9f2195bc9fea61911345d80f108925dee1ff5fa0"
+    },
+    {
       "path": "dist/workers/registered-process-supervisor.js",
       "size": 11296,
       "sha256": "854a3e487dba768d994158e92743b372c145c64654f29b69985bbee82c966843"
@@ -321,13 +331,13 @@
     },
     {
       "path": "package-lock.json",
-      "size": 87254,
-      "sha256": "c51d4f940ead1a3a280a544db0d34fda122fd2b19375e0661bc1202e3f58f6ba"
+      "size": 87378,
+      "sha256": "f1e2d1c293b3428530ced6f23597bd246c06eb5e6d778c2041e80052f60cb497"
     },
     {
       "path": "package.json",
-      "size": 644,
-      "sha256": "2a2d5a16111b41be1ef4e2f859ad164bddce2da149953417950d2b7d054addbb"
+      "size": 671,
+      "sha256": "997319d863c9547e540ef5a0bb3a0a5c8888689c457e544dba3c0035eecb85d7"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

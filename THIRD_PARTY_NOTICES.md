@@ -64,9 +64,9 @@ Thank you to Edward Kim and the rhwp contributors for making this optional Rust/
 ## Model Context Protocol TypeScript SDK
 
 - Repository: <https://github.com/modelcontextprotocol/typescript-sdk>
-- Version: `@modelcontextprotocol/sdk` `1.29.0` (`v1.29.0`)
+- Version: `@modelcontextprotocol/sdk` `1.32.1` (`v1.32.1`)
 - Copyright: `Copyright (c) 2024 Anthropic, PBC`
-- License: MIT for the fixed `v1.29.0` source and package
+- License: MIT for the fixed `v1.32.1` source and package
 - Use in this project: MCP server, stdio transport, request/result types, and tool registration.
 
 Thank you to the modelcontextprotocol maintainers and contributors for the TypeScript MCP implementation.

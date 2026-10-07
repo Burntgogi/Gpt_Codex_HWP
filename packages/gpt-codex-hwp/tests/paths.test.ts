@@ -9,6 +9,7 @@ import {
   prepareOutputPath,
   resolveLocalPath,
   resolveSourceAndOutputPaths,
+  setPermittedNetworkRoots,
 } from "../src/shared/paths.js";
 
 async function pathExists(path: string): Promise<boolean> {
@@ -63,14 +64,17 @@ test("resolveLocalPath rejects ambiguous or device-backed Windows path syntax", 
   }
 });
 
-test("resolveLocalPath preserves normal Windows drive, UNC, NFC, and NFD spellings", {
+test("resolveLocalPath preserves normal Windows drive, relative, NFC, and NFD spellings", {
   skip: process.platform !== "win32",
 }, () => {
   const filename = "한글-경로-é";
   const inputs = [
     join(resolve("tmp", "windows-path-safety"), `${filename.normalize("NFC")}.hwpx`),
     join(resolve("tmp", "windows-path-safety"), `${filename.normalize("NFD")}.hwpx`),
-    "\\\\server\\share\\한글 문서.hwpx",
+    ".\\relative-output.hwpx",
+    "./relative-output.hwpx",
+    "..\\sibling\\source.hwp",
+    `${resolve("tmp")}\\..\\tmp\\dotted.hwpx`,
   ];
 
   for (const input of inputs) {
@@ -78,6 +82,29 @@ test("resolveLocalPath preserves normal Windows drive, UNC, NFC, and NFD spellin
     assert.equal(resolved, resolve(input));
     assert.equal(resolved.normalize("NFC") === resolved, resolve(input).normalize("NFC") === resolve(input));
     assert.equal(resolved.normalize("NFD") === resolved, resolve(input).normalize("NFD") === resolve(input));
+  }
+});
+
+test("resolveLocalPath rejects Windows UNC paths unless an allowed root permits them", {
+  skip: process.platform !== "win32",
+}, (t) => {
+  t.after(() => setPermittedNetworkRoots([]));
+  const isNetworkRejection = (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error &&
+    error.code === "UNSAFE_LOCAL_PATH" && String(error).includes("network (UNC)");
+  for (const input of ["\\\\server\\share\\한글 문서.hwpx", "//server/share/a.hwp"]) {
+    assert.throws(() => resolveLocalPath(input, "file_path"), isNetworkRejection, input);
+  }
+  assert.equal(
+    resolveLocalPath("\\\\server\\share\\docs", "root[0]", { allowNetwork: true }),
+    "\\\\server\\share\\docs",
+  );
+
+  setPermittedNetworkRoots(["\\\\Server\\Share\\Docs"]);
+  const permitted = "\\\\server\\share\\docs\\한글 문서.hwpx";
+  assert.equal(resolveLocalPath(permitted, "file_path"), resolve(permitted));
+  for (const input of ["\\\\server\\share\\other\\a.hwp", "\\\\server\\share\\docs-evil\\a.hwp"]) {
+    assert.throws(() => resolveLocalPath(input, "file_path"), isNetworkRejection, input);
   }
 });
 

@@ -1,6 +1,20 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { dirname, parse as parsePath, resolve } from "node:path";
-export function resolveLocalPath(localPath, label = "path") {
+// Windows UNC roots (\\server\share) explicitly configured as allowed roots.
+// Other network paths are rejected so a document cannot steer the agent into
+// an SMB connection to an arbitrary host.
+let permittedNetworkRootKeys = Object.freeze([]);
+export function setPermittedNetworkRoots(roots) {
+    permittedNetworkRootKeys = Object.freeze(roots.filter(isWindowsNetworkPath).map(networkRootKey));
+}
+export function isWindowsNetworkPath(path) {
+    return /^\\\\(?![.?]\\)[^\\]/u.test(path.replaceAll("/", "\\"));
+}
+function networkRootKey(path) {
+    const key = resolve(path).normalize("NFC").toLocaleLowerCase("en-US");
+    return key.endsWith("\\") ? key : `${key}\\`;
+}
+export function resolveLocalPath(localPath, label = "path", options = {}) {
     if (typeof localPath !== "string" || localPath.trim().length === 0) {
         throw new Error(`${label} must not be empty.`);
     }
@@ -10,6 +24,12 @@ export function resolveLocalPath(localPath, label = "path") {
     const resolved = resolve(localPath);
     if (process.platform === "win32") {
         assertSafeWindowsPath(resolved, label);
+        if (isWindowsNetworkPath(resolved) && options.allowNetwork !== true) {
+            const key = networkRootKey(resolved);
+            if (!permittedNetworkRootKeys.some((root) => key.startsWith(root))) {
+                throw new UnsafeWindowsPathError(label, "network (UNC) paths are not accepted unless an allowed root permits them");
+            }
+        }
     }
     return resolved;
 }
@@ -35,6 +55,9 @@ function assertSafeWindowsPath(path, label) {
     }
     const components = remainder.split(/[\\/]+/u).filter(Boolean);
     for (const component of components) {
+        // "." and ".." are relative navigation; the resolved path is rechecked.
+        if (component === "." || component === "..")
+            continue;
         if (/[ .]$/u.test(component)) {
             throw new UnsafeWindowsPathError(label, "components must not end with a dot or space");
         }

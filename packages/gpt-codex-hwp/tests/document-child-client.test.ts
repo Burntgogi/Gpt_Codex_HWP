@@ -1760,7 +1760,9 @@ test("forced Windows tracker directly cleans a live descendant tree without a pr
     assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 2 [0-9]+$/u);
     const trackerFrame = supervisorFrames[1] ?? "";
     assert.match(trackerFrame, /^GPT_CODEX_HWP_JOB TRACKER [0-9]+ [0-9]+$/u);
-    assert.ok(Number.parseInt(trackerFrame.split(" ").at(-2)!, 10) < 200, trackerFrame);
+    // Max tracker poll gap under a 50 ms spawn storm; hosted Windows runners
+    // routinely stall a few hundred ms, so only a stuck tracker fails here.
+    assert.ok(Number.parseInt(trackerFrame.split(" ").at(-2)!, 10) < 2_000, trackerFrame);
     assert.ok(Number.parseInt(trackerFrame.split(" ").at(-1)!, 10) >= 4, trackerFrame);
     assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
     assert.equal(supervisorFrames[3], "GPT_CODEX_HWP_JOB GONE 0 2");

@@ -46,7 +46,9 @@ export async function resolveHwpxAnchorOccurrence(
   }
   const zip = await loadArchive(source);
   const sectionNames = Object.keys(zip.files)
-    .filter((name) => /(?:^|\/)section\d+\.xml$/iu.test(name))
+    // Must match hwpxlib.section_names so the occurrence chosen here selects
+    // the same paragraph in the Python image helper.
+    .filter((name) => /^Contents\/section\d+\.xml$/u.test(name))
     .sort((left, right) => sectionNumber(left) - sectionNumber(right));
   let matchCount = 0;
   for (const [index, name] of sectionNames.entries()) {

@@ -8,7 +8,11 @@ import {
   sep,
 } from "node:path";
 
-import { resolveLocalPath } from "./paths.js";
+import {
+  isWindowsNetworkPath,
+  resolveLocalPath,
+  setPermittedNetworkRoots,
+} from "./paths.js";
 
 const MAX_CONFIGURATION_BYTES = 16_384;
 const MAX_ROOTS = 32;
@@ -23,6 +27,8 @@ interface CanonicalRoot {
 export interface AllowedRootsPolicy {
   readonly configured: boolean;
   readonly rootLabels: readonly string[];
+  /** Configured Windows UNC roots; only these network locations are usable. */
+  readonly networkRoots?: readonly string[];
   authorizeExistingPath(path: string): Promise<string>;
   authorizeFuturePath(path: string): Promise<string>;
 }
@@ -63,7 +69,7 @@ export async function createAllowedRootsPolicy(
   for (const [index, configuredRoot] of configuredRoots.entries()) {
     const label = `root[${index}]`;
     try {
-      const lexicalRoot = resolveLocalPath(configuredRoot, label);
+      const lexicalRoot = resolveLocalPath(configuredRoot, label, { allowNetwork: true });
       await assertNoLinkedComponents(lexicalRoot, "configuration");
       const [canonicalPath, status] = await Promise.all([
         realpath(lexicalRoot),
@@ -85,6 +91,9 @@ export async function createAllowedRootsPolicy(
   return Object.freeze({
     configured: true,
     rootLabels: Object.freeze(roots.map((root) => root.label)),
+    networkRoots: Object.freeze(
+      roots.map((root) => root.path).filter(isWindowsNetworkPath),
+    ),
     authorizeExistingPath: (path: string) => authorizeExisting(roots, path),
     authorizeFuturePath: (path: string) => authorizeFuture(roots, path),
   });
@@ -100,10 +109,12 @@ export function setActiveAllowedRootsPolicy(policy: AllowedRootsPolicy): void {
     throw new AllowedRootsConfigurationError();
   }
   activePolicy = policy;
+  setPermittedNetworkRoots(policy.networkRoots ?? []);
 }
 
 export function resetActiveAllowedRootsPolicy(): void {
   activePolicy = unrestrictedPolicy;
+  setPermittedNetworkRoots([]);
 }
 
 export function authorizeExistingPath(path: string): Promise<string> {

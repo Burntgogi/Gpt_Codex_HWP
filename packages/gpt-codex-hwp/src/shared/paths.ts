@@ -6,7 +6,36 @@ export interface ResolvedSourceAndOutputPaths {
   outputPath: string;
 }
 
-export function resolveLocalPath(localPath: string, label = "path"): string {
+export interface ResolveLocalPathOptions {
+  /** Accept a Windows UNC path even without a permitting allowed root. */
+  readonly allowNetwork?: boolean;
+}
+
+// Windows UNC roots (\\server\share) explicitly configured as allowed roots.
+// Other network paths are rejected so a document cannot steer the agent into
+// an SMB connection to an arbitrary host.
+let permittedNetworkRootKeys: readonly string[] = Object.freeze([]);
+
+export function setPermittedNetworkRoots(roots: readonly string[]): void {
+  permittedNetworkRootKeys = Object.freeze(
+    roots.filter(isWindowsNetworkPath).map(networkRootKey),
+  );
+}
+
+export function isWindowsNetworkPath(path: string): boolean {
+  return /^\\\\(?![.?]\\)[^\\]/u.test(path.replaceAll("/", "\\"));
+}
+
+function networkRootKey(path: string): string {
+  const key = resolve(path).normalize("NFC").toLocaleLowerCase("en-US");
+  return key.endsWith("\\") ? key : `${key}\\`;
+}
+
+export function resolveLocalPath(
+  localPath: string,
+  label = "path",
+  options: ResolveLocalPathOptions = {},
+): string {
   if (typeof localPath !== "string" || localPath.trim().length === 0) {
     throw new Error(`${label} must not be empty.`);
   }
@@ -17,6 +46,15 @@ export function resolveLocalPath(localPath: string, label = "path"): string {
   const resolved = resolve(localPath);
   if (process.platform === "win32") {
     assertSafeWindowsPath(resolved, label);
+    if (isWindowsNetworkPath(resolved) && options.allowNetwork !== true) {
+      const key = networkRootKey(resolved);
+      if (!permittedNetworkRootKeys.some((root) => key.startsWith(root))) {
+        throw new UnsafeWindowsPathError(
+          label,
+          "network (UNC) paths are not accepted unless an allowed root permits them",
+        );
+      }
+    }
   }
   return resolved;
 }
@@ -53,6 +91,8 @@ function assertSafeWindowsPath(path: string, label: string): void {
 
   const components = remainder.split(/[\\/]+/u).filter(Boolean);
   for (const component of components) {
+    // "." and ".." are relative navigation; the resolved path is rechecked.
+    if (component === "." || component === "..") continue;
     if (/[ .]$/u.test(component)) {
       throw new UnsafeWindowsPathError(
         label,

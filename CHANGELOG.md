@@ -16,6 +16,21 @@ This file records release tags and their publication status. Work under `Unrelea
   10 MiB through the unchanged 512 MiB safety ceiling are theoretically
   supported but not verified size by size; `--large-detect 100` remains an
   optional local experiment.
+- Reject Windows network (UNC) paths unless an allowed root names that UNC
+  share, and accept `.`/`..` relative components that were wrongly rejected
+  on Windows.
+- Resolve the image-helper Python from a shared list of trusted absolute
+  locations (also used by doctor), return `PYTHON_NOT_FOUND` when none exists,
+  and pass helper failures such as `ANCHOR_NOT_FOUND` and `INVALID_IMAGE`
+  through instead of `ENGINE_PROTOCOL_ERROR`.
+- Count only `Contents/sectionN.xml` when resolving image anchors, matching
+  the Python helper, and parse `header.xml` with the DTD-rejecting XML policy.
+- Scope hosted-CI pass statements to the release commit they describe, and
+  give long-running source test files a larger per-file budget.
+- Update @modelcontextprotocol/sdk to 1.32.1 (GHSA-6qxp-vccf-f47h) and
+  override proxy-addr to 2.0.8 (GHSA-jqcg-44mw-7w3h). The plugin uses neither
+  the OAuth client nor an HTTP server, but the production audit gate now
+  passes again.
 
 ## [0.2.7] - 2026-09-29
 

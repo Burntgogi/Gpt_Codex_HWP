@@ -28,6 +28,7 @@ import {
   DOCTOR_RUNNER_READY,
   DOCTOR_RUNNER_SCHEMA_VERSION,
 } from "./workers/doctor-command-runner.js";
+import { pythonCommandCandidates } from "./shared/python-command.js";
 
 export const DOCTOR_SCHEMA_VERSION = 1;
 
@@ -219,15 +220,8 @@ async function createDefaultDependencies(): Promise<DoctorDependencies> {
     nodeVersion: process.version,
     projectMetadata: PROJECT_METADATA,
     npmCommand,
-    pythonCommands: process.platform === "win32"
-      ? [
-        { command: "python", argsPrefix: [] },
-        { command: "py", argsPrefix: ["-3"] },
-      ]
-      : [
-        { command: "python3", argsPrefix: [] },
-        { command: "python", argsPrefix: [] },
-      ],
+    // Same trusted absolute locations the image helper uses at runtime.
+    pythonCommands: pythonCommandCandidates(),
     verifyKordocRuntime: async () => {
       const verifier = await import(new URL(
         "../scripts/kordoc-runtime-verifier.mjs",

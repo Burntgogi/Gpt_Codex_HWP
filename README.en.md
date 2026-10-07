@@ -30,7 +30,7 @@ Gpt_Codex_HWP is a local Codex and Claude Code plugin for reading, creating, edi
 
 ## v0.2.7 Release
 
-`v0.2.7` updates the packages reported in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18) and strengthens HWPX XML output validation. It also fixes missing or duplicate advisory rows in dependency audit reports. The read-only HWP and writable HWPX policies, explicit runtime installation, and nine one-shot tools remain. Development and real-document validation were performed on Windows x64, and hosted Windows x64, macOS arm64, and Linux CI passed. Codex Desktop and Hancom Office Hangul on a physical Mac remain unverified.
+`v0.2.7` updates the packages reported in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18) and strengthens HWPX XML output validation. It also fixes missing or duplicate advisory rows in dependency audit reports. The read-only HWP and writable HWPX policies, explicit runtime installation, and nine one-shot tools remain. Development and real-document validation were performed on Windows x64. Hosted CI results (Windows x64, macOS arm64, Linux lifecycle) are records for the v0.2.7 release PR commit; macOS results for any later HEAD need that commit's own receipt. Codex Desktop and Hancom Office Hangul on a physical Mac remain unverified.
 
 ## Previous releases
 
@@ -70,7 +70,7 @@ HWPX is the supported authoring format. To revise a binary HWP, read it with `hw
 
 - Node.js 22 or later
 - Windows x64 or macOS Apple Silicon
-- Python 3.10 or later on PATH for `after-paragraph` image insertion
+- Python 3.10 or later in a standard location for `after-paragraph` image insertion. PATH is not searched: Windows uses `%SystemRoot%\py.exe` or the per-user `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`; macOS tries `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, then the Command Line Tools `python3`; Linux uses `/usr/bin/python3` or `/usr/local/bin/python3`.
 - An environment with Codex plugin marketplace commands
 
 Without Python, only the Python-backed image insertion mode fails with `PYTHON_NOT_FOUND`; the other tools remain available.
@@ -135,7 +135,7 @@ try {
 ```
 
 6. `doctor` is diagnostic only: it does not install or repair anything and is not an MCP tool. Its JSON contains only safe status codes, booleans, versions, and counts; missing optional capabilities such as Python, rhwp, or the pinned test fixture remain separate from required failures.
-7. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration. On `RUNTIME_NOT_INSTALLED`, stop retrying the document operation and rerun the installer from the validated path. Require one HWP/HWPX operation to succeed, verify the generated output, and confirm that the one-shot process and descendants exit. Worker-only, child-only, and mixed cleanup receipts with zero remaining supervised process trees are part of this check. Windows x64, Linux lifecycle, macOS arm64, and Security policy hosted checks passed on the final candidate, while physical Mac use remains unverified. If verification fails, keep the older working plugin and report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
+7. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration. On `RUNTIME_NOT_INSTALLED`, stop retrying the document operation and rerun the installer from the validated path. Require one HWP/HWPX operation to succeed, verify the generated output, and confirm that the one-shot process and descendants exit. Worker-only, child-only, and mixed cleanup receipts with zero remaining supervised process trees are part of this check. Hosted check results are limited to the v0.2.7 release PR commit, and physical Mac use remains unverified. If verification fails, keep the older working plugin and report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
 
 ## Installation and Migration
 
@@ -276,6 +276,7 @@ Internal large-document spools use a separate unpredictable, owner-only director
 - Input and output paths must differ, and existing output files are never overwritten.
 - Signed, encrypted, DRM-protected, or distribution-protected documents are refused without bypassing protection.
 - Path aliases, hard links, symbolic links, Windows junctions, and ZIP path traversal are defended against.
+- Windows network (UNC, `\\server\share`) paths are rejected by default. To use a network share, list its UNC root in `GPT_CODEX_HWP_ALLOWED_ROOTS`; only paths below it are accepted.
 - A generated or edited artifact is not written when HWPX validation fails.
 - Semantic verification is mandatory for `hwp_patch_document`; it cannot publish when verification is disabled or verification statistics are missing.
 - Protection manifests are inspected with UTF-8/UTF-16 awareness, and ZIP entry counts are capped at 10,000 before JSZip loads the archive.

@@ -18,6 +18,15 @@ const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DOCUMENT_PROCESS_TEST_TIMEOUT_MS = 300_000;
 const DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS = 600_000;
+// Files whose own per-test timeouts add up past the ordinary file budget; on
+// hosted runners a slow but healthy file was otherwise killed as a failure.
+const LONG_RUNNING_FILE_TIMEOUTS_MS = Object.freeze({
+  "benchmark-policy.test.ts": 300_000,
+  "mcp-cancellation-progress.test.ts": 300_000,
+  "mcp-smoke.test.ts": 300_000,
+  "read-worker-safety.test.ts": 600_000,
+  "runtime-projection.test.ts": 600_000,
+});
 const MAX_BENCHMARK_DIAGNOSTIC_RECEIPT_BYTES = 384;
 const MAX_BENCHMARK_REGISTERED_IDENTITIES = 32;
 const TEST_FILES = SOURCE_NODE_TEST_FILES;
@@ -436,7 +445,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         ? DOCUMENT_PROCESS_TEST_TIMEOUT_MS
         : file === "document-worker-operations.test.ts"
           ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
-          : DEFAULT_TEST_TIMEOUT_MS,
+          : LONG_RUNNING_FILE_TIMEOUTS_MS[file] ?? DEFAULT_TEST_TIMEOUT_MS,
     );
     const testSkipPattern = profilePlan.skipPatternFor(file);
     try {

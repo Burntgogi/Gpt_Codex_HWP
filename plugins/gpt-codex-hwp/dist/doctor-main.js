@@ -13,6 +13,7 @@ import { registerTools } from "./tools/index.js";
 import { encodeBoundedJsonFrame } from "./workers/bounded-frame.js";
 import { isGatedRootGoneError, isSupervisorHelperUnclosedError, observeChildProcessClose, superviseDocumentProcessTree, terminateGatedChildByHandle, terminateDocumentProcessTreeByPid, } from "./workers/document-child-client.js";
 import { DOCTOR_RUNNER_MAX_FRAME_BYTES, DOCTOR_RUNNER_READY, DOCTOR_RUNNER_SCHEMA_VERSION, } from "./workers/doctor-command-runner.js";
+import { pythonCommandCandidates } from "./shared/python-command.js";
 export const DOCTOR_SCHEMA_VERSION = 1;
 const EXPECTED_TOOL_NAMES = Object.freeze([
     "hwp_detect_format",
@@ -110,15 +111,8 @@ async function createDefaultDependencies() {
         nodeVersion: process.version,
         projectMetadata: PROJECT_METADATA,
         npmCommand,
-        pythonCommands: process.platform === "win32"
-            ? [
-                { command: "python", argsPrefix: [] },
-                { command: "py", argsPrefix: ["-3"] },
-            ]
-            : [
-                { command: "python3", argsPrefix: [] },
-                { command: "python", argsPrefix: [] },
-            ],
+        // Same trusted absolute locations the image helper uses at runtime.
+        pythonCommands: pythonCommandCandidates(),
         verifyKordocRuntime: async () => {
             const verifier = await import(new URL("../scripts/kordoc-runtime-verifier.mjs", import.meta.url).href);
             const result = await verifier.verifyKordocCoreRuntime(join(runtimeRoot, "vendor", "kordoc-core"));

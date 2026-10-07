@@ -32,7 +32,7 @@ const EXPECTED_EXCLUDED_PACKAGES = Object.freeze([
   "boolean",
 ]);
 const EXPECTED_DEPENDENCIES = Object.freeze({
-  "@modelcontextprotocol/sdk": "1.29.0",
+  "@modelcontextprotocol/sdk": "1.32.1",
   "@xmldom/xmldom": "0.9.12",
   cfb: "1.2.2",
   jszip: "3.10.1",
@@ -50,6 +50,7 @@ const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
 const EXPECTED_OVERRIDES = Object.freeze({
   "@hono/node-server": "2.0.11",
   "fast-uri": "3.1.8",
+  "proxy-addr": "2.0.8",
 });
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",

@@ -442,7 +442,9 @@ for (const engine of ["worker", "supervised child"] as const) {
         startTimer = setTimeout(() => {
           if (!firstStartObserved) enterRunningChildStage("START_TIMEOUT");
           reject(new Error("engine did not start"));
-        }, 2_500);
+          // Windows starts PowerShell for owner-only ACLs and the Job
+          // supervisor before the child reports its first progress.
+        }, process.platform === "win32" ? 15_000 : 2_500);
       });
       try {
         await Promise.race([started, earlySettlement, startDeadline]);

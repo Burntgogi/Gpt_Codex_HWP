@@ -197,6 +197,25 @@ for (const [name, code] of [
   });
 }
 
+test("font inspection rejects a header.xml with a DTD or entity declaration", async () => {
+  const zip = await JSZip.loadAsync(await fontFixture({ uniformRef: "0" }));
+  const header = await requiredEntry(zip, "Contents/header.xml");
+  zip.file(
+    "Contents/header.xml",
+    header.replace(/^(<\?xml[^>]*\?>)?/u, (declaration) =>
+      `${declaration}<!DOCTYPE head [<!ENTITY x "x">]>`),
+  );
+  const source = await zip.generateAsync({ type: "uint8array" });
+  await assert.rejects(
+    normalizeGeneratedFontReferences(source),
+    (error: unknown) => {
+      assert.ok(error instanceof HwpxFontReferenceError);
+      assert.match(error.message, /DTD or entity/u);
+      return true;
+    },
+  );
+});
+
 async function malformedFontFixture(kind: MalformedKind): Promise<Uint8Array> {
   return fontFixture({
     refs: {

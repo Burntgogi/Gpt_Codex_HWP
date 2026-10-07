@@ -139,6 +139,25 @@ test("source Node diagnostic gives document lifecycle files their measured exten
   assert.equal(output, "MAC_NODE_TEST_FILE file=files.test.ts status=failed\n");
 });
 
+test("source Node diagnostic gives files with long per-test timeouts a larger file budget", async () => {
+  const timeouts = new Map();
+  const passed = await runMacNodeTestsDiagnostic({
+    runFile: async (file, fileOptions) => {
+      timeouts.set(file, fileOptions?.testTimeoutMs);
+      return true;
+    },
+    runBenchmarkFile: async () => ({ passed: true }),
+    stdout: { write() {} },
+    setExitCode() {},
+  });
+  assert.equal(passed, true);
+  assert.equal(timeouts.get("allowed-roots.test.ts"), 120_000);
+  assert.equal(timeouts.get("mcp-smoke.test.ts"), 300_000);
+  assert.equal(timeouts.get("mcp-cancellation-progress.test.ts"), 300_000);
+  assert.equal(timeouts.get("read-worker-safety.test.ts"), 600_000);
+  assert.equal(timeouts.get("runtime-projection.test.ts"), 600_000);
+});
+
 test("macOS Node diagnostic narrows an allowed-roots aggregate failure to one fixed case id", async () => {
   const cases = [];
   let output = "";

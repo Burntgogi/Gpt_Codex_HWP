@@ -1,4 +1,4 @@
-import { DOMParser, XMLSerializer, } from "@xmldom/xmldom";
+import { XMLSerializer, } from "@xmldom/xmldom";
 import { loadBoundedHwpxZip, } from "./zip-preflight.js";
 import { parsePolicyXml } from "./xml-policy.js";
 export class HwpxFontReferenceError extends Error {
@@ -112,17 +112,9 @@ async function loadArchiveAndHeader(input, loadZip) {
     if (entry === null) {
         throw new Error(`${HEADER_PATH} is missing from the HWPX package.`);
     }
-    const errors = [];
-    const document = new DOMParser({
-        onError: (level, message) => {
-            if (level !== "warning") {
-                errors.push(message);
-            }
-        },
-    }).parseFromString(await entry.async("string"), "application/xml");
-    if (errors.length > 0) {
-        throw new Error(`Could not parse ${HEADER_PATH}: ${errors.join("; ")}`);
-    }
+    // The shared policy parser rejects DTD/ENTITY declarations like every other
+    // HWPX XML part instead of handing them to the DOM parser.
+    const document = parsePolicyXml(await entry.async("uint8array"), HEADER_PATH);
     return { bytes, zip, document };
 }
 function inspectDocument(document) {

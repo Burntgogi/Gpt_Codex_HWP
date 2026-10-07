@@ -30,7 +30,7 @@ Gpt_Codex_HWP는 Codex와 Claude Code에서 한국어 HWP/HWPX 문서를 읽고,
 
 ## v0.2.7 릴리즈
 
-`v0.2.7`은 [의존성 감사 이슈 #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18)에 보고된 패키지를 갱신하고 HWPX XML 출력의 유효성 검사를 강화했습니다. 감사 보고에서 여러 advisory가 빠지거나 중복되는 문제도 고쳤습니다. HWP 읽기 전용·HWPX 쓰기 정책, 명시적 런타임 설치와 one-shot 도구 9개는 유지합니다. 개발과 실제 문서 검증은 Windows x64에서 수행했고 Windows x64·macOS arm64·Linux 호스팅 CI를 통과했습니다. 실제 Mac 기기의 Codex Desktop·한컴오피스 한글은 아직 검증하지 않았습니다.
+`v0.2.7`은 [의존성 감사 이슈 #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18)에 보고된 패키지를 갱신하고 HWPX XML 출력의 유효성 검사를 강화했습니다. 감사 보고에서 여러 advisory가 빠지거나 중복되는 문제도 고쳤습니다. HWP 읽기 전용·HWPX 쓰기 정책, 명시적 런타임 설치와 one-shot 도구 9개는 유지합니다. 개발과 실제 문서 검증은 Windows x64에서 수행했습니다. 호스팅 CI(Windows x64·macOS arm64·Linux lifecycle)는 v0.2.7 릴리스 PR 커밋 기준 기록이며, 그 이후 HEAD의 macOS 결과는 해당 커밋의 영수증으로 따로 확인해야 합니다. 실제 Mac 기기의 Codex Desktop·한컴오피스 한글은 아직 검증하지 않았습니다.
 
 ## 이전 릴리즈
 
@@ -70,7 +70,7 @@ HWPX는 이 프로젝트의 정식 작성 형식입니다. 바이너리 HWP를 �
 
 - Node.js 22 이상
 - Windows x64 또는 macOS Apple Silicon
-- `after-paragraph` 이미지 삽입에는 PATH에서 실행 가능한 Python 3.10 이상
+- `after-paragraph` 이미지 삽입에는 표준 위치에 설치된 Python 3.10 이상. PATH는 탐색하지 않습니다. Windows는 `%SystemRoot%\py.exe` 또는 사용자 설치 `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`, macOS는 `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, Command Line Tools의 `python3` 순, Linux는 `/usr/bin/python3`, `/usr/local/bin/python3`을 사용합니다.
 - Codex 플러그인 마켓플레이스 명령을 사용할 수 있는 환경
 
 Python이 없으면 Python 기반 이미지 삽입 모드만 `PYTHON_NOT_FOUND`로 실패하며 다른 도구는 계속 사용할 수 있습니다.
@@ -135,7 +135,7 @@ try {
 ```
 
 6. `doctor`는 진단 전용이며 설치나 복구를 수행하지 않고 MCP 도구가 아닙니다. JSON에는 안전한 상태 코드, 불리언, 버전과 개수만 포함되며 Python·rhwp·고정 테스트 fixture 같은 선택 기능의 부재는 필수 실패와 분리됩니다.
-7. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 경로에서 설치기를 다시 실행합니다. HWP/HWPX 작업 하나가 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인합니다. worker-only·child-only·mixed 종료 영수증과 감독된 나머지 프로세스 트리 0개가 검증 대상입니다. Windows x64, Linux lifecycle, macOS arm64와 Security policy hosted 검사는 최종 후보에서 통과했지만 실제 Mac 사용은 미검증입니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
+7. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 경로에서 설치기를 다시 실행합니다. HWP/HWPX 작업 하나가 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인합니다. worker-only·child-only·mixed 종료 영수증과 감독된 나머지 프로세스 트리 0개가 검증 대상입니다. hosted 검사 결과는 v0.2.7 릴리스 PR 커밋에 한정된 기록이며 실제 Mac 사용은 미검증입니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
 
 ## 설치 및 마이그레이션
 
@@ -276,6 +276,7 @@ export GPT_CODEX_HWP_ALLOWED_ROOTS='["/Volumes/TeamDocs"]'
 - 입력 경로와 출력 경로는 달라야 하며 기존 출력 파일을 덮어쓰지 않습니다.
 - 서명, 암호화, DRM, 배포용 보호가 감지된 문서는 보호를 우회하지 않고 거부합니다.
 - 경로 별칭, 하드링크, 심볼릭 링크, Windows junction, ZIP 경로 순회를 방어합니다.
+- Windows 네트워크 경로(UNC, `\\서버\공유`)는 기본적으로 거부합니다. 네트워크 공유를 써야 하면 `GPT_CODEX_HWP_ALLOWED_ROOTS`에 그 UNC 루트를 명시하십시오. 그 아래 경로만 허용됩니다.
 - HWPX 검증에 실패하면 생성 또는 편집 결과물을 쓰지 않습니다.
 - `hwp_patch_document`의 의미 검증은 필수이며 검증을 끄거나 검증 통계 없이 결과물을 게시할 수 없습니다.
 - 보호 매니페스트는 UTF-8/UTF-16 인코딩을 구분해 검사하고, ZIP 엔트리 수는 JSZip 로드 전에 최대 10,000개로 제한합니다.
