@@ -235,14 +235,19 @@
       "sha256": "fe470a9ef87ab0926214269d9dbc5e26c3afcc9dff7f3fcceaf2a14d364649a0"
     },
     {
+      "path": "dist/workers/child-process-primitives.js",
+      "size": 1593,
+      "sha256": "2a0f61b862433c92aea6d48c8d8f433f7c89cea5a9b0c1d8ba7a479282f035d2"
+    },
+    {
       "path": "dist/workers/doctor-command-runner.js",
       "size": 5383,
       "sha256": "e231dd583bba5f86f3b930e40d3834d92bf400d24e9de66e2ff21669b3abc800"
     },
     {
       "path": "dist/workers/document-child-client.js",
-      "size": 118145,
-      "sha256": "c65a92f3c36908c730681cd64116c9c1e3b8513769900e72e14627495fa2f5b6"
+      "size": 56299,
+      "sha256": "4dda6fadcb3df16653b79d97412e656847a93dbd7fa07f2762150a0e4ae29bae"
     },
     {
       "path": "dist/workers/document-child-start-gate.js",
@@ -310,9 +315,29 @@
       "sha256": "e2f16812ed7726a863486bac9f2195bc9fea61911345d80f108925dee1ff5fa0"
     },
     {
+      "path": "dist/workers/macos-process-identity.js",
+      "size": 13194,
+      "sha256": "5f1aaad4e1dafbd564598569e6cd1bdfe10ba1894d100e32ad195f02b3d5bc78"
+    },
+    {
+      "path": "dist/workers/posix-process-records.js",
+      "size": 53,
+      "sha256": "09e09319dbf85fe0190e0a4e7b192183713095dba3c09b7553ff391054cbbdde"
+    },
+    {
+      "path": "dist/workers/posix-process-telemetry.js",
+      "size": 26105,
+      "sha256": "e31f2526b6218377e9123f054b94cb838bab842bcd4c2af58d835a0ccc4ce2fa"
+    },
+    {
       "path": "dist/workers/registered-process-supervisor.js",
       "size": 11296,
       "sha256": "854a3e487dba768d994158e92743b372c145c64654f29b69985bbee82c966843"
+    },
+    {
+      "path": "dist/workers/windows-job-supervisor-client.js",
+      "size": 22979,
+      "sha256": "a4121e3493cb91a3f26cc942d304bed133080bdf5dae232ab31b7330c9e7225d"
     },
     {
       "path": "dist/workers/windows-job-supervisor.ps1",

@@ -1,0 +1,1 @@
+export const MAX_TRACKED_PROCESS_IDENTITIES = 4_096;

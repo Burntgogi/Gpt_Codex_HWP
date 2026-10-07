@@ -42,6 +42,18 @@ const startGatePath = fileURLToPath(
 const sourceClientPath = fileURLToPath(
   new URL("../src/workers/document-child-client.ts", import.meta.url),
 );
+const sourceClientModulePaths = [
+  sourceClientPath,
+  ...[
+    "child-process-primitives.ts",
+    "windows-job-supervisor-client.ts",
+    "posix-process-records.ts",
+    "posix-process-telemetry.ts",
+    "macos-process-identity.ts",
+  ].map((name) => fileURLToPath(new URL(`../src/workers/${name}`, import.meta.url))),
+];
+const readSourceClient = (): string =>
+  sourceClientModulePaths.map((path) => readFileSync(path, "utf8")).join("\n");
 const createProductionDocumentChildClient = childClientModule.createDocumentChildClient;
 const bindMacosProcessRecords = (
   childClientModule as unknown as Readonly<{
@@ -74,7 +86,7 @@ const bindMacosProcessRecords = (
 ).bindMacosProcessRecords;
 
 test("production document lifecycle API does not expose the forced tracker switch", () => {
-  const source = readFileSync(sourceClientPath, "utf8");
+  const source = readSourceClient();
   assert.equal(source.includes("readonly forceWindowsTracker?: boolean;"), false);
   assert.equal(source.includes("dependencies.forceWindowsTracker"), false);
 });
@@ -194,7 +206,7 @@ test("Windows hosted pre-frame classifier uses only causal booleans", () => {
 });
 
 test("Windows hosted classifiers report unverified pre-frame helper close in the active phase", () => {
-  const source = readFileSync(sourceClientPath, "utf8");
+  const source = readSourceClient();
   assert.match(
     source,
     /if \(!await cleanupWindowsSupervisorHelper\(helper, closeReceipt\)\) \{[\s\S]*?emitHostedWindowsBoundary\(hostedDiagnosticObserver, "helper-close"\);[\s\S]*?emitHostedWindowsLateBoundary\(hostedDiagnosticLateObserver, "helper-close"\);[\s\S]*?throw supervisorHelperUnclosedError/u,
@@ -2282,10 +2294,7 @@ test("POSIX tree termination targets the process group and verifies it is gone",
 });
 
 test("platform supervisors bind exact identities and bound topology sampling in source", () => {
-  const source = readFileSync(
-    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
-    "utf8",
-  );
+  const source = readSourceClient();
   const windows = readFileSync(
     fileURLToPath(new URL("../src/workers/windows-job-supervisor.ps1", import.meta.url)),
     "utf8",
@@ -2316,10 +2325,7 @@ test("platform supervisors bind exact identities and bound topology sampling in 
 });
 
 test("Linux retained traversal validates actual parentage and bounds work before enqueue", () => {
-  const source = readFileSync(
-    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
-    "utf8",
-  );
+  const source = readSourceClient();
   assert.match(source, /if \(child\.parentPid !== process\.pid\) continue;/u);
   assert.match(
     source,
@@ -2337,10 +2343,7 @@ test("Linux retained traversal validates actual parentage and bounds work before
 });
 
 test("macOS topology binds ps between kernel identity snapshots and cleanup is identity-only", () => {
-  const source = readFileSync(
-    fileURLToPath(new URL("../src/workers/document-child-client.ts", import.meta.url)),
-    "utf8",
-  );
+  const source = readSourceClient();
   assert.match(source, /pbi_ppid/u);
   assert.match(source, /"ppid": info\.pbi_ppid/u);
   assert.match(source, /const identitiesBefore = await macosKernelIdentities/u);
@@ -2359,7 +2362,7 @@ test("macOS topology binds ps between kernel identity snapshots and cleanup is i
   assert.match(source, /snapshotPosixIdentity/u);
 
   const identityTreeStart = source.indexOf("async function snapshotMacosIdentityTree");
-  const identityTreeEnd = source.indexOf("async function snapshotLinuxRetainedTree", identityTreeStart);
+  const identityTreeEnd = source.indexOf("function sameMacosKernelIdentity", identityTreeStart);
   assert.ok(identityTreeStart >= 0 && identityTreeEnd > identityTreeStart);
   const identityTree = source.slice(identityTreeStart, identityTreeEnd);
   assert.equal([...identityTree.matchAll(/await identitySource\(\)/gu)].length, 2);
