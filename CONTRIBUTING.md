@@ -138,15 +138,15 @@ Kordoc, rhwp, hwpx-editing-skill, or another third-party component.
 
 ## Release publication handoff
 
-After owner review and candidate checks, create the immutable `v0.2.7` tag only at the exact intended 40-character owner-authored commit SHA. The artifact builder checks both the commit author and committer against the neutral release identity. GitHub squash merge commits use a GitHub committer and fail this check. If the release commit is on a reviewed branch, verify that its tree matches the intended merged tree before publication. Resolve the tag SHA with `git rev-parse 'v0.2.7^{commit}'`, then run `release-verify.yml` with these exact inputs:
+After owner review and candidate checks, create the immutable `v0.3.0` tag only at the exact intended 40-character owner-authored commit SHA. The artifact builder checks both the commit author and committer against the neutral release identity. GitHub squash merge commits use a GitHub committer and fail this check. If the release commit is on a reviewed branch, verify that its tree matches the intended merged tree before publication. Resolve the tag SHA with `git rev-parse 'v0.3.0^{commit}'`, then run `release-verify.yml` with these exact inputs:
 
 ```text
-release_ref=v0.2.7
-expected_release_sha=<the exact 40-character output of git rev-parse v0.2.7^{commit}>
-release_version=0.2.7
+release_ref=v0.3.0
+expected_release_sha=<the exact 40-character output of git rev-parse v0.3.0^{commit}>
+release_version=0.3.0
 ```
 
-Publish only after both build and attestation jobs succeed. Use only `gpt-codex-hwp-0.2.7.zip`, `gpt-codex-hwp-0.2.7.spdx.json`, `provenance.json`, and `SHA256SUMS` from the same workflow artifact. Never rebuild, repackage, or substitute local files for those verified outputs.
+Publish only after both build and attestation jobs succeed. Use only `gpt-codex-hwp-0.3.0.zip`, `gpt-codex-hwp-0.3.0.spdx.json`, `provenance.json`, and `SHA256SUMS` from the same workflow artifact. Never rebuild, repackage, or substitute local files for those verified outputs.
 
 The attested archive covers only the `gpt-codex-hwp` runtime. The root
 marketplaces and `plugins/korean-official-doc` reach users only through the

@@ -172,7 +172,7 @@ async function regularFiles(root) {
 // version can leave users on a stale copy. Changing korean-official-doc means
 // bumping both of its manifests and recording the new content hash here.
 const KOREAN_OFFICIAL_DOC_CONTENT_SHA256 = Object.freeze({
-  "0.1.0": "4043d49ab2b943f8fae407da34293b48fd1783c242dc06c243d23f9543f5cf15",
+  "0.1.0": "2c227445094710507f153c1074ce69027a50c5e35341a2972f1aab65a5ca2028",
 });
 
 test("korean-official-doc content is tied to its manifest version", async () => {

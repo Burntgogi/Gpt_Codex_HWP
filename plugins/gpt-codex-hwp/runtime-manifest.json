@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
-  "pluginVersion": "0.2.7+codex.20261008150000",
-  "packageLockSha256": "84ea09a61cf0fd99cdcdef8cda3300af2f344042c8f5e5a4b1e661e408e12acd",
+  "pluginVersion": "0.3.0+codex.20261008150000",
+  "packageLockSha256": "34b7b4f00b454aa893a861a0881420e6a9af56e307ebf4743cf6222d8bfa2a3f",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -12,7 +12,7 @@
     {
       "path": ".codex-plugin/plugin.json",
       "size": 1208,
-      "sha256": "5af2f727de220a95e351eca61f5e33dff00094639b845a47069b071a3e72ab79"
+      "sha256": "febfd150479548ca4d73dcab82170c855ef7be5445e8926705846d34950248a8"
     },
     {
       "path": ".npmrc",
@@ -32,7 +32,7 @@
     {
       "path": "dist/generated/project-metadata.js",
       "size": 140,
-      "sha256": "4c11f701efbe15de6d000d7c18b290f940971b637752b2debabd29e1f121240b"
+      "sha256": "e4ccce2f198ca2b10fdf8ebee14a811d7bf8cb79d11529540fe6efda32013a34"
     },
     {
       "path": "dist/install-runtime.js",
@@ -121,8 +121,8 @@
     },
     {
       "path": "dist/shared/markdown-underscore.js",
-      "size": 8040,
-      "sha256": "0ea72d6702f5bbd78b3ebe34d63eb51c8407489cf8663986d916456a2bffdff2"
+      "size": 13287,
+      "sha256": "abe9231925f3444acd83f39b810724b5f95d0fad837f099bdd17604ba05f3bf6"
     },
     {
       "path": "dist/shared/output.js",
@@ -362,12 +362,12 @@
     {
       "path": "package-lock.json",
       "size": 87489,
-      "sha256": "84ea09a61cf0fd99cdcdef8cda3300af2f344042c8f5e5a4b1e661e408e12acd"
+      "sha256": "34b7b4f00b454aa893a861a0881420e6a9af56e307ebf4743cf6222d8bfa2a3f"
     },
     {
       "path": "package.json",
       "size": 670,
-      "sha256": "33681e275d6378aac64c331ee9c155eebf568f96692796eb443a362bc379419c"
+      "sha256": "5a110e5ced52a4d688613ebb9108b49caa6bec79eef7d4c3e3f1b66ebc2303c7"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",
