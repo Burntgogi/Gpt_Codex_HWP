@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 import {
+  pluginHostForVersionDirectory,
   RuntimeBootstrapError,
   resolveInstalledRuntime,
+  resolveManagedRuntime,
 } from "../src/runtime-bootstrap.js";
 import { runDoctorBootstrap } from "../src/doctor.js";
 import { runMcpBootstrap } from "../src/mcp.js";
@@ -105,6 +107,43 @@ test("runtime bootstrap maps receipt source platform dependency and path failure
   );
 });
 
+test("runtime bootstrap maps cache version directories to their plugin host", () => {
+  assert.equal(pluginHostForVersionDirectory(PLUGIN_VERSION, PLUGIN_VERSION), "codex");
+  assert.equal(
+    pluginHostForVersionDirectory("0.2.7-codex.20260929182230", PLUGIN_VERSION),
+    "claude-code",
+  );
+  for (const directory of ["0.2.7", "0.2.7_codex.20260929182230", "0.2.8+codex.20260929182230", ""]) {
+    assert.equal(pluginHostForVersionDirectory(directory, PLUGIN_VERSION), undefined, directory);
+  }
+});
+
+test("runtime bootstrap resolves a Claude Code cache layout with a sanitized version directory", async (t) => {
+  const fixture = await createRuntimeFixture(t, { versionDirectory: "0.2.7-codex.20260929182230" });
+  const entry = pathToFileURL(join(fixture.managedRoot, "dist", "oneshot.js")).href;
+  const identity = await resolveManagedRuntime(entry, { codexHome: fixture.codexHome });
+  assert.equal(identity.host, "claude-code");
+  assert.equal(identity.pluginVersion, PLUGIN_VERSION);
+
+  const runtime = await resolveInstalledRuntime(entry, "dist/oneshot-main.js", {
+    codexHome: fixture.codexHome,
+  });
+  assert.equal(runtime.root, fixture.durableRoot);
+});
+
+test("runtime bootstrap rejects a cache version directory that matches no host", async (t) => {
+  const fixture = await createRuntimeFixture(t, { versionDirectory: "0.2.7_codex.20260929182230" });
+  await assert.rejects(
+    resolveInstalledRuntime(
+      pathToFileURL(join(fixture.managedRoot, "dist", "oneshot.js")).href,
+      "dist/oneshot-main.js",
+      { codexHome: fixture.codexHome },
+    ),
+    (error: unknown) => error instanceof RuntimeBootstrapError
+      && error.code === "RUNTIME_PATH_INVALID",
+  );
+});
+
 test("public bootstraps fail closed without loading the heavy runtime", async (t) => {
   const fixture = await createRuntimeFixture(t, { durable: false });
   const entry = pathToFileURL(join(fixture.managedRoot, "dist", "oneshot.js")).href;
@@ -157,10 +196,12 @@ test("MCP bootstrap preserves only the stable allowed-roots configuration code",
 
 async function createRuntimeFixture(
   t: { after(fn: () => Promise<void>): void },
-  options: Readonly<{ durable?: boolean }> = {},
+  options: Readonly<{ durable?: boolean; versionDirectory?: string }> = {},
 ) {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bootstrap-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  // Canonical spelling: hosted runners use an 8.3 TEMP on Windows and the
+  // /var -> /private/var alias on macOS, and the bootstrap requires realpaths.
+  const root = await realpath(await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bootstrap-test-")));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const codexHome = join(root, "codex-home");
   const managedRoot = join(
     codexHome,
@@ -168,7 +209,7 @@ async function createRuntimeFixture(
     "cache",
     MARKETPLACE,
     PRODUCT,
-    PLUGIN_VERSION,
+    options.versionDirectory ?? PLUGIN_VERSION,
   );
   await mkdir(join(managedRoot, ".codex-plugin"), { recursive: true });
   await mkdir(join(managedRoot, "dist"), { recursive: true });

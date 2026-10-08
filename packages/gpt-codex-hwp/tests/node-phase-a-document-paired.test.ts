@@ -41,7 +41,7 @@ test("document paired benchmark reuses one exact source per size", async () => {
       "control", "candidate", "candidate", "control",
     ]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -74,7 +74,7 @@ test("document paired benchmark retries only one approved infrastructure failure
       "retryable-infrastructure", "passed", "passed",
     ]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -100,7 +100,7 @@ test("document paired benchmark never retries OOM", async () => {
     );
     assert.equal(calls, 1);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -137,6 +137,6 @@ test("document case verifies the exact source before delegating to its bounded e
       { code: "BENCHMARK_SOURCE_CHANGED" },
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });

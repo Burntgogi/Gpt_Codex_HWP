@@ -466,7 +466,7 @@ function credentialAssignment(keyParts: string[], valueParts: string[]): string 
 
 async function temporaryRuntime(t: TestContext, prefix: string, parent?: string): Promise<string> {
   const root = await createCanonicalTemporaryDirectory({ parent, prefix });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   return root;
 }
 
@@ -481,14 +481,14 @@ async function temporaryDirectoryAlias(
   try {
     await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
   } catch (error) {
-    await rm(base, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true, maxRetries: 5 });
     if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
       t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
       return undefined;
     }
     throw error;
   }
-  t.after(async () => rm(base, { recursive: true, force: true }));
+  t.after(async () => rm(base, { recursive: true, force: true, maxRetries: 5 }));
   return { canonicalParent: await realpath(canonicalParent), path };
 }
 

@@ -26,6 +26,9 @@ import {
   unverifiedTermination,
 } from "../src/workers/registered-process-supervisor.ts";
 
+// 10 MiB is the only CI-verified tier. Sizes above it run only locally behind
+// HWP_BENCH_LARGE=1; the 100 MiB "verified support" evidence is an optional
+// local receipt for --validate-large, not a hosted CI or release gate.
 export const PR_SMOKE_BENCHMARK_SIZES_MIB = Object.freeze([10]);
 export const VERIFIED_SUPPORT_BENCHMARK_SIZES_MIB = Object.freeze([100]);
 export const LOCAL_EXPERIMENTAL_BENCHMARK_SIZES_MIB = Object.freeze([256, 512]);

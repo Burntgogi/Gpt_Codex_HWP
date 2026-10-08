@@ -66,7 +66,7 @@ test("doctor gate runner input rejects duplicate partial and timed-out control f
 
 test("compiled doctor gate runner emits bounded READY and never executes malformed or duplicate requests", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "doctor-runner-protocol-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   for (const [label, frames] of [
     ["extra cwd", [{
       schemaVersion: 1,

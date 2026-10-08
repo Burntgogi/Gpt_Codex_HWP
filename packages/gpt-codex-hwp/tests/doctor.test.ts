@@ -275,7 +275,7 @@ test("doctor runtime access rejects linked file and directory ancestors without 
   if (createAccess === undefined) return;
 
   const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "doctor-path-boundary-" });
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const runtimeRoot = join(temporaryRoot, "runtime");
   const outsideRoot = join(temporaryRoot, "outside");
   await mkdir(runtimeRoot);
@@ -564,7 +564,7 @@ test("Windows doctor gate never dispatches through a forced cleanup-only tracker
 }, async (t) => {
   const root = await createCanonicalTemporaryDirectory({ prefix: "doctor-tracker-gate-" });
   const markerPath = join(root, "dispatched.txt");
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const supervisorFrames: string[] = [];
   const result = await doctorModule.executeBoundedCommand({
     ...commandSpecification(5_000),
@@ -628,7 +628,7 @@ test("doctor bounded command removes a real descendant after timeout", { timeout
   if (execute === undefined) return;
 
   const temporaryRoot = await createCanonicalTemporaryDirectory({ prefix: "doctor-process-tree-" });
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 }));
   const fixturePath = join(temporaryRoot, "tree.mjs");
   await writeFile(fixturePath, [
     'import { spawn } from "node:child_process";',
@@ -664,7 +664,7 @@ test("doctor timeout terminates a grandchild after its parent exits but inherite
       try { process.kill(descendantPid, "SIGKILL"); } catch {}
       await waitUntilProcessGone(descendantPid).catch(() => undefined);
     }
-    await rm(temporaryRoot, { recursive: true, force: true });
+    await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
   });
   await writeFile(fixturePath, [
     'import { spawn } from "node:child_process";',
@@ -723,7 +723,7 @@ test("Windows doctor Job removes a grandchild after the command parent exits", {
       try { process.kill(descendantPid, "SIGKILL"); } catch {}
       await waitUntilProcessGone(descendantPid).catch(() => undefined);
     }
-    await rm(temporaryRoot, { recursive: true, force: true });
+    await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
   });
   await writeFile(fixturePath, [
     'import { spawn } from "node:child_process";',

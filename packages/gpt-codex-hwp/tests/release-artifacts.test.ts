@@ -284,9 +284,9 @@ test("release artifact builder never deletes a private staging replacement on fa
   let savedPrivateRoot;
   let replacementSentinel;
   t.after(async () => {
-    if (savedPrivateRoot !== undefined) await rm(savedPrivateRoot, { recursive: true, force: true });
+    if (savedPrivateRoot !== undefined) await rm(savedPrivateRoot, { recursive: true, force: true, maxRetries: 5 });
     if (replacementSentinel !== undefined) {
-      await rm(dirname(replacementSentinel), { recursive: true, force: true });
+      await rm(dirname(replacementSentinel), { recursive: true, force: true, maxRetries: 5 });
     }
   });
   await assert.rejects(
@@ -316,7 +316,7 @@ test("release artifact builder canonicalizes an injected temporary parent", asyn
   if (alias === undefined) return;
   let privateRoot: string | undefined;
   t.after(async () => {
-    if (privateRoot !== undefined) await rm(privateRoot, { recursive: true, force: true });
+    if (privateRoot !== undefined) await rm(privateRoot, { recursive: true, force: true, maxRetries: 5 });
   });
   await assert.rejects(
     buildReleaseArtifacts({
@@ -800,7 +800,7 @@ async function createReleaseFixture(t: test.TestContext) {
   const parent = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-release-test-",
   });
-  t.after(async () => { await rm(parent, { recursive: true, force: true }); });
+  t.after(async () => { await rm(parent, { recursive: true, force: true, maxRetries: 5 }); });
   const root = join(parent, "repository");
   await mkdir(root, { recursive: true });
   const runtimeRoot = join(root, "plugins", "gpt-codex-hwp");
@@ -937,14 +937,14 @@ async function temporaryDirectoryAlias(
   try {
     await symlink(canonicalParent, path, process.platform === "win32" ? "junction" : "dir");
   } catch (error) {
-    await rm(base, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true, maxRetries: 5 });
     if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code)) {
       t.skip(`directory aliases are unavailable (${(error as NodeJS.ErrnoException).code})`);
       return undefined;
     }
     throw error;
   }
-  t.after(async () => rm(base, { recursive: true, force: true }));
+  t.after(async () => rm(base, { recursive: true, force: true, maxRetries: 5 }));
   return { canonicalParent: await realpath(canonicalParent), path };
 }
 

@@ -51,18 +51,21 @@ values, anchors, user paths, temporary paths, or raw errors.
 
 Hosted compatibility and immutable release verification use the installed
 production one-shot path instead of the RSS benchmark supervisor. The smoke
-generates one 100 MiB HWPX, calls `hwp_detect_format`, verifies the reported
+generates one 10 MiB HWPX, calls `hwp_detect_format`, verifies the reported
 format and size, proves the source SHA-256 is unchanged, and requires zero
 remaining descendants:
 
 ```powershell
-node scripts/installed-runtime-smoke.mjs --large-detect 100
+node scripts/installed-runtime-smoke.mjs --large-detect 10
 ```
+
+The same smoke accepts `--large-detect 100` as an optional local experiment.
+No hosted job runs it, and its result neither satisfies nor fails a gate.
 
 The RSS benchmark remains a maintainer-only local measurement tool. Its receipt
 is not a hosted compatibility or release gate.
 
-The 256 and 512 MiB cases remain available only as explicit local experiments.
+The 100, 256, and 512 MiB cases remain available only as explicit local experiments.
 They are schema-validated diagnostics, may pass, fail, or report
 `resource-refused`, and never satisfy or fail the required release evidence:
 
@@ -83,11 +86,13 @@ engine inputs live in a fresh owned temporary directory below the ignored
 output directory and are removed in `finally`. Delete old ignored receipts when
 they are no longer needed.
 
-Valid documents up to and including 100 MiB are in the CI-verified support
-envelope, subject to malformed-archive rejection, decompression and resource
-policies, and allowed-root policy. Documents over 100 MiB through the 512 MiB
-safety ceiling are best-effort and carry no compatibility guarantee. Files over
-512 MiB are rejected.
+Most Hangul documents finish around 1 MiB and rarely exceed 10 MiB, so the
+size policy has two tiers. Valid documents up to and including 10 MiB are the
+default, CI-verified support tier, subject to malformed-archive rejection,
+decompression and resource policies, and allowed-root policy. Documents over
+10 MiB through the 512 MiB safety ceiling are theoretically supported: they use
+the same code path, but no hosted job verifies them size by size and they carry
+no compatibility guarantee. Files over 512 MiB are rejected.
 
 ## CI gate ownership
 
@@ -102,15 +107,15 @@ are:
 | `Security policy` | repository privacy, dependency, generated-runtime, and workflow policy rather than platform compatibility |
 
 The desktop PR jobs do not create platform receipts, build or verify release
-artifacts, request attestation permissions, or generate 100/256/512 MiB
-evidence. Their bounded installed-runtime smoke still initializes the exact
+artifacts, request attestation permissions, or generate evidence above
+10 MiB. Their bounded installed-runtime smoke still initializes the exact
 runtime manifest, verifies all nine tool schemas, and exercises SVG-to-PNG
 Sharp behavior after a fresh production-only install. It is a bounded PR
 profile and does not replace immutable release verification.
 
 The scheduled and manually dispatched Compatibility workflow has one default
 responsibility: on Windows x64, Linux x64, and macOS arm64, install source and
-public-runtime dependencies and run the exact 100 MiB production one-shot
+public-runtime dependencies and run the exact 10 MiB production one-shot
 smoke. Required CI already owns the stable Node, Python, runtime, and platform
 profiles; Compatibility does not duplicate those suites, create platform
 receipts, or upload default-run diagnostics. Immutable release verification
@@ -120,11 +125,11 @@ separately owns the full release candidate, artifact, and attestation gates.
 independent `macos-15` matrix jobs run the anchored `bp16` case once each and
 retain only a distilled bounded receipt. Scheduled runs cannot activate the
 matrix. Enable it only when production process-cleanup semantics changed, not
-for receipt, profile, documentation, or workflow-only changes. The 256 and 512
-MiB cases remain local opt-in experiments outside every hosted compatibility
+for receipt, profile, documentation, or workflow-only changes. The 100, 256,
+and 512 MiB cases remain local opt-in experiments outside every hosted compatibility
 and release gate.
 
-Release preflight is deliberately fail-closed. Its 100 MiB production-path
+Release preflight is deliberately fail-closed. Its 10 MiB production-path
 smoke is not `continue-on-error`; failure emits only a fixed bounded stage and
 stops the full release gate, artifact construction, and attestation.
 Runs for the same immutable tag and SHA are serialized and never auto-cancel an
@@ -143,8 +148,9 @@ functionality. An ordinary
 v0.2.1 desktop PR generated 100, 256, and 512 MiB on both Windows and macOS:
 1,736 MiB in aggregate. v0.2.2 generates one 10 MiB case on each platform:
 20 MiB in aggregate, a reduction of about 98.8%. Compatibility and immutable
-release verification retain the required 100 MiB production-path smoke. The 256 and 512 MiB
-cases remain explicit local experiments.
+release verification retained a 100 MiB production-path smoke until the
+post-v0.2.7 size-tier change, which lowered that gate to the 10 MiB default
+tier. The 100, 256, and 512 MiB cases remain explicit local experiments.
 
 | Measurement | v0.2.1 baseline | v0.2.2 candidate | Change |
 | --- | ---: | ---: | ---: |
@@ -232,7 +238,8 @@ It does not grant protection from a hostile document or a same-user process;
 run untrusted inputs under an appropriate least-privilege OS account or sandbox.
 
 Public-release verification runs
-`node scripts/installed-runtime-smoke.mjs --large-detect 100` directly. Local
+`node scripts/installed-runtime-smoke.mjs --large-detect 10` directly;
+`--large-detect 100` is only an optional local experiment. Local
 RSS receipts and the historical `HWP_BENCH_*` controls remain engineering
 tools and cannot satisfy or bypass the public release gate.
 

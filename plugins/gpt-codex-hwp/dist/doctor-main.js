@@ -13,6 +13,7 @@ import { registerTools } from "./tools/index.js";
 import { encodeBoundedJsonFrame } from "./workers/bounded-frame.js";
 import { isGatedRootGoneError, isSupervisorHelperUnclosedError, observeChildProcessClose, superviseDocumentProcessTree, terminateGatedChildByHandle, terminateDocumentProcessTreeByPid, } from "./workers/document-child-client.js";
 import { DOCTOR_RUNNER_MAX_FRAME_BYTES, DOCTOR_RUNNER_READY, DOCTOR_RUNNER_SCHEMA_VERSION, } from "./workers/doctor-command-runner.js";
+import { MINIMUM_HELPER_PYTHON, pythonCommandCandidates, pythonVersionAtLeast, } from "./shared/python-command.js";
 export const DOCTOR_SCHEMA_VERSION = 1;
 const EXPECTED_TOOL_NAMES = Object.freeze([
     "hwp_detect_format",
@@ -32,6 +33,10 @@ const KORDOC_FILE_LIMIT_BYTES = 16 * 1024 * 1024;
 const KORDOC_FILE_COUNT_LIMIT = 512;
 const KORDOC_TOTAL_LIMIT_BYTES = 64 * 1024 * 1024;
 const unsafeDoctorStartupRetentions = new Set();
+// On macOS the supervised document child also uses Python (libproc via
+// ctypes) to identify processes, so image insertion of either mode and
+// sources over 64 MiB need it, not only after-paragraph insertion.
+const MACOS_PYTHON_REMEDIATION = "Install Python 3.10 or newer, for example Homebrew python3, for after-paragraph image insertion. On macOS, image insertion and documents over 64 MiB also need a python3 for process supervision; the Xcode Command Line Tools python3 is enough for that but may be older than 3.10.";
 const REMEDIATION = Object.freeze({
     node: "Install a supported Node.js release and retry the diagnostic.",
     npm: "Install npm for the active Node.js runtime and retry the diagnostic.",
@@ -110,15 +115,8 @@ async function createDefaultDependencies() {
         nodeVersion: process.version,
         projectMetadata: PROJECT_METADATA,
         npmCommand,
-        pythonCommands: process.platform === "win32"
-            ? [
-                { command: "python", argsPrefix: [] },
-                { command: "py", argsPrefix: ["-3"] },
-            ]
-            : [
-                { command: "python3", argsPrefix: [] },
-                { command: "python", argsPrefix: [] },
-            ],
+        // Same trusted absolute locations the image helper uses at runtime.
+        pythonCommands: pythonCommandCandidates(),
         verifyKordocRuntime: async () => {
             const verifier = await import(new URL("../scripts/kordoc-runtime-verifier.mjs", import.meta.url).href);
             const result = await verifier.verifyKordocCoreRuntime(join(runtimeRoot, "vendor", "kordoc-core"));
@@ -176,7 +174,9 @@ async function pythonCheck(dependencies) {
             return check("PYTHON_OK", true, false, { version });
         }
     }
-    return check("PYTHON_UNAVAILABLE", false, false, { remediation: REMEDIATION.python });
+    return check("PYTHON_UNAVAILABLE", false, false, {
+        remediation: process.platform === "darwin" ? MACOS_PYTHON_REMEDIATION : REMEDIATION.python,
+    });
 }
 async function projectMetadataCheck(dependencies) {
     try {
@@ -936,8 +936,8 @@ function cleanVersion(value) {
     return match?.[1];
 }
 function isSupportedPython(version) {
-    const [major, minor] = version.split(".").map(Number);
-    return major === 3 && minor !== undefined && minor >= 10;
+    // Same rule the image helper applies when it selects an interpreter.
+    return pythonVersionAtLeast(`Python ${version}`, MINIMUM_HELPER_PYTHON);
 }
 function object(value) {
     if (value === null || typeof value !== "object" || Array.isArray(value))

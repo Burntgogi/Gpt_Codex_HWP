@@ -4,7 +4,7 @@
 
 <h1 align="center">Gpt_Codex_HWP</h1>
 
-<p align="center"><strong>Codex에서 한글 HWP를 읽고, 검증 가능한 HWPX를 만드는 로컬 문서 플러그인</strong></p>
+<p align="center"><strong>Codex와 Claude Code에서 한글 HWP를 읽고, 검증 가능한 HWPX를 만드는 로컬 문서 플러그인</strong></p>
 
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
@@ -19,21 +19,22 @@
   <a href="README.en.md">English</a> ·
   <a href="#실제-hwpx-결과">결과 보기</a> ·
   <a href="#안정-버전-v027-github-설치">빠른 설치</a> ·
+  <a href="#claude-code-설치">Claude Code</a> ·
   <a href="#형식-지원">지원 범위</a> ·
   <a href="#안전">보안</a>
 </p>
 
 ## 개요
 
-Gpt_Codex_HWP는 Codex에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
+Gpt_Codex_HWP는 Codex와 Claude Code에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
 
 ## v0.2.7 릴리즈
 
-`v0.2.7`은 [의존성 감사 이슈 #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18)에 보고된 패키지를 갱신하고 HWPX XML 출력의 유효성 검사를 강화했습니다. 감사 보고에서 여러 advisory가 빠지거나 중복되는 문제도 고쳤습니다. HWP 읽기 전용·HWPX 쓰기 정책, 명시적 런타임 설치와 one-shot 도구 9개는 유지합니다. 개발과 실제 문서 검증은 Windows x64에서 수행했고 Windows x64·macOS arm64·Linux 호스팅 CI를 통과했습니다. 실제 Mac 기기의 Codex Desktop·한컴오피스 한글은 아직 검증하지 않았습니다.
+`v0.2.7`은 [의존성 감사 이슈 #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18)에 보고된 패키지를 갱신하고 HWPX XML 출력의 유효성 검사를 강화했습니다. 감사 보고에서 여러 advisory가 빠지거나 중복되는 문제도 고쳤습니다. HWP 읽기 전용·HWPX 쓰기 정책, 명시적 런타임 설치와 one-shot 도구 9개는 유지합니다. 개발과 실제 문서 검증은 Windows x64에서 수행했습니다. 호스팅 CI(Windows x64·macOS arm64·Linux lifecycle)는 v0.2.7 릴리스 PR 커밋 기준 기록이며, 그 이후 HEAD의 macOS 결과는 해당 커밋의 영수증으로 따로 확인해야 합니다. 실제 Mac 기기의 Codex Desktop·한컴오피스 한글은 아직 검증하지 않았습니다.
 
 ## 이전 릴리즈
 
-`v0.2.5`는 이전 공개 릴리스입니다. `v0.2.3`, `v0.2.4`, `v0.2.6`은 불변 미게시 후보 태그이며 GitHub Release와 배포 자산이 없습니다. `v0.2.2`는 HWP 읽기 전용·HWPX 쓰기, 기본 one-shot 실행과 100 MiB CI 검증 범위를 도입했습니다. 자세한 이력은 [CHANGELOG](CHANGELOG.md)와 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있습니다.
+`v0.2.5`는 이전 공개 릴리스입니다. `v0.2.3`, `v0.2.4`, `v0.2.6`은 불변 미게시 후보 태그이며 GitHub Release와 배포 자산이 없습니다. `v0.2.2`는 HWP 읽기 전용·HWPX 쓰기, 기본 one-shot 실행과 100 MiB CI 검증 범위를 도입했습니다. 자세한 이력은 [CHANGELOG](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md)와 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있습니다.
 
 ## 기능
 
@@ -69,8 +70,9 @@ HWPX는 이 프로젝트의 정식 작성 형식입니다. 바이너리 HWP를 �
 
 - Node.js 22 이상
 - Windows x64 또는 macOS Apple Silicon
-- `after-paragraph` 이미지 삽입에는 PATH에서 실행 가능한 Python 3.10 이상
-- Codex 플러그인 마켓플레이스 명령을 사용할 수 있는 환경
+- `after-paragraph` 이미지 삽입에는 표준 위치에 설치된 Python 3.10 이상. PATH는 탐색하지 않습니다. Windows는 `%SystemRoot%\py.exe` 또는 사용자 설치 `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`, macOS는 `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, Command Line Tools의 `python3` 순, Linux는 `/usr/bin/python3`, `/usr/local/bin/python3`을 사용합니다.
+- macOS에서는 문서 처리 자식 프로세스의 감독에도 Python을 씁니다. 그림 삽입(두 모드 모두)과 64 MiB를 넘는 문서에는 python3가 필요합니다. 이 용도에는 Xcode Command Line Tools(`xcode-select --install`)의 python3로 충분하지만, `after-paragraph` 삽입에는 3.10 이상(예: Homebrew `python3`)이 필요합니다. 이미지 helper는 신뢰 경로 중 3.10 이상인 첫 인터프리터를 쓰며 doctor도 같은 기준으로 판정합니다. 없으면 `/usr/bin/python3`가 설치 안내 창을 띄우고 해당 작업이 실패할 수 있습니다.
+- Codex 또는 Claude Code 플러그인 마켓플레이스 명령을 사용할 수 있는 환경
 
 Python이 없으면 Python 기반 이미지 삽입 모드만 `PYTHON_NOT_FOUND`로 실패하며 다른 도구는 계속 사용할 수 있습니다.
 
@@ -92,7 +94,7 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 이 프로젝트는 주로 Windows x64에서 개발하고 실제 검증했습니다. macOS Apple Silicon 플러그인 런타임 CI는 구성되어 있지만, 현재 HEAD에 대한 성공 영수증이 확인되기 전에는 이 CI를 통과 또는 검증 완료로 표현하지 않습니다. 실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정은 검증하지 않았습니다. 따라서 macOS는 호환 대상이며 macOS 완전 지원을 주장하지 않습니다.
 
-`v0.1.4`는 Node 테스트 334개 중 330개 통과, 예상 플랫폼·권한 스킵 4개, 실패 0개와 Python 테스트 16/16, production audit 취약점 0개를 확인했습니다. 자세한 결과는 [v0.1.4 GitHub 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.1.4)를 참조하십시오.
+릴리스별 테스트·감사 결과는 각 [GitHub 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases)의 노트에 기록합니다.
 
 ## 안정 버전 v0.2.7 GitHub 설치
 
@@ -134,7 +136,7 @@ try {
 ```
 
 6. `doctor`는 진단 전용이며 설치나 복구를 수행하지 않고 MCP 도구가 아닙니다. JSON에는 안전한 상태 코드, 불리언, 버전과 개수만 포함되며 Python·rhwp·고정 테스트 fixture 같은 선택 기능의 부재는 필수 실패와 분리됩니다.
-7. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 경로에서 설치기를 다시 실행합니다. HWP/HWPX 작업 하나가 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인합니다. worker-only·child-only·mixed 종료 영수증과 감독된 나머지 프로세스 트리 0개가 검증 대상입니다. Windows x64, Linux lifecycle, macOS arm64와 Security policy hosted 검사는 최종 후보에서 통과했지만 실제 Mac 사용은 미검증입니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
+7. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 경로에서 설치기를 다시 실행합니다. HWP/HWPX 작업 하나가 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인합니다. worker-only·child-only·mixed 종료 영수증과 감독된 나머지 프로세스 트리 0개가 검증 대상입니다. hosted 검사 결과는 v0.2.7 릴리스 PR 커밋에 한정된 기록이며 실제 Mac 사용은 미검증입니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
 
 ## 설치 및 마이그레이션
 
@@ -175,6 +177,56 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 
 반환된 `version`과 `installedPath`가 v0.2.2의 실제 설치 디렉터리를 가리키는지 검증하고, 공개 v0.2.2 안내의 잠금 파일 설치·doctor·문서 스모크를 완료하십시오. 롤백 성공이 확인되기 전에는 새 런타임을 지우지 마십시오. 성공 후에만 더 이상 사용하지 않는 정확한 `0.2.7+codex.20260929182230` 지속 런타임 디렉터리를 확인해 수동으로 제거합니다.
 
+## Claude Code 설치
+
+같은 플러그인 폴더를 Claude Code에서도 씁니다. 저장소 루트의 `.claude-plugin/marketplace.json`이 `plugins/gpt-codex-hwp`를 가리키며, 마켓플레이스 이름은 Codex와 같은 `gpt-codex-hwp-local`입니다. Claude Code 지원은 `v0.2.7` 이후 변경이므로 이를 포함한 릴리스 태그가 나오기 전까지는 `main`을 사용하고, 태그가 나오면 `#<태그>`로 고정하십시오. `main` 빌드는 버전이 `0.2.7+codex.<빌드 ID>`로 표시되지만 공개된 `v0.2.7` 릴리스와는 다른 빌드입니다.
+
+Claude Code 세션 안에서:
+
+```text
+/plugin marketplace add Burntgogi/Gpt_Codex_HWP
+/plugin install gpt-codex-hwp@gpt-codex-hwp-local
+```
+
+터미널에서는 `claude plugin marketplace add Burntgogi/Gpt_Codex_HWP`와 `claude plugin install gpt-codex-hwp@gpt-codex-hwp-local`을 사용합니다.
+
+1. 설치된 플러그인 경로는 `~/.claude/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<버전>`입니다. `CLAUDE_CONFIG_DIR`을 쓰면 `~/.claude` 대신 그 경로가 기준입니다. Claude Code는 버전의 `+`를 `-`로 바꿔 디렉터리를 만들므로 실제 이름은 `0.2.7-codex.<빌드 ID>` 형태이며, 런타임은 이 배치를 Claude Code 설치로 인식합니다.
+2. 그 경로에서 Codex와 같은 명시적 런타임 설치기와 doctor를 실행합니다.
+
+```bash
+cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<버전 디렉터리>"
+node dist/install-runtime.js --json   # code가 RUNTIME_INSTALL_OK인지 확인
+node dist/doctor.js --json            # code가 DOCTOR_OK인지 확인
+```
+
+PowerShell에서는 다음과 같습니다. `CLAUDE_CONFIG_DIR`을 쓰면 `$env:USERPROFILE\.claude` 대신 그 경로를 넣으십시오.
+
+```powershell
+Push-Location -LiteralPath "$env:USERPROFILE\.claude\plugins\cache\gpt-codex-hwp-local\gpt-codex-hwp\<버전 디렉터리>"
+try {
+  $runtime = node dist/install-runtime.js --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $runtime.code -ne "RUNTIME_INSTALL_OK") { throw "runtime installation failed" }
+  node dist/doctor.js --json
+} finally { Pop-Location }
+```
+
+3. 운영 의존성은 `~/.claude/plugin-runtime-data/gpt-codex-hwp/<전체-플러그인-버전>/<platform>-<arch>-node<주버전>`에 저장됩니다. Codex 런타임과 공유하지 않습니다.
+4. Claude Code 세션을 다시 시작한 뒤 `/gpt-codex-hwp:gpt-codex-hwp` 스킬이 보이는지 확인합니다. 기본 MCP 서버는 등록하지 않으며, 스킬이 작업마다 `dist/oneshot.js`를 한 번 실행합니다.
+
+Claude Code 경로는 Windows x64에서 격리된 `CLAUDE_CONFIG_DIR`에 설치해 런타임 설치, doctor, HWPX 생성·검증·읽기·미리보기를 확인했습니다. macOS의 Claude Code 사용은 아직 검증하지 않았습니다.
+
+## 함께 쓰면 좋은 스킬 (선택)
+
+다음 스킬은 필수 의존성이 아닙니다. 설치하지 않아도 Gpt_Codex_HWP의 모든 도구가 동작합니다. 설치를 맡은 에이전트는 런타임 설치가 끝난 뒤 사용자에게 한 번만 권하고, 사용자가 동의한 경우에만 각 저장소의 설치 안내를 따릅니다. 거절하면 다시 묻지 않습니다.
+
+| 스킬 | 쓰임새 | Codex | Claude Code |
+| --- | --- | --- | --- |
+| [AI Slop 탈곡기](https://github.com/Burntgogi/ai-slop-thresher) | HWPX로 만들기 전 한국어 초안의 AI 말투와 과잉 설명을 다듬습니다. | `codex plugin marketplace add Burntgogi/ai-slop-thresher` 후 `codex plugin add ai-slop-thresher@ai-slop-thresher` | `/plugin marketplace add Burntgogi/ai-slop-thresher` 후 `/plugin install ai-slop-thresher@ai-slop-thresher` |
+| [kar-plain](https://github.com/Burntgogi/kar-plain) | 주제를 글, 다이어그램, 웹 페이지, 영상으로 설명합니다. 문서의 설명 단락과 도식 초안에 씁니다. | 저장소의 수동 설치(`~/.agents/skills`) 안내 | `/plugin marketplace add Burntgogi/kar-plain` 후 `/plugin install kar-plain@kar-plain` |
+| [공문서 작성 규칙](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/plugins/korean-official-doc/skills/korean-official-doc/SKILL.md) (`korean-official-doc`) | 공문서 Markdown 초안의 날짜·시각·금액 표기, 항목 기호 순서, 붙임, 「끝」 표시를 법령 근거와 함께 오프라인으로 점검합니다. 공공기관 문서를 쓰는 사용자에게 권합니다. | 같은 마켓플레이스에서 `codex plugin add korean-official-doc@gpt-codex-hwp-local` (`v0.2.7` 태그에는 없으므로 이를 포함한 다음 릴리스 태그로 마켓플레이스를 고정해야 합니다) | 같은 마켓플레이스에서 `/plugin install korean-official-doc@gpt-codex-hwp-local` |
+
+각 저장소의 최신 릴리스 태그와 설치 안내를 먼저 확인하십시오. 위 명령은 2026-10-08 기준입니다.
+
 ## 지속 런타임 저장과 제거
 
 v0.2.7의 운영 의존성은 Codex 관리 캐시가 아니라 `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<전체-플러그인-버전>/<platform>-<arch>-node<Node-주버전>`에 저장됩니다. 예를 들어 Windows x64의 Node.js 22 런타임 키는 `win32-x64-node22`입니다. 같은 Codex 프로필에서도 Node 주버전별 런타임은 서로 교체하지 않고 공존합니다.
@@ -209,7 +261,7 @@ v0.2.7의 운영 의존성은 Codex 관리 캐시가 아니라 `$CODEX_HOME/plug
 
 ## 대용량 문서 읽기
 
-형식과 구조가 유효한 원본 문서 중 100 MiB 이하 파일은 CI 검증 지원 범위입니다. 다만 비정상·손상 아카이브, 압축 해제 및 자원 정책, 선택적 허용 루트 정책에 따라 크기와 무관하게 거부될 수 있습니다. 100 MiB 초과 512 MiB 이하 문서는 최선 노력(best-effort) 범위로 호환성을 보장하지 않으며, 512 MiB 초과 파일은 거부합니다. Kordoc 3.18.1은 현재 HWP/HWPX 전체 압축 해제량을 100 MiB, HWPX 항목 수를 500개로 제한하므로 더 엄격한 엔진 한도가 먼저 적용될 수 있습니다.
+대부분의 한글 문서는 1 MiB 안팎이고 10 MiB를 넘는 경우는 드뭅니다. 그래서 **10 MiB 이하를 기본 지원 범위**로 정하고 PR CI, 주간 Compatibility, 릴리스 게이트에서 이 크기만 검증합니다. **10 MiB 초과 512 MiB 이하는 이론상 처리 가능한 범위**입니다. 같은 코드 경로를 쓰지만 크기별로 일일이 검증하지 않으며 호환성을 보장하지 않습니다(best-effort). 512 MiB 초과 파일은 거부합니다. 크기와 무관하게 비정상·손상 아카이브, 압축 해제 및 자원 정책, 선택적 허용 루트 정책에 따라 거부될 수 있습니다. Kordoc 3.18.1은 현재 HWP/HWPX 전체 압축 해제량을 100 MiB, HWPX 항목 수를 500개로 제한하므로 더 엄격한 엔진 한도가 먼저 적용될 수 있습니다.
 
 일반 `hwp_read`는 JavaScript 문자열 길이 기준 Markdown 64,000자까지 인라인으로 반환합니다. 더 큰 결과에는 기존 파일이 아닌 새 `.md` 경로를 `markdown_output_path`로 지정하십시오. 플러그인은 원본을 한 번만 파싱하고 전체 UTF-8 Markdown을 최대 256 MiB까지 저장하며, 응답에는 처음 64,000자와 전체 크기·원본 지문·권장 분할 크기를 반환합니다. 이후 Codex는 파생 Markdown을 약 64,000자 단위로 읽으므로 원본 문서를 반복 파싱하지 않습니다.
 
@@ -221,7 +273,7 @@ v0.2.7의 운영 의존성은 Codex 관리 캐시가 아니라 `$CODEX_HOME/plug
 
 ### 선택적 문서 루트 제한
 
-`GPT_CODEX_HWP_ALLOWED_ROOTS`를 설정하면 9개 MCP 도구가 사용하는 모든 사용자 입력·출력 경로를 지정한 로컬 디렉터리 안으로 제한할 수 있습니다. 설정하지 않으면 이전 버전과 같이 현재 OS 사용자가 접근할 수 있는 로컬 경로를 사용합니다. 값은 비어 있지 않은 JSON 배열이어야 하며, 각 항목은 이미 존재하는 고유한 절대 디렉터리여야 합니다. 심볼릭 링크나 Windows junction/reparse 별칭 자체는 루트로 사용할 수 없습니다. 아래 값은 정확한 JSON 문자열 예시입니다.
+`GPT_CODEX_HWP_ALLOWED_ROOTS`를 설정하면 9개 MCP 도구가 사용하는 모든 사용자 입력·출력 경로를 지정한 로컬 디렉터리 안으로 제한할 수 있습니다. 설정하지 않으면 이전 버전과 같이 현재 OS 사용자가 접근할 수 있는 로컬 경로를 사용합니다. 단 Windows 네트워크(UNC) 경로는 이 기본값에서도 거부합니다. 값은 비어 있지 않은 JSON 배열이어야 하며, 각 항목은 이미 존재하는 고유한 절대 디렉터리여야 합니다. 심볼릭 링크나 Windows junction/reparse 별칭 자체는 루트로 사용할 수 없습니다. 아래 값은 정확한 JSON 문자열 예시입니다.
 
 ```powershell
 $env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
@@ -231,13 +283,14 @@ $env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
 export GPT_CODEX_HWP_ALLOWED_ROOTS='["/Volumes/TeamDocs"]'
 ```
 
-빈 배열, 잘못된 JSON, 상대 경로, 중복 루트, 존재하지 않는 루트, 파일 또는 링크 루트가 있으면 MCP 서버가 시작 단계에서 닫힌 상태로 실패합니다. 값은 UTF-8 기준 16,384바이트, 루트 32개, 항목당 4,096자로 제한됩니다. 설정된 경우 원본 HWP/HWPX, Markdown·이미지 입력, 생성·패치·양식·이미지 삽입 HWPX, Markdown·SVG·PNG·미리보기·추출 이미지와 출력 디렉터리 모두 실경로 확인 뒤 같은 정책을 적용합니다. 거부 결과는 `PATH_OUTSIDE_ALLOWED_ROOTS`만 반환하며 설정값이나 거부된 절대 경로를 노출하지 않습니다.
+빈 배열, 잘못된 JSON, 상대 경로, 중복 루트, 존재하지 않는 루트, 파일 또는 링크 루트가 있으면 one-shot 호출은 도구를 실행하기 전에, 수동 MCP 서버는 시작 단계에서 닫힌 상태로 실패합니다. 값은 UTF-8 기준 16,384바이트, 루트 32개, 항목당 4,096자로 제한됩니다. 설정된 경우 원본 HWP/HWPX, Markdown·이미지 입력, 생성·패치·양식·이미지 삽입 HWPX, Markdown·SVG·PNG·미리보기·추출 이미지와 출력 디렉터리 모두 실경로 확인 뒤 같은 정책을 적용합니다. 거부 결과는 `PATH_OUTSIDE_ALLOWED_ROOTS`만 반환하며 설정값이나 거부된 절대 경로를 노출하지 않습니다.
 
 대용량 처리용 내부 스풀은 사용자 루트 설정을 받지 않는 별도의 예측 불가능한 OS 임시 디렉터리에 소유자 전용 권한으로 만들고, 자식 프로세스에는 상속된 핸들만 전달하며 `finally`에서 제거합니다. 따라서 스풀은 사용자 허용 루트의 예외가 아니라 독립된 내부 신뢰 영역입니다. `allowed_roots`는 에이전트의 실수나 경로 이탈을 줄이는 방어선이며, 같은 OS 사용자 권한으로 실행되는 악성 프로세스를 완전히 격리하지는 못합니다. Node.js는 모든 파일시스템에서 Linux `openat2`나 Windows 핸들 상대 경로와 같은 원자적 보장을 이식성 있게 제공하지 않으므로, 높은 위험의 문서는 별도 저권한 계정·VM·컨테이너 같은 OS 격리에서 처리하십시오.
 
 - 입력 경로와 출력 경로는 달라야 하며 기존 출력 파일을 덮어쓰지 않습니다.
 - 서명, 암호화, DRM, 배포용 보호가 감지된 문서는 보호를 우회하지 않고 거부합니다.
 - 경로 별칭, 하드링크, 심볼릭 링크, Windows junction, ZIP 경로 순회를 방어합니다.
+- Windows 네트워크 경로(UNC, `\\서버\공유`)는 기본적으로 거부합니다. 네트워크 공유를 써야 하면 `GPT_CODEX_HWP_ALLOWED_ROOTS`에 그 UNC 루트를 명시하십시오. 그 아래 경로만 허용됩니다. `GPT_CODEX_HWP_ALLOWED_ROOTS`를 설정하지 않았다면 매핑된 네트워크 드라이브(예: `Z:\`)에 있는 문서는 읽을 수 있지만, 그 UNC 루트를 지정하지 않는 한 그 공유로 결과물을 쓰지는 않습니다.
 - HWPX 검증에 실패하면 생성 또는 편집 결과물을 쓰지 않습니다.
 - `hwp_patch_document`의 의미 검증은 필수이며 검증을 끄거나 검증 통계 없이 결과물을 게시할 수 없습니다.
 - 보호 매니페스트는 UTF-8/UTF-16 인코딩을 구분해 검사하고, ZIP 엔트리 수는 JSZip 로드 전에 최대 10,000개로 제한합니다.
@@ -253,7 +306,7 @@ HWPX는 `HANGUL`, `LATIN`, `HANJA`, `JAPANESE`, `OTHER`, `SYMBOL`, `USER` 언어
 ## 알려진 제한
 
 - 바이너리 HWP는 읽기 전용이며 생성·수정·변환 출력은 모두 HWPX로 작성합니다.
-- 유효한 원본 문서는 100 MiB 이하까지 CI 검증 범위이며, 100 MiB 초과 512 MiB 이하는 비보장 best-effort, 512 MiB 초과는 거부됩니다. 비정상 아카이브, 압축 해제·자원·허용 루트 정책과 Kordoc 3.18.1의 100 MiB 압축 해제량 및 HWPX 500개 항목 제한은 별도로 적용됩니다.
+- 유효한 원본 문서는 10 MiB 이하가 CI 검증 기본 범위이며, 10 MiB 초과 512 MiB 이하는 이론상 처리 가능하지만 검증하지 않는 best-effort, 512 MiB 초과는 거부됩니다. 비정상 아카이브, 압축 해제·자원·허용 루트 정책과 Kordoc 3.18.1의 100 MiB 압축 해제량 및 HWPX 500개 항목 제한은 별도로 적용됩니다.
 - 인라인 Markdown은 64,000자, 파생 Markdown 파일은 256 MiB, 최종 직렬화 MCP 결과는 8 MiB로 제한합니다.
 - Kordoc 또는 rhwp 미리보기는 한컴 GUI와 픽셀 단위로 동일하지 않을 수 있습니다.
 - rhwp 미리보기 폴백은 첫 페이지만 렌더링하고 Node 환경의 근사 글꼴 폭을 사용할 수 있습니다.

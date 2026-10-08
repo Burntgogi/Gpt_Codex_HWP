@@ -8,7 +8,7 @@
     "start": "node dist/mcp.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@xmldom/xmldom": "0.9.12",
     "cfb": "1.2.2",
     "jszip": "3.10.1",
@@ -21,11 +21,12 @@
     "node": ">=22"
   },
   "optionalDependencies": {
-    "@rhwp/core": "0.7.17"
+    "@rhwp/core": "0.8.7"
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
-    "fast-uri": "3.1.8"
+    "fast-uri": "3.1.8",
+    "proxy-addr": "2.0.8"
   },
   "license": "Apache-2.0"
 }

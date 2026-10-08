@@ -8,7 +8,13 @@ import {
   sep,
 } from "node:path";
 
-import { resolveLocalPath } from "./paths.js";
+import {
+  clearDerivedNetworkRoots,
+  isWindowsNetworkPath,
+  permitDerivedNetworkPath,
+  resolveLocalPath,
+  setPermittedNetworkRoots,
+} from "./paths.js";
 
 const MAX_CONFIGURATION_BYTES = 16_384;
 const MAX_ROOTS = 32;
@@ -23,6 +29,8 @@ interface CanonicalRoot {
 export interface AllowedRootsPolicy {
   readonly configured: boolean;
   readonly rootLabels: readonly string[];
+  /** Configured Windows UNC roots; only these network locations are usable. */
+  readonly networkRoots?: readonly string[];
   authorizeExistingPath(path: string): Promise<string>;
   authorizeFuturePath(path: string): Promise<string>;
 }
@@ -63,7 +71,7 @@ export async function createAllowedRootsPolicy(
   for (const [index, configuredRoot] of configuredRoots.entries()) {
     const label = `root[${index}]`;
     try {
-      const lexicalRoot = resolveLocalPath(configuredRoot, label);
+      const lexicalRoot = resolveLocalPath(configuredRoot, label, { allowNetwork: true });
       await assertNoLinkedComponents(lexicalRoot, "configuration");
       const [canonicalPath, status] = await Promise.all([
         realpath(lexicalRoot),
@@ -85,6 +93,9 @@ export async function createAllowedRootsPolicy(
   return Object.freeze({
     configured: true,
     rootLabels: Object.freeze(roots.map((root) => root.label)),
+    networkRoots: Object.freeze(
+      roots.map((root) => root.path).filter(isWindowsNetworkPath),
+    ),
     authorizeExistingPath: (path: string) => authorizeExisting(roots, path),
     authorizeFuturePath: (path: string) => authorizeFuture(roots, path),
   });
@@ -100,10 +111,14 @@ export function setActiveAllowedRootsPolicy(policy: AllowedRootsPolicy): void {
     throw new AllowedRootsConfigurationError();
   }
   activePolicy = policy;
+  setPermittedNetworkRoots(policy.networkRoots ?? []);
+  clearDerivedNetworkRoots();
 }
 
 export function resetActiveAllowedRootsPolicy(): void {
   activePolicy = unrestrictedPolicy;
+  setPermittedNetworkRoots([]);
+  clearDerivedNetworkRoots();
 }
 
 export function authorizeExistingPath(path: string): Promise<string> {
@@ -121,13 +136,18 @@ function createUnrestrictedPolicy(): AllowedRootsPolicy {
     async authorizeExistingPath(path: string): Promise<string> {
       const resolved = resolveLocalPath(path);
       try {
-        return await realpath(resolved);
+        const canonical = await realpath(resolved);
+        // A mapped network drive the caller named resolves to its UNC share;
+        // later checks of that canonical spelling must still pass.
+        permitDerivedNetworkPath(resolved, canonical);
+        return canonical;
       } catch {
         return resolved;
       }
     },
     async authorizeFuturePath(path: string): Promise<string> {
-      return resolveLocalPath(path);
+      // Future paths are outputs; a mapped share's UNC spelling is not writable.
+      return resolveLocalPath(path, "output_path");
     },
   });
 }

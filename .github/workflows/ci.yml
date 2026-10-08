@@ -15,7 +15,7 @@ jobs:
   windows:
     name: Windows x64
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
@@ -63,6 +63,9 @@ jobs:
         id: windows_python
         timeout-minutes: 15
         run: npm run test:python
+      - name: Run Windows official document lint tests
+        timeout-minutes: 5
+        run: npm run test:official-doc
       - name: Run 10 MiB document smoke
         timeout-minutes: 15
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/pr-10.json
@@ -82,7 +85,7 @@ jobs:
   macos:
     name: macOS arm64
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
@@ -130,6 +133,9 @@ jobs:
         id: macos_python
         timeout-minutes: 15
         run: npm run test:python
+      - name: Run macOS official document lint tests
+        timeout-minutes: 5
+        run: npm run test:official-doc
       - name: Run 10 MiB document smoke
         timeout-minutes: 15
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/pr-10.json
@@ -177,3 +183,6 @@ jobs:
       - name: Run bounded lifecycle focused tests
         timeout-minutes: 20
         run: npm --prefix packages/gpt-codex-hwp run test:focused -- tests/document-process-registration.test.ts tests/document-child-client.test.ts tests/benchmark-policy.test.ts
+      - name: Run official document lint tests
+        timeout-minutes: 5
+        run: npm run test:official-doc

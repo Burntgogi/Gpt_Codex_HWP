@@ -16,7 +16,7 @@ test("Node test profiles expose the fixed full, Windows PR, and macOS PR policy"
   const pr = await profilesModule.resolveNodeTestProfile("pr");
   const macos = await profilesModule.resolveNodeTestProfile("pr-macos");
 
-  assert.equal(full.testFiles.length, 41);
+  assert.equal(full.testFiles.length, 45);
   assert.deepEqual(full.deferredCases, []);
   assert.deepEqual(pr.deferredCases.map(({ testName }) => testName), [INSTALLED_RUNTIME_NAME]);
   assert.deepEqual(macos.deferredCases.map(({ testName }) => testName), [

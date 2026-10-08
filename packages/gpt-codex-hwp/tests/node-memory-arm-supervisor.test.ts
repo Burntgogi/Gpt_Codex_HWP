@@ -68,7 +68,7 @@ test("supervisor timeout removes its worker and spawned descendant", async () =>
     assert.equal(processExists(state.rootPid), false);
     assert.equal(processExists(state.childPid), false);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 

@@ -314,7 +314,7 @@ test("platform expectation canonicalizes a repository-root path alias", async (t
   const alias = join(aliasParent, "repository");
   t.after(async () => {
     await unlink(alias).catch(() => {});
-    await rm(aliasParent, { recursive: true, force: true });
+    await rm(aliasParent, { recursive: true, force: true, maxRetries: 5 });
   });
   try {
     await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
@@ -376,7 +376,7 @@ test("platform expectation rejects tracked files reached through a directory jun
   } finally {
     if (junctionCreated) await unlink(pluginsPath);
     await rename(outsidePluginsPath, pluginsPath);
-    await rm(outsideRoot, { recursive: true, force: true });
+    await rm(outsideRoot, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -668,7 +668,7 @@ test("platform receipt creation rejects a pre-existing Windows junction output d
     );
   } finally {
     if (junctionCreated) await unlink(outputRoot);
-    await rm(outsideRoot, { recursive: true, force: true });
+    await rm(outsideRoot, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -873,7 +873,7 @@ test("platform receipt CLI never echoes malformed stage evidence or arbitrary er
 
 async function createRepository(t) {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-platform-receipt-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   git(root, "init", "--initial-branch=main");
   git(root, "config", "user.name", "Gpt_Codex_HWP contributors");
   git(root, "config", "user.email", "224273819+Burntgogi@users.noreply.github.com");

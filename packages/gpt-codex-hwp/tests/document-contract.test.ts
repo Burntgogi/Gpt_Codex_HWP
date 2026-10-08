@@ -51,7 +51,7 @@ test("document contract rejects conversion-style HWP and extensionless outputs",
 
 test("document contract rejects generation outputs before engine dispatch", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-output-contract-generate-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   let dispatches = 0;
 
   for (const name of REJECTED_OUTPUTS) {
@@ -74,7 +74,7 @@ test("document contract rejects generation outputs before engine dispatch", asyn
 
 test("document contract rejects patch outputs before source read or engine dispatch", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-output-contract-patch-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   let dispatches = 0;
   const source = join(root, "missing-source.hwpx");
 
@@ -102,7 +102,7 @@ test("document contract rejects patch outputs before source read or engine dispa
 
 test("document contract rejects fill outputs before source read or engine dispatch", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-output-contract-fill-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   let dispatches = 0;
   const source = join(root, "missing-source.hwpx");
 
@@ -130,7 +130,7 @@ test("document contract rejects fill outputs before source read or engine dispat
 
 test("document contract rejects image-placement outputs before source read or engine dispatch", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-output-contract-image-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   let dispatches = 0;
   const source = join(root, "missing-source.hwpx");
   const image = join(root, "missing-image.png");

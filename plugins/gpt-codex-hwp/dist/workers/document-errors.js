@@ -21,6 +21,9 @@ export const DOCUMENT_ENGINE_ERROR_CODES = [
     "AMBIGUOUS_ANCHOR",
     "INVALID_IMAGE",
     "UNSAFE_SVG",
+    "PYTHON_NOT_FOUND",
+    "IMAGE_INSERTION_FAILED",
+    "PREVIEW_REFLOW_REQUIRED",
 ];
 export const DOCUMENT_ENGINE_ERROR_MESSAGES = {
     ENGINE_TIMEOUT: "The document engine exceeded its time limit.",
@@ -45,6 +48,9 @@ export const DOCUMENT_ENGINE_ERROR_MESSAGES = {
     AMBIGUOUS_ANCHOR: "The image anchor is ambiguous; specify a zero-based occurrence.",
     INVALID_IMAGE: "The image could not be decoded safely.",
     UNSAFE_SVG: "The SVG image contains unsupported or unsafe content.",
+    PYTHON_NOT_FOUND: "Python 3.10 or newer was not found in a trusted location; after-paragraph image insertion is unavailable.",
+    IMAGE_INSERTION_FAILED: "The image helper could not insert the image into the HWPX document.",
+    PREVIEW_REFLOW_REQUIRED: "The HWPX has no Hancom layout cache (linesegarray); retry with reflow set to true for an approximate synthetic layout.",
 };
 export const DOCUMENT_ENGINE_STAGES = [
     "startup",

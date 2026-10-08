@@ -1,0 +1,12 @@
+{
+  "name": "korean-official-doc",
+  "version": "0.1.0",
+  "description": "Check Korean official document (공문서) drafts against the statutory formatting rules before generating HWPX.",
+  "author": {
+    "name": "Gpt_Codex_HWP contributors"
+  },
+  "homepage": "https://github.com/Burntgogi/Gpt_Codex_HWP",
+  "repository": "https://github.com/Burntgogi/Gpt_Codex_HWP",
+  "license": "Apache-2.0",
+  "keywords": ["korean", "official-document", "gongmun", "hwpx", "lint"]
+}

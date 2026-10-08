@@ -17,6 +17,7 @@ import { markdownToHwpx } from "kordoc";
 import type { DocumentEngineFacade } from "../src/shared/document-engine.js";
 import { prepareDocumentRenderOutput } from "../src/shared/document-render-output.js";
 import {
+  OutputPlaceholderLeftError,
   captureExistingOutputDirectoryIdentity,
   preflightExclusiveOutput,
   writeFileRangeAndFilesExclusively,
@@ -77,7 +78,7 @@ test("defense-in-depth: hwp_read budgets oversized facade details before image a
     await assertMissing(markdownPath);
     assert.deepEqual(await readFile(sourcePath), sourceBytes);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -99,7 +100,7 @@ test("hwp_read does not create an empty image directory", async () => {
     assert.deepEqual(result.structuredContent?.assets, []);
     await assertMissing(outputDir);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -135,7 +136,7 @@ test("hwp_read rechecks source identity after response budgeting and before comm
     assert.equal(commitVerifications, 1);
     assert.equal(await readFile(markdownPath, "utf8"), "committed markdown");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -170,7 +171,7 @@ test("a replaced planned image directory fails with OUTPUT_CONFLICT and no suffi
     await assertMissing(join(outputDir, "seal_2.png"));
     await assertMissing(join(displacedDir, "seal.png"));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -199,7 +200,7 @@ test("exclusive output preflight rejects existing targets and preserves parent i
     );
     await assertMissing(outputPath);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -263,7 +264,7 @@ test("exclusive writers recheck parent identity after open and before payload by
         }
       } finally {
         await input.close();
-        await rm(root, { recursive: true, force: true });
+        await rm(root, { recursive: true, force: true, maxRetries: 5 });
       }
     });
   }
@@ -309,7 +310,7 @@ test("exclusive writers reject unused expected directory identities before outpu
         await assertMissing(outputDir);
       } finally {
         await input.close();
-        await rm(root, { recursive: true, force: true });
+        await rm(root, { recursive: true, force: true, maxRetries: 5 });
       }
     });
   }
@@ -333,7 +334,7 @@ test("render preparation validates metadata without creating the destination", a
     await prepared.cleanup();
     await prepared.cleanup();
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -379,7 +380,7 @@ test("defense-in-depth: hwp_render_preview rejects oversized facade details befo
     assert.equal(result.structuredContent?.code, "RESPONSE_TOO_LARGE");
     await assertMissing(outputPath);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -424,7 +425,7 @@ test("defense-in-depth: hwp_generate_hwpx rejects oversized facade preview detai
     await assertMissing(outputPath);
     await assertMissing(previewPath);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -579,7 +580,7 @@ test("defense-in-depth: hwp_create_svg_asset budgets an oversized PNG fallback w
     await assertMissing(svgPath);
     await assertMissing(pngPath);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -692,7 +693,7 @@ test("hwp_read commits image and Markdown for protocol-valid near-ceiling metada
     assert.equal(await readFile(markdownPath, "utf8"), payload.markdown);
     assert.deepEqual(await readFile(sourcePath), sourceBytes);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -743,7 +744,7 @@ async function mutationFixture(label: string): Promise<{
     root,
     sourcePath,
     outputPath: join(root, "output.hwpx"),
-    async cleanup() { await rm(root, { recursive: true, force: true }); },
+    async cleanup() { await rm(root, { recursive: true, force: true, maxRetries: 5 }); },
   };
 }
 
@@ -804,3 +805,57 @@ function authorizedHwpxResult({
     async cleanup() { cleaned = true; },
   };
 }
+
+test("a write failure after reservation leaves only empty placeholders and says so", async () => {
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-placeholder-",
+  });
+  const first = join(root, "first.hwpx");
+  const second = join(root, "second.svg");
+  try {
+    await assert.rejects(
+      writeFilesExclusively(
+        [
+          { path: first, data: "complete first output" },
+          { path: second, data: "second output" },
+        ],
+        {
+          unitTestBeforeWrite: (_path: string, index: number) => {
+            if (index === 1) {
+              throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+            }
+          },
+        } as never,
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof OutputPlaceholderLeftError);
+        assert.equal(error.code, "ENOSPC");
+        assert.deepEqual(error.release, { emptied: 1, possiblyPartial: 0, complete: 0, neverWritten: 1 });
+        assert.match(error.message, /disk full.*1 emptied, 1 never written/su);
+        return true;
+      },
+    );
+    assert.equal((await stat(first)).size, 0, "the written output is emptied through its handle");
+    assert.equal((await stat(second)).size, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("a failure before any output is written keeps the original error", async () => {
+  const root = await createCanonicalTemporaryDirectory({
+    prefix: "gpt-codex-hwp-output-prewrite-",
+  });
+  try {
+    const original = Object.assign(new Error("identity changed"), { code: "PATH_ALIAS" });
+    await assert.rejects(
+      writeFilesExclusively(
+        [{ path: join(root, "only.hwpx"), data: "content" }],
+        { unitTestBeforeWrite: () => { throw original; } } as never,
+      ),
+      (error: unknown) => error === original,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});

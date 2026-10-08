@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import type { FileType } from "kordoc";
 
 import { parsePolicyXml, xmlLocalName } from "./xml-policy.js";
+import { readZipEntryBounded } from "./zip-bounded-read.js";
 import {
   loadBoundedHwpxZip,
   type BoundedZipLoader,
@@ -192,7 +193,11 @@ export async function inspectExactHwpxProtection(
   }
   let manifestBytes: Uint8Array;
   try {
-    manifestBytes = await manifest.async("uint8array");
+    manifestBytes = await readZipEntryBounded(
+      manifest,
+      MAX_PROTECTION_MANIFEST_BYTES,
+      "HWPX protection manifest",
+    );
   } catch (error: unknown) {
     return {
       code: "INVALID_HWPX_PROTECTION_METADATA",

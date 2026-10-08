@@ -1,4 +1,7 @@
+import { readZipEntryBounded } from "./zip-bounded-read.js";
 import { loadBoundedHwpxZip } from "./zip-preflight.js";
+// Same per-part ceiling the font-integrity scan applies to section XML.
+const MAX_SECTION_XML_BYTES = 128 * 1024 * 1024;
 export class HwpxAnchorResolutionError extends Error {
     code;
     constructor(code) {
@@ -17,14 +20,17 @@ export async function resolveHwpxAnchorOccurrence(source, anchorText, requestedO
     }
     const zip = await loadArchive(source);
     const sectionNames = Object.keys(zip.files)
-        .filter((name) => /(?:^|\/)section\d+\.xml$/iu.test(name))
+        // Must match hwpxlib.section_names so the occurrence chosen here selects
+        // the same paragraph in the Python image helper.
+        .filter((name) => /^Contents\/section\d+\.xml$/u.test(name))
         .sort((left, right) => sectionNumber(left) - sectionNumber(right));
     let matchCount = 0;
     for (const [index, name] of sectionNames.entries()) {
         const entry = zip.file(name);
         if (entry === null)
             continue;
-        const scanned = scan(await entry.async("text"), index);
+        const xml = new TextDecoder("utf-8").decode(await readZipEntryBounded(entry, MAX_SECTION_XML_BYTES, name));
+        const scanned = scan(xml, index);
         for (const paragraph of eligibleParagraphs(scanned.bodyParagraphs, scanned.tables)) {
             let from = 0;
             while (from <= paragraph.text.length) {

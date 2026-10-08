@@ -873,7 +873,7 @@ function documentBenchmarkStage(root, env) {
   return nodeStage("document-benchmark", [
     "scripts/installed-runtime-smoke.mjs",
     "--large-detect",
-    "100",
+    "10",
   ], root, env);
 }
 

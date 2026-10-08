@@ -1,0 +1,24 @@
+{
+  "name": "gpt-codex-hwp-local",
+  "owner": {
+    "name": "Gpt_Codex_HWP contributors",
+    "url": "https://github.com/Burntgogi/Gpt_Codex_HWP"
+  },
+  "metadata": {
+    "description": "Gpt_Codex_HWP Claude Code plugin marketplace: read HWP and safely create, edit, validate, and preview HWPX."
+  },
+  "plugins": [
+    {
+      "name": "gpt-codex-hwp",
+      "source": "./plugins/gpt-codex-hwp",
+      "description": "Read Korean HWP/HWPX documents and safely create, edit, validate, and preview HWPX.",
+      "category": "productivity"
+    },
+    {
+      "name": "korean-official-doc",
+      "source": "./plugins/korean-official-doc",
+      "description": "Optional companion: lint Korean official document (공문서) drafts against the statutory formatting rules.",
+      "category": "productivity"
+    }
+  ]
+}

@@ -46,19 +46,23 @@ export async function resolveManagedRuntime(importMetaUrl, options = {}) {
         || basename(pluginsRoot) !== "plugins" || !safeName(basename(marketplaceRoot))) {
         throw failure("RUNTIME_PATH_INVALID");
     }
-    const configuredCodexHome = options.codexHome ?? process.env.CODEX_HOME;
+    const plugin = await readManagedJson(pluginRoot, ".codex-plugin/plugin.json", MAX_JSON_BYTES);
+    const pluginVersion = typeof plugin.version === "string" ? plugin.version : "";
+    if (plugin.name !== PRODUCT
+        || !/^[0-9]+\.[0-9]+\.[0-9]+\+codex\.[A-Za-z0-9._-]{1,64}$/u.test(pluginVersion)) {
+        throw failure("RUNTIME_PATH_INVALID");
+    }
+    const host = pluginHostForVersionDirectory(basename(pluginRoot), pluginVersion);
+    if (host === undefined)
+        throw failure("RUNTIME_PATH_INVALID");
+    const configuredCodexHome = options.codexHome
+        ?? (host === "claude-code" ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME);
     const codexHome = configuredCodexHome === undefined
         ? derivedCodexHome
         : resolveAbsolute(configuredCodexHome);
     await requireExactDirectory(codexHome);
     if (!samePath(codexHome, derivedCodexHome))
         throw failure("RUNTIME_PATH_INVALID");
-    const plugin = await readManagedJson(pluginRoot, ".codex-plugin/plugin.json", MAX_JSON_BYTES);
-    const pluginVersion = typeof plugin.version === "string" ? plugin.version : "";
-    if (plugin.name !== PRODUCT || pluginVersion !== basename(pluginRoot)
-        || !/^[0-9]+\.[0-9]+\.[0-9]+\+codex\.[A-Za-z0-9._-]{1,64}$/u.test(pluginVersion)) {
-        throw failure("RUNTIME_PATH_INVALID");
-    }
     const [runtimePackage, manifestRead, lockRead] = await Promise.all([
         readManagedJson(pluginRoot, "package.json", MAX_JSON_BYTES),
         readManagedBytes(pluginRoot, "runtime-manifest.json", MAX_MANIFEST_BYTES),
@@ -82,6 +86,7 @@ export async function resolveManagedRuntime(importMetaUrl, options = {}) {
     return Object.freeze({
         pluginRoot,
         codexHome,
+        host,
         productId: PRODUCT,
         pluginVersion,
         platform: options.platform ?? process.platform,
@@ -92,6 +97,17 @@ export async function resolveManagedRuntime(importMetaUrl, options = {}) {
         directDependencies: Object.freeze(directDependencies),
         manifestFiles: manifest.files,
     });
+}
+/**
+ * Codex caches the plugin under its exact version. Claude Code caches the same
+ * plugin under a directory whose semver "+" build separator becomes "-".
+ */
+export function pluginHostForVersionDirectory(directoryName, pluginVersion) {
+    if (directoryName === pluginVersion)
+        return "codex";
+    if (directoryName === pluginVersion.replace("+", "-"))
+        return "claude-code";
+    return undefined;
 }
 export function resolveDurableRoot(identity) {
     return join(identity.codexHome, "plugin-runtime-data", identity.productId, identity.pluginVersion, runtimePlatformKey(identity));

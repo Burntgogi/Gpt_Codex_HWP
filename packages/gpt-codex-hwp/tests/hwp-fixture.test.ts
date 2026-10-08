@@ -226,7 +226,7 @@ test("HWP fixture resolver diagnostics require a regular .hwp file", async (t) =
   });
 
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-fixture-directory-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const directoryPath = join(root, "not-a-regular-file.hwp");
   await mkdir(directoryPath);
   await withFixtureEnvironment(undefined, async () => {
@@ -244,7 +244,7 @@ async function diagnosticFixture(
   bytes: Uint8Array,
 ): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-fixture-diagnostic-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const destination = join(root, filename);
   await writeFile(destination, bytes);
   return destination;
@@ -255,7 +255,7 @@ async function isolatedResolver(
   options: { provenance: unknown; fixtureBytes?: Uint8Array },
 ): Promise<typeof resolveHwpFixture> {
   const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-fixture-module-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const releaseScripts = join(root, "release-scripts");
   const fixtureRoot = join(root, "tests", "fixtures", "rhwp");
   await mkdir(releaseScripts, { recursive: true });

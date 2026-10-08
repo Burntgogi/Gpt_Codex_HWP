@@ -20,7 +20,7 @@ function sha256(bytes) {
 
 test("evidence freeze copies exact bytes without source paths and rejects tampering", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-phase-a-evidence-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "private-source.json");
   const outputRoot = join(root, "bundle");
   const sourceBytes = Buffer.from('{"status":"exploratory"}\n', "utf8");
@@ -63,7 +63,7 @@ test("evidence freeze copies exact bytes without source paths and rejects tamper
 
 test("evidence freeze rejects credential-shaped metadata", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-phase-a-evidence-private-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "source.json");
   const sourceBytes = Buffer.from("{}\n", "utf8");
   const credentialKey = ["api", "Key"].join("");
@@ -93,7 +93,7 @@ test("evidence freeze rejects credential-shaped metadata", async (t) => {
 
 test("evidence freeze is exclusive and verification rejects unindexed files", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-phase-a-evidence-exclusive-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "source.md");
   const outputRoot = join(root, "bundle");
   const sourceBytes = Buffer.from("# evidence\n", "utf8");
@@ -126,7 +126,7 @@ test("evidence freeze is exclusive and verification rejects unindexed files", as
 
 test("evidence CLI emits only a fixed receipt", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "node-phase-a-evidence-cli-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "source.json");
   const outputRoot = join(root, "bundle");
   const specPath = join(root, "spec.json");

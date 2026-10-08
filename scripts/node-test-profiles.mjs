@@ -16,10 +16,12 @@ export const SOURCE_NODE_TEST_FILES = Object.freeze([
   "hwp-fixture-integrity.test.ts", "hwp-fixture.test.ts", "hwp-plugin.test.ts",
   "hwpx-anchor.test.ts", "kordoc-core-runtime.test.ts", "markdown-output.test.ts",
   "mcp-cancellation-progress.test.ts", "mcp-smoke.test.ts",
+  "oneshot-tool-schemas.test.ts", "oneshot.test.ts",
   "output-budget-atomicity.test.ts", "patch.test.ts", "paths.test.ts",
   "protection.test.ts", "public-runtime-privacy.test.ts", "read-worker-safety.test.ts",
   "release-artifacts.test.ts", "release-metadata.test.ts", "result.test.ts",
-  "rhwp-backend.test.ts", "runtime-projection.test.ts", "tools.test.ts",
+  "rhwp-backend.test.ts", "runtime-bootstrap.test.ts", "runtime-installation.test.ts",
+  "runtime-projection.test.ts", "tools.test.ts",
   "validation-regressions.test.ts", "windows-hosted-diagnostic.test.ts",
   "write-worker-safety.test.ts",
 ]);

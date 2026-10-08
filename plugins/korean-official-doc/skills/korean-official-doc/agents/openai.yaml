@@ -1,0 +1,5 @@
+interface:
+  display_name: "공문서 작성 규칙"
+  short_description: "Lint Korean official document drafts before HWPX"
+  default_prompt: "Use $korean-official-doc to check this 공문서 draft against the formatting rules."
+  brand_color: "#2563EB"

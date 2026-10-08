@@ -16,7 +16,9 @@ not reduce the peak memory required by an active document parse. The optional
 and must be measured separately.
 
 Every measured size uses the production `detectFormat` engine operation. The
-10 MiB default benchmark demonstrates the transferable-worker path. The opt-in
+10 MiB default benchmark demonstrates the transferable-worker path and matches
+the only CI-verified document tier; larger sizes are theoretically supported
+but never gated in hosted CI or release verification. The opt-in
 100 and 256 MiB cases are descriptor-transport and supervised-child evidence,
 not proof that Kordoc can parse document content above its separate 100 MiB
 decompression guard. A small normal parse/read probe runs after each measured
@@ -93,7 +95,14 @@ generator iteratively adjusts the pad so the exact final archive size is at or
 below the requested ceiling without materializing multiple full-size copies.
 
 Current local evidence is Windows x64. macOS is an unverified device class, so
-these receipts must not be presented as macOS validation. Benchmark files and
+these receipts must not be presented as macOS validation.
+
+`hwp_generate_hwpx` runs Kordoc twice when it escapes an intraword underscore
+(for example in `snake_case` identifiers): once on the escaped Markdown for the
+document and once on the original Markdown to take `Preview/PrvText.txt`. The two
+runs are sequential, so for such documents generation time roughly doubles
+while the first archive is held in memory during the second run; Markdown
+without intraword underscores is generated once. Benchmark files and
 receipts are ignored development artifacts and are excluded from the compact
 installed runtime. Clean them from the selected ignored output directory after
 retaining only the evidence needed for the release decision.

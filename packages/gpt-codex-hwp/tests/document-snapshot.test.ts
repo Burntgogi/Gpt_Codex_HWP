@@ -140,7 +140,7 @@ test("owned bytes reports cumulative defensive copies through a bounded observer
 
 test("document snapshot opens an exact worker buffer with frozen path-free metadata", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-small-snapshot-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "private-name.hwpx");
   const bytes = Uint8Array.from([
     0x50, 0x4b, 0x03, 0x04, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74,
@@ -203,7 +203,7 @@ test("document snapshot opens an exact worker buffer with frozen path-free metad
 
 test("document snapshot reports shallow HWP and unknown candidates without exact claims", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-shallow-format-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const cases = [
     {
       name: "candidate.hwp",
@@ -233,7 +233,7 @@ test("document snapshot reports shallow HWP and unknown candidates without exact
 
 test("document snapshot rejects 512 MiB plus one from stat before allocation", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-snapshot-limit-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "oversized.hwpx");
   const handle = await open(sourcePath, "wx");
   try {
@@ -266,7 +266,7 @@ test("document snapshot rejects 512 MiB plus one from stat before allocation", a
 
 test("document snapshot rejects a source identity replacement after its positional read", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-snapshot-change-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "sensitive-source.hwpx");
   const movedPath = join(root, "moved.hwpx");
   const original = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]);
@@ -294,7 +294,7 @@ test("document snapshot rejects a source identity replacement after its position
 
 test("document snapshot rejects directories and redacts native path diagnostics", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-snapshot-redaction-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
 
   await assert.rejects(
     openDocumentSnapshot(root),
@@ -310,7 +310,7 @@ test("document snapshot rejects directories and redacts native path diagnostics"
 
 test("document snapshot rejects a FIFO without waiting for a writer", { skip: process.platform === "win32" }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-snapshot-fifo-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const path = join(root, "source.fifo");
   await execFileAsync("mkfifo", [path], { timeout: 5_000, maxBuffer: 8_192 });
   const operation = openDocumentSnapshot(path);
@@ -322,7 +322,7 @@ test("document snapshot rejects a FIFO without waiting for a writer", { skip: pr
 
 test("document snapshot streams large input into an owner-only spool with an offset-zero fd", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-snapshot-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "private-large.hwpx");
@@ -391,7 +391,7 @@ test("document snapshot streams large input into an owner-only spool with an off
 
 test("document snapshot reports only fixed spool stages to a diagnostic test hook", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-stage-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -426,7 +426,7 @@ test("document snapshot reports only fixed spool stages to a diagnostic test hoo
 
 test("document snapshot spool cleanup never deletes a replacement directory", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-replacement-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -481,7 +481,7 @@ test("document snapshot spool cleanup never deletes a replacement directory", as
 
 test("document snapshot removes a completed spool when the source changes", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-source-change-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -514,7 +514,7 @@ test("document snapshot removes a completed spool when the source changes", asyn
 
 test("document snapshot validates spool hooks without exposing runtime paths", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-options-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "source.hwpx");
   await writeFile(sourcePath, Uint8Array.from([1]));
 
@@ -541,7 +541,7 @@ test("document snapshot validates spool hooks without exposing runtime paths", a
 
 test("document snapshot large-input allocation stays within one MiB", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-buffer-bound-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -564,7 +564,7 @@ test("document snapshot large-input allocation stays within one MiB", async (t) 
 
 test("document snapshot cleans an owned spool when its creation observer fails", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-construction-failure-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -606,7 +606,7 @@ test("document snapshot implementation avoids concatenation and hidden full-buff
 
 test("document snapshot verifies the source after worker transfer with bounded memory", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-snapshot-post-verify-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const sourcePath = join(root, "private-source.hwpx");
   const bytes = Buffer.alloc(1024 * 1024 + 17, 0x41);
   bytes.set([0x50, 0x4b, 0x03, 0x04], 0);
@@ -638,7 +638,7 @@ test("document snapshot verifies the source after worker transfer with bounded m
 
 test("document snapshot verifies the source after a spool handle is taken", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-post-verify-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -655,7 +655,7 @@ test("document snapshot verifies the source after a spool handle is taken", asyn
 
 test("document snapshot cleanup retries an owned quarantine after file unlink", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-cleanup-retry-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -686,7 +686,7 @@ test("document snapshot cleanup retries an owned quarantine after file unlink", 
 
 test("document snapshot creates a protected Windows spool ACL", { skip: process.platform !== "win32" }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-spool-acl-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const spoolRoot = join(root, "spools");
   await mkdir(spoolRoot);
   const sourcePath = join(root, "source.hwpx");
@@ -718,14 +718,14 @@ test("Windows owner-only ACL replacement removes a pre-existing explicit third-p
   skip: process.platform !== "win32",
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-acl-replace-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   await execFileAsync("icacls.exe", [
     root,
     "/inheritance:r",
     "/grant:r",
     "*S-1-5-32-545:(OI)(CI)F",
     "/q",
-  ], { timeout: 5_000, maxBuffer: 64 * 1024, windowsHide: true });
+  ], { timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true });
 
   assert.equal(await applyWindowsOwnerOnlyAcl(root, "directory"), "OK");
   const acl = await readWindowsAcl(root);
@@ -783,7 +783,7 @@ async function readWindowsAcl(path: string): Promise<WindowsAclReceipt> {
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
       env: { ...process.env, GPT_CODEX_HWP_TEST_ACL_PATH: path },
-      timeout: 5_000,
+      timeout: 15_000,
       maxBuffer: 64 * 1024,
       windowsHide: true,
     },

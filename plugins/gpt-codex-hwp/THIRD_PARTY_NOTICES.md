@@ -54,19 +54,20 @@ Thank you to the Kordoc maintainer and contributors for the document runtime on 
 ## rhwp
 
 - Repository: <https://github.com/edwardkim/rhwp>
-- Version: `@rhwp/core` `0.7.17` (`v0.7.17`)
+- Version: `@rhwp/core` `0.8.7` (`v0.8.7`)
 - Copyright: `Copyright (c) 2025-2026 Edward Kim`
 - License: MIT
 - Use in this project: optional HWP/HWPX parsing and preview fallback for read-only document workflows.
+- Note: the npm package ships no font files. Its WebAssembly module embeds a generated table of glyph-width metrics used to approximate layout; upstream marks the table's provenance as unverified.
 
 Thank you to Edward Kim and the rhwp contributors for making this optional Rust/Wasm document path available.
 
 ## Model Context Protocol TypeScript SDK
 
 - Repository: <https://github.com/modelcontextprotocol/typescript-sdk>
-- Version: `@modelcontextprotocol/sdk` `1.29.0` (`v1.29.0`)
+- Version: `@modelcontextprotocol/sdk` `1.32.1` (upstream tag `1.32.1`)
 - Copyright: `Copyright (c) 2024 Anthropic, PBC`
-- License: MIT for the fixed `v1.29.0` source and package
+- License: MIT for the fixed `1.32.1` source and package (the upstream repository has announced a move to Apache-2.0 for later versions; recheck on upgrade)
 - Use in this project: MCP server, stdio transport, request/result types, and tool registration.
 
 Thank you to the modelcontextprotocol maintainers and contributors for the TypeScript MCP implementation.
@@ -74,7 +75,7 @@ Thank you to the modelcontextprotocol maintainers and contributors for the TypeS
 ## xmldom
 
 - Repository: <https://github.com/xmldom/xmldom>
-- Version: `@xmldom/xmldom` `0.9.10` (`0.9.10`)
+- Version: `@xmldom/xmldom` `0.9.12` (`0.9.12`)
 - Copyright: `Copyright 2019 - present Christopher J. Brody and other contributors, as listed in: https://github.com/xmldom/xmldom/graphs/contributors`; `Copyright 2012 - 2017 @jindw and other contributors, as listed in: https://github.com/xmldom/xmldom/graphs/contributors`
 - License: MIT
 - Use in this project: parsing, inspecting, modifying, and serializing HWPX XML for font-integrity checks and image insertion.
@@ -101,13 +102,24 @@ Thank you to SheetJS LLC and the js-cfb contributors for the compound-file imple
 
 Thank you to Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso, and all JSZip contributors for the ZIP implementation.
 
+## markdown-it
+
+- Repository: <https://github.com/markdown-it/markdown-it>
+- Version: `14.3.1` (`14.3.1`)
+- Copyright: `Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.`
+- License: MIT
+- Registry integrity: `sha512-4Ej49aYTDFIQ+uBkfX8GBvJGccoARxxPep+7aWTs55ozbjQJpW9M26Fe53vnGgvLeVzva/amzjQQaQu9w0vMhA==`
+- Use in this project: Markdown parsing inside the vendored Kordoc Core runtime; declared directly so the runtime lock pins the patched version.
+
+Thank you to Vitaly Puzrin, Alex Kocharin, and the markdown-it contributors for the CommonMark parser.
+
 ## fast-uri
 
 - Repository: <https://github.com/fastify/fast-uri>
-- Version: `3.1.4` (`v3.1.4`)
+- Version: `3.1.8` (`v3.1.8`)
 - Copyright: `Copyright (c) 2011-2021, Gary Court`; `Copyright (c) 2021-present The Fastify team`
 - License: BSD-3-Clause
-- Registry integrity: `sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw==`
+- Registry integrity: `sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==`
 - Use in this project: URI parsing used transitively by the JSON schema validator in the runtime dependency graph.
 
 Thank you to the Fastify team and fast-uri contributors for the URI implementation.
@@ -115,10 +127,11 @@ Thank you to the Fastify team and fast-uri contributors for the URI implementati
 ## Sharp
 
 - Repository: <https://github.com/lovell/sharp>
-- Version: `0.35.3` (`v0.35.3`)
-- Copyright: the upstream `v0.35.3` `LICENSE` contains no project-specific copyright notice; its official `package.json` names Lovell Fuller as author
+- Version: `0.35.5` (`v0.35.5`)
+- Copyright: the upstream `v0.35.5` `LICENSE` contains no project-specific copyright notice; its official `package.json` names Lovell Fuller as author
 - License: Apache-2.0
-- Registry integrity: `sha512-ej0zVHuZGHCiABXcNxeYhpRnPNPAcvbG8RMdBAhDAxLKkCRVSpK3Iyu7qbqw3JMzoj0REeM6f3tJLtVwl0023Q==`
+- Platform binaries: npm installs a prebuilt platform package. On macOS and Linux that is `@img/sharp-<platform>` (Apache-2.0) plus a separate `@img/sharp-libvips-<platform>` (LGPL-3.0-or-later); on Windows, `@img/sharp-win32-<arch>` bundles libvips and is Apache-2.0 AND LGPL-3.0-or-later. They are installed from npm into the local runtime and are not bundled in this repository or its release archive.
+- Registry integrity: `sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g==`
 - Use in this project: bounded SVG rasterization, PNG metadata validation, and safe image conversion before HWPX insertion.
 
 Thank you to Lovell Fuller and the Sharp contributors for the cross-platform image-processing runtime.

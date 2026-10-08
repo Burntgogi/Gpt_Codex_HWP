@@ -1,6 +1,7 @@
-import { DOMParser, XMLSerializer, } from "@xmldom/xmldom";
+import { XMLSerializer, } from "@xmldom/xmldom";
 import { loadBoundedHwpxZip, } from "./zip-preflight.js";
 import { parsePolicyXml } from "./xml-policy.js";
+import { readZipEntryBounded } from "./zip-bounded-read.js";
 export class HwpxFontReferenceError extends Error {
     issues;
     code = "HWPX_FONT_REFERENCE_ERROR";
@@ -11,6 +12,8 @@ export class HwpxFontReferenceError extends Error {
     }
 }
 const HEADER_PATH = "Contents/header.xml";
+// Matches the per-entry limit of the ZIP preflight, but counts real bytes.
+const MAX_XML_PART_BYTES = 128 * 1024 * 1024;
 const HEADER_NAMESPACE = "http://www.hancom.co.kr/hwpml/2011/head";
 const NON_NEGATIVE_INTEGER = /^(?:0|[1-9][0-9]*)$/u;
 const SCRIPT_LANG = [
@@ -112,17 +115,9 @@ async function loadArchiveAndHeader(input, loadZip) {
     if (entry === null) {
         throw new Error(`${HEADER_PATH} is missing from the HWPX package.`);
     }
-    const errors = [];
-    const document = new DOMParser({
-        onError: (level, message) => {
-            if (level !== "warning") {
-                errors.push(message);
-            }
-        },
-    }).parseFromString(await entry.async("string"), "application/xml");
-    if (errors.length > 0) {
-        throw new Error(`Could not parse ${HEADER_PATH}: ${errors.join("; ")}`);
-    }
+    // The shared policy parser rejects DTD/ENTITY declarations like every other
+    // HWPX XML part instead of handing them to the DOM parser.
+    const document = parsePolicyXml(await readZipEntryBounded(entry, MAX_XML_PART_BYTES, HEADER_PATH), HEADER_PATH);
     return { bytes, zip, document };
 }
 function inspectDocument(document) {
@@ -315,7 +310,7 @@ async function inspectCharacterShapeReferences(zip, header, issues) {
         const entry = zip.file(name);
         if (entry === null)
             continue;
-        const section = parsePolicyXml(await entry.async("uint8array"), name);
+        const section = parsePolicyXml(await readZipEntryBounded(entry, MAX_XML_PART_BYTES, name), name);
         const elements = section.getElementsByTagName("*");
         for (let index = 0; index < elements.length; index += 1) {
             const element = elements.item(index);

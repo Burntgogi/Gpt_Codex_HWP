@@ -1,24 +1,146 @@
-import { mkdir, realpath, stat } from "node:fs/promises";
-import { dirname, parse as parsePath, resolve } from "node:path";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
+import { join, parse as parsePath, resolve } from "node:path";
 
-export interface ResolvedSourceAndOutputPaths {
-  sourcePath: string;
-  outputPath: string;
+export interface ResolveLocalPathOptions {
+  /** Accept a Windows UNC path even without a permitting allowed root. */
+  readonly allowNetwork?: boolean;
 }
 
-export function resolveLocalPath(localPath: string, label = "path"): string {
+// Windows UNC roots (\\server\share) explicitly configured as allowed roots.
+// Other network paths are rejected so a document cannot steer the agent into
+// an SMB connection to an arbitrary host.
+let permittedNetworkRootKeys: readonly string[] = Object.freeze([]);
+// Shares reached through a drive letter the caller named (a mapped network
+// drive). realpath reports them in UNC form, and re-authorizing that canonical
+// spelling must not fail.
+const derivedNetworkRootKeys = new Set<string>();
+const MAX_DERIVED_NETWORK_ROOTS = 32;
+
+export function setPermittedNetworkRoots(roots: readonly string[]): void {
+  permittedNetworkRootKeys = Object.freeze(
+    roots.filter(isWindowsNetworkPath).map(networkRootKey),
+  );
+}
+
+export function isWindowsNetworkPath(path: string): boolean {
+  return /^\\\\(?![.?]\\)[^\\]/u.test(path.replaceAll("/", "\\"));
+}
+
+/**
+ * Records that a caller-named local drive path resolved to a UNC share, so the
+ * canonical UNC spelling of that share passes later checks. Ignored unless the
+ * local spelling is not a network path and the canonical one is.
+ */
+export function permitDerivedNetworkPath(localSpelling: string, canonical: string): void {
+  if (process.platform !== "win32" || isWindowsNetworkPath(localSpelling)
+    || !isWindowsNetworkPath(canonical)) return;
+  if (derivedNetworkRootKeys.size >= MAX_DERIVED_NETWORK_ROOTS) return;
+  derivedNetworkRootKeys.add(networkRootKey(parsePath(resolve(canonical)).root));
+}
+
+function networkRootKey(path: string): string {
+  const key = resolve(path).normalize("NFC").toLocaleLowerCase("en-US");
+  return key.endsWith("\\") ? key : `${key}\\`;
+}
+
+export function clearDerivedNetworkRoots(): void {
+  derivedNetworkRootKeys.clear();
+}
+
+function assertNetworkPathPermitted(path: string, label: string): void {
+  if (!isWindowsNetworkPath(path)) return;
+  const key = networkRootKey(path);
+  if (permittedNetworkRootKeys.some((root) => key.startsWith(root))) return;
+  // A share reached through a mapped drive stays readable only: every output
+  // path is resolved under an output label first, which never uses it.
+  if (!/output/iu.test(label)) {
+    for (const root of derivedNetworkRootKeys) if (key.startsWith(root)) return;
+  }
+  throw new UnsafeWindowsPathError(
+    label,
+    "network (UNC) paths are not accepted unless an allowed root permits them",
+  );
+}
+
+export function resolveLocalPath(
+  localPath: string,
+  label = "path",
+  options: ResolveLocalPathOptions = {},
+): string {
   if (typeof localPath !== "string" || localPath.trim().length === 0) {
     throw new Error(`${label} must not be empty.`);
   }
 
-  if (process.platform === "win32") {
-    assertSafeWindowsPath(localPath, label);
-  }
-  const resolved = resolve(localPath);
-  if (process.platform === "win32") {
+  if (process.platform !== "win32") return canonicalizeKnownAliases(resolve(localPath));
+
+  assertSafeWindowsPath(localPath, label);
+  const lexical = resolve(localPath);
+  assertSafeWindowsPath(lexical, label);
+  // Decide on network paths before any filesystem access: expanding an 8.3
+  // name below would otherwise contact the host named in the path.
+  if (options.allowNetwork !== true) assertNetworkPathPermitted(lexical, label);
+  const resolved = canonicalizeKnownAliases(lexical);
+  if (resolved !== lexical) {
     assertSafeWindowsPath(resolved, label);
+    permitDerivedNetworkPath(lexical, resolved);
+    if (options.allowNetwork !== true) assertNetworkPathPermitted(resolved, label);
   }
   return resolved;
+}
+
+// macOS ships these root-owned aliases into /private. Paths through them are
+// rewritten to the real location instead of being rejected as linked paths.
+const MACOS_SYSTEM_ALIASES = Object.freeze(["/tmp", "/var", "/etc"]);
+
+/**
+ * Rewrites two benign spellings to their canonical form so later
+ * realpath-equality checks do not reject them: Windows 8.3 short names (such
+ * as a TEMP directory below an abbreviated profile name) when no component on
+ * the way is a link or junction, and the macOS /tmp, /var, and /etc aliases.
+ */
+export function canonicalizeKnownAliases(path: string): string {
+  if (process.platform === "darwin") return canonicalizeMacosSystemAlias(path);
+  if (process.platform === "win32") return expandWindowsShortNames(path);
+  return path;
+}
+
+function canonicalizeMacosSystemAlias(path: string): string {
+  for (const alias of MACOS_SYSTEM_ALIASES) {
+    if (path !== alias && !path.startsWith(`${alias}/`)) continue;
+    try {
+      const status = lstatSync(alias);
+      if (!status.isSymbolicLink() || status.uid !== 0) return path;
+      if (readlinkSync(alias) !== `private${alias}`) return path;
+      return `/private${path}`;
+    } catch {
+      return path;
+    }
+  }
+  return path;
+}
+
+function expandWindowsShortNames(path: string): string {
+  const root = parsePath(path).root;
+  const segments = path.slice(root.length).split(/[\\/]+/u).filter(Boolean);
+  let last = -1;
+  segments.forEach((segment, index) => { if (/~\d/u.test(segment)) last = index; });
+  if (last < 0) return path;
+  let prefix = root;
+  for (const segment of segments.slice(0, last + 1)) {
+    prefix = join(prefix, segment);
+    try {
+      if (lstatSync(prefix).isSymbolicLink()) return path;
+    } catch {
+      return path;
+    }
+  }
+  try {
+    const expanded = realpathSync.native(prefix);
+    if (expanded.toLocaleLowerCase("en-US") === prefix.toLocaleLowerCase("en-US")) return path;
+    return join(expanded, ...segments.slice(last + 1));
+  } catch {
+    return path;
+  }
 }
 
 export class UnsafeWindowsPathError extends Error {
@@ -53,6 +175,8 @@ function assertSafeWindowsPath(path: string, label: string): void {
 
   const components = remainder.split(/[\\/]+/u).filter(Boolean);
   for (const component of components) {
+    // "." and ".." are relative navigation; the resolved path is rechecked.
+    if (component === "." || component === "..") continue;
     if (/[ .]$/u.test(component)) {
       throw new UnsafeWindowsPathError(
         label,
@@ -76,100 +200,4 @@ function assertSafeWindowsPath(path: string, label: string): void {
       );
     }
   }
-}
-
-export function assertSafeZipEntryName(entryName: string): string {
-  if (typeof entryName !== "string" || entryName.trim().length === 0) {
-    throw new Error("ZIP entry name must not be empty.");
-  }
-
-  if (entryName.includes("\0")) {
-    throw new Error("ZIP entry name must not contain null bytes.");
-  }
-
-  const normalizedName = entryName.replaceAll("\\", "/");
-  if (normalizedName.startsWith("/") || /^[A-Za-z]:/.test(normalizedName)) {
-    throw new Error("ZIP entry name must be package-relative.");
-  }
-
-  if (normalizedName.split("/").includes("..")) {
-    throw new Error("ZIP entry name must not contain directory traversal.");
-  }
-
-  return normalizedName;
-}
-
-export function resolveSourceAndOutputPaths(
-  sourcePath: string,
-  outputPath: string,
-): ResolvedSourceAndOutputPaths {
-  const resolvedSourcePath = resolveLocalPath(sourcePath, "source_path");
-  const resolvedOutputPath = resolveLocalPath(outputPath, "output_path");
-  const comparableSourcePath = comparablePath(resolvedSourcePath);
-  const comparableOutputPath = comparablePath(resolvedOutputPath);
-
-  if (comparableSourcePath === comparableOutputPath) {
-    throw new Error("source_path and output_path must be different.");
-  }
-
-  return {
-    sourcePath: resolvedSourcePath,
-    outputPath: resolvedOutputPath,
-  };
-}
-
-export async function prepareOutputPath(
-  sourcePath: string,
-  outputPath: string,
-): Promise<ResolvedSourceAndOutputPaths> {
-  const resolvedPaths = resolveSourceAndOutputPaths(sourcePath, outputPath);
-  const [sourceIdentity, outputIdentity] = await Promise.all([
-    getExistingPathIdentity(resolvedPaths.sourcePath),
-    getExistingPathIdentity(resolvedPaths.outputPath),
-  ]);
-
-  if (
-    sourceIdentity !== undefined &&
-    outputIdentity !== undefined &&
-    (comparablePath(sourceIdentity.realPath) ===
-      comparablePath(outputIdentity.realPath) ||
-      (sourceIdentity.device === outputIdentity.device &&
-        sourceIdentity.inode === outputIdentity.inode))
-  ) {
-    throw new Error("source_path and output_path must be different.");
-  }
-
-  await mkdir(dirname(resolvedPaths.outputPath), { recursive: true });
-  return resolvedPaths;
-}
-
-interface ExistingPathIdentity {
-  realPath: string;
-  device: bigint;
-  inode: bigint;
-}
-
-async function getExistingPathIdentity(
-  path: string,
-): Promise<ExistingPathIdentity | undefined> {
-  try {
-    const [resolvedRealPath, stats] = await Promise.all([
-      realpath(path),
-      stat(path, { bigint: true }),
-    ]);
-    return {
-      realPath: resolvedRealPath,
-      device: stats.dev,
-      inode: stats.ino,
-    };
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-function comparablePath(path: string): string {
-  return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
 }

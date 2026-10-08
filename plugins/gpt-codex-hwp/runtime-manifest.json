@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
-  "pluginVersion": "0.2.7+codex.20260929182230",
-  "packageLockSha256": "c51d4f940ead1a3a280a544db0d34fda122fd2b19375e0661bc1202e3f58f6ba",
+  "pluginVersion": "0.2.7+codex.20261008150000",
+  "packageLockSha256": "84ea09a61cf0fd99cdcdef8cda3300af2f344042c8f5e5a4b1e661e408e12acd",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -12,7 +12,7 @@
     {
       "path": ".codex-plugin/plugin.json",
       "size": 1208,
-      "sha256": "4cc1e8b854763ae70b5c8fdd4ceaa62cba89970c79753887497a1bacfcdf7cec"
+      "sha256": "5af2f727de220a95e351eca61f5e33dff00094639b845a47069b071a3e72ab79"
     },
     {
       "path": ".npmrc",
@@ -21,8 +21,8 @@
     },
     {
       "path": "dist/doctor-main.js",
-      "size": 42911,
-      "sha256": "5ccaac8f1229cc77a0f3727056f01b7bc5966a294a4315bd6018830040c8039f"
+      "size": 43448,
+      "sha256": "ba06d5dbe9adc6a4b1b3eea19b2c109e629e0bf224d45311687618f8d4b464bb"
     },
     {
       "path": "dist/doctor.js",
@@ -51,8 +51,8 @@
     },
     {
       "path": "dist/oneshot-main.js",
-      "size": 10182,
-      "sha256": "d795140472c5d20f1f26ce1fb4bd5e8804e7ceae3f48b5530f37d62fef40469f"
+      "size": 11347,
+      "sha256": "8568b99bd38771c0fb02ca1dfa8c90f511f635d9ecf2860faf0cb796a7a1c8ea"
     },
     {
       "path": "dist/oneshot.js",
@@ -61,13 +61,13 @@
     },
     {
       "path": "dist/runtime-bootstrap.js",
-      "size": 18763,
-      "sha256": "f61859bcee2d8a7bb7fd0d1208c44c341b028d46e44c84195661318c412217c9"
+      "size": 19380,
+      "sha256": "093d25289f5a8e63bcccb788ff5a8df16388f6e0cd616b757743b29e024ffbd3"
     },
     {
       "path": "dist/shared/allowed-roots.js",
-      "size": 8527,
-      "sha256": "b41b85f5efa3686735d742a688e897c95ec3e43bab9ace65ee931cc4925382d9"
+      "size": 9278,
+      "sha256": "16a979f93ac49858b1b745522f96dfd34ec827eabfdf3f958011cdcaba1a7de3"
     },
     {
       "path": "dist/shared/document-contract.js",
@@ -96,13 +96,13 @@
     },
     {
       "path": "dist/shared/hwpx-anchor.js",
-      "size": 2945,
-      "sha256": "15d3fece5b224b77d5ff3ba6ca0b5f3ce7c7f155b956db62fe21ee749531d2fc"
+      "size": 3364,
+      "sha256": "731620a30237715b5d2f5216a8a83b7889ada0839198a41ca045dca456017530"
     },
     {
       "path": "dist/shared/hwpx-font-integrity.js",
-      "size": 14927,
-      "sha256": "3da557ade94743387a102fd6c65a2739538d2d94edd4d21c530a0593d7eb4e17"
+      "size": 14999,
+      "sha256": "d6438b6cab90ead16262d5ec784de94cafaa412c7383b337e530a40db9298bcb"
     },
     {
       "path": "dist/shared/image-normalization.js",
@@ -120,9 +120,14 @@
       "sha256": "a8cca33e602c7c34a87de4a2561bc07c77fabf15db15ac5bd778c3df9bec2ce9"
     },
     {
+      "path": "dist/shared/markdown-underscore.js",
+      "size": 8040,
+      "sha256": "0ea72d6702f5bbd78b3ebe34d63eb51c8407489cf8663986d916456a2bffdff2"
+    },
+    {
       "path": "dist/shared/output.js",
-      "size": 21911,
-      "sha256": "06b63c42bab60a4bbd5f819089e3204435ce56bd7e2bf2e54ea55385901d1031"
+      "size": 25192,
+      "sha256": "4fca38d8801365cd6cb10c6c648f3170932fc4d6a52fa4c441abd3ce437e9130"
     },
     {
       "path": "dist/shared/owned-bytes.js",
@@ -130,19 +135,19 @@
       "sha256": "fabc54f48afb1c65c53bae8a2d2a2e3a39bffb4b331a1ca7d3bc4d48d6fb8edc"
     },
     {
-      "path": "dist/shared/path-policy.js",
-      "size": 223,
-      "sha256": "e89ff5f2905094fcc7ecef5959192d054b1103729794c045c99f713ed8297cb7"
-    },
-    {
       "path": "dist/shared/paths.js",
-      "size": 4750,
-      "sha256": "286a3cbbd4bc889d8c4a81298c835efeda5d636e8ee4cca5f5627f98a033e087"
+      "size": 7232,
+      "sha256": "87acacf8ea9c5b4f571f93ef74854be29ee448dc14d4277ab444f8a8a56ffa12"
     },
     {
       "path": "dist/shared/protection.js",
-      "size": 9092,
-      "sha256": "466b4e22de890fda76b3b3922418006f5a93530e3ef2e137f8e437b545321f75"
+      "size": 9213,
+      "sha256": "841e2626bd874de9a0db1a228b76651f8544457c7d2a4136dd2a618bbbdf3467"
+    },
+    {
+      "path": "dist/shared/python-command.js",
+      "size": 4110,
+      "sha256": "b7748d197d5312d8abf2d8192d95677da53d90bcaebfef688f706a7da7c59791"
     },
     {
       "path": "dist/shared/resource-limits.js",
@@ -178,6 +183,11 @@
       "path": "dist/shared/xml-policy.js",
       "size": 3231,
       "sha256": "03979a9297ce215e082fa9f24ccb701862e2a5e343841f665bda4f0ab1c8207a"
+    },
+    {
+      "path": "dist/shared/zip-bounded-read.js",
+      "size": 1759,
+      "sha256": "387c29bdd106eca4d3ef737f71a6c66fae92e3107be811bf5d60ea4ca8411f57"
     },
     {
       "path": "dist/shared/zip-preflight.js",
@@ -230,14 +240,19 @@
       "sha256": "fe470a9ef87ab0926214269d9dbc5e26c3afcc9dff7f3fcceaf2a14d364649a0"
     },
     {
+      "path": "dist/workers/child-process-primitives.js",
+      "size": 1593,
+      "sha256": "2a0f61b862433c92aea6d48c8d8f433f7c89cea5a9b0c1d8ba7a479282f035d2"
+    },
+    {
       "path": "dist/workers/doctor-command-runner.js",
       "size": 5383,
       "sha256": "e231dd583bba5f86f3b930e40d3834d92bf400d24e9de66e2ff21669b3abc800"
     },
     {
       "path": "dist/workers/document-child-client.js",
-      "size": 118145,
-      "sha256": "c65a92f3c36908c730681cd64116c9c1e3b8513769900e72e14627495fa2f5b6"
+      "size": 56445,
+      "sha256": "e5b987222d766480c4d847637013e0333c0736119b8b8c43a5993873209fee6b"
     },
     {
       "path": "dist/workers/document-child-start-gate.js",
@@ -251,18 +266,18 @@
     },
     {
       "path": "dist/workers/document-child.js",
-      "size": 14667,
-      "sha256": "66508cf8ffdbd447736931863a577299a2de41442b74dfbd6891e8de9f29fb9e"
+      "size": 15399,
+      "sha256": "a2bf842f04fc755ced9b947e7655c73e92e5038bba8f11da74e360cb1fe7a556"
     },
     {
       "path": "dist/workers/document-compute-backend.js",
-      "size": 30450,
-      "sha256": "83f8342d27b50f88abbe93b77f3fb86f30bc32457606b43f34056ecf3b22e285"
+      "size": 31996,
+      "sha256": "82611d9764913b2ad563b49386b7af8b467a90003cb6c9c9c34ef4134f8237f5"
     },
     {
       "path": "dist/workers/document-errors.js",
-      "size": 7681,
-      "sha256": "339200967262dd92dfb2a7b98a772e275a0d85943a5d6f24b63f90a3b699b303"
+      "size": 8147,
+      "sha256": "747ae5a4b6640015ab67c47b824ba29fffe7081cedf70fd004e09446da273d0b"
     },
     {
       "path": "dist/workers/document-execution-policy.js",
@@ -300,9 +315,34 @@
       "sha256": "07459231d881addf577628ab42a77d43749a3ab12412991a8dbccc3cbd8f6656"
     },
     {
+      "path": "dist/workers/image-helper-errors.js",
+      "size": 1142,
+      "sha256": "e2f16812ed7726a863486bac9f2195bc9fea61911345d80f108925dee1ff5fa0"
+    },
+    {
+      "path": "dist/workers/macos-process-identity.js",
+      "size": 14496,
+      "sha256": "0e208970590a6e50f3541652a91ceafc0293f2338eaf5acba96148916e2bba31"
+    },
+    {
+      "path": "dist/workers/posix-process-records.js",
+      "size": 53,
+      "sha256": "09e09319dbf85fe0190e0a4e7b192183713095dba3c09b7553ff391054cbbdde"
+    },
+    {
+      "path": "dist/workers/posix-process-telemetry.js",
+      "size": 26105,
+      "sha256": "e31f2526b6218377e9123f054b94cb838bab842bcd4c2af58d835a0ccc4ce2fa"
+    },
+    {
       "path": "dist/workers/registered-process-supervisor.js",
       "size": 11296,
       "sha256": "854a3e487dba768d994158e92743b372c145c64654f29b69985bbee82c966843"
+    },
+    {
+      "path": "dist/workers/windows-job-supervisor-client.js",
+      "size": 22979,
+      "sha256": "a4121e3493cb91a3f26cc942d304bed133080bdf5dae232ab31b7330c9e7225d"
     },
     {
       "path": "dist/workers/windows-job-supervisor.ps1",
@@ -321,13 +361,13 @@
     },
     {
       "path": "package-lock.json",
-      "size": 87254,
-      "sha256": "c51d4f940ead1a3a280a544db0d34fda122fd2b19375e0661bc1202e3f58f6ba"
+      "size": 87489,
+      "sha256": "84ea09a61cf0fd99cdcdef8cda3300af2f344042c8f5e5a4b1e661e408e12acd"
     },
     {
       "path": "package.json",
-      "size": 644,
-      "sha256": "2a2d5a16111b41be1ef4e2f859ad164bddce2da149953417950d2b7d054addbb"
+      "size": 670,
+      "sha256": "33681e275d6378aac64c331ee9c155eebf568f96692796eb443a362bc379419c"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

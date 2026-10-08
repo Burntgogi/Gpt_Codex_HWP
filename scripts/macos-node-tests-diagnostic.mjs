@@ -18,6 +18,18 @@ const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DOCUMENT_PROCESS_TEST_TIMEOUT_MS = 300_000;
 const DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS = 600_000;
+// Files whose own per-test timeouts add up past the ordinary file budget; on
+// hosted runners a slow but healthy file was otherwise killed as a failure.
+const LONG_RUNNING_FILE_TIMEOUTS_MS = Object.freeze({
+  // The whole file failed on hosted Windows timing (main push CI) while every
+  // case passed alone, so it gets the same budget as the other long files.
+  "allowed-roots.test.ts": 300_000,
+  "benchmark-policy.test.ts": 300_000,
+  "mcp-cancellation-progress.test.ts": 300_000,
+  "mcp-smoke.test.ts": 300_000,
+  "read-worker-safety.test.ts": 600_000,
+  "runtime-projection.test.ts": 600_000,
+});
 const MAX_BENCHMARK_DIAGNOSTIC_RECEIPT_BYTES = 384;
 const MAX_BENCHMARK_REGISTERED_IDENTITIES = 32;
 const TEST_FILES = SOURCE_NODE_TEST_FILES;
@@ -374,7 +386,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     ?? ((fileOptions = {}) => executeBenchmarkPolicyDiagnostic({
       spawnProcess: options.spawnProcess ?? spawn,
       terminateTree: options.terminateTree ?? terminateTree,
-      testTimeoutMs: boundedTimeout(options.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS),
+      testTimeoutMs: benchmarkFileTimeout(fileOptions, options),
       closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
       testSkipPattern: fileOptions.testSkipPattern,
       onSpawn: onTestFileSpawn,
@@ -436,13 +448,14 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         ? DOCUMENT_PROCESS_TEST_TIMEOUT_MS
         : file === "document-worker-operations.test.ts"
           ? DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS
-          : DEFAULT_TEST_TIMEOUT_MS,
+          : LONG_RUNNING_FILE_TIMEOUTS_MS[file] ?? DEFAULT_TEST_TIMEOUT_MS,
     );
     const testSkipPattern = profilePlan.skipPatternFor(file);
     try {
       if (file === "benchmark-policy.test.ts" && typeof runBenchmarkFile === "function") {
         benchmarkReceipt = await runBenchmarkFile({
           testSkipPattern,
+          testTimeoutMs,
           profile: profilePlan.name,
           onSpawn: onTestFileSpawn,
         });
@@ -1274,6 +1287,12 @@ function executeSvgAssetDiagnostic(options) {
     });
     testTimer = setTimeout(stopUnverified, options.testTimeoutMs);
   });
+}
+
+/** The per-file budget computed by the runner wins over the default. */
+export function benchmarkFileTimeout(fileOptions = {}, runnerOptions = {}) {
+  return fileOptions.testTimeoutMs
+    ?? boundedTimeout(runnerOptions.testTimeoutMs, DEFAULT_TEST_TIMEOUT_MS);
 }
 
 export function executeBoundedNodeTestFile(file, options = {}) {

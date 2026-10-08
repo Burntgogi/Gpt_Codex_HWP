@@ -16,6 +16,7 @@ import {
   assertClassicZipEntryBudget,
   loadBoundedHwpxZip,
 } from "../src/shared/zip-preflight.js";
+import { readZipEntryBounded, ZipEntryTooLargeError } from "../src/shared/zip-bounded-read.js";
 
 type XmlEncoding = "utf8" | "utf16le" | "utf16be";
 
@@ -47,7 +48,7 @@ async function hwpxWithProtectionManifest(manifest: Uint8Array): Promise<Uint8Ar
 
 test("bounded file reads reject growth beyond the caller's byte limit", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hwp-bounded-read-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const path = join(root, "large.bin");
   await writeFile(path, Buffer.alloc(9, 1));
 
@@ -209,3 +210,27 @@ function zipWithEocdCount(
   eocd.writeUInt16LE(0, 20);
   return Buffer.concat([centralDirectory, eocd]);
 }
+
+test("bounded ZIP entry reads count real bytes even when headers understate the size", async () => {
+  const zip = new JSZip();
+  zip.file("Contents/header.xml", new Uint8Array(1024 * 1024), { compression: "DEFLATE" });
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // Rewrite the uncompressed size in the local and central headers to 16 bytes.
+  view.setUint32(22, 16, true);
+  const central = bytes.findIndex((_, index) =>
+    view.getUint32(index, true) === 0x02014b50 && index + 4 <= bytes.byteLength - 4);
+  assert.ok(central > 0);
+  view.setUint32(central + 24, 16, true);
+
+  const lying = await JSZip.loadAsync(bytes);
+  const entry = lying.file("Contents/header.xml")!;
+  await assert.rejects(
+    readZipEntryBounded(entry, 64 * 1024, "Contents/header.xml"),
+    (error: unknown) => error instanceof ZipEntryTooLargeError && error.code === "ZIP_ENTRY_TOO_LARGE",
+  );
+
+  const honest = await JSZip.loadAsync(await zip.generateAsync({ type: "uint8array" }));
+  const read = await readZipEntryBounded(honest.file("Contents/header.xml")!, 2 * 1024 * 1024, "header");
+  assert.equal(read.byteLength, 1024 * 1024);
+});

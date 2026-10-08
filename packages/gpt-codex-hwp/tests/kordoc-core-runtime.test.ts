@@ -24,7 +24,7 @@ const VENDOR_ROOT = join(SOURCE_ROOT, "vendor", "kordoc-core");
 test("authenticated Kordoc archive generation is deterministic and source maps are excluded", async (t) => {
   t.diagnostic("KORDOC_KC01_STAGE_SETUP");
   const root = await createCanonicalTemporaryDirectory({ prefix: "kordoc-core-generator-" });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const first = join(root, "first");
   const second = join(root, "second");
   const tarballPath = join(root, "kordoc.tgz");
@@ -84,7 +84,7 @@ test("authenticated Kordoc archive generation is deterministic and source maps a
 
 test("tampered Kordoc archive is rejected before output", async (t) => {
   const root = await createCanonicalTemporaryDirectory({ prefix: "kordoc-core-integrity-" });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const tarballPath = join(root, "kordoc.tgz");
   const original = createTestPackageArchive([
     ["package/package.json", JSON.stringify(testKordocPackage())],
@@ -107,7 +107,7 @@ test("tampered Kordoc archive is rejected before output", async (t) => {
 
 test("authenticated Kordoc archive rejects non-regular tar entries", async (t) => {
   const root = await createCanonicalTemporaryDirectory({ prefix: "kordoc-core-tar-type-" });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const tarballPath = join(root, "kordoc.tgz");
   const tarball = createTestPackageArchive([
     ["package/package.json", JSON.stringify(testKordocPackage())],
@@ -130,7 +130,7 @@ test("authenticated Kordoc archive rejects non-regular tar entries", async (t) =
 
 test("authenticated Kordoc archive size guard accepts its boundary and rejects plus one", async (t) => {
   const root = await createCanonicalTemporaryDirectory({ prefix: "kordoc-core-size-guard-" });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const exact = join(root, "exact.tgz");
   const over = join(root, "over.tgz");
   await writeFile(exact, Buffer.alloc(1024));
@@ -220,7 +220,7 @@ test("authenticated Kordoc tar parser enforces exact configurable resource bound
 
 test("committed Kordoc verifier rejects a provenance-blessed source map", async (t) => {
   const root = await createCanonicalTemporaryDirectory({ prefix: "kordoc-core-map-verifier-" });
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const vendor = join(root, "vendor");
   await cp(VENDOR_ROOT, vendor, { recursive: true });
   const mapPath = join(vendor, "dist", "injected.js.map");

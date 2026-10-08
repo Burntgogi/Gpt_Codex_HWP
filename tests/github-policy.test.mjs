@@ -95,7 +95,7 @@ test("GitHub repository policy declares protected main, immutable tags, and owne
 
 test("GitHub repository policy rejects malformed or internally inconsistent policy before any request", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-invalid-policy-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 5 }));
   const original = JSON.parse(await readFile(POLICY_PATH, "utf8"));
   const mutations = [
     (policy) => { policy.repository.name = "../wrong"; },
@@ -363,7 +363,7 @@ test("GitHub repository policy requires numeric tag-ruleset detail with exact in
 
 test("GitHub repository policy drops raw bypass-actor metadata from drift evidence", async (t) => {
   const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bypass-evidence-"));
-  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true, maxRetries: 5 }));
   const { runRepositoryPolicy } = await import(
     `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?bypass-evidence=${Date.now()}`
   );
@@ -414,7 +414,7 @@ test("GitHub repository policy apply re-enables disabled Actions from policy", a
 
 test("GitHub repository policy check records disabled Actions as drift", async (t) => {
   const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-actions-evidence-"));
-  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true, maxRetries: 5 }));
   const { runRepositoryPolicy } = await import(
     `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?actions-check=${Date.now()}`
   );
@@ -512,7 +512,7 @@ test("GitHub repository policy fails closed when collaborator pagination never t
 
 test("GitHub repository policy blocks a second-page write deploy key without leaking raw metadata", async (t) => {
   const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-deploy-key-evidence-"));
-  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true, maxRetries: 5 }));
   const { runRepositoryPolicy } = await import(
     `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?deploy-key=${Date.now()}`
   );
@@ -717,7 +717,7 @@ test("GitHub repository policy apply mutates only repository, Actions, main, and
 
 test("GitHub repository policy writes distinct redacted evidence for rapid repeated checks", async (t) => {
   const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-policy-evidence-"));
-  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true, maxRetries: 5 }));
   const { runRepositoryPolicy } = await import(
     `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?evidence=${Date.now()}`
   );
@@ -733,7 +733,7 @@ test("GitHub repository policy writes distinct redacted evidence for rapid repea
 
 test("GitHub repository policy evidence is a strict safe DTO, never a raw API projection", async (t) => {
   const evidenceDirectory = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-policy-safe-evidence-"));
-  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true, maxRetries: 5 }));
   const { runRepositoryPolicy } = await import(
     `${new URL("../scripts/github-repository-policy.mjs", import.meta.url).href}?safe-evidence=${Date.now()}`
   );

@@ -12,7 +12,7 @@
     "developerName": "Gpt_Codex_HWP contributors",
     "marketplaceName": "gpt-codex-hwp-local",
     "legacyUninstallSelector": "hwp-korean-docs@hwp-local",
-    "codexBuildId": "20260929182230"
+    "codexBuildId": "20261008150000"
   },
   "scripts": {
     "build": "npm --prefix packages/gpt-codex-hwp run build",
@@ -39,7 +39,8 @@
     "test:repository": "node --test --test-concurrency=1 tests/*.test.mjs",
     "test:policy": "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
-    "test": "npm run test:repository && npm run test:source",
-    "test:python": "npm --prefix packages/gpt-codex-hwp run test:python"
+    "test": "npm run test:repository && npm run test:official-doc && npm run test:source",
+    "test:python": "npm --prefix packages/gpt-codex-hwp run test:python",
+    "test:official-doc": "node --test tests/korean-official-doc/lint-official-doc.test.mjs"
   }
 }

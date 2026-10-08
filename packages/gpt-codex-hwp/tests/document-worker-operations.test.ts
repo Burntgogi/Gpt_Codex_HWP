@@ -99,6 +99,14 @@ test("document worker operations use only bytes for HWPX generation, parse, rend
   );
   assert.match(rendered.svg, /^\s*<svg\b/iu);
 
+  // Generated HWPX has no Hancom layout cache; without an explicit reflow the
+  // engine reports an actionable code instead of crashing.
+  await assert.rejects(
+    client.run(request("render"), workerSnapshot(generated.bytes.slice(0))),
+    (error: unknown) => typeof error === "object" && error !== null && "code" in error
+      && error.code === "PREVIEW_REFLOW_REQUIRED",
+  );
+
   const edited = parsed.markdown.replace("Worker synthetic", "Worker updated");
   assert.notEqual(edited, parsed.markdown);
   const patched = await client.run(
@@ -486,7 +494,7 @@ test("Python insert-image descriptor mode directly consumes fd3/fd4 and writes f
     );
     assert.equal(validation.ok, true);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -523,6 +531,9 @@ test("descriptor helper command line never contains a distinctive document ancho
     "-NonInteractive",
     "-Command",
     [
+      // Warm up CIM first: its cold start can outlast the helper itself.
+      "Get-CimInstance Win32_Process | Out-Null",
+      "[Console]::Out.WriteLine('READY'); [Console]::Out.Flush()",
       "$deadline=(Get-Date).AddSeconds(15)",
       "while ((Get-Date) -lt $deadline) {",
       "$p=Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(py|python|python3)\\.exe$' -and $_.CommandLine -like '*insert_image.py*' } | Select-Object -First 1",
@@ -536,7 +547,12 @@ test("descriptor helper command line never contains a distinctive document ancho
   const monitorError: Buffer[] = [];
   monitor.stdout.on("data", (chunk: Buffer) => monitorOutput.push(chunk));
   monitor.stderr.on("data", (chunk: Buffer) => monitorError.push(chunk));
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+  const readyDeadline = Date.now() + 60_000;
+  while (!Buffer.concat(monitorOutput).toString("utf8").includes("READY")) {
+    assert.ok(Date.now() < readyDeadline, "the process monitor never became ready");
+    assert.equal(monitor.exitCode, null, Buffer.concat(monitorError).toString("utf8"));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+  }
 
   const insertion = runBuiltChildInsert(
     generated.bytes,
@@ -549,7 +565,7 @@ test("descriptor helper command line never contains a distinctive document ancho
   );
   const [monitorCode] = await once(monitor, "exit");
   assert.equal(monitorCode, 0, Buffer.concat(monitorError).toString("utf8"));
-  const observed = Buffer.concat(monitorOutput).toString("utf8").trim();
+  const observed = Buffer.concat(monitorOutput).toString("utf8").replace(/^READY\r?\n/u, "").trim();
   assert.ok(observed, "the deliberately slow helper was never observed");
   assert.doesNotMatch(observed, new RegExp(anchor, "u"));
   assert.doesNotMatch(observed, new RegExp(String(generated.bytes.byteLength), "u"));
@@ -944,7 +960,7 @@ test("document child emits no dispatch metrics when inherited fd ingestion fails
   } finally {
     closeSync(inputFd);
     closeSync(outputFd);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -1153,14 +1169,14 @@ function spoolSnapshot(bytes: Uint8Array): {
         if (cleaned) return;
         cleaned = true;
         closeSync(fd);
-        rmSync(root, { recursive: true, force: true });
+        rmSync(root, { recursive: true, force: true, maxRetries: 5 });
       },
     },
     cleanup(): void {
       if (cleaned) return;
       cleaned = true;
       closeSync(fd);
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5 });
     },
   };
 }

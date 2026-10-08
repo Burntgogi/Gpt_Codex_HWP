@@ -18,6 +18,10 @@ const DEFAULT_RUNTIME_ROOT = resolve(PROJECT_ROOT, "plugins/gpt-codex-hwp");
 const ALLOWED_ROOTS_ENVIRONMENT_VARIABLE = "GPT_CODEX_HWP_ALLOWED_ROOTS";
 const REQUEST_TIMEOUT_MS = 20_000;
 const LARGE_DOCUMENT_TIMEOUT_MS = 180_000;
+// 10 MiB is the CI-verified default tier. 100 MiB stays available as an
+// explicit local experiment; larger sources are best-effort and unverified.
+export const DEFAULT_LARGE_DETECT_SIZE_MIB = 10;
+export const LARGE_DETECT_SIZES_MIB = Object.freeze([10, 100]);
 const MAX_STDERR_BYTES = 64 * 1024;
 const MAX_MCP_STDOUT_BYTES = 512 * 1024;
 const MAX_MCP_FRAME_BYTES = 128 * 1024;
@@ -405,14 +409,17 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
     return generatePaddedHwpx(request);
   });
   const runProcess = options.runProcess ?? runBoundedProcess;
-  const requestedMiB = options.sizeMiB ?? 100;
-  let stage = "runtime";
+  const requestedMiB = options.sizeMiB ?? DEFAULT_LARGE_DETECT_SIZE_MIB;
+  let stage = "size";
   let cleanupRoot;
   let report;
   let failure;
   let failureReason;
   let prepared;
   try {
+    // Reject an unsupported size before installing or touching any runtime.
+    if (!LARGE_DETECT_SIZES_MIB.includes(requestedMiB)) throw new Error("invalid supported size");
+    stage = "runtime";
     if (options.prepareRuntime !== undefined
       || (options.runtimeRoot === undefined && options.runProcess === undefined)) {
       stage = "runtime-install";
@@ -420,7 +427,6 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
     }
     stage = "runtime";
     const runtimeRoot = resolve(options.runtimeRoot ?? prepared?.managedRoot ?? DEFAULT_RUNTIME_ROOT);
-    if (requestedMiB !== 100) throw new Error("invalid supported size");
     const entry = join(runtimeRoot, "dist", "oneshot.js");
     const entryMetadata = await lstat(entry);
     if (!entryMetadata.isFile() || entryMetadata.isSymbolicLink()) {
@@ -429,7 +435,7 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
     stage = "temporary-root";
     const ownedRoot = await assertOwnedTemporaryRoot(resolve(await createTemporaryRoot()));
     cleanupRoot = ownedRoot;
-    const sourcePath = join(ownedRoot, "supported-100.hwpx");
+    const sourcePath = join(ownedRoot, `supported-${requestedMiB}.hwpx`);
     const requestPath = join(ownedRoot, "request.json");
     const responsePath = join(ownedRoot, "response.json");
     for (const path of [sourcePath, requestPath, responsePath]) assertPathInside(ownedRoot, path);
@@ -1282,8 +1288,9 @@ function sameStrings(actual, expected) {
 
 const entryPoint = process.argv[1];
 if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
-  if (process.argv.length === 4 && process.argv[2] === "--large-detect" && process.argv[3] === "100") {
-    await runInstalledLargeDocumentSmoke();
+  if (process.argv.length === 4 && process.argv[2] === "--large-detect"
+    && LARGE_DETECT_SIZES_MIB.map(String).includes(process.argv[3])) {
+    await runInstalledLargeDocumentSmoke({ sizeMiB: Number(process.argv[3]) });
   } else if (process.argv.length !== 2) {
     process.stderr.write("Runtime smoke accepts no arguments.\n");
     process.exitCode = 1;

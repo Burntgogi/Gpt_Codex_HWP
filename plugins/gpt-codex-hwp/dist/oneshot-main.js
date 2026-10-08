@@ -11,6 +11,18 @@ import { MAX_DOCUMENT_DEADLINE_MS } from "./workers/document-execution-policy.js
 import { subscribeDocumentChildTerminationReceipts } from "./workers/document-child-termination-channel.js";
 import { subscribeDocumentWorkerTerminationReceipts } from "./workers/document-worker-termination-channel.js";
 import { MAX_REGISTERED_PROCESS_GROUPS, normalizeProcessTreeTerminationReceipt, unverifiedTermination, } from "./workers/registered-process-supervisor.js";
+export const ONESHOT_INVOCATION_FAILURE_REASONS = Object.freeze([
+    "ARGUMENTS_INVALID",
+    "ALLOWED_ROOTS_INVALID",
+    "REQUEST_UNREADABLE",
+    "REQUEST_INVALID",
+    "RESPONSE_PATH_REJECTED",
+    "TOOL_CALL_FAILED",
+    "CANCELLED",
+    "RESPONSE_TOO_LARGE",
+    "RESPONSE_WRITE_FAILED",
+    "CLEANUP_EVIDENCE_INVALID",
+]);
 export const MAX_ONESHOT_REQUEST_BYTES = 32 * 1024 * 1024;
 export const ONESHOT_CLEANUP_ALLOWANCE_MS = 15_000;
 export const ONESHOT_TOOL_TIMEOUT_MS = MAX_DOCUMENT_DEADLINE_MS + ONESHOT_CLEANUP_ALLOWANCE_MS;
@@ -136,10 +148,16 @@ export function callOneShotTool(client, request, options = {}) {
 export async function runOneShot(argv = process.argv.slice(2), options = {}) {
     let client;
     let server;
+    let stage = "ARGUMENTS_INVALID";
     try {
         const paths = parseOneShotArguments(argv);
+        stage = "ALLOWED_ROOTS_INVALID";
         await configureAllowedRootsForMcp();
-        const request = parseOneShotRequest(await readFileBounded(paths.requestPath, "one-shot request", MAX_ONESHOT_REQUEST_BYTES, { directPath: true }));
+        stage = "REQUEST_UNREADABLE";
+        const requestBytes = await readFileBounded(paths.requestPath, "one-shot request", MAX_ONESHOT_REQUEST_BYTES, { directPath: true });
+        stage = "REQUEST_INVALID";
+        const request = parseOneShotRequest(requestBytes);
+        stage = "RESPONSE_PATH_REJECTED";
         const response = await preflightExclusiveOutput(paths.responsePath, {
             sourcePaths: [paths.requestPath],
         });
@@ -151,9 +169,12 @@ export async function runOneShot(argv = process.argv.slice(2), options = {}) {
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
         await server.connect(serverTransport);
         await client.connect(clientTransport);
+        stage = "TOOL_CALL_FAILED";
         const result = await callOneShotTool(client, request, options);
+        stage = "RESPONSE_TOO_LARGE";
         const serialized = JSON.stringify(result);
         assertUtf8Budget(serialized, MAX_MCP_RESPONSE_BYTES, "one-shot response");
+        stage = "RESPONSE_WRITE_FAILED";
         await writeFilesExclusively([{ path: response.path, data: serialized, mode: 0o600 }], {
             sourcePaths: [paths.requestPath],
             expectedDirectoryIdentities: response.expectedDirectoryIdentities,
@@ -161,6 +182,11 @@ export async function runOneShot(argv = process.argv.slice(2), options = {}) {
         return result.isError === true ? 1 : 0;
     }
     catch {
+        const reason = options.signal?.aborted === true ? "CANCELLED" : stage;
+        try {
+            options.onInvocationFailure?.(reason);
+        }
+        catch { }
         return 2;
     }
     finally {
@@ -188,17 +214,23 @@ export async function runOneShotEntry(argv = process.argv.slice(2)) {
     process.once("SIGINT", abort);
     process.once("SIGTERM", abort);
     let code = 2;
+    let failureReason;
     let cleanupEvidence;
     let cleanupEvidenceReceipt = "";
     try {
         const evidenceMode = process.env[ONESHOT_CLEANUP_EVIDENCE_ENV];
         delete process.env[ONESHOT_CLEANUP_EVIDENCE_ENV];
         if (evidenceMode !== undefined) {
-            if (evidenceMode !== "stdout")
+            if (evidenceMode !== "stdout") {
+                failureReason = "CLEANUP_EVIDENCE_INVALID";
                 throw new Error("Invalid one-shot cleanup evidence mode.");
+            }
             cleanupEvidence = createOneShotCleanupEvidenceCollector();
         }
-        code = await runOneShot(argv, { signal: controller.signal });
+        code = await runOneShot(argv, {
+            signal: controller.signal,
+            onInvocationFailure: (reason) => { failureReason = reason; },
+        });
         if (code === 0 && cleanupEvidence !== undefined) {
             cleanupEvidenceReceipt = cleanupEvidence.finish();
         }
@@ -221,7 +253,9 @@ export async function runOneShotEntry(argv = process.argv.slice(2)) {
         ? `${cleanupEvidenceReceipt}ONESHOT_OK\n`
         : code === 1
             ? "ONESHOT_TOOL_ERROR\n"
-            : "ONESHOT_INVOCATION_ERROR\n";
+            : failureReason === undefined
+                ? "ONESHOT_INVOCATION_ERROR\n"
+                : `ONESHOT_INVOCATION_ERROR reason=${failureReason}\n`;
     try {
         (code === 2 ? process.stderr : process.stdout).write(receipt);
     }

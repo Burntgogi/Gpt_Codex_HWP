@@ -19,6 +19,8 @@ import {
   normalizeDocumentEngineError,
   type DocumentEnginePublicError,
 } from "./document-errors.js";
+import { imageHelperFailureCode } from "./image-helper-errors.js";
+import { MINIMUM_HELPER_PYTHON, resolvePythonCommand } from "../shared/python-command.js";
 import {
   DOCUMENT_PROTOCOL_VERSION,
   MAX_CHILD_INLINE_RESULT_BYTES,
@@ -126,14 +128,12 @@ async function runImageHelper(
     "../../scripts/hwpx-safe-edit/insert_image.py",
     import.meta.url,
   ));
-  const command = process.platform === "win32"
-    ? join(process.env.SystemRoot ?? "C:\\Windows", "py.exe")
-    : "/usr/bin/python3";
-  const args = [
-    ...(process.platform === "win32" ? ["-3"] : []),
-    script,
-    "--descriptor-mode",
-  ];
+  const python = await resolvePythonCommand(undefined, {
+    minimumVersion: MINIMUM_HELPER_PYTHON,
+  });
+  if (python === undefined) throw createDocumentEngineRunError("PYTHON_NOT_FOUND");
+  const command = python.command;
+  const args = [...python.argsPrefix, script, "--descriptor-mode"];
   const control = encodeBoundedJsonFrame({
     sourceSize,
     imageSize: image.byteLength,
@@ -153,6 +153,7 @@ async function runImageHelper(
     let outputBytes = 0;
     let errorBytes = 0;
     const outputChunks: Buffer[] = [];
+    const errorChunks: Buffer[] = [];
     helper.stdout?.on("data", (chunk: Buffer) => {
       outputBytes += chunk.byteLength;
       if (outputBytes > 64 * 1024) helper.kill();
@@ -161,6 +162,7 @@ async function runImageHelper(
     helper.stderr?.on("data", (chunk: Buffer) => {
       errorBytes += chunk.byteLength;
       if (errorBytes > 64 * 1024) helper.kill();
+      else errorChunks.push(Buffer.from(chunk));
     });
     helper.stdin?.on("error", () => undefined);
     helper.stdin?.end(control);
@@ -174,8 +176,13 @@ async function runImageHelper(
     }
     imageInput.on("error", () => undefined);
     imageInput.end(Buffer.from(image));
-    helper.once("error", rejectPromise);
-    helper.once("exit", (code) => {
+    helper.once("error", (error: NodeJS.ErrnoException) => {
+      rejectPromise(error.code === "ENOENT"
+        ? createDocumentEngineRunError("PYTHON_NOT_FOUND")
+        : error);
+    });
+    // "close" fires after stdout is fully drained; "exit" can precede it.
+    helper.once("close", (code) => {
       if (code === 0 && outputBytes <= 64 * 1024 && errorBytes <= 64 * 1024) {
         try {
           resolvePromise(afterParagraphMetadata(Buffer.concat(outputChunks)));
@@ -183,11 +190,16 @@ async function runImageHelper(
           rejectPromise(error);
         }
       } else {
-        rejectPromise(createDocumentEngineRunError("ENGINE_PROTOCOL_ERROR"));
+        rejectPromise(createDocumentEngineRunError(
+          code !== 0 && errorBytes <= 64 * 1024
+            ? imageHelperFailureCode(Buffer.concat(errorChunks))
+            : "ENGINE_PROTOCOL_ERROR",
+        ));
       }
     });
   });
 }
+
 
 function afterParagraphMetadata(encoded: Uint8Array) {
   let value: unknown;
@@ -342,6 +354,8 @@ function minimalPythonEnvironment(): NodeJS.ProcessEnv {
     "TMPDIR",
     "LANG",
     "LC_ALL",
+    // The py.exe launcher reads its per-user configuration from here.
+    "LOCALAPPDATA",
   ]) {
     const value = process.env[key];
     if (value !== undefined) result[key] = value;

@@ -181,144 +181,161 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
     }
   }
 
-  for (const file of repositoryTestFiles) {
-    let passed = false;
-    let publicContentReceipt;
-    const testTimeoutMs = file === "public-content-policy.test.mjs"
-      ? PUBLIC_CONTENT_TEST_TIMEOUT_MS
-      : file === "runtime-projection.test.mjs"
-        ? RUNTIME_PROJECTION_TEST_TIMEOUT_MS
-        : DEFAULT_REPOSITORY_TEST_TIMEOUT_MS;
-    try {
-      if (file === "public-content-policy.test.mjs"
-        && typeof runPublicContentFile === "function") {
-        publicContentReceipt = await runPublicContentFile();
-        passed = publicContentReceipt?.passed === true;
-      } else {
-        passed = await runRepositoryFile(file, { testTimeoutMs }) === true;
-      }
-    } catch { passed = false; }
-    if (!passed) {
-      if (file === "kordoc-runtime-ownership.test.mjs") {
-        for (const record of KORDOC_OWNERSHIP_CASES) {
-          let casePassed = false;
-          try { casePassed = await runKordocCase(record) === true; } catch { casePassed = false; }
-          if (!casePassed) {
-            if (record.id === "ko02") {
-              let stage = "diagnostic-failed";
-              try {
-                const candidate = await runKordocDefaultDiagnostic();
-                if (KORDOC_DEFAULT_STAGES.has(candidate)) stage = candidate;
-              } catch {}
-              stdout.write(`WINDOWS_KORDOC_DEFAULT stage=${stage}\n`);
-            }
-            stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
-            setExitCode(1);
-            return false;
-          }
+  // The fail-closed release gate stops at the first repository failure. The
+  // PR diagnostic still runs the source diagnostic afterwards, so a
+  // repository flake cannot hide the source failure that triggered it.
+  const repositoryPassed = await (async () => {
+    for (const file of repositoryTestFiles) {
+      let passed = false;
+      let publicContentReceipt;
+      const testTimeoutMs = file === "public-content-policy.test.mjs"
+        ? PUBLIC_CONTENT_TEST_TIMEOUT_MS
+        : file === "runtime-projection.test.mjs"
+          ? RUNTIME_PROJECTION_TEST_TIMEOUT_MS
+          : DEFAULT_REPOSITORY_TEST_TIMEOUT_MS;
+      try {
+        if (file === "public-content-policy.test.mjs"
+          && typeof runPublicContentFile === "function") {
+          publicContentReceipt = await runPublicContentFile();
+          passed = publicContentReceipt?.passed === true;
+        } else {
+          passed = await runRepositoryFile(file, { testTimeoutMs }) === true;
         }
-        stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=kordoc-aggregate status=failed\n");
+      } catch { passed = false; }
+      if (!passed) {
+        if (file === "kordoc-runtime-ownership.test.mjs") {
+          for (const record of KORDOC_OWNERSHIP_CASES) {
+            let casePassed = false;
+            try { casePassed = await runKordocCase(record) === true; } catch { casePassed = false; }
+            if (!casePassed) {
+              if (record.id === "ko02") {
+                let stage = "diagnostic-failed";
+                try {
+                  const candidate = await runKordocDefaultDiagnostic();
+                  if (KORDOC_DEFAULT_STAGES.has(candidate)) stage = candidate;
+                } catch {}
+                stdout.write(`WINDOWS_KORDOC_DEFAULT stage=${stage}\n`);
+              }
+              stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
+              setExitCode(1);
+              return false;
+            }
+          }
+          stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=kordoc-aggregate status=failed\n");
+          setExitCode(1);
+          return false;
+        }
+        if (file === "release-verify.test.mjs") {
+          for (const record of RELEASE_VERIFY_CASES) {
+            let casePassed = false;
+            try { casePassed = await runReleaseVerifyCase(record) === true; } catch { casePassed = false; }
+            if (!casePassed) {
+              if (record.id === "rv32") {
+                let stage = "diagnostic-failed";
+                try {
+                  const candidate = await runReleaseOracleDiagnostic();
+                  if (RELEASE_ORACLE_STAGES.has(candidate)) stage = candidate;
+                } catch {}
+                stdout.write(`WINDOWS_RELEASE_ORACLE stage=${stage}\n`);
+              }
+              stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
+              setExitCode(1);
+              return false;
+            }
+          }
+          stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=release-aggregate status=failed\n");
+          setExitCode(1);
+          return false;
+        }
+        if (file === "public-content-policy.test.mjs") {
+          let caseId = "aggregate";
+          let completionKind;
+          let runnerFailureKind;
+          let stage;
+          try {
+            const candidate = publicContentReceipt ?? await runPublicContentDiagnostic();
+            if (typeof candidate === "string"
+              && /^pc(?:0[1-9]|[1-5][0-9]|6[0-3])$/u.test(candidate)) {
+              caseId = candidate;
+            } else if (candidate !== null && typeof candidate === "object") {
+              if (/^(?:pc(?:0[1-9]|[1-5][0-9]|6[0-3])|public-content-(?:aggregate|rerun-passed))$/u
+                .test(candidate.caseId)) {
+                caseId = candidate.caseId;
+              }
+              if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate.stage)
+                || PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate.stage)
+                || PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate.stage)) {
+                stage = candidate.stage;
+              }
+              if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
+                .includes(candidate.completionKind)) {
+                completionKind = candidate.completionKind;
+              }
+              if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
+                .includes(candidate.runnerFailureKind)) {
+                runnerFailureKind = candidate.runnerFailureKind;
+              }
+            }
+          } catch {}
+          if (caseId === "pc23") {
+            stdout.write(`WINDOWS_PUBLIC_CONTENT_METADATA stage=${stage ?? "diagnostic-failed"}\n`);
+          } else if (caseId === "pc11") {
+            stdout.write(`WINDOWS_PUBLIC_CONTENT_BINARY_PATH stage=${stage ?? "diagnostic-failed"}\n`);
+          } else if (caseId === "pc24") {
+            stdout.write(`WINDOWS_PUBLIC_CONTENT_FROZEN_TAG stage=${stage ?? "diagnostic-failed"}\n`);
+          }
+          if (completionKind !== undefined) {
+            stdout.write(`WINDOWS_PUBLIC_CONTENT_COMPLETION kind=${completionKind}\n`);
+          }
+          if (runnerFailureKind !== undefined) {
+            stdout.write(`WINDOWS_PUBLIC_CONTENT_RUNNER kind=${runnerFailureKind}\n`);
+          }
+          stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
+          setExitCode(1);
+          return false;
+        }
+        if (file === "runtime-projection.test.mjs") {
+          let caseId = "aggregate";
+          let runnerFailureKind;
+          try {
+            const candidate = await runRuntimeProjectionDiagnostic();
+            if (typeof candidate === "string"
+              && /^rp(?:0[1-9]|[12][0-9]|3[0-2])$/u.test(candidate)) {
+              caseId = candidate;
+            } else if (candidate !== null && typeof candidate === "object") {
+              if (/^(?:rp(?:0[1-9]|[12][0-9]|3[0-2])|runtime-projection-(?:aggregate|rerun-passed))$/u
+                .test(candidate.caseId)) {
+                caseId = candidate.caseId;
+              }
+              if (RUNNER_FAILURE_KINDS.has(candidate.runnerFailureKind)) {
+                runnerFailureKind = candidate.runnerFailureKind;
+              }
+            }
+          } catch {}
+          if (runnerFailureKind !== undefined) {
+            stdout.write(`WINDOWS_RUNTIME_PROJECTION_RUNNER kind=${runnerFailureKind}\n`);
+          }
+          stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
+          setExitCode(1);
+          return false;
+        }
+        stdout.write(`WINDOWS_REPOSITORY_TEST_FILE file=${file} status=failed\n`);
         setExitCode(1);
         return false;
       }
-      if (file === "release-verify.test.mjs") {
-        for (const record of RELEASE_VERIFY_CASES) {
-          let casePassed = false;
-          try { casePassed = await runReleaseVerifyCase(record) === true; } catch { casePassed = false; }
-          if (!casePassed) {
-            if (record.id === "rv32") {
-              let stage = "diagnostic-failed";
-              try {
-                const candidate = await runReleaseOracleDiagnostic();
-                if (RELEASE_ORACLE_STAGES.has(candidate)) stage = candidate;
-              } catch {}
-              stdout.write(`WINDOWS_RELEASE_ORACLE stage=${stage}\n`);
-            }
-            stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${record.id} status=failed\n`);
-            setExitCode(1);
-            return false;
-          }
-        }
-        stdout.write("WINDOWS_REPOSITORY_TEST_CASE case=release-aggregate status=failed\n");
-        setExitCode(1);
-        return false;
-      }
-      if (file === "public-content-policy.test.mjs") {
-        let caseId = "aggregate";
-        let completionKind;
-        let runnerFailureKind;
-        let stage;
-        try {
-          const candidate = publicContentReceipt ?? await runPublicContentDiagnostic();
-          if (typeof candidate === "string"
-            && /^pc(?:0[1-9]|[1-5][0-9]|6[0-2])$/u.test(candidate)) {
-            caseId = candidate;
-          } else if (candidate !== null && typeof candidate === "object") {
-            if (/^(?:pc(?:0[1-9]|[1-5][0-9]|6[0-2])|public-content-(?:aggregate|rerun-passed))$/u
-              .test(candidate.caseId)) {
-              caseId = candidate.caseId;
-            }
-            if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate.stage)
-              || PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate.stage)
-              || PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate.stage)) {
-              stage = candidate.stage;
-            }
-            if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
-              .includes(candidate.completionKind)) {
-              completionKind = candidate.completionKind;
-            }
-            if (["spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk", "capture-limit", "runner-timeout"]
-              .includes(candidate.runnerFailureKind)) {
-              runnerFailureKind = candidate.runnerFailureKind;
-            }
-          }
-        } catch {}
-        if (caseId === "pc23") {
-          stdout.write(`WINDOWS_PUBLIC_CONTENT_METADATA stage=${stage ?? "diagnostic-failed"}\n`);
-        } else if (caseId === "pc11") {
-          stdout.write(`WINDOWS_PUBLIC_CONTENT_BINARY_PATH stage=${stage ?? "diagnostic-failed"}\n`);
-        } else if (caseId === "pc24") {
-          stdout.write(`WINDOWS_PUBLIC_CONTENT_FROZEN_TAG stage=${stage ?? "diagnostic-failed"}\n`);
-        }
-        if (completionKind !== undefined) {
-          stdout.write(`WINDOWS_PUBLIC_CONTENT_COMPLETION kind=${completionKind}\n`);
-        }
-        if (runnerFailureKind !== undefined) {
-          stdout.write(`WINDOWS_PUBLIC_CONTENT_RUNNER kind=${runnerFailureKind}\n`);
-        }
-        stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
-        setExitCode(1);
-        return false;
-      }
-      if (file === "runtime-projection.test.mjs") {
-        let caseId = "aggregate";
-        let runnerFailureKind;
-        try {
-          const candidate = await runRuntimeProjectionDiagnostic();
-          if (typeof candidate === "string"
-            && /^rp(?:0[1-9]|[12][0-9]|3[0-2])$/u.test(candidate)) {
-            caseId = candidate;
-          } else if (candidate !== null && typeof candidate === "object") {
-            if (/^(?:rp(?:0[1-9]|[12][0-9]|3[0-2])|runtime-projection-(?:aggregate|rerun-passed))$/u
-              .test(candidate.caseId)) {
-              caseId = candidate.caseId;
-            }
-            if (RUNNER_FAILURE_KINDS.has(candidate.runnerFailureKind)) {
-              runnerFailureKind = candidate.runnerFailureKind;
-            }
-          }
-        } catch {}
-        if (runnerFailureKind !== undefined) {
-          stdout.write(`WINDOWS_RUNTIME_PROJECTION_RUNNER kind=${runnerFailureKind}\n`);
-        }
-        stdout.write(`WINDOWS_REPOSITORY_TEST_CASE case=${caseId} status=failed\n`);
-        setExitCode(1);
-        return false;
-      }
-      stdout.write(`WINDOWS_REPOSITORY_TEST_FILE file=${file} status=failed\n`);
-      setExitCode(1);
-      return false;
     }
+    return true;
+  })();
+  if (!repositoryPassed) {
+    if (profile === "pr") {
+      try {
+        await runSourceDiagnostic({ receiptPrefix: "WINDOWS", profile, stdout, setExitCode });
+      } catch {
+        stdout.write("WINDOWS_SOURCE_NODE_DIAGNOSTIC status=failed\n");
+      }
+      setExitCode(1);
+    }
+    return false;
   }
 
   stdout.write(
@@ -374,7 +391,7 @@ async function executePublicContentDiagnostic() {
   const passed = await executeBoundedNodeTestFile("public-content-policy.test.mjs", {
     repository: true,
     testTimeoutMs: PUBLIC_CONTENT_TEST_TIMEOUT_MS,
-    maximumTopLevelTests: 62,
+    maximumTopLevelTests: 63,
     onCompletionKind: (value) => { completionKind = value; },
     onRunnerFailureKind: (value) => { runnerFailureKind = value; },
     onFailedTopLevelOrdinal: (value) => { ordinal = value; },
