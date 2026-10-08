@@ -75,7 +75,9 @@ export function koreanAmount(value) {
 }
 
 function withCommas(digits) {
-  return digits.replace(/\B(?=(\d{3})+(?!\d))/gu, ",");
+  // Callers pass a safe integer, so this string has at most 16 digits; a long
+  // run of leading zeros would otherwise make the lookahead quadratic.
+  return String(Number(digits)).replace(/\B(?=(\d{3})+(?!\d))/gu, ",");
 }
 
 /** Masks fenced code, inline code, and URLs so they are never linted. */
@@ -318,7 +320,8 @@ function lastContentLine(lines) {
 function lintEndMark(lines, findings) {
   const index = lastContentLine(lines);
   if (index < 0) return;
-  const line = lines[index].replace(/\s+$/u, "");
+  // trimEnd is linear; /\s+$/ rescans every whitespace run that is not final.
+  const line = lines[index].trimEnd();
   if (/^\s*\|.*\|$/u.test(line)) {
     if (!/(?:이하\s?빈칸|끝)/u.test(line)) {
       findings.push(finding(
@@ -332,7 +335,7 @@ function lintEndMark(lines, findings) {
     }
     return;
   }
-  const end = /(\s*)끝(\.?)$/u.exec(line);
+  const end = finalEndMark(line);
   if (end === null) {
     findings.push(finding(
       "end-mark",
@@ -367,13 +370,29 @@ function lintEndMark(lines, findings) {
   }
 }
 
+/**
+ * Same result as /(\s*)끝(\.?)$/u.exec(line) without its quadratic rescans of a
+ * long whitespace run: [whitespace before 끝, "." or ""] with `index` set.
+ */
+function finalEndMark(line) {
+  const dot = line.endsWith("끝.") ? "." : "";
+  if (dot === "" && !line.endsWith("끝")) return null;
+  const mark = line.length - 1 - dot.length;
+  let start = mark;
+  while (start > 0 && /\s/u.test(line[start - 1])) start -= 1;
+  const result = [line.slice(start), line.slice(start, mark), dot];
+  result.index = start;
+  return result;
+}
+
 function lintAttachments(lines, findings) {
   lines.forEach((line, index) => {
     const { offset, text } = stripListPrefix(line);
     if (!/^붙\s?임(?=\s|$)/u.test(text)) return;
     const body = text.replace(/^붙\s?임\s*/u, "");
     if (body.length === 0) return; // items follow on the next lines
-    if (!/\d+\s*(?:부|매|권|건|장|개|종|점)/u.test(body)) {
+    // (?<!\d) starts each try at the beginning of a digit run, keeping it linear.
+    if (!/(?<!\d)\d+\s*(?:부|매|권|건|장|개|종|점)/u.test(body)) {
       findings.push(finding(
         "attachment",
         "warn",

@@ -113,6 +113,25 @@ test("a 금 that ends a compound noun is not taken as the amount prefix", () => 
   );
 });
 
+test("crafted whitespace and zero runs are linted in linear time", () => {
+  // Each input targets one fixed pattern: trailing whitespace, comma grouping,
+  // the 끝 mark after a long whitespace run, and the 붙임 quantity check.
+  for (const draft of [
+    `내용입니다.\n${" ".repeat(200_000)}x\n`,
+    `${"0".repeat(200_000)}1원\n`,
+    `내용입니다.\n${" ".repeat(200_000)}x끝\n`,
+    `붙임 ${"1".repeat(200_000)}x부\n`,
+  ]) {
+    const started = performance.now();
+    lintOfficialDocument(draft, { profile: "gongmun" });
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 3_000, `took ${Math.round(elapsed)} ms`);
+  }
+  const report = lintOfficialDocument("예산 0001000원\n", { profile: "general" });
+  assert.equal(report.findings.find((entry) => entry.rule === "amount").suggestion, "1,000원(일천원)",
+    "leading zeros are dropped from the suggestion");
+});
+
 test("time-of-day words convert to the right 24-hour value and bare hours are not guessed", () => {
   const report = lintOfficialDocument("저녁 7시, 밤 9시까지, 밤 12시, 낮 2시, 새벽 5시, 3시 회의, 15시, 밤 1시, 저녁 12시\n", { profile: "general" });
   assert.deepEqual(

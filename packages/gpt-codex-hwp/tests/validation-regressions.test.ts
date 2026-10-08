@@ -117,6 +117,133 @@ function directElements(parent: Element, localName: string): Element[] {
   return result;
 }
 
+test("underscore escaper scanners match their reference regexes and stay linear on crafted input", async () => {
+  const { escapeIntrawordUnderscores, htmlTableRenders, htmlTableTags, protectedInlineRanges } = await import(
+    "../src/shared/markdown-underscore.js"
+  );
+  const inlineReference = /`[^`]+`|<[a-z][a-z0-9+.-]*:[^>\s]*>|\]\([^)\s]*\)|\bhttps?:\/\/\S+/giu;
+  // Kordoc's parseHtmlTable uses exactly these flags.
+  const tagReference = /<(\/?)(table|tr|td|th)((?:"[^"]*"|'[^']*'|[^>"'])*?)>/gi;
+  const tagMatches = (raw: string) => [...raw.matchAll(tagReference)]
+    .map((match) => [match.index, match.index + match[0].length, match[1] === "/", match[2]!.toLowerCase()]);
+  const scannedTags = (raw: string) => [...htmlTableTags(raw)]
+    .map((tag) => [tag.start, tag.end, tag.isClose, tag.tag]);
+  const referenceRenders = (raw: string): boolean => {
+    let depth = 0;
+    let rowOpen = false;
+    let rowCells = 0;
+    let cellOpen = false;
+    let renderedCell = false;
+    for (const match of raw.matchAll(tagReference)) {
+      const isClose = match[1] === "/";
+      const tag = match[2]!.toLowerCase();
+      if (tag === "table") {
+        depth += isClose ? -1 : 1;
+        if (depth < 0) return false;
+        continue;
+      }
+      if (depth !== 1) continue;
+      if (tag === "tr") {
+        if (!isClose) {
+          rowOpen = true;
+          rowCells = 0;
+        } else if (rowOpen) {
+          if (rowCells > 0) renderedCell = true;
+          rowOpen = false;
+        }
+      } else if (!isClose) {
+        cellOpen = true;
+      } else if (cellOpen && rowOpen) {
+        rowCells += 1;
+        cellOpen = false;
+      }
+    }
+    return depth === 0 && renderedCell;
+  };
+
+  // Deterministic generator over the characters both scanners branch on.
+  let seed = 0x2f6b_4a1d;
+  const random = (limit: number): number => {
+    seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0;
+    return seed % limit;
+  };
+  // Multi-character tokens make URL, autolink, and link-destination prefixes
+  // common, including the Unicode case folds the "iu" flags apply.
+  const inlineAlphabet = ["`", "<", ">", "]", "(", ")", "](", "<a:", "<S:", "<\u017f:", "http", "HTTP", "https", "httpſ",
+    "hTtPſ", "://", "s", ":", "/", "a", "Z", "1", "+", "-", ".", "_", " ", "\t", "\n", "\u00a0", "\u2003",
+    "\u017f", "\u212a", "\u00e9", "x"];
+  const tagAlphabet = ["<", ">", "/", "table", "TABLE", "tr", "td", "th", "thead", "trx", "\"", "'", " ", "a", "\n", "x"];
+  // Mutations of a renderable table, so both outcomes are well represented.
+  const tableSkeleton = ["<table>", "<tr>", "<td>", "x", "</td>", "</tr>", "</table>"];
+  const tableInserts = ["<td x='>'", "<td a=\"x>y\">", "\"", "'", "<thead>", "</thead>", "<trx>", "<tr>", "</tr>",
+    "<td>", "</td>", "<th>", "</th>", "<table>", "</table>", ">", "<", "\n"];
+  let renderedTables = 0;
+  for (let round = 0; round < 4_000; round += 1) {
+    const line = Array.from({ length: 1 + random(24) }, () => inlineAlphabet[random(inlineAlphabet.length)]).join("");
+    const expected = [...line.matchAll(inlineReference)].map((match) => [match.index, match.index + match[0].length]);
+    assert.deepEqual(protectedInlineRanges(line), expected, JSON.stringify(line));
+
+    const raw = Array.from({ length: 1 + random(30) }, () => tagAlphabet[random(tagAlphabet.length)]).join("");
+    assert.deepEqual(scannedTags(raw), tagMatches(raw), JSON.stringify(raw));
+    assert.equal(htmlTableRenders(raw), referenceRenders(raw), JSON.stringify(raw));
+
+    const table = [...tableSkeleton];
+    for (let edit = random(4); edit > 0; edit -= 1) {
+      const at = random(table.length + 1);
+      if (random(3) === 0 && table.length > 0) table.splice(Math.min(at, table.length - 1), 1);
+      else table.splice(at, 0, tableInserts[random(tableInserts.length)]!);
+    }
+    const mutated = table.join("");
+    assert.deepEqual(scannedTags(mutated), tagMatches(mutated), JSON.stringify(mutated));
+    const renders = htmlTableRenders(mutated);
+    assert.equal(renders, referenceRenders(mutated), JSON.stringify(mutated));
+    if (renders) renderedTables += 1;
+  }
+  assert.ok(renderedTables > 400, `the table fuzz must exercise rendered tables (${renderedTables})`);
+  for (const [raw, renders] of [
+    ["<table><tr><td>a</td></tr></table>", true],
+    ["<table border=\"1\"><tr><th colspan='2'>a>b</th></tr></table>", true],
+    ["<table><tr><td>a</td></table>", false],
+    ["<TABLE><TR><TD>a</TD></TR></TABLE>", true],
+    ["<table><tr><td x='>'</td></tr></table>", false],
+    ["<table><tr><thead>x</td></tr></table>", true],
+    ["<table><tr><td a=\"x>y\">c</td></tr></table>", true],
+  ] as const) {
+    assert.equal(referenceRenders(raw), renders, `reference: ${raw}`);
+    assert.equal(htmlTableRenders(raw), renders, raw);
+  }
+  for (const [line, protectedText] of [
+    ["xhttp://a_b", []],
+    ["\u017fhttp://a_b", []],
+    ["\u212ahttp://a_b", []],
+    ["HTTP\u017f://a_b", ["HTTP\u017f://a_b"]],
+    ["\u00e9 http://a_b c_d", ["http://a_b"]],
+    ["see <\u017f:x_y> and ](a_b)", ["<\u017f:x_y>", "](a_b)"]],
+  ] as const) {
+    assert.deepEqual(protectedInlineRanges(line).map(([start, end]) => line.slice(start, end)), protectedText, line);
+    assert.deepEqual(
+      [...line.matchAll(inlineReference)].map((match) => match[0]),
+      protectedText,
+      `reference: ${line}`,
+    );
+  }
+
+  // Inputs that made the regexes quadratic (32 to 82 s at these sizes): each
+  // must now finish quickly.
+  for (const crafted of [
+    `a_b ${"](".repeat(100_000)}`,
+    `a_b ${"<a:".repeat(70_000)}`,
+    `a_b ${"<A:".repeat(70_000)}`,
+    `<table ${"<td".repeat(70_000)} a_b`,
+    `<table "${"<td".repeat(70_000)} a_b`,
+  ]) {
+    const started = performance.now();
+    escapeIntrawordUnderscores(crafted);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 3_000, `${crafted.slice(0, 12)}… took ${Math.round(elapsed)} ms`);
+  }
+});
+
 test("generation keeps underscores inside identifiers instead of turning them into emphasis", async () => {
   const bs = String.fromCharCode(92);
   const { escapeIntrawordUnderscores } = await import("../src/shared/markdown-underscore.js");

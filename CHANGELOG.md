@@ -4,6 +4,8 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-08
+
 - Support Claude Code as a second host for the same plugin folder: a
   repository-root `.claude-plugin/marketplace.json` (marketplace
   `gpt-codex-hwp-local`), a generated `plugins/gpt-codex-hwp/.claude-plugin/plugin.json`
@@ -84,9 +86,15 @@ This file records release tags and their publication status. Work under `Unrelea
 - Resolve the Python used for macOS process identity from the same trusted
   locations as the image helper, preferring Homebrew over the
   `/usr/bin/python3` stub.
-- Assign a new plugin build identity (`0.2.7+codex.20261008150000`) so the
-  changed runtime cannot reuse the published v0.2.7 runtime directory, nor a
-  runtime installed from an earlier commit of this change.
+- After a pre-release security audit, scan protected inline spans and HTML
+  table tags for the underscore escaper in linear time (crafted Markdown made
+  the previous regexes quadratic and could hold generation until its
+  deadline), and make the `korean-official-doc` linter linear on long
+  whitespace, zero, and digit runs.
+- Release as 0.3.0 with plugin version `0.3.0+codex.20261008150000`, so the
+  changed runtime cannot reuse the published v0.2.7 runtime directory. The
+  minor version records the behavior changes for 0.2.x users listed in the
+  release notes.
 - Keep underscores inside identifiers such as `Gpt_Codex_HWP` and
   `hwp_detect_format` when generating HWPX. Kordoc treated them as emphasis
   and dropped the underscores; generation now escapes intraword underscores
@@ -244,7 +252,8 @@ This file records release tags and their publication status. Work under `Unrelea
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.4...v0.2.5

@@ -19,10 +19,8 @@ const MATH_FENCE_STOP = /^\s*(`{3,}|~{3,})/u;
 const MATH_OPEN = /^\s*\$\$/u;
 const HTML_TABLE_OPEN = /^<table[\s>]/iu;
 const INTRAWORD_UNDERSCORES = /(?<=[\p{L}\p{N}])_+(?=[\p{L}\p{N}])/gu;
-// Inline code spans (Kordoc only knows single-backtick spans), autolinks, link
-// destinations, and bare URLs keep their underscores verbatim.
-const PROTECTED_INLINE = /`[^`]+`|<[a-z][a-z0-9+.-]*:[^>\s]*>|\]\([^)\s]*\)|\bhttps?:\/\/\S+/giu;
 const PREVIEW_TEXT_PATH = "Preview/PrvText.txt";
+const WHITESPACE = /\s/u;
 export function escapeIntrawordUnderscores(markdown) {
     const lines = markdown.split("\n");
     let index = 0;
@@ -51,17 +49,22 @@ export function escapeIntrawordUnderscores(markdown) {
     }
     return lines.join("\n");
 }
-/** Mirrors Kordoc's parseHtmlTable + generateHtmlTableXml table-or-fallback decision. */
-function htmlTableRenders(raw) {
-    const tags = /<(\/?)(table|tr|td|th)((?:"[^"]*"|'[^']*'|[^>"'])*?)>/giu;
+/**
+ * Mirrors Kordoc's parseHtmlTable + generateHtmlTableXml table-or-fallback
+ * decision. Kordoc finds tags with
+ * /<(\/?)(table|tr|td|th)((?:"[^"]*"|'[^']*'|[^>"'])*?)>/gi; this yields the
+ * same matches in linear time, so a crafted unclosed table cannot make the
+ * scan quadratic.
+ */
+export function htmlTableRenders(raw) {
     let depth = 0;
     let rowOpen = false;
     let rowCells = 0;
     let cellOpen = false;
     let renderedCell = false;
-    for (const match of raw.matchAll(tags)) {
-        const isClose = match[1] === "/";
-        const tag = match[2].toLowerCase();
+    for (const match of htmlTableTags(raw)) {
+        const isClose = match.isClose;
+        const tag = match.tag;
         if (tag === "table") {
             depth += isClose ? -1 : 1;
             if (depth < 0)
@@ -90,6 +93,48 @@ function htmlTableRenders(raw) {
         }
     }
     return depth === 0 && renderedCell;
+}
+export function* htmlTableTags(raw) {
+    const length = raw.length;
+    // tagEnd[p]: index of the ">" that ends attributes scanned from p, skipping
+    // quoted strings, or -1 when an unclosed quote or the end comes first.
+    const nextDouble = new Int32Array(length + 1).fill(-1);
+    const nextSingle = new Int32Array(length + 1).fill(-1);
+    const tagEnd = new Int32Array(length + 1).fill(-1);
+    for (let index = length - 1; index >= 0; index -= 1) {
+        const char = raw[index];
+        nextDouble[index] = char === "\"" ? index : nextDouble[index + 1];
+        nextSingle[index] = char === "'" ? index : nextSingle[index + 1];
+        if (char === ">") {
+            tagEnd[index] = index;
+        }
+        else if (char === "\"" || char === "'") {
+            const close = (char === "\"" ? nextDouble : nextSingle)[index + 1];
+            tagEnd[index] = close < 0 ? -1 : tagEnd[close + 1];
+        }
+        else {
+            tagEnd[index] = tagEnd[index + 1];
+        }
+    }
+    let position = 0;
+    while (position < length) {
+        const open = raw.indexOf("<", position);
+        if (open < 0)
+            return;
+        let cursor = open + 1;
+        const isClose = raw[cursor] === "/";
+        if (isClose)
+            cursor += 1;
+        const tag = ["table", "tr", "td", "th"]
+            .find((name) => raw.slice(cursor, cursor + name.length).toLowerCase() === name);
+        const end = tag === undefined ? -1 : tagEnd[cursor + tag.length];
+        if (tag === undefined || end < 0) {
+            position = open + 1;
+            continue;
+        }
+        yield { start: open, end: end + 1, isClose, tag };
+        position = end + 1;
+    }
 }
 function protectedBlock(lines, start) {
     const line = lines[start];
@@ -161,12 +206,106 @@ function escapeLine(line) {
         return line;
     let result = "";
     let last = 0;
-    for (const match of line.matchAll(PROTECTED_INLINE)) {
-        result += escapeText(line.slice(last, match.index));
-        result += match[0];
-        last = match.index + match[0].length;
+    for (const [start, end] of protectedInlineRanges(line)) {
+        result += escapeText(line.slice(last, start));
+        result += line.slice(start, end);
+        last = end;
     }
     return result + escapeText(line.slice(last));
+}
+/**
+ * Inline code spans (Kordoc only knows single-backtick spans), autolinks, link
+ * destinations, and bare URLs keep their underscores verbatim. The ranges are
+ * exactly the matches of
+ * /`[^`]+`|<[a-z][a-z0-9+.-]*:[^>\s]*>|\]\([^)\s]*\)|\bhttps?:\/\/\S+/giu,
+ * found in linear time: that regex rescans to the end of the line from every
+ * failed "](" or "<x:", which a crafted line turns into quadratic work.
+ */
+export function protectedInlineRanges(line) {
+    const length = line.length;
+    // First ")" or whitespace, ">" or whitespace, and whitespace at or after i.
+    const parenStop = new Int32Array(length + 1).fill(length);
+    const angleStop = new Int32Array(length + 1).fill(length);
+    const spaceStop = new Int32Array(length + 1).fill(length);
+    for (let index = length - 1; index >= 0; index -= 1) {
+        const char = line[index];
+        const space = WHITESPACE.test(char);
+        spaceStop[index] = space ? index : spaceStop[index + 1];
+        parenStop[index] = space || char === ")" ? index : parenStop[index + 1];
+        angleStop[index] = space || char === ">" ? index : angleStop[index + 1];
+    }
+    const ranges = [];
+    let backticksExhausted = false;
+    let index = 0;
+    while (index < length) {
+        const char = line[index];
+        let end = -1;
+        if (char === "`" && !backticksExhausted) {
+            const close = line.indexOf("`", index + 1);
+            if (close < 0)
+                backticksExhausted = true;
+            else if (close > index + 1)
+                end = close + 1;
+        }
+        else if (char === "<" && isSchemeStart(line[index + 1])) {
+            let cursor = index + 2;
+            while (cursor < length && isSchemeChar(line[cursor]))
+                cursor += 1;
+            if (line[cursor] === ":") {
+                const stop = angleStop[cursor + 1];
+                if (line[stop] === ">")
+                    end = stop + 1;
+            }
+        }
+        else if (char === "]" && line[index + 1] === "(") {
+            const stop = parenStop[index + 2];
+            if (line[stop] === ")")
+                end = stop + 1;
+        }
+        else if (foldsTo(char, "h") && !isWordChar(line[index - 1])) {
+            const scheme = matchHttpScheme(line, index);
+            if (scheme > 0 && scheme < length && spaceStop[scheme] > scheme)
+                end = spaceStop[scheme];
+        }
+        if (end > index) {
+            ranges.push([index, end]);
+            index = end;
+        }
+        else {
+            index += 1;
+        }
+    }
+    return ranges;
+}
+// Case-insensitive Unicode matching (the "iu" flags) also folds U+017F (long
+// s) to "s" and U+212A (Kelvin sign) to "k".
+function foldsTo(char, lower) {
+    if (char === undefined)
+        return false;
+    if (char.toLowerCase() === lower && char.length === 1)
+        return true;
+    return (lower === "s" && char === "ſ") || (lower === "k" && char === "K");
+}
+function isSchemeStart(char) {
+    return char !== undefined && (/^[a-z]$/iu.test(char) || char === "ſ" || char === "K");
+}
+function isSchemeChar(char) {
+    return isSchemeStart(char) || /^[0-9+.-]$/u.test(char);
+}
+function isWordChar(char) {
+    return char !== undefined && (/^\w$/u.test(char) || char === "ſ" || char === "K");
+}
+/** Index after "http://" or "https://" (case-insensitive) at `start`, or -1. */
+function matchHttpScheme(line, start) {
+    let cursor = start;
+    for (const expected of "http") {
+        if (!foldsTo(line[cursor], expected))
+            return -1;
+        cursor += 1;
+    }
+    if (foldsTo(line[cursor], "s"))
+        cursor += 1;
+    return line.startsWith("://", cursor) ? cursor + 3 : -1;
 }
 function escapeText(text) {
     return text.replace(INTRAWORD_UNDERSCORES, (run) => "\\_".repeat(run.length));

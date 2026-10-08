@@ -18,7 +18,7 @@ import { runOneShotBootstrap } from "../src/oneshot.js";
 
 const PRODUCT = "gpt-codex-hwp";
 const MARKETPLACE = "gpt-codex-hwp-local";
-const PLUGIN_VERSION = "0.2.7+codex.20260929182230";
+const PLUGIN_VERSION = "0.3.0+codex.20261008150000";
 const RUNTIME_KEY = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
 
 test("runtime bootstrap resolves the exact version and platform durable runtime", async (t) => {
@@ -110,16 +110,16 @@ test("runtime bootstrap maps receipt source platform dependency and path failure
 test("runtime bootstrap maps cache version directories to their plugin host", () => {
   assert.equal(pluginHostForVersionDirectory(PLUGIN_VERSION, PLUGIN_VERSION), "codex");
   assert.equal(
-    pluginHostForVersionDirectory("0.2.7-codex.20260929182230", PLUGIN_VERSION),
+    pluginHostForVersionDirectory("0.3.0-codex.20261008150000", PLUGIN_VERSION),
     "claude-code",
   );
-  for (const directory of ["0.2.7", "0.2.7_codex.20260929182230", "0.2.8+codex.20260929182230", ""]) {
+  for (const directory of ["0.3.0", "0.3.0_codex.20261008150000", "0.3.1+codex.20261008150000", ""]) {
     assert.equal(pluginHostForVersionDirectory(directory, PLUGIN_VERSION), undefined, directory);
   }
 });
 
 test("runtime bootstrap resolves a Claude Code cache layout with a sanitized version directory", async (t) => {
-  const fixture = await createRuntimeFixture(t, { versionDirectory: "0.2.7-codex.20260929182230" });
+  const fixture = await createRuntimeFixture(t, { versionDirectory: "0.3.0-codex.20261008150000" });
   const entry = pathToFileURL(join(fixture.managedRoot, "dist", "oneshot.js")).href;
   const identity = await resolveManagedRuntime(entry, { codexHome: fixture.codexHome });
   assert.equal(identity.host, "claude-code");
@@ -132,7 +132,7 @@ test("runtime bootstrap resolves a Claude Code cache layout with a sanitized ver
 });
 
 test("runtime bootstrap rejects a cache version directory that matches no host", async (t) => {
-  const fixture = await createRuntimeFixture(t, { versionDirectory: "0.2.7_codex.20260929182230" });
+  const fixture = await createRuntimeFixture(t, { versionDirectory: "0.3.0_codex.20261008150000" });
   await assert.rejects(
     resolveInstalledRuntime(
       pathToFileURL(join(fixture.managedRoot, "dist", "oneshot.js")).href,
@@ -216,7 +216,7 @@ async function createRuntimeFixture(
   const lockBytes = Buffer.from("{\"lockfileVersion\":3}\n", "utf8");
   const packageBytes = Buffer.from(`${JSON.stringify({
     name: PRODUCT,
-    version: "0.2.7",
+    version: "0.3.0",
     type: "module",
     dependencies: { zod: "3.25.76" },
   })}\n`, "utf8");
