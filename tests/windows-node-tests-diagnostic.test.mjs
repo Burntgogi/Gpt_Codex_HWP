@@ -64,6 +64,62 @@ test("Windows Node diagnostic reports only the fixed failed repository filename"
   );
 });
 
+test("PR Windows diagnostic still runs the source diagnostic after a repository failure", async () => {
+  let output = "";
+  let sourceProfile;
+  let exitCode;
+  const passed = await runWindowsNodeTestsDiagnostic({
+    profile: "pr",
+    runRepositoryFile: async (file) => file !== "governance-docs.test.mjs",
+    runSourceDiagnostic: async (options) => {
+      sourceProfile = options.profile;
+      options.stdout.write("WINDOWS_NODE_TEST_FILE file=mcp-smoke.test.ts status=failed\n");
+      return false;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode(value) { exitCode = value; },
+  });
+  assert.equal(passed, false);
+  assert.equal(sourceProfile, "pr");
+  assert.equal(exitCode, 1);
+  assert.equal(
+    output,
+    "WINDOWS_REPOSITORY_TEST_FILE file=governance-docs.test.mjs status=failed\n"
+      + "WINDOWS_NODE_TEST_FILE file=mcp-smoke.test.ts status=failed\n",
+  );
+});
+
+test("PR Windows diagnostic keeps exit 1 when the source diagnostic passes after a repository failure", async () => {
+  let output = "";
+  let exitCode;
+  const passed = await runWindowsNodeTestsDiagnostic({
+    profile: "pr",
+    runRepositoryFile: async (file) => file !== "governance-docs.test.mjs",
+    runSourceDiagnostic: async (options) => {
+      // The real source runner ends a passing run with setExitCode(0).
+      options.setExitCode(0);
+      return true;
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode(value) { exitCode = value; },
+  });
+  assert.equal(passed, false);
+  assert.equal(exitCode, 1);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_FILE file=governance-docs.test.mjs status=failed\n");
+});
+
+test("Windows Node diagnostic maps the last public-content case, pc63", async () => {
+  let output = "";
+  const passed = await runWindowsNodeTestsDiagnostic({
+    runRepositoryFile: async (file) => file !== "public-content-policy.test.mjs",
+    runPublicContentDiagnostic: async () => "pc63",
+    stdout: { write: (value) => { output += value; } },
+    setExitCode() {},
+  });
+  assert.equal(passed, false);
+  assert.equal(output, "WINDOWS_REPOSITORY_TEST_CASE case=pc63 status=failed\n");
+});
+
 test("Windows Node diagnostic gives only the Git-history policy file an extended bound", async () => {
   let observedTimeout;
   const passed = await runWindowsNodeTestsDiagnostic({

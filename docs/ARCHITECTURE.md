@@ -4,7 +4,7 @@
 
 The authoritative source tree is `packages/gpt-codex-hwp` plus the repository
 scripts that verify, project, and package it. `plugins/gpt-codex-hwp` is the
-generated runtime consumed by Codex. It contains compiled JavaScript, the compact
+generated runtime consumed by Codex and Claude Code. It contains compiled JavaScript, the compact
 vendored Kordoc Core, runtime Python helpers, skill assets, manifests, locked
 production dependencies, and selected end-user documentation. It deliberately
 excludes TypeScript source, tests, fixtures, contributor documents, release
@@ -13,6 +13,17 @@ scripts, private plans, benchmark receipts, and temporary artifacts.
 Do not edit the generated runtime. `npm run runtime:write` builds a fresh staged
 projection from source, verifies it, and atomically promotes it. A clean
 `npm run runtime:check` proves that committed runtime bytes match a fresh build.
+The generated runtime includes both host manifests:
+`.codex-plugin/plugin.json` and `.claude-plugin/plugin.json` carry the same
+plugin version.
+
+Three hand-maintained surfaces sit outside that projection: the repository-root
+marketplaces (`.agents/plugins/marketplace.json` for Codex and
+`.claude-plugin/marketplace.json` for Claude Code) and the optional
+`plugins/korean-official-doc` plugin, which has no build step and is edited in
+place. They are distributed through the Git tag that a marketplace is pinned to,
+not through the attested release archive, which covers only the
+`gpt-codex-hwp` runtime.
 
 ## Tool contract and process lifecycle
 

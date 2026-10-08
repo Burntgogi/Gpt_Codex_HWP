@@ -5,7 +5,11 @@ import type {
   scanSectionXml,
 } from "kordoc";
 
+import { readZipEntryBounded } from "./zip-bounded-read.js";
 import { loadBoundedHwpxZip } from "./zip-preflight.js";
+
+// Same per-part ceiling the font-integrity scan applies to section XML.
+const MAX_SECTION_XML_BYTES = 128 * 1024 * 1024;
 
 export type HwpxAnchorResolutionErrorCode =
   | "ANCHOR_NOT_FOUND"
@@ -54,7 +58,10 @@ export async function resolveHwpxAnchorOccurrence(
   for (const [index, name] of sectionNames.entries()) {
     const entry = zip.file(name);
     if (entry === null) continue;
-    const scanned = scan(await entry.async("text"), index);
+    const xml = new TextDecoder("utf-8").decode(
+      await readZipEntryBounded(entry, MAX_SECTION_XML_BYTES, name),
+    );
+    const scanned = scan(xml, index);
     for (const paragraph of eligibleParagraphs(
       scanned.bodyParagraphs,
       scanned.tables,

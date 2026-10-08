@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
-  "pluginVersion": "0.2.7+codex.20261008050000",
+  "pluginVersion": "0.2.7+codex.20261008150000",
   "packageLockSha256": "84ea09a61cf0fd99cdcdef8cda3300af2f344042c8f5e5a4b1e661e408e12acd",
   "mainEntries": [
     "dist/doctor-main.js",
@@ -12,7 +12,7 @@
     {
       "path": ".codex-plugin/plugin.json",
       "size": 1208,
-      "sha256": "b56882fcf4cde12a0130d5c0493d367a2befcdc56db41974d8a9f0540376f377"
+      "sha256": "5af2f727de220a95e351eca61f5e33dff00094639b845a47069b071a3e72ab79"
     },
     {
       "path": ".npmrc",
@@ -96,8 +96,8 @@
     },
     {
       "path": "dist/shared/hwpx-anchor.js",
-      "size": 3087,
-      "sha256": "3759868063e93a8ef366b46d5c55a4557a868e405ceab93a5906b4eb93e63f7b"
+      "size": 3364,
+      "sha256": "731620a30237715b5d2f5216a8a83b7889ada0839198a41ca045dca456017530"
     },
     {
       "path": "dist/shared/hwpx-font-integrity.js",
@@ -146,8 +146,8 @@
     },
     {
       "path": "dist/shared/python-command.js",
-      "size": 3861,
-      "sha256": "dd146b901296bea55faae90189da3c8bfb25243a950482c7726ed27b60b41e5a"
+      "size": 4110,
+      "sha256": "b7748d197d5312d8abf2d8192d95677da53d90bcaebfef688f706a7da7c59791"
     },
     {
       "path": "dist/shared/resource-limits.js",
@@ -321,8 +321,8 @@
     },
     {
       "path": "dist/workers/macos-process-identity.js",
-      "size": 13848,
-      "sha256": "4719d21863c831d290684a8ab9d3bd1b8f6ca6cc3e5fa89a9b3b8925654d9a77"
+      "size": 14496,
+      "sha256": "0e208970590a6e50f3541652a91ceafc0293f2338eaf5acba96148916e2bba31"
     },
     {
       "path": "dist/workers/posix-process-records.js",

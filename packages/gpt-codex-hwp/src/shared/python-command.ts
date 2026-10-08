@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { win32 } from "node:path";
 
 export interface PythonCommand {
   readonly command: string;
@@ -17,12 +17,15 @@ export function pythonCommandCandidates(
   env: NodeJS.ProcessEnv = process.env,
 ): readonly PythonCommand[] {
   if (platform === "win32") {
-    const candidates: PythonCommand[] = [
-      { command: join(env.SystemRoot ?? "C:\\Windows", "py.exe"), argsPrefix: ["-3"] },
-    ];
-    if (env.LOCALAPPDATA !== undefined && env.LOCALAPPDATA.length > 0) {
+    // A relative SystemRoot or LOCALAPPDATA would resolve against the working
+    // directory, so such a value never names a trusted location.
+    const systemRoot = env.SystemRoot ?? "C:\\Windows";
+    const candidates: PythonCommand[] = win32.isAbsolute(systemRoot)
+      ? [{ command: win32.join(systemRoot, "py.exe"), argsPrefix: ["-3"] }]
+      : [];
+    if (env.LOCALAPPDATA !== undefined && win32.isAbsolute(env.LOCALAPPDATA)) {
       candidates.push({
-        command: join(env.LOCALAPPDATA, "Programs", "Python", "Launcher", "py.exe"),
+        command: win32.join(env.LOCALAPPDATA, "Programs", "Python", "Launcher", "py.exe"),
         argsPrefix: ["-3"],
       });
     }

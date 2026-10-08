@@ -15,7 +15,9 @@ import {
 
 const SOURCE_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-test("built MCP server initializes and registers exactly nine tools without stderr", { timeout: 90_000 }, async () => {
+// Preparing the runtime runs a networked `npm ci`, which took about 70 s on a
+// hosted Windows runner; stay below the runner's 300 s file budget.
+test("built MCP server initializes and registers exactly nine tools without stderr", { timeout: 240_000 }, async () => {
   const configuredServerPath = process.env.HWP_MCP_SERVER_PATH?.trim();
   const prepared = configuredServerPath ? undefined : await prepareRestartSafeRuntime();
   const serverPath = configuredServerPath

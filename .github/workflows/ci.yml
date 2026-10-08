@@ -63,6 +63,9 @@ jobs:
         id: windows_python
         timeout-minutes: 15
         run: npm run test:python
+      - name: Run Windows official document lint tests
+        timeout-minutes: 5
+        run: npm run test:official-doc
       - name: Run 10 MiB document smoke
         timeout-minutes: 15
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/pr-10.json
@@ -130,6 +133,9 @@ jobs:
         id: macos_python
         timeout-minutes: 15
         run: npm run test:python
+      - name: Run macOS official document lint tests
+        timeout-minutes: 5
+        run: npm run test:official-doc
       - name: Run 10 MiB document smoke
         timeout-minutes: 15
         run: npm --prefix packages/gpt-codex-hwp run benchmark:documents -- --sizes 10 --output .superpowers/benchmarks/pr-10.json

@@ -65,9 +65,9 @@ Thank you to Edward Kim and the rhwp contributors for making this optional Rust/
 ## Model Context Protocol TypeScript SDK
 
 - Repository: <https://github.com/modelcontextprotocol/typescript-sdk>
-- Version: `@modelcontextprotocol/sdk` `1.32.1` (`v1.32.1`)
+- Version: `@modelcontextprotocol/sdk` `1.32.1` (upstream tag `1.32.1`)
 - Copyright: `Copyright (c) 2024 Anthropic, PBC`
-- License: MIT for the fixed `v1.32.1` source and package
+- License: MIT for the fixed `1.32.1` source and package (the upstream repository has announced a move to Apache-2.0 for later versions; recheck on upgrade)
 - Use in this project: MCP server, stdio transport, request/result types, and tool registration.
 
 Thank you to the modelcontextprotocol maintainers and contributors for the TypeScript MCP implementation.
@@ -130,6 +130,7 @@ Thank you to the Fastify team and fast-uri contributors for the URI implementati
 - Version: `0.35.5` (`v0.35.5`)
 - Copyright: the upstream `v0.35.5` `LICENSE` contains no project-specific copyright notice; its official `package.json` names Lovell Fuller as author
 - License: Apache-2.0
+- Platform binaries: npm installs a prebuilt platform package. On macOS and Linux that is `@img/sharp-<platform>` (Apache-2.0) plus a separate `@img/sharp-libvips-<platform>` (LGPL-3.0-or-later); on Windows, `@img/sharp-win32-<arch>` bundles libvips and is Apache-2.0 AND LGPL-3.0-or-later. They are installed from npm into the local runtime and are not bundled in this repository or its release archive.
 - Registry integrity: `sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g==`
 - Use in this project: bounded SVG rasterization, PNG metadata validation, and safe image conversion before HWPX insertion.
 

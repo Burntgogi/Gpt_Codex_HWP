@@ -4,7 +4,7 @@
 
 <h1 align="center">Gpt_Codex_HWP</h1>
 
-<p align="center"><strong>Codex에서 한글 HWP를 읽고, 검증 가능한 HWPX를 만드는 로컬 문서 플러그인</strong></p>
+<p align="center"><strong>Codex와 Claude Code에서 한글 HWP를 읽고, 검증 가능한 HWPX를 만드는 로컬 문서 플러그인</strong></p>
 
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
@@ -72,7 +72,7 @@ HWPX는 이 프로젝트의 정식 작성 형식입니다. 바이너리 HWP를 �
 - Windows x64 또는 macOS Apple Silicon
 - `after-paragraph` 이미지 삽입에는 표준 위치에 설치된 Python 3.10 이상. PATH는 탐색하지 않습니다. Windows는 `%SystemRoot%\py.exe` 또는 사용자 설치 `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`, macOS는 `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, Command Line Tools의 `python3` 순, Linux는 `/usr/bin/python3`, `/usr/local/bin/python3`을 사용합니다.
 - macOS에서는 문서 처리 자식 프로세스의 감독에도 Python을 씁니다. 그림 삽입(두 모드 모두)과 64 MiB를 넘는 문서에는 python3가 필요합니다. 이 용도에는 Xcode Command Line Tools(`xcode-select --install`)의 python3로 충분하지만, `after-paragraph` 삽입에는 3.10 이상(예: Homebrew `python3`)이 필요합니다. 이미지 helper는 신뢰 경로 중 3.10 이상인 첫 인터프리터를 쓰며 doctor도 같은 기준으로 판정합니다. 없으면 `/usr/bin/python3`가 설치 안내 창을 띄우고 해당 작업이 실패할 수 있습니다.
-- Codex 플러그인 마켓플레이스 명령을 사용할 수 있는 환경
+- Codex 또는 Claude Code 플러그인 마켓플레이스 명령을 사용할 수 있는 환경
 
 Python이 없으면 Python 기반 이미지 삽입 모드만 `PYTHON_NOT_FOUND`로 실패하며 다른 도구는 계속 사용할 수 있습니다.
 
@@ -179,7 +179,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 
 ## Claude Code 설치
 
-같은 플러그인 폴더를 Claude Code에서도 씁니다. 저장소 루트의 `.claude-plugin/marketplace.json`이 `plugins/gpt-codex-hwp`를 가리키며, 마켓플레이스 이름은 Codex와 같은 `gpt-codex-hwp-local`입니다. Claude Code 지원은 `v0.2.7` 이후 변경이므로 이를 포함한 릴리스 태그가 나오기 전까지는 `main`을 사용하고, 태그가 나오면 `#<태그>`로 고정하십시오.
+같은 플러그인 폴더를 Claude Code에서도 씁니다. 저장소 루트의 `.claude-plugin/marketplace.json`이 `plugins/gpt-codex-hwp`를 가리키며, 마켓플레이스 이름은 Codex와 같은 `gpt-codex-hwp-local`입니다. Claude Code 지원은 `v0.2.7` 이후 변경이므로 이를 포함한 릴리스 태그가 나오기 전까지는 `main`을 사용하고, 태그가 나오면 `#<태그>`로 고정하십시오. `main` 빌드는 버전이 `0.2.7+codex.<빌드 ID>`로 표시되지만 공개된 `v0.2.7` 릴리스와는 다른 빌드입니다.
 
 Claude Code 세션 안에서:
 
@@ -194,14 +194,26 @@ Claude Code 세션 안에서:
 2. 그 경로에서 Codex와 같은 명시적 런타임 설치기와 doctor를 실행합니다.
 
 ```bash
+cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<버전 디렉터리>"
 node dist/install-runtime.js --json   # code가 RUNTIME_INSTALL_OK인지 확인
-node dist/doctor.js --json
+node dist/doctor.js --json            # code가 DOCTOR_OK인지 확인
+```
+
+PowerShell에서는 다음과 같습니다. `CLAUDE_CONFIG_DIR`을 쓰면 `$env:USERPROFILE\.claude` 대신 그 경로를 넣으십시오.
+
+```powershell
+Push-Location -LiteralPath "$env:USERPROFILE\.claude\plugins\cache\gpt-codex-hwp-local\gpt-codex-hwp\<버전 디렉터리>"
+try {
+  $runtime = node dist/install-runtime.js --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $runtime.code -ne "RUNTIME_INSTALL_OK") { throw "runtime installation failed" }
+  node dist/doctor.js --json
+} finally { Pop-Location }
 ```
 
 3. 운영 의존성은 `~/.claude/plugin-runtime-data/gpt-codex-hwp/<전체-플러그인-버전>/<platform>-<arch>-node<주버전>`에 저장됩니다. Codex 런타임과 공유하지 않습니다.
 4. Claude Code 세션을 다시 시작한 뒤 `/gpt-codex-hwp:gpt-codex-hwp` 스킬이 보이는지 확인합니다. 기본 MCP 서버는 등록하지 않으며, 스킬이 작업마다 `dist/oneshot.js`를 한 번 실행합니다.
 
-Claude Code 경로는 Windows x64에서 격리된 `CLAUDE_CONFIG_DIR`에 설치해 런타임 설치, doctor, HWPX 생성·검증·읽기를 확인했습니다. macOS의 Claude Code 사용은 아직 검증하지 않았습니다.
+Claude Code 경로는 Windows x64에서 격리된 `CLAUDE_CONFIG_DIR`에 설치해 런타임 설치, doctor, HWPX 생성·검증·읽기·미리보기를 확인했습니다. macOS의 Claude Code 사용은 아직 검증하지 않았습니다.
 
 ## 함께 쓰면 좋은 스킬 (선택)
 
@@ -211,7 +223,7 @@ Claude Code 경로는 Windows x64에서 격리된 `CLAUDE_CONFIG_DIR`에 설치�
 | --- | --- | --- | --- |
 | [AI Slop 탈곡기](https://github.com/Burntgogi/ai-slop-thresher) | HWPX로 만들기 전 한국어 초안의 AI 말투와 과잉 설명을 다듬습니다. | `codex plugin marketplace add Burntgogi/ai-slop-thresher` 후 `codex plugin add ai-slop-thresher@ai-slop-thresher` | `/plugin marketplace add Burntgogi/ai-slop-thresher` 후 `/plugin install ai-slop-thresher@ai-slop-thresher` |
 | [kar-plain](https://github.com/Burntgogi/kar-plain) | 주제를 글, 다이어그램, 웹 페이지, 영상으로 설명합니다. 문서의 설명 단락과 도식 초안에 씁니다. | 저장소의 수동 설치(`~/.agents/skills`) 안내 | `/plugin marketplace add Burntgogi/kar-plain` 후 `/plugin install kar-plain@kar-plain` |
-| [공문서 작성 규칙](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/plugins/korean-official-doc/skills/korean-official-doc/SKILL.md) (`korean-official-doc`) | 공문서 Markdown 초안의 날짜·시각·금액 표기, 항목 기호 순서, 붙임, 「끝」 표시를 법령 근거와 함께 오프라인으로 점검합니다. 공공기관 문서를 쓰는 사용자에게 권합니다. | 같은 마켓플레이스에서 `codex plugin add korean-official-doc@gpt-codex-hwp-local` | 같은 마켓플레이스에서 `/plugin install korean-official-doc@gpt-codex-hwp-local` |
+| [공문서 작성 규칙](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/plugins/korean-official-doc/skills/korean-official-doc/SKILL.md) (`korean-official-doc`) | 공문서 Markdown 초안의 날짜·시각·금액 표기, 항목 기호 순서, 붙임, 「끝」 표시를 법령 근거와 함께 오프라인으로 점검합니다. 공공기관 문서를 쓰는 사용자에게 권합니다. | 같은 마켓플레이스에서 `codex plugin add korean-official-doc@gpt-codex-hwp-local` (`v0.2.7` 태그에는 없으므로 이를 포함한 다음 릴리스 태그로 마켓플레이스를 고정해야 합니다) | 같은 마켓플레이스에서 `/plugin install korean-official-doc@gpt-codex-hwp-local` |
 
 각 저장소의 최신 릴리스 태그와 설치 안내를 먼저 확인하십시오. 위 명령은 2026-10-08 기준입니다.
 
@@ -261,7 +273,7 @@ v0.2.7의 운영 의존성은 Codex 관리 캐시가 아니라 `$CODEX_HOME/plug
 
 ### 선택적 문서 루트 제한
 
-`GPT_CODEX_HWP_ALLOWED_ROOTS`를 설정하면 9개 MCP 도구가 사용하는 모든 사용자 입력·출력 경로를 지정한 로컬 디렉터리 안으로 제한할 수 있습니다. 설정하지 않으면 이전 버전과 같이 현재 OS 사용자가 접근할 수 있는 로컬 경로를 사용합니다. 값은 비어 있지 않은 JSON 배열이어야 하며, 각 항목은 이미 존재하는 고유한 절대 디렉터리여야 합니다. 심볼릭 링크나 Windows junction/reparse 별칭 자체는 루트로 사용할 수 없습니다. 아래 값은 정확한 JSON 문자열 예시입니다.
+`GPT_CODEX_HWP_ALLOWED_ROOTS`를 설정하면 9개 MCP 도구가 사용하는 모든 사용자 입력·출력 경로를 지정한 로컬 디렉터리 안으로 제한할 수 있습니다. 설정하지 않으면 이전 버전과 같이 현재 OS 사용자가 접근할 수 있는 로컬 경로를 사용합니다. 단 Windows 네트워크(UNC) 경로는 이 기본값에서도 거부합니다. 값은 비어 있지 않은 JSON 배열이어야 하며, 각 항목은 이미 존재하는 고유한 절대 디렉터리여야 합니다. 심볼릭 링크나 Windows junction/reparse 별칭 자체는 루트로 사용할 수 없습니다. 아래 값은 정확한 JSON 문자열 예시입니다.
 
 ```powershell
 $env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
@@ -278,7 +290,7 @@ export GPT_CODEX_HWP_ALLOWED_ROOTS='["/Volumes/TeamDocs"]'
 - 입력 경로와 출력 경로는 달라야 하며 기존 출력 파일을 덮어쓰지 않습니다.
 - 서명, 암호화, DRM, 배포용 보호가 감지된 문서는 보호를 우회하지 않고 거부합니다.
 - 경로 별칭, 하드링크, 심볼릭 링크, Windows junction, ZIP 경로 순회를 방어합니다.
-- Windows 네트워크 경로(UNC, `\\서버\공유`)는 기본적으로 거부합니다. 네트워크 공유를 써야 하면 `GPT_CODEX_HWP_ALLOWED_ROOTS`에 그 UNC 루트를 명시하십시오. 그 아래 경로만 허용됩니다.
+- Windows 네트워크 경로(UNC, `\\서버\공유`)는 기본적으로 거부합니다. 네트워크 공유를 써야 하면 `GPT_CODEX_HWP_ALLOWED_ROOTS`에 그 UNC 루트를 명시하십시오. 그 아래 경로만 허용됩니다. `GPT_CODEX_HWP_ALLOWED_ROOTS`를 설정하지 않았다면 매핑된 네트워크 드라이브(예: `Z:\`)에 있는 문서는 읽을 수 있지만, 그 UNC 루트를 지정하지 않는 한 그 공유로 결과물을 쓰지는 않습니다.
 - HWPX 검증에 실패하면 생성 또는 편집 결과물을 쓰지 않습니다.
 - `hwp_patch_document`의 의미 검증은 필수이며 검증을 끄거나 검증 통계 없이 결과물을 게시할 수 없습니다.
 - 보호 매니페스트는 UTF-8/UTF-16 인코딩을 구분해 검사하고, ZIP 엔트리 수는 JSZip 로드 전에 최대 10,000개로 제한합니다.

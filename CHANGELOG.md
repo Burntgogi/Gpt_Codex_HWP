@@ -4,6 +4,17 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+- Support Claude Code as a second host for the same plugin folder: a
+  repository-root `.claude-plugin/marketplace.json` (marketplace
+  `gpt-codex-hwp-local`), a generated `plugins/gpt-codex-hwp/.claude-plugin/plugin.json`
+  with the same version as the Codex manifest, runtime-bootstrap detection of
+  Claude Code's cache layout (a version directory with `+` replaced by `-`),
+  and runtime data under `<CLAUDE_CONFIG_DIR or ~/.claude>/plugin-runtime-data`,
+  separate from Codex. Verified on Windows x64 by installing into an isolated
+  `CLAUDE_CONFIG_DIR`; Claude Code on macOS is not yet verified.
+- Recommend the optional external companions `ai-slop-thresher` and
+  `kar-plain` (and the new `korean-official-doc`) once, after an installation
+  the user asked for. Nothing is installed automatically.
 - Update source and generated-runtime dependencies to fast-uri 3.1.8 and
   markdown-it 14.3.1 for GHSA-hrr3-gc8f-f4qj and GHSA-253c-mchw-3w2r.
 - Record runtime preparation failures and fixed, redacted process failure
@@ -22,7 +33,9 @@ This file records release tags and their publication status. Work under `Unrelea
 - Resolve the image-helper Python from a shared list of trusted absolute
   locations (also used by doctor), return `PYTHON_NOT_FOUND` when none exists,
   and pass helper failures such as `ANCHOR_NOT_FOUND` and `INVALID_IMAGE`
-  through instead of `ENGINE_PROTOCOL_ERROR`.
+  through instead of `ENGINE_PROTOCOL_ERROR`. A helper report that the source
+  is not a valid HWPX becomes `SOURCE_HWPX_INVALID`, and any other helper
+  failure `IMAGE_INSERTION_FAILED`.
 - Count only `Contents/sectionN.xml` when resolving image anchors, matching
   the Python helper, and parse `header.xml` with the DTD-rejecting XML policy.
 - Scope hosted-CI pass statements to the release commit they describe, and
@@ -45,6 +58,10 @@ This file records release tags and their publication status. Work under `Unrelea
   writing started through their own handles so no truncated document
   survives, and report what remains at the output paths (emptied, never
   written, complete, or possibly partial). Files are never removed by name.
+  A failure after writing started returns the cause's code, or
+  `OUTPUT_WRITE_FAILED` when the cause has none (previously
+  `HWPX_GENERATION_ERROR` for generation); a failure before any byte was
+  written keeps the original error.
 - Accept Windows 8.3 short-name paths that contain no links and the macOS
   `/tmp`, `/var`, and `/etc` system aliases by rewriting them to their
   canonical form instead of rejecting them as linked paths.
@@ -67,8 +84,9 @@ This file records release tags and their publication status. Work under `Unrelea
 - Resolve the Python used for macOS process identity from the same trusted
   locations as the image helper, preferring Homebrew over the
   `/usr/bin/python3` stub.
-- Assign a new plugin build identity (`0.2.7+codex.20261008050000`) so the
-  changed runtime cannot reuse the published v0.2.7 runtime directory.
+- Assign a new plugin build identity (`0.2.7+codex.20261008150000`) so the
+  changed runtime cannot reuse the published v0.2.7 runtime directory, nor a
+  runtime installed from an earlier commit of this change.
 - Keep underscores inside identifiers such as `Gpt_Codex_HWP` and
   `hwp_detect_format` when generating HWPX. Kordoc treated them as emphasis
   and dropped the underscores; generation now escapes intraword underscores
@@ -80,15 +98,29 @@ This file records release tags and their publication status. Work under `Unrelea
 - Fix issues found by an adversarial review of this branch: decide on UNC
   paths before any filesystem access (8.3 expansion could otherwise contact
   the host); keep reading documents from mapped network drives, whose realpath is a
-  UNC share (writing to them is still refused, as before);
+  UNC share, while still refusing to write to that share;
   report reserved outputs accurately after a failed write; pass
   `LOCALAPPDATA` to the document child so the per-user `py.exe` is found;
   select the helper Python by the same 3.10 rule doctor uses; leave HTML
-  tables and closed `$$` math unescaped and restore identifiers in
-  `Preview/PrvText.txt`; forward the larger per-file budget to the benchmark
+  tables that Kordoc renders, closed `$$` math, and single-backtick code spans
+  unescaped; take `Preview/PrvText.txt` from a second Kordoc generation of the
+  unescaped Markdown (only when an escape was added, so such documents are
+  generated twice); forward the larger per-file budget to the benchmark
   runner; reject unsupported smoke sizes in their own `size` stage; and fix
   the official-document linter for itemized 붙임, compound nouns ending in 금,
-  and 저녁/밤/새벽 times.
+  저녁/밤/새벽 times, and 저녁 12시.
+- Fix issues found by a release-readiness review: give `mcp-smoke` a 240 s
+  per-test limit (preparing its runtime runs a networked `npm ci`) and
+  `allowed-roots` a 300 s file budget; run the Claude Code host-detection,
+  runtime-installation, one-shot, and one-shot schema tests in the PR and
+  release profiles (45 files); run the official-document linter tests on
+  Windows, macOS, and in `npm test`; keep the Windows failure diagnostic
+  running the source tests after a repository failure and map the last
+  public-content case (pc63); bound the decompressed size of section XML read
+  for image anchors; start the macOS process-identity Python in isolated mode
+  (`-I`) from `/` with a minimal environment; skip relative `SystemRoot` and
+  `LOCALAPPDATA` values when listing trusted Python locations; and tie the
+  `korean-official-doc` content to its manifest version.
 
 ## [0.2.7] - 2026-09-29
 

@@ -95,7 +95,14 @@ generator iteratively adjusts the pad so the exact final archive size is at or
 below the requested ceiling without materializing multiple full-size copies.
 
 Current local evidence is Windows x64. macOS is an unverified device class, so
-these receipts must not be presented as macOS validation. Benchmark files and
+these receipts must not be presented as macOS validation.
+
+`hwp_generate_hwpx` runs Kordoc twice when it escapes an intraword underscore
+(for example in `snake_case` identifiers): once on the escaped Markdown for the
+document and once on the original Markdown to take `Preview/PrvText.txt`. The two
+runs are sequential, so for such documents generation time roughly doubles
+while the first archive is held in memory during the second run; Markdown
+without intraword underscores is generated once. Benchmark files and
 receipts are ignored development artifacts and are excluded from the compact
 installed runtime. Clean them from the selected ignored output directory after
 retaining only the evidence needed for the release decision.

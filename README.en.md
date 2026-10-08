@@ -4,7 +4,7 @@
 
 <h1 align="center">Gpt_Codex_HWP</h1>
 
-<p align="center"><strong>A local Codex document plugin that reads Korean HWP and produces validated HWPX</strong></p>
+<p align="center"><strong>A local Codex and Claude Code document plugin that reads Korean HWP and produces validated HWPX</strong></p>
 
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
@@ -72,7 +72,7 @@ HWPX is the supported authoring format. To revise a binary HWP, read it with `hw
 - Windows x64 or macOS Apple Silicon
 - Python 3.10 or later in a standard location for `after-paragraph` image insertion. PATH is not searched: Windows uses `%SystemRoot%\py.exe` or the per-user `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`; macOS tries `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, then the Command Line Tools `python3`; Linux uses `/usr/bin/python3` or `/usr/local/bin/python3`.
 - On macOS the supervised document child also uses Python to identify processes, so image insertion (either mode) and documents over 64 MiB need a python3. The Xcode Command Line Tools (`xcode-select --install`) python3 is enough for that, but `after-paragraph` insertion needs 3.10 or newer, for example Homebrew `python3`. The image helper uses the first trusted interpreter that reports 3.10 or newer, and doctor applies the same rule. Without them, `/usr/bin/python3` may open an installer prompt and the operation can fail.
-- An environment with Codex plugin marketplace commands
+- An environment with Codex or Claude Code plugin marketplace commands
 
 Without Python, only the Python-backed image insertion mode fails with `PYTHON_NOT_FOUND`; the other tools remain available.
 
@@ -179,7 +179,7 @@ Validate that the returned `version` and `installedPath` identify the actual v0.
 
 ## Claude Code installation
 
-Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support landed after `v0.2.7`, so use `main` until a release tag includes it, then pin `#<tag>`.
+Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support landed after `v0.2.7`, so use `main` until a release tag includes it, then pin `#<tag>`. A `main` build reports version `0.2.7+codex.<build ID>` but is not the published `v0.2.7` release.
 
 Inside a Claude Code session:
 
@@ -194,14 +194,26 @@ From a terminal, use `claude plugin marketplace add Burntgogi/Gpt_Codex_HWP` and
 2. From that directory, run the same explicit runtime installer and doctor as on Codex.
 
 ```bash
+cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version directory>"
 node dist/install-runtime.js --json   # require code RUNTIME_INSTALL_OK
-node dist/doctor.js --json
+node dist/doctor.js --json            # require code DOCTOR_OK
+```
+
+In PowerShell (replace `$env:USERPROFILE\.claude` with `CLAUDE_CONFIG_DIR` when it is set):
+
+```powershell
+Push-Location -LiteralPath "$env:USERPROFILE\.claude\plugins\cache\gpt-codex-hwp-local\gpt-codex-hwp\<version directory>"
+try {
+  $runtime = node dist/install-runtime.js --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $runtime.code -ne "RUNTIME_INSTALL_OK") { throw "runtime installation failed" }
+  node dist/doctor.js --json
+} finally { Pop-Location }
 ```
 
 3. Production dependencies are stored under `~/.claude/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<major>` and are not shared with the Codex runtime.
 4. Restart the Claude Code session and confirm the `/gpt-codex-hwp:gpt-codex-hwp` skill is listed. No MCP server is registered by default; the skill runs `dist/oneshot.js` once per operation.
 
-The Claude Code path was checked on Windows x64 by installing into an isolated `CLAUDE_CONFIG_DIR` and running the runtime installer, doctor, and HWPX generate, validate, and read. Claude Code on macOS is not yet verified.
+The Claude Code path was checked on Windows x64 by installing into an isolated `CLAUDE_CONFIG_DIR` and running the runtime installer, doctor, and HWPX generate, validate, read, and preview. Claude Code on macOS is not yet verified.
 
 ## Recommended companion skills (optional)
 
@@ -211,7 +223,7 @@ These skills are not dependencies; every Gpt_Codex_HWP tool works without them. 
 | --- | --- | --- | --- |
 | [AI Slop Thresher](https://github.com/Burntgogi/ai-slop-thresher) | Trims AI-style phrasing and over-explanation from Korean drafts before they become HWPX. | `codex plugin marketplace add Burntgogi/ai-slop-thresher`, then `codex plugin add ai-slop-thresher@ai-slop-thresher` | `/plugin marketplace add Burntgogi/ai-slop-thresher`, then `/plugin install ai-slop-thresher@ai-slop-thresher` |
 | [kar-plain](https://github.com/Burntgogi/kar-plain) | Explains a topic as prose, a diagram, a web page, or a video; useful for drafting explanatory sections and figures. | Manual install into `~/.agents/skills` per its README | `/plugin marketplace add Burntgogi/kar-plain`, then `/plugin install kar-plain@kar-plain` |
-| [Korean official document rules](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/plugins/korean-official-doc/skills/korean-official-doc/SKILL.md) (`korean-official-doc`) | Offline lint of 공문서 Markdown drafts for date, time, and amount notation, item-symbol order, 붙임, and the 「끝」 mark, with statute citations. Recommended for public-sector writers. | From the same marketplace: `codex plugin add korean-official-doc@gpt-codex-hwp-local` | From the same marketplace: `/plugin install korean-official-doc@gpt-codex-hwp-local` |
+| [Korean official document rules](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/plugins/korean-official-doc/skills/korean-official-doc/SKILL.md) (`korean-official-doc`) | Offline lint of 공문서 Markdown drafts for date, time, and amount notation, item-symbol order, 붙임, and the 「끝」 mark, with statute citations. Recommended for public-sector writers. | From the same marketplace: `codex plugin add korean-official-doc@gpt-codex-hwp-local` (not in the `v0.2.7` tag; pin the marketplace to a later release tag that includes it) | From the same marketplace: `/plugin install korean-official-doc@gpt-codex-hwp-local` |
 
 Check each repository's latest release tag and installation guide first; the commands above reflect 2026-10-08.
 
@@ -261,7 +273,7 @@ For vulnerabilities, follow the GitHub private-reporting process in [SECURITY.md
 
 ### Optional document-root restriction
 
-Set `GPT_CODEX_HWP_ALLOWED_ROOTS` to restrict every user-supplied input and output path used by all nine MCP tools to selected local directories. When the variable is unset, the backward-compatible default allows local paths available to the current OS user. The value must be a non-empty JSON array of unique, existing absolute directories. A symbolic-link or Windows junction/reparse alias cannot itself be a configured root. These are exact JSON-string examples:
+Set `GPT_CODEX_HWP_ALLOWED_ROOTS` to restrict every user-supplied input and output path used by all nine MCP tools to selected local directories. When the variable is unset, the backward-compatible default allows local paths available to the current OS user, except Windows network (UNC) paths, which are rejected. The value must be a non-empty JSON array of unique, existing absolute directories. A symbolic-link or Windows junction/reparse alias cannot itself be a configured root. These are exact JSON-string examples:
 
 ```powershell
 $env:GPT_CODEX_HWP_ALLOWED_ROOTS = '["C:\\Documents\\HWP","D:\\TeamDocs"]'
@@ -278,7 +290,7 @@ Internal large-document spools use a separate unpredictable, owner-only director
 - Input and output paths must differ, and existing output files are never overwritten.
 - Signed, encrypted, DRM-protected, or distribution-protected documents are refused without bypassing protection.
 - Path aliases, hard links, symbolic links, Windows junctions, and ZIP path traversal are defended against.
-- Windows network (UNC, `\\server\share`) paths are rejected by default. To use a network share, list its UNC root in `GPT_CODEX_HWP_ALLOWED_ROOTS`; only paths below it are accepted.
+- Windows network (UNC, `\\server\share`) paths are rejected by default. To use a network share, list its UNC root in `GPT_CODEX_HWP_ALLOWED_ROOTS`; only paths below it are accepted. When `GPT_CODEX_HWP_ALLOWED_ROOTS` is unset, documents on a mapped network drive (for example `Z:\`) can be read, but outputs are not written to that share unless its UNC root is configured.
 - A generated or edited artifact is not written when HWPX validation fails.
 - Semantic verification is mandatory for `hwp_patch_document`; it cannot publish when verification is disabled or verification statistics are missing.
 - Protection manifests are inspected with UTF-8/UTF-16 awareness, and ZIP entry counts are capped at 10,000 before JSZip loads the archive.

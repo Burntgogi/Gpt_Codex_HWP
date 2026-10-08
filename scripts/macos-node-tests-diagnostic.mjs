@@ -21,6 +21,9 @@ const DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS = 600_000;
 // Files whose own per-test timeouts add up past the ordinary file budget; on
 // hosted runners a slow but healthy file was otherwise killed as a failure.
 const LONG_RUNNING_FILE_TIMEOUTS_MS = Object.freeze({
+  // The whole file failed on hosted Windows timing (main push CI) while every
+  // case passed alone, so it gets the same budget as the other long files.
+  "allowed-roots.test.ts": 300_000,
   "benchmark-policy.test.ts": 300_000,
   "mcp-cancellation-progress.test.ts": 300_000,
   "mcp-smoke.test.ts": 300_000,

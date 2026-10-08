@@ -48,9 +48,9 @@ test("macOS Node diagnostic emits one fixed success receipt after every allowlis
     setExitCode: (value) => { exitCode = value; },
   });
   assert.equal(passed, true);
-  assert.equal(files.length, 41);
-  assert.equal(new Set(files).size, 41);
-  assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=41\n");
+  assert.equal(files.length, 45);
+  assert.equal(new Set(files).size, 45);
+  assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=45\n");
   assert.equal(exitCode, 0);
 });
 
@@ -110,8 +110,8 @@ test("macOS Node diagnostic accepts capability skips when every executed test pa
     setExitCode() {},
   });
   assert.equal(passed, true);
-  assert.equal(calls, 41);
-  assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=41\n");
+  assert.equal(calls, 45);
+  assert.equal(output, "MAC_NODE_TEST_FILES status=passed files=45\n");
 });
 
 test("source Node diagnostic gives document lifecycle files their measured extended bounds", async () => {
@@ -121,7 +121,7 @@ test("source Node diagnostic gives document lifecycle files their measured exten
   let output = "";
   const passed = await runMacNodeTestsDiagnostic({
     runFile: async (file, fileOptions) => {
-      if (file === "allowed-roots.test.ts") ordinaryTimeout = fileOptions?.testTimeoutMs;
+      if (file === "assets.test.ts") ordinaryTimeout = fileOptions?.testTimeoutMs;
       if (file === "document-child-client.test.ts") {
         documentChildTimeout = fileOptions?.testTimeoutMs;
       }
@@ -155,7 +155,8 @@ test("source Node diagnostic gives files with long per-test timeouts a larger fi
     setExitCode() {},
   });
   assert.equal(passed, true);
-  assert.equal(timeouts.get("allowed-roots.test.ts"), 120_000);
+  assert.equal(timeouts.get("assets.test.ts"), 120_000);
+  assert.equal(timeouts.get("allowed-roots.test.ts"), 300_000);
   assert.equal(timeouts.get("benchmark-policy.test.ts"), 300_000);
   assert.equal(benchmarkFileTimeout({ testTimeoutMs: 300_000 }, {}), 300_000);
   assert.equal(benchmarkFileTimeout({}, {}), 120_000);
@@ -1247,7 +1248,7 @@ test("source Node diagnostic uses the fixed Windows receipt prefix only when req
     setExitCode() {},
   });
   assert.equal(passed, true);
-  assert.equal(output, "WINDOWS_NODE_TEST_FILES status=passed files=41\n");
+  assert.equal(output, "WINDOWS_NODE_TEST_FILES status=passed files=45\n");
 });
 
 test("bounded Node runner returns only an allowlisted fixed failure diagnostic", async () => {

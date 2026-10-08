@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
@@ -166,3 +167,34 @@ async function regularFiles(root) {
   }
   return output;
 }
+
+// Hosts cache installed plugins by version, so a content change that keeps the
+// version can leave users on a stale copy. Changing korean-official-doc means
+// bumping both of its manifests and recording the new content hash here.
+const KOREAN_OFFICIAL_DOC_CONTENT_SHA256 = Object.freeze({
+  "0.1.0": "4043d49ab2b943f8fae407da34293b48fd1783c242dc06c243d23f9543f5cf15",
+});
+
+test("korean-official-doc content is tied to its manifest version", async () => {
+  const pluginRoot = join(ROOT, "plugins", "korean-official-doc");
+  const manifests = [".codex-plugin/plugin.json", ".claude-plugin/plugin.json"];
+  const versions = await Promise.all(manifests.map(async (path) =>
+    JSON.parse(await readFile(join(pluginRoot, path), "utf8")).version));
+  assert.equal(new Set(versions).size, 1, "both manifests carry the same version");
+  const files = (await readdir(pluginRoot, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(pluginRoot, join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
+    .filter((path) => !manifests.includes(path))
+    .sort();
+  const hash = createHash("sha256");
+  for (const path of files) {
+    hash.update(`${path}\0`);
+    hash.update(await readFile(join(pluginRoot, path)));
+    hash.update("\0");
+  }
+  assert.equal(
+    hash.digest("hex"),
+    KOREAN_OFFICIAL_DOC_CONTENT_SHA256[versions[0]],
+    "korean-official-doc changed: bump its version in both manifests and record the new hash",
+  );
+});

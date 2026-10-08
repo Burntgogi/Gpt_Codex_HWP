@@ -16,6 +16,16 @@ function resolveMacosPython() {
     });
     return macosPythonCommand;
 }
+function macosPythonEnvironment() {
+    // -I ignores PYTHON* variables, so only the locale and paths are passed.
+    const result = {};
+    for (const key of ["PATH", "TMPDIR", "LANG", "LC_ALL"]) {
+        const value = process.env[key];
+        if (value !== undefined)
+            result[key] = value;
+    }
+    return result;
+}
 const MAX_MACOS_IDENTITY_STABILIZATION_ROUNDS = 4;
 export async function snapshotMacosPsRecords() {
     const result = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,rss="], { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" });
@@ -254,7 +264,16 @@ print(json.dumps(out, separators=(",", ":")))
 export async function macosKernelIdentities(pids = []) {
     if (pids.length > MAX_TRACKED_PROCESS_IDENTITIES)
         throw new Error("macOS PID limit exceeded");
-    const result = await execFileAsync(await resolveMacosPython(), ["-c", MACOS_LIBPROC_IDENTITY_SCRIPT, ...pids.map(String)], { timeout: 5_000, maxBuffer: 1024 * 1024, encoding: "utf8" });
+    // -I (isolated mode) ignores PYTHON* variables, the user site directory, and
+    // the working directory, so a json.py or ctypes/ in the workspace the server
+    // was started from cannot shadow the standard library.
+    const result = await execFileAsync(await resolveMacosPython(), ["-I", "-c", MACOS_LIBPROC_IDENTITY_SCRIPT, ...pids.map(String)], {
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+        encoding: "utf8",
+        cwd: "/",
+        env: macosPythonEnvironment(),
+    });
     const value = JSON.parse(String(result.stdout));
     if (!Array.isArray(value) || value.length > MAX_TRACKED_PROCESS_IDENTITIES) {
         throw new Error("invalid macOS identity receipt");

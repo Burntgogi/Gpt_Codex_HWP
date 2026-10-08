@@ -1174,6 +1174,8 @@ function assertFastDesktopPrJobBoundary(section, options) {
     `npm --prefix packages/gpt-codex-hwp run ${options.profile}`,
     options.nodeDiagnosticCommand,
     "npm run test:python",
+    // The zero-dependency official-document linter tests take seconds.
+    "npm run test:official-doc",
   ]);
   const sourceNodeTestCommands = section.split(/\r?\n/u)
     .map((line) => line.trim().replace(/^run:\s*/u, ""))

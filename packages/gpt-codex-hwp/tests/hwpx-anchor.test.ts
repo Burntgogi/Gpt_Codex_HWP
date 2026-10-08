@@ -101,6 +101,11 @@ test("Python helper candidates are absolute trusted locations shared with doctor
   assert.match(windows[0]!.command, /Windows[\\/]py\.exe$/u);
   assert.match(windows[1]!.command, /Programs[\\/]Python[\\/]Launcher[\\/]py\.exe$/u);
   assert.equal(pythonCommandCandidates("win32", { SystemRoot: "C:/Windows" }).length, 1);
+  assert.deepEqual(
+    pythonCommandCandidates("win32", { SystemRoot: "Windows", LOCALAPPDATA: "relative" }),
+    [],
+    "relative environment values never name a trusted interpreter",
+  );
 
   const mac = pythonCommandCandidates("darwin", {}).map((entry) => entry.command);
   assert.equal(mac.at(-1), "/usr/bin/python3", "the CLT stub is tried last");

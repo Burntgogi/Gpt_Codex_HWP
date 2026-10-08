@@ -99,7 +99,10 @@ If the release 10 MiB preflight fails, the job stops there: the complete
 release gate, candidate construction, and attestation do not run, and no
 follow-up diagnostic can restore success. Duplicate manual verification for the
 same immutable tag and SHA is serialized without cancelling an execution that
-already started.
+already started. If the gate fails for a reason unrelated to the tagged code
+(for example a hosted-runner timing failure that passes on rerun), dispatch
+`release-verify.yml` again with the same tag and SHA after recording the cause;
+do not cut a new version for an unchanged tree.
 
 PR concurrency is scoped by workflow plus PR number or ref. Compatibility
 concurrency additionally includes the event name: a newer scheduled run may
@@ -109,8 +112,13 @@ push, release, and dependency work remain separate.
 ## Source and generated runtime
 
 `packages/gpt-codex-hwp` and `scripts` are the authoritative source tree.
-`plugins/gpt-codex-hwp` is a generated runtime projection. Never edit the
-generated runtime directly. Change source or end-user documentation, run
+`plugins/gpt-codex-hwp` is a generated runtime projection, including its
+`.claude-plugin/plugin.json`. Never edit the generated runtime directly.
+The root marketplaces (`.agents/plugins/marketplace.json`,
+`.claude-plugin/marketplace.json`) and `plugins/korean-official-doc` are
+hand-maintained source. When `korean-official-doc` content changes, bump the
+version in both of its manifests and record the new content hash in
+`tests/repository-layout.test.mjs`; hosts cache installed plugins by version. Change source or end-user documentation, run
 `npm run runtime:write`, review the projection, and require
 `npm run runtime:check` to pass. Contributor-only documentation, tests, fixtures,
 private plans, benchmark receipts, and temporary artifacts must not enter the
@@ -139,3 +147,8 @@ release_version=0.2.7
 ```
 
 Publish only after both build and attestation jobs succeed. Use only `gpt-codex-hwp-0.2.7.zip`, `gpt-codex-hwp-0.2.7.spdx.json`, `provenance.json`, and `SHA256SUMS` from the same workflow artifact. Never rebuild, repackage, or substitute local files for those verified outputs.
+
+The attested archive covers only the `gpt-codex-hwp` runtime. The root
+marketplaces and `plugins/korean-official-doc` reach users only through the
+Git tag a marketplace is pinned to; the public-tree privacy scan covers them,
+but they are not part of the archive, SBOM, provenance, or attestation.

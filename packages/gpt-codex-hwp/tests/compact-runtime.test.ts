@@ -125,7 +125,7 @@ test("obsolete public-source references are absent from split release suites", a
     "node --test --test-concurrency=1 tests/*.test.mjs",
   );
   assert.equal(rootPackage.scripts["test:source"], "npm --prefix packages/gpt-codex-hwp test");
-  assert.equal(rootPackage.scripts.test, "npm run test:repository && npm run test:source");
+  assert.equal(rootPackage.scripts.test, "npm run test:repository && npm run test:official-doc && npm run test:source");
   assert.equal(rootPackage.scripts["test:python"], "npm --prefix packages/gpt-codex-hwp run test:python");
 });
 
