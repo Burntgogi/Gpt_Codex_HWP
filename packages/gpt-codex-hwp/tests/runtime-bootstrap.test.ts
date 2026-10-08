@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -198,7 +198,9 @@ async function createRuntimeFixture(
   t: { after(fn: () => Promise<void>): void },
   options: Readonly<{ durable?: boolean; versionDirectory?: string }> = {},
 ) {
-  const root = await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bootstrap-test-"));
+  // Canonical spelling: hosted runners use an 8.3 TEMP on Windows and the
+  // /var -> /private/var alias on macOS, and the bootstrap requires realpaths.
+  const root = await realpath(await mkdtemp(join(tmpdir(), "gpt-codex-hwp-bootstrap-test-")));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const codexHome = join(root, "codex-home");
   const managedRoot = join(
