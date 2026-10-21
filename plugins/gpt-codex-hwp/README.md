@@ -38,7 +38,7 @@ Gpt_Codex_HWP는 Codex와 Claude Code에서 한국어 HWP/HWPX 문서를 읽고,
 
 ## 이전 릴리즈
 
-`v0.2.7`은 이전 공개 릴리스이며 [의존성 감사 이슈 #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18)의 패키지를 갱신했습니다. `v0.2.5`는 그 전 공개 릴리스입니다. `v0.2.3`, `v0.2.4`, `v0.2.6`은 불변 미게시 후보 태그이며 GitHub Release와 배포 자산이 없습니다. `v0.2.2`는 HWP 읽기 전용·HWPX 쓰기, 기본 one-shot 실행과 100 MiB CI 검증 범위를 도입했습니다. 자세한 이력은 [CHANGELOG](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md)와 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있습니다.
+`v0.3.1` 이전 공개 릴리스는 최신 순으로 `v0.3.0`, `v0.2.7`, `v0.2.5`입니다. `v0.2.7`은 [의존성 감사 이슈 #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18)의 패키지를 갱신했습니다. `v0.2.3`, `v0.2.4`, `v0.2.6`은 불변 미게시 후보 태그이며 GitHub Release와 배포 자산이 없습니다. `v0.2.2`는 HWP 읽기 전용·HWPX 쓰기, 기본 one-shot 실행과 100 MiB CI 검증 범위를 도입했습니다. 자세한 이력은 [CHANGELOG](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md)와 [한국어 릴리즈 노트](RELEASE_NOTES.md)에서 확인할 수 있습니다.
 
 ## 기능
 

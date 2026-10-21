@@ -331,8 +331,8 @@
     },
     {
       "path": "dist/workers/posix-process-telemetry.js",
-      "size": 26105,
-      "sha256": "e31f2526b6218377e9123f054b94cb838bab842bcd4c2af58d835a0ccc4ce2fa"
+      "size": 26221,
+      "sha256": "b33b707b6a4d72cbf811515d6ede98630216a7132ef6e253286255a86ae3948c"
     },
     {
       "path": "dist/workers/registered-process-supervisor.js",

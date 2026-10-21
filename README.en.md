@@ -38,7 +38,7 @@ Gpt_Codex_HWP is a local Codex and Claude Code plugin for reading, creating, edi
 
 ## Previous releases
 
-`v0.2.7` is the previous public release; it updated the packages reported in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18). `v0.2.5` is the public release before it. `v0.2.3`, `v0.2.4`, and `v0.2.6` are immutable unpublished candidate tags with no GitHub Release or distribution assets. `v0.2.2` introduced read-only HWP, HWPX writing, default one-shot execution, and the 100 MiB CI-verified envelope. See the [changelog](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for retained history.
+The public releases before `v0.3.1`, newest first, are `v0.3.0`, `v0.2.7`, and `v0.2.5`. `v0.2.7` updated the packages reported in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18). `v0.2.3`, `v0.2.4`, and `v0.2.6` are immutable unpublished candidate tags with no GitHub Release or distribution assets. `v0.2.2` introduced read-only HWP, HWPX writing, default one-shot execution, and the 100 MiB CI-verified envelope. See the [changelog](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for retained history.
 
 ## Features
 

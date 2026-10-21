@@ -28,6 +28,10 @@ This file records release tags and their publication status. Work under `Unrelea
 - Retain fixed Windows Job startup/RSS/GONE/finalization failure boundaries in
   failed CI runtime-install receipts. Never print raw helper reasons or accept
   an unverified process-tree cleanup as success.
+- Preserve Linux RSS history when a missing-`VmRSS` read ends with an
+  exact-identity terminal process state. Live, unreadable, unknown or reused
+  identities still invalidate telemetry; process-group absence remains a
+  separate required proof. Sampling and termination bounds are unchanged.
 
 ## [0.3.0] - 2026-10-08
 
