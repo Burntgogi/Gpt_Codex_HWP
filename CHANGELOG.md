@@ -25,6 +25,9 @@ This file records release tags and their publication status. Work under `Unrelea
   source-test invocation in CI. Different Windows files failed initially and
   passed later diagnostics, so later success is not a recovered root cause.
   Keep the required checks, behavior tests, resource bounds and failure status.
+- Retain fixed Windows Job startup/RSS/GONE/finalization failure boundaries in
+  failed CI runtime-install receipts. Never print raw helper reasons or accept
+  an unverified process-tree cleanup as success.
 
 ## [0.3.0] - 2026-10-08
 

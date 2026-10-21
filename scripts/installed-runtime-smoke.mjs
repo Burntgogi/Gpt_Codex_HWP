@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { runBoundedProcess } from "./public-content-policy.mjs";
+import { PUBLIC_PROCESS_FAILURE_DIAGNOSTICS, runBoundedProcess } from "./public-content-policy.mjs";
 import { createCanonicalTemporaryDirectory } from "./canonical-temp.mjs";
 import { loadProjectMetadata, pluginVersion } from "./project-metadata.mjs";
 import { buildRuntime } from "./project-runtime.mjs";
@@ -185,9 +185,10 @@ export function assertOneShotProcessCleanup(result) {
 }
 
 class RuntimeProcessFailure extends Error {
-  constructor(reason) {
+  constructor(reason, diagnostic) {
     super("One-shot process failed.");
     this.reason = reason;
+    this.diagnostic = PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.includes(diagnostic) ? diagnostic : undefined;
   }
 }
 
@@ -199,7 +200,7 @@ function assertSuccessfulOneShotProcess(result, verifyStdout = true) {
     || !Buffer.isBuffer(result.stderr) || !Buffer.isBuffer(result.stdout)) {
     throw new RuntimeProcessFailure("invalid-result");
   }
-  if (result.terminationFailed) throw new RuntimeProcessFailure("cleanup");
+  if (result.terminationFailed) throw new RuntimeProcessFailure("cleanup", result.failureDiagnostic);
   if (result.timedOut) throw new RuntimeProcessFailure("timeout");
   if (result.overflow) throw new RuntimeProcessFailure("output-limit");
   if (result.signal !== null) throw new RuntimeProcessFailure("signal");
@@ -224,6 +225,7 @@ export async function runInstalledOneShotSmoke(options = {}) {
   let report;
   let failure;
   let failureReason;
+  let failureBoundary;
   let prepared;
   try {
     if (options.prepareRuntime !== undefined
@@ -370,7 +372,10 @@ export async function runInstalledOneShotSmoke(options = {}) {
     });
   } catch (error) {
     failure = stage;
-    if (error instanceof RuntimeProcessFailure) failureReason = error.reason;
+    if (error instanceof RuntimeProcessFailure) {
+      failureReason = error.reason;
+      failureBoundary = error.diagnostic;
+    }
   } finally {
     if (cleanupRoot !== undefined) {
       try {
@@ -385,7 +390,8 @@ export async function runInstalledOneShotSmoke(options = {}) {
   }
 
   if (failure !== undefined || report === undefined) {
-    const diagnostic = failureReason === undefined ? "" : ` reason=${failureReason}`;
+    const diagnostic = (failureReason === undefined ? "" : ` reason=${failureReason}`)
+      + (failureBoundary === undefined ? "" : ` boundary=${failureBoundary}`);
     stdout.write(`RUNTIME_SMOKE status=failed stage=${failure ?? "unknown"}${diagnostic}\n`);
     setExitCode(1);
     return false;
@@ -415,6 +421,7 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
   let report;
   let failure;
   let failureReason;
+  let failureBoundary;
   let prepared;
   try {
     // Reject an unsupported size before installing or touching any runtime.
@@ -500,7 +507,10 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
     });
   } catch (error) {
     failure = stage;
-    if (error instanceof RuntimeProcessFailure) failureReason = error.reason;
+    if (error instanceof RuntimeProcessFailure) {
+      failureReason = error.reason;
+      failureBoundary = error.diagnostic;
+    }
   } finally {
     if (cleanupRoot !== undefined) {
       try {
@@ -511,7 +521,8 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
   }
 
   if (failure !== undefined || report === undefined) {
-    const diagnostic = failureReason === undefined ? "" : ` reason=${failureReason}`;
+    const diagnostic = (failureReason === undefined ? "" : ` reason=${failureReason}`)
+      + (failureBoundary === undefined ? "" : ` boundary=${failureBoundary}`);
     stdout.write(`LARGE_DOCUMENT_SMOKE status=failed stage=${failure ?? "unknown"}${diagnostic}\n`);
     setExitCode(1);
     return false;

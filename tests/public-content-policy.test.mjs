@@ -1158,6 +1158,7 @@ test("Windows public scanner rejects mode 2 before dispatching an ephemeral-inte
 
   assert.equal(result.code, -1);
   assert.equal(result.terminationFailed, false);
+  assert.equal(result.failureDiagnostic, "windows-ready-mode2");
   assert.deepEqual(startupError?.startupCleanup, {
     helperClosed: true,
     runnerClosed: true,
@@ -1236,6 +1237,35 @@ test("public scanner invalid frame performs bounded helper cleanup without proof
   assert.equal(helper.stdin.destroyed, true);
   assert.equal(helper.stdout.destroyed, true);
   assert.equal(helper.stderr.destroyed, true);
+});
+
+test("public scanner retains a fixed helper error without accepting cleanup proof or disclosing its reason", {
+  timeout: 5_000,
+}, async (t) => {
+  const privateReason = "PRIVATE_FAILURE_DETAIL";
+  const helper = spawn(process.execPath, ["-e", [
+    "process.stdin.resume();",
+    "process.stdin.once('end', () => {",
+    `process.stdout.end(${JSON.stringify(`GPT_CODEX_HWP_JOB ERROR sampling ${privateReason}\n`)});`,
+    "process.exitCode = 1;",
+    "});",
+  ].join("")], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const closeReceipt = publicContentPolicy.observePublicProcessClose(helper);
+  t.after(() => {
+    if (helper.exitCode === null && helper.signalCode === null) helper.kill("SIGKILL");
+  });
+  const diagnostics = [];
+  const gone = await publicContentPolicy.terminatePublicWindowsSupervisor({
+    helper,
+    lines: new publicContentPolicy.BoundedLineReader(helper.stdout, 256),
+    closeReceipt,
+    transcriptReceipt: cleanPublicSupervisorTranscript,
+    onFailureDiagnostic: (code) => { diagnostics.push(code); },
+  });
+  assert.equal(gone, false);
+  assert.deepEqual(diagnostics, ["windows-helper-sampling"]);
+  assert.equal(JSON.stringify(diagnostics).includes(privateReason), false);
+  assert.equal((await closeReceipt).error, null);
 });
 
 test("public scanner retains an unclosed helper until its exact late close", async () => {

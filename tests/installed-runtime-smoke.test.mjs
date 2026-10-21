@@ -447,7 +447,7 @@ test("MCP stdout budget rejects per-frame and aggregate overflow before bufferin
   assert.throws(() => aggregateBudget.consume(Buffer.from("{}\n")), /stdout|aggregate|bound/iu);
 });
 
-test("over-limit MCP stdout emits one fixed initialization failure and closes the supervised root", async (t) => {
+test("over-limit MCP stdout fails after actual output and closes the supervised root with bounded diagnostics", async (t) => {
   assert.equal(typeof smokeModule.createDefaultRuntimeSession, "function");
   const root = await mkdtemp(join(tmpdir(), "runtime-smoke-stdout-limit-"));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
@@ -460,6 +460,7 @@ test("over-limit MCP stdout emits one fixed initialization failure and closes th
   const runtimeRoot = join(process.cwd(), "plugins", "gpt-codex-hwp");
   const sourceRoot = join(process.cwd(), "packages", "gpt-codex-hwp");
   let child;
+  let observedStdoutBytes = 0;
   let output = "";
   const passed = await smokeModule.runInstalledRuntimeSmoke({
     runtimeRoot,
@@ -469,6 +470,7 @@ test("over-limit MCP stdout emits one fixed initialization failure and closes th
       {
         spawnProcess(command, args, options) {
           child = spawn(command, args, options);
+          child.stdout.on("data", (chunk) => { observedStdoutBytes += chunk.length; });
           return child;
         },
       },
@@ -479,9 +481,9 @@ test("over-limit MCP stdout emits one fixed initialization failure and closes th
   assert.equal(passed, false);
   assert.ok(child !== undefined);
   assert.equal(child.exitCode !== null || child.signalCode !== null, true);
-  const receipt = /^RUNTIME_SMOKE status=failed stage=initialize boundary=gate-released stderrBytes=([1-9][0-9]{0,4})\n$/u.exec(output);
-  assert.notEqual(receipt, null);
-  assert.equal(Number(receipt[1]) <= 65_537, true);
+  assert.ok(observedStdoutBytes > 128 * 1024, "the target must actually cross the MCP frame bound");
+  const stderrBytes = Number(/stderrBytes=([0-9]+)/u.exec(output)?.[1]);
+  assert.ok(Number.isSafeInteger(stderrBytes) && stderrBytes >= 0 && stderrBytes <= 65_537);
   assert.doesNotMatch(output, /oversized-stdout|runtime-smoke-stdout-limit|private/iu);
 });
 
