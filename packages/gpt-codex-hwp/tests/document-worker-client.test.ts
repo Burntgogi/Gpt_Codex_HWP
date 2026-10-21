@@ -9,6 +9,7 @@ import {
   type DocumentWorkerLike,
 } from "../src/workers/document-worker-client.js";
 import { subscribeDocumentWorkerTerminationReceipts } from "../src/workers/document-worker-termination-channel.js";
+import { createDocumentEventValidator } from "../src/workers/document-protocol.js";
 import {
   CHILD_WORKING_SET_MAX_BYTES,
   HeavyChildGate,
@@ -144,8 +145,9 @@ test("document worker client maps pre-ready crash, post-ready crash, OOM, and ma
     ["oom", "ENGINE_OOM"],
     ["malformed", "ENGINE_PROTOCOL_ERROR"],
   ] as const) {
+    const request = detectRequest(`worker-${mode}`);
     await assert.rejects(
-      workerClient(mode).run(detectRequest(`worker-${mode}`), workerSnapshot(new ArrayBuffer(1))),
+      workerClient(mode, 250, request.requestId).run(request, workerSnapshot(new ArrayBuffer(1))),
       (error: unknown) => safeCode(error) === code && !JSON.stringify(error).includes("private"),
     );
     assert.deepEqual(
@@ -704,12 +706,39 @@ test("hybrid engine cleans a spool snapshot when its external gate wait aborts",
   release();
 });
 
-function workerClient(mode: string, delayMs = 250) {
+function workerClient(mode: string, delayMs = 250, requestId?: string) {
   return createDocumentWorkerClient({
-    workerFactory: (options) => new Worker(fixtureUrl, {
-      ...options,
-      workerData: { mode, delayMs },
-    }),
+    workerFactory: (options) => {
+      const readyObservedGate = mode === "crash-after-ready"
+        ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+        : undefined;
+      let onReady: ((value: unknown) => void) | undefined;
+      if (readyObservedGate !== undefined) {
+        assert.ok(requestId !== undefined);
+        const validator = createDocumentEventValidator(requestId, "detect");
+        onReady = (value: unknown) => {
+          try {
+            if (validator.accept(value).type !== "ready") return;
+          } catch { return; }
+          // Uncaught errors use a different Node port. Let the client's
+          // synchronous ready listener run before the fixture can throw.
+          queueMicrotask(() => {
+            Atomics.store(readyObservedGate, 0, 1);
+            Atomics.notify(readyObservedGate, 0);
+          });
+        };
+      }
+      const worker = new Worker(fixtureUrl, {
+        ...options,
+        workerData: {
+          mode,
+          delayMs,
+          ...(readyObservedGate === undefined ? {} : { readyObservedGate }),
+        },
+      });
+      if (onReady !== undefined) worker.once("message", onReady);
+      return worker;
+    },
   });
 }
 

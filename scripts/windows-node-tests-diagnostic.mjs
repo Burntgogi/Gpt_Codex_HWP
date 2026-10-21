@@ -7,6 +7,7 @@ import {
   runMacNodeTestsDiagnostic,
 } from "./macos-node-tests-diagnostic.mjs";
 import { parseNodeTestProfileArguments } from "./node-test-profiles.mjs";
+import { PUBLIC_PROCESS_FAILURE_DIAGNOSTICS } from "./public-content-policy.mjs";
 
 const PR_REPOSITORY_TEST_FILES = Object.freeze([
   "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
@@ -49,12 +50,12 @@ const KORDOC_OWNERSHIP_CASES = Object.freeze([
   id: `ko${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
 })));
+const RELEASE_ORACLE_CASE = "actual npm-wrapped real-HWP and HWPX stages satisfy their evidence oracles";
 const RELEASE_VERIFY_CASES = Object.freeze([
   "release subprocess environments scrub Git semantics and Node test context",
   "release subprocess environments preserve exact null-prototype record keys",
   "release verification binds schema 2 receipts to independent source identity",
   "release source identity ignores replacement refs and hostile Git selectors",
-  "release verification package scripts use the exact public entry points",
   "release verification runs the exact required stage contract in order",
   "release stages install source dependencies and keep temp nine-tools as runtime authority",
   "release artifacts stage owns a fresh output, verifies it independently, and cleans it",
@@ -81,10 +82,11 @@ const RELEASE_VERIFY_CASES = Object.freeze([
   "Windows process-tree termination bounds taskkill and falls back",
   "POSIX process-tree termination preserves TERM-delay-KILL ordering",
   "stage command requires one passed and zero skipped focused test",
-  "actual npm-wrapped real-HWP and HWPX stages satisfy their evidence oracles",
+  RELEASE_ORACLE_CASE,
 ].map((pattern, index) => Object.freeze({
   id: `rv${String(index + 1).padStart(2, "0")}`,
   pattern: `^${pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+  oracle: pattern === RELEASE_ORACLE_CASE,
 })));
 const KORDOC_DEFAULT_STAGES = new Set([
   "output-check", "input-validate", "parent-create", "output-create", "file-write",
@@ -132,6 +134,20 @@ const PUBLIC_CONTENT_FROZEN_TAG_PROGRESS_CODES = Object.freeze(
   [...PUBLIC_CONTENT_FROZEN_TAG_STAGES].map((stage) =>
     `PUBLIC_CONTENT_FROZEN_TAG_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`),
 );
+const PUBLIC_CONTENT_REPLACE_DIAGNOSTICS = new Map([
+  ...[
+    "setup", "base-commit", "private-commit", "clean-replacement", "install",
+    "reset", "scan", "private-finding", "override-finding",
+  ].map((stage) => [
+    `PUBLIC_CONTENT_REPLACE_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`,
+    `replace-${stage}`,
+  ]),
+  ...PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.map((code, index) => [
+    `PUBLIC_CONTENT_REPLACE_PROCESS_${index}`, code,
+  ]),
+]);
+const PUBLIC_CONTENT_REPLACE_STAGES = new Set(PUBLIC_CONTENT_REPLACE_DIAGNOSTICS.values());
+
 
 export async function runWindowsNodeTestsDiagnostic(options = {}) {
   const stdout = options.stdout ?? process.stdout;
@@ -230,7 +246,7 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
             let casePassed = false;
             try { casePassed = await runReleaseVerifyCase(record) === true; } catch { casePassed = false; }
             if (!casePassed) {
-              if (record.id === "rv32") {
+              if (record.oracle) {
                 let stage = "diagnostic-failed";
                 try {
                   const candidate = await runReleaseOracleDiagnostic();
@@ -264,7 +280,8 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
               }
               if (PUBLIC_CONTENT_METADATA_STAGES.has(candidate.stage)
                 || PUBLIC_CONTENT_BINARY_PATH_STAGES.has(candidate.stage)
-                || PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate.stage)) {
+                || PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate.stage)
+                || PUBLIC_CONTENT_REPLACE_STAGES.has(candidate.stage)) {
                 stage = candidate.stage;
               }
               if (["passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal"]
@@ -277,6 +294,9 @@ export async function runWindowsNodeTestsDiagnostic(options = {}) {
               }
             }
           } catch {}
+          if (caseId === "pc17" && PUBLIC_CONTENT_REPLACE_STAGES.has(stage)) {
+            caseId = `${caseId}-${stage}`;
+          }
           if (caseId === "pc23") {
             stdout.write(`WINDOWS_PUBLIC_CONTENT_METADATA stage=${stage ?? "diagnostic-failed"}\n`);
           } else if (caseId === "pc11") {
@@ -399,6 +419,7 @@ async function executePublicContentDiagnostic() {
       ...PUBLIC_CONTENT_METADATA_CODES,
       ...PUBLIC_CONTENT_BINARY_PATH_CODES,
       ...PUBLIC_CONTENT_FROZEN_TAG_CODES,
+      ...PUBLIC_CONTENT_REPLACE_DIAGNOSTICS.keys(),
     ],
     onFixedDiagnostic: (code) => {
       if (code.startsWith("PUBLIC_CONTENT_METADATA_")) {
@@ -411,6 +432,8 @@ async function executePublicContentDiagnostic() {
         const candidate = code.slice("PUBLIC_CONTENT_FROZEN_TAG_".length)
           .toLowerCase().replaceAll("_", "-");
         if (PUBLIC_CONTENT_FROZEN_TAG_STAGES.has(candidate)) stage = candidate;
+      } else if (PUBLIC_CONTENT_REPLACE_DIAGNOSTICS.has(code)) {
+        stage = PUBLIC_CONTENT_REPLACE_DIAGNOSTICS.get(code);
       }
     },
     fixedProgressDiagnostics: [

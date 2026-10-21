@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
-  "pluginVersion": "0.3.4+codex.20261021164358",
-  "packageLockSha256": "db5456987bb7912d7d59fa18226403da8d6a827a63d8ece12b4d556fb299721f",
+  "pluginVersion": "0.3.5+codex.20261021184753",
+  "packageLockSha256": "6544a4f080b6dca6fdeee72485d2c61bf863796caa8e5422f198ff8b212ed050",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -12,7 +12,7 @@
     {
       "path": ".codex-plugin/plugin.json",
       "size": 1208,
-      "sha256": "d76a893e24c004a6891e41676b50a7a87a04852af8f23b6b251d07ec57313fe8"
+      "sha256": "52797464d9f1a07ec0f421d8f5fc6cd273ff8fa38e08465739e65e7cadeb7acf"
     },
     {
       "path": ".npmrc",
@@ -32,7 +32,7 @@
     {
       "path": "dist/generated/project-metadata.js",
       "size": 140,
-      "sha256": "e82abc76d1ce34a69901b4b5e12db0b3a31e84717bb7363a8a02d7aa53a97eeb"
+      "sha256": "e37f12a0cc6e3e6098f074cea403f3a8f92c02c9ff5f2b984d3a822118ef336b"
     },
     {
       "path": "dist/install-runtime.js",
@@ -346,8 +346,8 @@
     },
     {
       "path": "dist/workers/windows-job-supervisor.ps1",
-      "size": 11793,
-      "sha256": "56e58ddf32f8ae01d9ded7d9254f4ab6ddd6026a1733e113da6f899c22055b0f"
+      "size": 12319,
+      "sha256": "69877abfc1b8a67c993611e7c08208b33f9f747a98a508dd69fa78f7afa65dc3"
     },
     {
       "path": "examples/mcp-manual.json",
@@ -362,12 +362,12 @@
     {
       "path": "package-lock.json",
       "size": 87458,
-      "sha256": "db5456987bb7912d7d59fa18226403da8d6a827a63d8ece12b4d556fb299721f"
+      "sha256": "6544a4f080b6dca6fdeee72485d2c61bf863796caa8e5422f198ff8b212ed050"
     },
     {
       "path": "package.json",
       "size": 670,
-      "sha256": "56cbad98a152dc70e4174939851e6b7e7c5733588e9772293441985a467530e1"
+      "sha256": "d2add2a79bfe44f99d1444e60868cc0dc41320dcd138879094e03c0ad78694fe"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

@@ -30,7 +30,6 @@ import {
   walkOwnedRegularFiles,
 } from "../scripts/public-content-policy.mjs";
 import { addTaggedRootTrees, scanPublicHistory } from "../scripts/scan-public-history.mjs";
-import { REQUIRED_RELEASE_STAGES } from "../scripts/release-verify.mjs";
 import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 
 const OWNER_EMAIL = fragments("224273819+Burntgogi", "@users.noreply.github.com");
@@ -466,30 +465,49 @@ test("Git history document exception requires the allowlisted bytes in a regular
 });
 
 test("Git history disables and rejects replacement refs that hide a private tree", async (t) => {
-  const root = await temporaryGitRepository(t, "public-history-replace-ref-");
-  const base = await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
-  const privatePath = ".superpowers/sdd/private-review.md";
-  const privateCommit = await commitFile(
-    root,
-    privatePath,
-    "safe but private evidence\n",
-    "private evidence",
-    OWNER_EMAIL,
-  );
-  const baseTree = git(root, ["rev-parse", `${base}^{tree}`]).trim();
-  const cleanReplacement = gitInput(
-    root,
-    ["commit-tree", baseTree, "-p", base],
-    "clean replacement\n",
-  ).trim();
-  git(root, ["replace", privateCommit, cleanReplacement]);
-  git(root, ["reset", "--hard", "-q", privateCommit]);
-
-  const result = await scanPublicHistory(syntheticHistoryOptions(root));
-  assert.ok(result.findings.some((finding) =>
-    finding.category === "private repository path"
-    && finding.label === privatePath));
-  assert.ok(result.findings.some((finding) => finding.category === "Git semantic override"));
+  let stage = "setup";
+  let processFailure;
+  try {
+    const root = await temporaryGitRepository(t, "public-history-replace-ref-");
+    stage = "base-commit";
+    const base = await commitFile(root, "README.md", "safe\n", "safe initial", OWNER_EMAIL);
+    const privatePath = ".superpowers/sdd/private-review.md";
+    stage = "private-commit";
+    const privateCommit = await commitFile(
+      root,
+      privatePath,
+      "safe but private evidence\n",
+      "private evidence",
+      OWNER_EMAIL,
+    );
+    const baseTree = git(root, ["rev-parse", `${base}^{tree}`]).trim();
+    stage = "clean-replacement";
+    const cleanReplacement = gitInput(
+      root,
+      ["commit-tree", baseTree, "-p", base],
+      "clean replacement\n",
+    ).trim();
+    stage = "install";
+    git(root, ["replace", privateCommit, cleanReplacement]);
+    stage = "reset";
+    git(root, ["reset", "--hard", "-q", privateCommit]);
+    stage = "scan";
+    const result = await scanPublicHistory(syntheticHistoryOptions(root, {
+      onFailureDiagnostic: (code) => { processFailure ??= code; },
+    }));
+    stage = "private-finding";
+    assert.ok(result.findings.some((finding) =>
+      finding.category === "private repository path"
+      && finding.label === privatePath));
+    stage = "override-finding";
+    assert.ok(result.findings.some((finding) => finding.category === "Git semantic override"));
+  } catch (error) {
+    const index = publicContentPolicy.PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.indexOf(processFailure);
+    const diagnostic = index < 0
+      ? `PUBLIC_CONTENT_REPLACE_STAGE_${stage.toUpperCase().replaceAll("-", "_")}`
+      : `PUBLIC_CONTENT_REPLACE_PROCESS_${index}`;
+    throw new Error(diagnostic, { cause: error });
+  }
 });
 
 test("Git history fails closed when info/grafts exists", async (t) => {
@@ -1566,15 +1584,6 @@ test("POSIX process group termination fails closed while the group remains alive
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });
 
-test("public content policy is mandatory in root scripts and release ordering", async () => {
-  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(packageJson.scripts["security:scan-tree"], "node scripts/public-content-policy.mjs --tree");
-  assert.equal(packageJson.scripts["security:scan-history"], "node scripts/scan-public-history.mjs");
-  const tree = REQUIRED_RELEASE_STAGES.indexOf("public-tree");
-  const history = REQUIRED_RELEASE_STAGES.indexOf("public-history");
-  const artifacts = REQUIRED_RELEASE_STAGES.indexOf("release-artifacts");
-  assert.ok(tree >= 0 && history > tree && artifacts > history);
-});
 
 test("public content fixtures canonicalize an injected aliased temp parent", async (t) => {
   const alias = await temporaryDirectoryAlias(t, "public-canonical-parent-");

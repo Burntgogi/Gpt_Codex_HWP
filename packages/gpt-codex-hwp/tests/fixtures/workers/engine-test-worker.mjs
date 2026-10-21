@@ -29,10 +29,14 @@ parentPort.once("message", (request) => {
   }
 
   parentPort.postMessage(event(request, "ready"));
-
   if (mode === "crash-after-ready") {
+    const readyObservedGate = workerData.readyObservedGate;
+    while (Atomics.load(readyObservedGate, 0) === 0) {
+      Atomics.wait(readyObservedGate, 0, 0);
+    }
     throw new Error("fixture engine crash: SECRET_DOCUMENT_FRAGMENT");
   }
+
   if (mode === "oom") {
     throw new Error("Reached heap limit Allocation failed - JavaScript heap out of memory");
   }

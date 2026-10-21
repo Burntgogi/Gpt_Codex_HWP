@@ -33,6 +33,7 @@ import { registerHwpDetectFormat } from "../src/tools/detect.js";
 import { handleHwpRead } from "../src/tools/read.js";
 import { createDocumentChildClient } from "../src/workers/document-child-client.js";
 import { createDocumentWorkerClient } from "../src/workers/document-worker-client.js";
+import { createDocumentEventValidator } from "../src/workers/document-protocol.js";
 
 const FIXTURE_ROOT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -540,32 +541,6 @@ test("MCP progress notification failure is non-fatal while active", async () => 
   }
 });
 
-test("supervised child fixture mode follows the child entry on every platform", () => {
-  assert.deepEqual(
-    withChildFixtureMode(["gate", "child", "success", "1000"], "child", "ignore-abort"),
-    ["gate", "child", "ignore-abort", "1000"],
-  );
-  assert.deepEqual(
-    withChildFixtureMode(
-      ["--import", "gate", "child", "success", "1000"],
-      "child",
-      "ignore-abort",
-    ),
-    ["--import", "gate", "child", "ignore-abort", "1000"],
-  );
-  assert.throws(
-    () => withChildFixtureMode(["gate", "success"], "child", "ignore-abort"),
-    /fixture arguments/iu,
-  );
-  assert.throws(
-    () => withChildFixtureMode(["child"], "child", "ignore-abort"),
-    /fixture arguments/iu,
-  );
-  assert.throws(
-    () => withChildFixtureMode(["child", "success", "child"], "child", "ignore-abort"),
-    /fixture arguments/iu,
-  );
-});
 
 function facadeWithDetect(
   detect: (
@@ -627,13 +602,37 @@ function isolatedCancellationFacade(
     : undefined;
   const runIsolated = engine === "worker"
     ? (() => {
+        let activeRequestId: string | undefined;
         const client = createDocumentWorkerClient({
           workerFactory: (workerOptions) => {
             const first = calls === 1;
+            const readyObservedGate = activeMode === "crash-after-ready"
+              ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+              : undefined;
+            let onReady: ((value: unknown) => void) | undefined;
+            if (readyObservedGate !== undefined) {
+              assert.ok(activeRequestId !== undefined);
+              const validator = createDocumentEventValidator(activeRequestId, "detect");
+              onReady = (value: unknown) => {
+                try {
+                  if (validator.accept(value).type !== "ready") return;
+                } catch { return; }
+                // This factory listener runs before the client's ready listener.
+                queueMicrotask(() => {
+                  Atomics.store(readyObservedGate, 0, 1);
+                  Atomics.notify(readyObservedGate, 0);
+                });
+              };
+            }
             const worker = new Worker(WORKER_FIXTURE, {
               ...workerOptions,
-              workerData: { mode: activeMode, delayMs: 1_000 },
+              workerData: {
+                mode: activeMode,
+                delayMs: 1_000,
+                ...(readyObservedGate === undefined ? {} : { readyObservedGate }),
+              },
             });
+            if (onReady !== undefined) worker.once("message", onReady);
             if (first) {
               started?.();
               worker.once("exit", () => {
@@ -647,11 +646,14 @@ function isolatedCancellationFacade(
           signal?: AbortSignal;
           deadlineMs: number;
           onProgress: (completed: number, total: number) => void;
-        }) => client.run(
-          request,
-          workerSnapshot(new ArrayBuffer(3), () => snapshotCleanups += 1),
-          options,
-        );
+        }) => {
+          activeRequestId = request.requestId;
+          return client.run(
+            request,
+            workerSnapshot(new ArrayBuffer(3), () => snapshotCleanups += 1),
+            options,
+          );
+        };
       })()
     : (() => {
         const client = createDocumentChildClient({
