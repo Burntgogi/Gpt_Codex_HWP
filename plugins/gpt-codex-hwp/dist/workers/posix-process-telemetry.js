@@ -558,8 +558,9 @@ async function snapshotLinuxProcess(pid, requireRss = true, readProcText = readB
             const statAfter = await readProcText(`/proc/${pid}/stat`, MAX_LINUX_PROC_STAT_BYTES);
             const before = parseLinuxStat(pid, statBefore);
             const after = parseLinuxStat(pid, statAfter);
-            if (before.identity !== after.identity || before.parentPid !== after.parentPid ||
-                (expectedIdentity !== undefined && after.identity !== expectedIdentity)) {
+            // Normal reparenting is mutable metadata, not a new PID/group/start identity.
+            if (!samePosixStableIdentity(before, after) ||
+                (expectedIdentity !== undefined && !samePosixStableIdentity(after, expectedIdentity))) {
                 if (requireRss)
                     throw new Error("Linux process identity changed during RSS sampling");
                 return undefined;
@@ -582,7 +583,7 @@ async function snapshotLinuxProcess(pid, requireRss = true, readProcText = readB
             }
             if (attempt + 1 === attempts)
                 throw new Error("Linux VmRSS unavailable");
-            expectedIdentity ??= after.identity;
+            expectedIdentity ??= after;
             await new Promise((resolveWait) => setImmediate(resolveWait));
         }
         throw new Error("Linux VmRSS unavailable");

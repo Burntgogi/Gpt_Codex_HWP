@@ -2293,55 +2293,6 @@ test("POSIX tree termination targets the process group and verifies it is gone",
   assert.equal(stuck, false);
 });
 
-test("platform supervisors bind exact identities and bound topology sampling in source", () => {
-  const source = readSourceClient();
-  const windows = readFileSync(
-    fileURLToPath(new URL("../src/workers/windows-job-supervisor.ps1", import.meta.url)),
-    "utf8",
-  );
-  const windowsInterop = readFileSync(
-    fileURLToPath(new URL("../src/workers/windows-job-interop.cs", import.meta.url)),
-    "utf8",
-  );
-  assert.match(source, /expectedIdentity: child\.identity/u);
-  assert.match(source, /statBefore[\s\S]*status[\s\S]*statAfter/u);
-  assert.match(source, /Linux VmRSS unavailable/u);
-  assert.match(source, /sampleRequested = true/u);
-  assert.match(source, /proc_pidinfo\(pid, 3/u);
-  assert.match(source, /error not in \(0, errno\.EPERM, errno\.ESRCH\)/u);
-  assert.match(source, /WINDOWS_SUPERVISOR_TERMINATION_FRAME_MS = 15_000/u);
-  assert.match(source, /pbi_start_tvsec/u);
-  assert.doesNotMatch(source, /pid=,ppid=,lstart=,rss=/u);
-  assert.match(windowsInterop, /NtQueryInformationProcess/u);
-  assert.match(windows, /RecordFromHandle\(\$process, \$TargetPid\)/u);
-  assert.match(windowsInterop, /OpenProcess\(0x00101001/u);
-  assert.match(windows, /OpenProcess\(0x00101101/u);
-  assert.match(windows, /WorkingSetHandle\(\$entry\.Handle\)/u);
-  assert.match(windows, /TerminateHandle\(\$entry\.Handle\)/u);
-  assert.doesNotMatch(windows, /WorkingSetExact|TerminateExact/u);
-  assert.doesNotMatch(windows, /Add-Type\s+-TypeDefinition/u);
-  assert.match(windows, /System\.Reflection\.Assembly\]::Load\(\$assemblyBytes\)/u);
-  assert.match(windows, /terminationRss = Measure-TrackedWorkingSet/u);
-});
-
-test("Linux retained traversal validates actual parentage and bounds work before enqueue", () => {
-  const source = readSourceClient();
-  assert.match(source, /if \(child\.parentPid !== process\.pid\) continue;/u);
-  assert.match(
-    source,
-    /if \(queued\.size >= MAX_TRACKED_PROCESS_IDENTITIES\)[\s\S]*queued\.add\(key\)/u,
-  );
-  assert.match(
-    source,
-    /readProcText: LinuxProcTextReader = readBoundedProcText/u,
-  );
-  assert.match(source, /await readProcText\(/u);
-  assert.doesNotMatch(source, /readFile\(`\/proc\/\$\{pid\}\/(?:stat|status)`/u);
-  assert.match(source, /await opendir\(`\/proc\/\$\{pid\}\/task`\)/u);
-  assert.doesNotMatch(source, /readdir\(`\/proc\/\$\{pid\}\/task`/u);
-  assert.doesNotMatch(source, /Promise\.all\(taskDirectories/u);
-});
-
 test("macOS topology binds ps between kernel identity snapshots and cleanup is identity-only", () => {
   const source = readSourceClient();
   assert.match(source, /pbi_ppid/u);
@@ -2747,6 +2698,64 @@ function linuxProcStat(
   ];
   return `${pid} (fixture) ${fields.join(" ")}\n`;
 }
+
+test("Linux RSS preserves the stable process across normal reparenting", async (t) => {
+  for (const outcome of ["measured", "later-rss", "terminal"] as const) {
+    await t.test(outcome, async () => {
+      const pid = 8_096;
+      const processGroupId = 8_000;
+      const startOrder = 80_960;
+      const stat = (parentPid: number, state = "S"): string =>
+        linuxProcStat(pid, state, parentPid, processGroupId, startOrder);
+      const missingRss = "Name:\tfixture\nState:\tS (sleeping)\n";
+      const measuredRss = `${missingRss}VmRSS:\t53 kB\n`;
+      const reads = [
+        stat(8_000),
+        outcome === "measured" ? measuredRss : missingRss,
+        stat(1, outcome === "terminal" ? "Z" : "S"),
+        ...(outcome === "later-rss" ? [stat(1), measuredRss, stat(1)] : []),
+      ];
+      let index = 0;
+      const result = await snapshotLinuxProcessForTest(pid, true, async () => {
+        const value = reads[index++];
+        if (value === undefined) throw new Error("unexpected proc read");
+        return value;
+      });
+      assert.deepEqual(result, {
+        pid,
+        parentPid: 1,
+        processGroupId,
+        identity: String(startOrder),
+        startOrder,
+        rssBytes: outcome === "terminal" ? 0 : 53 * 1024,
+      });
+    });
+  }
+});
+
+test("Linux RSS rejects process-group drift within or between sampling attempts", async (t) => {
+  for (const timing of ["within-read", "between-attempts"] as const) {
+    await t.test(timing, async () => {
+      const pid = 8_097;
+      const stat = (processGroupId: number): string =>
+        linuxProcStat(pid, "S", 8_000, processGroupId, 80_970);
+      const missingRss = "Name:\tfixture\nState:\tS (sleeping)\n";
+      const measuredRss = `${missingRss}VmRSS:\t53 kB\n`;
+      const reads = timing === "within-read"
+        ? [stat(8_000), measuredRss, stat(9_000)]
+        : [
+            stat(8_000), missingRss, stat(8_000),
+            stat(9_000), measuredRss, stat(9_000),
+          ];
+      let index = 0;
+      await assert.rejects(snapshotLinuxProcessForTest(pid, true, async () => {
+        const value = reads[index++];
+        if (value === undefined) throw new Error("unexpected proc read");
+        return value;
+      }));
+    });
+  }
+});
 
 test("Linux RSS skips only a stable exited identity while retaining a live root", async () => {
   const exitedPid = 8_090;

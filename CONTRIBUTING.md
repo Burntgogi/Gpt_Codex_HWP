@@ -138,11 +138,26 @@ Kordoc, rhwp, hwpx-editing-skill, or another third-party component.
 
 ## Release publication handoff
 
-For the 0.3.1 security candidate, require plugin version `0.3.1+codex.20261021043114` and Claude Code cache directory `0.3.1-codex.20261021043114`. Preserve published tags and historical verification records; record actual candidate results rather than relabelling v0.3.0 evidence. After owner review and candidate checks, create the immutable `v0.3.1` tag only at the exact intended 40-character owner-authored commit SHA. The artifact builder checks both the commit author and committer against the neutral release identity. GitHub squash merge commits use a GitHub committer and fail this check. If the release commit is on a reviewed branch, verify that its tree matches the intended merged tree before publication. Resolve the tag SHA with `git rev-parse 'v0.3.1^{commit}'`, then run `release-verify.yml` with these exact inputs:
+### v0.3.2 publication procedure
+
+Use plugin `0.3.2+codex.20261021115738` and Claude cache `0.3.2-codex.20261021115738`. Preserve published v0.3.1. After all required checks and owner review, tag only the exact neutral-author/committer release commit whose tree matches merged main. Never move an existing tag. Resolve `v0.3.2^{commit}` to its exact 40-character SHA and dispatch the workflow **at that tag**, not at main with only a checkout override:
+
+```bash
+gh workflow run release-verify.yml --repo Burntgogi/Gpt_Codex_HWP --ref v0.3.2 \
+  -f release_ref=v0.3.2 \
+  -f expected_release_sha="$(git rev-parse 'v0.3.2^{commit}')" \
+  -f release_version=0.3.2
+```
+
+Require the full build gate and all three attestation steps. Publish only that same run's `gpt-codex-hwp-0.3.2.zip`, `gpt-codex-hwp-0.3.2.spdx.json`, `provenance.json` and `SHA256SUMS`. Independently verify checksums, exact repo/source SHA/ref/workflow@tag, GitHub-hosted runner and certificate run invocation; compare actual installed-cache bytes against the verified ZIP before runtime/doctor/document smoke. No local rebuild, repackage, synthetic RSS or incomplete cleanup is acceptable evidence. Record actual results in the GitHub Release after observing them; do not infer publication or physical Mac use from CI.
+
+### Historical v0.3.1 publication
+
+The [published v0.3.1 security release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1) uses plugin version `0.3.1+codex.20261021043114` and Claude Code cache directory `0.3.1-codex.20261021043114`. Its immutable owner-authored commit is `4180a8d35e01aa95205a39c60ae9686486f6f9cb`; its tree matched merged main `633421e39e0ecad35817bcfe8b061f7b80da7ea8` before tagging. [Full gate and attestation run 39589053351](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39589053351) passed with the exact inputs below. Do not recreate or move this tag. For a later release, choose a new version and preserve published tags and historical verification records. The artifact builder checks both author and committer against the neutral release identity; GitHub squash merge commits fail that check. A reviewed owner-authored release commit must match the intended merged tree before publication.
 
 ```text
 release_ref=v0.3.1
-expected_release_sha=<the exact 40-character output of git rev-parse v0.3.1^{commit}>
+expected_release_sha=4180a8d35e01aa95205a39c60ae9686486f6f9cb
 release_version=0.3.1
 ```
 
