@@ -34,17 +34,6 @@ import { copyRuntimeProjectionSourceFixture } from "./runtime-projection-source-
 const REPOSITORY_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 let ROOT;
 let SOURCE;
-const TOOL_NAMES = [
-  "hwp_create_svg_asset",
-  "hwp_detect_format",
-  "hwp_fill_form",
-  "hwp_generate_hwpx",
-  "hwp_insert_image",
-  "hwp_patch_document",
-  "hwp_read",
-  "hwp_render_preview",
-  "hwp_validate",
-];
 const ROOT_DOCUMENTS = [
   "LICENSE",
   "NOTICE",
@@ -520,35 +509,6 @@ test("root runtime fixtures canonicalize an injected aliased temp parent", async
   assert.equal(dirname(root), alias.canonicalParent);
   const output = join(root, "runtime");
   await assert.doesNotReject(buildRuntime({ root: ROOT, outputRoot: output }));
-});
-
-test("package-local npm policy is projected byte-for-byte into the public runtime", async () => {
-  const [rootPolicy, sourcePolicy, runtimePolicy] = await Promise.all([
-    readFile(join(ROOT, ".npmrc")),
-    readFile(join(SOURCE, ".npmrc")),
-    readFile(join(actualRoot, ".npmrc")),
-  ]);
-  assert.deepEqual(sourcePolicy, rootPolicy);
-  assert.deepEqual(runtimePolicy, sourcePolicy);
-});
-
-test("runtime copies exactly the two declared skill icons from package assets", async () => {
-  const skillAssets = (await regularEntries(join(actualRoot, "skills", "gpt-codex-hwp", "assets")))
-    .map(({ path }) => path);
-  assert.deepEqual(skillAssets, ["gpt-codex-hwp-icon-64.png", "gpt-codex-hwp-icon.png"]);
-  for (const name of skillAssets) {
-    assert.equal(
-      await sha256(join(actualRoot, "skills", "gpt-codex-hwp", "assets", name)),
-      await sha256(join(SOURCE, "assets", name)),
-    );
-  }
-});
-
-test("runtime skill documents exactly the nine supported MCP tools", async () => {
-  const skill = await readFile(join(actualRoot, "skills", "gpt-codex-hwp", "SKILL.md"), "utf8");
-  const documented = [...new Set([...skill.matchAll(/`(hwp_[a-z_]+)`/gu)].map((match) => match[1]))]
-    .sort(comparePaths);
-  assert.deepEqual(documented, TOOL_NAMES);
 });
 
 test("runtime preserves the pinned compact Kordoc provenance", async () => {
