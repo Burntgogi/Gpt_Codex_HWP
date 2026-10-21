@@ -1,11 +1,25 @@
-# Gpt_Codex_HWP v0.3.3 Release Notes
+# Gpt_Codex_HWP v0.3.4 Candidate Release Notes
 
 - Prepared: 2026-10-21
-- Plugin version: `0.3.3+codex.20261021134251`
-- Claude Code cache: `0.3.3-codex.20261021134251`
-- Publication check: after publication, verify exact SHA, full gate, same-run attestation and four original assets on the [immutable v0.3.3 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.3). Another tag's passed checks are not substitute evidence.
+- Plugin version: `0.3.4+codex.20261021164358`
+- Claude Code cache: `0.3.4-codex.20261021164358`
+- Status: immutable v0.3.4 tag/full gate/attestation, publication and upgrade verification are pending. After actual publication, verify exact SHA, full gate, same-run attestation and four original assets on the [immutable v0.3.4 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4). Another tag's passed checks are not substitute evidence.
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
+
+## Original failure receipt retention
+
+The release wrapper now preserves the original rich `WINDOWS_NODE_TEST_FAILURE` rather than discarding it for a trailing coarse file receipt. A real-child parser probe before and after retained failed status in both versions and kept the original rich receipt after the correction; prepared behavioral verification passed.
+
+Original Windows sampling causes remain unknown. A separate [real-handle experiment](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39638006755) passed actual RSS, native mode-1 and cleanup checks in both baseline and candidate; its workflow failed because the expected baseline failure did not occur. That is not a reproduced regression. The speculative native change and test are excluded; collector permissions, stable identity, RSS, execution and cleanup limits remain unchanged.
+
+Duplicated MCP tool-name literals, the bare not-throw wrapper and source/command-copy assertions are retired. Actual initialized-server full-schema catalog, version, stderr, failure precedence, privacy and resource-bound checks remain. Preparatory Linux actual-runtime verification observed nine tools, 14,421 HWPX bytes, zero stderr and zero descendants, with passing child-client behavior checks. Neither replaces final-tag/publication/upgrade, Windows-native or physical Mac/Claude/Hancom GUI proof.
+
+## Unpublished v0.3.3 candidate
+
+Preserve immutable `v0.3.3` at neutral-owner source `5ac9f568f4ac0c3d5cec14f54f2a68acf996bc19`, whose tree exactly matched normally merged main `8e1ce2ae90038907873880ad96bd365d18a2526c`. All four PR checks in [39627644066](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627644066) and [Security 39627643973](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627643973) passed. Original [postmerge 39629542245](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629542245) failed actual Windows runtime one-shot cleanup at `windows-helper-sampling`; [tag full gate 39629550109](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629550109) passed its initial 10 MiB smoke but failed the full Node gate at `mcp-smoke`. No assets, attestation or release were produced.
+
+Later instrumented [native 39633262366](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633262366) passed actual nine-tool/HWPX 14,421-byte/zero-stderr/zero-descendant verification, and unchanged [MCP 39633269000](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633269000) passed. These diagnostics do not identify either original cause or recover either original failed run. Exact original sampling/MCP causes remain unknown. Never move or replace the tag or reuse its checks as v0.3.4 evidence.
 
 ## Release-path improvements without relaxed limits
 
@@ -17,7 +31,7 @@ The [counterbalanced Windows experiment](https://github.com/Burntgogi/Gpt_Codex_
 
 ## Unpublished v0.3.2 candidate
 
-The immutable `v0.3.2` tag's [full gate and attestation](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599590179) passed, but the original Windows `release-artifacts.test.ts` exceeded its deadline in [postmerge main CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599469450), so no GitHub Release was published. Its exact historical cause cannot be reconstructed; later diagnostic success does not invalidate that failure. Preserve the tag and artifacts instead of moving/replacing them; use v0.3.3's fresh identity and its own validation.
+The immutable `v0.3.2` tag remains at neutral-owner source `f02d7ff416f76ee34fbd3bc0f31ab501988148fc`. Its [full gate and attestation](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599590179) passed, but the original Windows `release-artifacts.test.ts` exceeded its deadline in [postmerge main CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599469450), so no GitHub Release was published. Its exact historical cause cannot be reconstructed; later diagnostic success does not invalidate that failure. Preserve the tag and artifacts instead of moving/replacing them; use v0.3.4's fresh identity and its own validation.
 
 ## Normal reparenting and real RSS
 
@@ -27,9 +41,9 @@ A controlled, actual Linux parent/child reparenting probe rejected the sample be
 
 ## Installation and verification scope
 
-Follow the README's v0.3.3 tag-change procedure. Even when source remove/add retains the previous cache, Codex CLI 0.162.1 `plugin add` can remove that cache. Do not manually delete the old durable runtime. Verify the new identity and `installedPath`, explicit installation, doctor, host restart and a document operation. The v0.3.1 markdown-it 14.3.3 security fix remains, as do nine tools and read-only HWP/HWPX writing.
+Only after actual publication, follow the README's v0.3.4 tag-change procedure. Even when source remove/add retains the previous cache, Codex CLI 0.162.1 `plugin add` can remove that cache. Do not manually delete the old durable runtime. Verify the new identity and `installedPath`, explicit installation, doctor, host restart and a document operation. The v0.3.1 markdown-it 14.3.3 security fix remains, as do nine tools and read-only HWP/HWPX writing.
 
-Preserve the v0.3.1 tag, assets and historical verification. Judge this patch's publication and platform checks only by its own v0.3.3 release evidence above. Hosted macOS is not physical-Mac/Desktop/Claude Code/Hancom GUI validation. Publish only ZIP, SPDX, provenance and SHA256SUMS from the same exact immutable-tag run that passes the full gate and attestation; never substitute a local rebuild.
+Preserve the v0.3.1 tag, assets and historical verification and the unpublished v0.3.2/v0.3.3 tags. Judge this patch's publication and platform checks only by its own v0.3.4 release evidence. Hosted macOS is not physical-Mac/Desktop/Claude Code/Hancom GUI validation; no default-user installation is claimed. Publish only ZIP, SPDX, provenance and SHA256SUMS from the same exact immutable-tag run that passes the full gate and all three strict attestations; never substitute a local rebuild.
 
 ## Historical v0.3.1 public record
 

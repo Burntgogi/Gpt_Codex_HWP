@@ -48,25 +48,11 @@ test("built MCP server initializes and registers exactly nine tools without stde
     await client.connect(transport);
     assert.equal(client.getServerVersion()?.version, packageJson.version);
     const response = await client.listTools();
-    assert.deepEqual(
-      response.tools.map((tool) => tool.name),
-      [
-        "hwp_detect_format",
-        "hwp_read",
-        "hwp_generate_hwpx",
-        "hwp_validate",
-        "hwp_render_preview",
-        "hwp_patch_document",
-        "hwp_fill_form",
-        "hwp_create_svg_asset",
-        "hwp_insert_image",
-      ],
-    );
     const catalog = JSON.parse(await readFile(
       join(SOURCE_ROOT, "examples", "oneshot-tool-schemas.json"),
       "utf8",
     ));
-    assert.doesNotThrow(() => assertExactToolSchemas(response.tools, catalog));
+    assertExactToolSchemas(response.tools, catalog);
   } finally {
     await client.close();
     await transport.close();

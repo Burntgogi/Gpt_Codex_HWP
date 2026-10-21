@@ -268,49 +268,6 @@ test("release source identity ignores replacement refs and hostile Git selectors
   });
 });
 
-test("release verification package scripts use the exact public entry points", async () => {
-  const rootPackage = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
-  const sourcePackage = JSON.parse(await readFile(
-    join(ROOT, "packages", "gpt-codex-hwp", "package.json"),
-    "utf8",
-  ));
-
-  assert.equal(rootPackage.scripts["release:verify"], "node scripts/release-verify.mjs");
-  assert.equal(
-    rootPackage.scripts["test:repository"],
-    "node --test --test-concurrency=1 tests/*.test.mjs",
-  );
-  assert.equal(
-    rootPackage.scripts["release:artifacts"],
-    "node packages/gpt-codex-hwp/release-scripts/build-release-artifacts.mjs",
-  );
-  assert.equal(
-    rootPackage.scripts["verify:release-artifacts"],
-    "node scripts/verify-release-artifacts.mjs",
-  );
-  assert.equal(
-    rootPackage.scripts["verify:compact-runtime"],
-    "node packages/gpt-codex-hwp/release-scripts/verify-compact-runtime.mjs",
-  );
-  assert.equal(
-    sourcePackage.scripts.build,
-    "tsc -p tsconfig.json && node scripts/copy-build-assets.mjs",
-  );
-  assert.equal(sourcePackage.scripts.test, "node ../../scripts/source-node-tests-isolated.mjs");
-  assert.equal(sourcePackage.scripts["test:python"], "python -m unittest scripts.hwpx-safe-edit.test_hwpx_safe_edit");
-  assert.equal(
-    sourcePackage.scripts["verify:compact-runtime"],
-    "node release-scripts/verify-compact-runtime.mjs",
-  );
-  assert.equal(
-    sourcePackage.scripts["release:artifacts"],
-    "node release-scripts/build-release-artifacts.mjs",
-  );
-  const releaseSource = await readFile(join(ROOT, "scripts", "release-verify.mjs"), "utf8");
-  assert.match(releaseSource, /clock: \(\) => performance\.now\(\),/u);
-  assert.doesNotMatch(releaseSource, /clock: performance\.now,/u);
-});
-
 test("release verification runs the exact required stage contract in order", async () => {
   const calls = [];
   const receipt = await runReleaseVerification({
@@ -1087,6 +1044,45 @@ test("Node test stage preserves only an allowlisted isolated-runner failure rece
     kind: "node-tests-runner",
     receipt: "WINDOWS_NODE_TEST_FILE file=PRIVATE/document.hwpx status=failed",
   }), undefined);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
+});
+
+test("Node stage preserves first failure evidence and rejects private or malformed receipts", async () => {
+  const original = "WINDOWS_NODE_TEST_FAILURE file=mcp-smoke.test.ts ordinal=1 status=failed"
+    + " failureKind=test-code completionKind=test-failure runnerFailureKind=unknown"
+    + " reportedCompletion=1-failed tap=11 lifecycle=1111000 terminationResult=unavailable";
+  const coarse = "WINDOWS_NODE_TEST_FILE file=mcp-smoke.test.ts status=failed";
+  const invalid = [
+    original.replace("mcp-smoke.test.ts", "PRIVATE/document.hwpx"),
+    original.replace("ordinal=1 ", "ordinal=1000 "),
+    original.replace("failureKind=test-code", "failureKind=PRIVATE"),
+    original.replace("completionKind=test-failure", "completionKind=PRIVATE"),
+    original.replace("runnerFailureKind=unknown", "runnerFailureKind=PRIVATE"),
+    original.replace("tap=11", "tap=111"),
+    original.replace("lifecycle=1111000", "lifecycle=11110000"),
+    original.replace("terminationResult=unavailable", "terminationResult=PRIVATE"),
+    `${original} PRIVATE_STDERR`,
+  ];
+  const invoke = async (lines) => runStageCommand(
+    nodeStage("node-tests", `process.stdout.write(${JSON.stringify(lines.join("\n") + "\n")}); process.exit(9)`),
+    { timeoutMs: 2_000, maxOutputBytes: 16_384 },
+  );
+  const later = original.replace("failureKind=test-code", "failureKind=test-timeout");
+  const result = await invoke(["PRIVATE/path/document.hwpx", ...invalid, original, later, coarse]);
+  assert.equal(result.status, "failed");
+  assert.equal(result.diagnostic.receipt, original);
+  for (const value of invalid) {
+    const rejected = await invoke([value, coarse]);
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.diagnostic.receipt, coarse);
+    assert.equal(formatReleaseStageDiagnostic({ kind: "node-tests-runner", receipt: value }), undefined);
+  }
+  const incomplete = original.replace("ordinal=1", "ordinal=unavailable")
+    .replace("reportedCompletion=1-failed tap=11", "reportedCompletion=unavailable-unavailable tap=00")
+    .replace("completionKind=test-failure", "completionKind=invalid-summary");
+  const stopped = await invoke([incomplete, coarse]);
+  assert.equal(stopped.status, "failed");
+  assert.equal(stopped.diagnostic.receipt, incomplete);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|\.hwpx|[\\/]/u);
 });
 

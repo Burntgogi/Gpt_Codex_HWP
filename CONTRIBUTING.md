@@ -138,18 +138,24 @@ Kordoc, rhwp, hwpx-editing-skill, or another third-party component.
 
 ## Release publication handoff
 
-### v0.3.3 publication procedure
+### v0.3.4 publication procedure (pending)
 
-Use plugin `0.3.3+codex.20261021134251` and Claude cache `0.3.3-codex.20261021134251`. Preserve published v0.3.1 and the unpublished immutable v0.3.2 tag. After all required checks and owner review, tag only the exact neutral-author/committer release commit whose tree matches merged main. Never move an existing tag. Resolve `v0.3.3^{commit}` to its exact 40-character SHA and dispatch the workflow **at that tag**, not at main with only a checkout override:
+Use plugin `0.3.4+codex.20261021164358` and Claude cache `0.3.4-codex.20261021164358`. Tagging, full gate, attestation, publication and actual upgrade proof remain pending. Preserve published v0.3.1 and unpublished immutable v0.3.2/v0.3.3 tags. After all required checks and owner review, use the unchanged protected merge procedure without bypass or protection changes, then tag only the exact neutral-author/committer release commit whose tree matches merged main. Never move an existing tag. Resolve `v0.3.4^{commit}` to its exact 40-character SHA and dispatch the workflow **at that immutable tag**, not at main with only a checkout override:
 
 ```bash
-gh workflow run release-verify.yml --repo Burntgogi/Gpt_Codex_HWP --ref v0.3.3 \
-  -f release_ref=v0.3.3 \
-  -f expected_release_sha="$(git rev-parse 'v0.3.3^{commit}')" \
-  -f release_version=0.3.3
+gh workflow run release-verify.yml --repo Burntgogi/Gpt_Codex_HWP --ref v0.3.4 \
+  -f release_ref=v0.3.4 \
+  -f expected_release_sha="$(git rev-parse 'v0.3.4^{commit}')" \
+  -f release_version=0.3.4
 ```
 
-Require the full build gate and all three attestation steps. Publish only that same run's `gpt-codex-hwp-0.3.3.zip`, `gpt-codex-hwp-0.3.3.spdx.json`, `provenance.json` and `SHA256SUMS`. Independently verify checksums, exact repo/source SHA/ref/workflow@tag, GitHub-hosted runner and certificate run invocation; compare actual installed-cache bytes against the verified ZIP before runtime/doctor/document smoke. No local rebuild, repackage, synthetic RSS or incomplete cleanup is acceptable evidence. Record actual results in the GitHub Release after observing them; do not infer publication or physical Mac use from CI.
+Require the full build gate and all three strict subject attestation verifications. Publish only that same run's original `gpt-codex-hwp-0.3.4.zip`, `gpt-codex-hwp-0.3.4.spdx.json`, `provenance.json` and `SHA256SUMS`. Independently verify checksums, exact repo/source SHA/ref/workflow@tag, GitHub-hosted runner and certificate run invocation. After actual public publication, download the four public assets, compare their bytes/digests to the verified same-run originals, and compare actual installed-cache bytes against that verified ZIP before explicit runtime installation, doctor and document-operation proof with one-shot/descendant exit. Exercise the actual CLI source remove → add `--ref v0.3.4` → plugin add procedure in an isolated profile; plugin add can remove the old cache while the old durable runtime persists. Do not promise cache retention or default-user installation. No local rebuild, repackage, synthetic RSS or incomplete cleanup is acceptable evidence. Record observed public download/cache/runtime/doctor/document results in the GitHub Release; do not infer publication, physical Mac, Claude or Hancom GUI use from CI.
+
+The release wrapper must preserve the original rich `WINDOWS_NODE_TEST_FAILURE`, not replace it with a trailing coarse file receipt. The real-child before/after probe retained failed status and now retains the original receipt. The separate native-handle experiment passed both variants, not failure-before/fix-after; its speculative change is excluded. Original Windows sampling/MCP causes remain unknown. Keep permissions, measured RSS, identity, native mode-1 zero-membership, failure/cleanup/capture/deadline bounds unchanged. Retain actual initialized-server full-schema catalog, version and stderr checks rather than duplicated tool-name literals or bare not-throw wrappers.
+
+### Unpublished v0.3.3 candidate
+
+Keep `v0.3.3` at neutral-owner source `5ac9f568f4ac0c3d5cec14f54f2a68acf996bc19`; its tree matched normally merged main `8e1ce2ae90038907873880ad96bd365d18a2526c` exactly. All four PR checks [39627644066](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627644066) and [Security 39627643973](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627643973) passed. Original [postmerge 39629542245](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629542245) failed actual Windows runtime one-shot cleanup at `windows-helper-sampling`. [Full-tag 39629550109](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629550109) passed initial 10 MiB smoke but failed the full Node gate at `mcp-smoke`; no assets, attestation or release followed. Later instrumented [native 39633262366](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633262366) passed nine tools/HWPX 14,421 bytes/zero stderr/zero descendants and unchanged [MCP 39633269000](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633269000) passed. Neither identifies or repairs the original failures; their exact causes remain unknown. Never move this tag or reuse its evidence for v0.3.4.
 
 ### Unpublished v0.3.2 candidate
 
