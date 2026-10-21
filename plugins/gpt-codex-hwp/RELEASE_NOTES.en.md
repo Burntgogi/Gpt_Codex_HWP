@@ -1,23 +1,35 @@
-# Gpt_Codex_HWP v0.3.2 Release Notes
+# Gpt_Codex_HWP v0.3.3 Release Notes
 
 - Prepared: 2026-10-21
-- Plugin version: `0.3.2+codex.20261021115738`
-- Claude Code cache: `0.3.2-codex.20261021115738`
-- Publication evidence: exact SHA, full gate, same-run attestation and four original assets on the [immutable v0.3.2 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.2)
+- Plugin version: `0.3.3+codex.20261021134251`
+- Claude Code cache: `0.3.3-codex.20261021134251`
+- Publication check: after publication, verify exact SHA, full gate, same-run attestation and four original assets on the [immutable v0.3.3 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.3). Another tag's passed checks are not substitute evidence.
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
+## Release-path improvements without relaxed limits
+
+The artifact producer, verifier and platform receipts share the existing Git `cat-file --batch` protocol and retain committed blob OIDs instead of launching size/content subprocesses for every runtime file. Per-file and aggregate bounds, OID/type/framing and exact-stream checks, committed-versus-staged bytes, Git environment isolation and disclosure checks remain.
+
+When an original test run stops at its deadline, the executor retains reported completion ordinal/summary from already captured bounded TAP and spawn/exit/stdout-end/close/deadline/grace evidence. A reported ordinal does not identify the active case; termination settlement or its Boolean result is not cleanup proof. Even complete passing TAP remains failure when the process does not close before its deadline. Ordinary 120-second file, five-second close grace and 512 KiB capture limits are unchanged; no raw content, paths, environment or private canary is printed.
+
+The [counterbalanced Windows experiment](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39609784474) executed each variant once in both orders; all four executions passed inside the original limit. Reduced file completion times are observed performance evidence, not proof of the historical timeout's exact cause. A separate real Linux child-process probe preserved formerly discarded failed TAP while both versions remained failed, with independently observed owned-group absence.
+
+## Unpublished v0.3.2 candidate
+
+The immutable `v0.3.2` tag's [full gate and attestation](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599590179) passed, but the original Windows `release-artifacts.test.ts` exceeded its deadline in [postmerge main CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599469450), so no GitHub Release was published. Its exact historical cause cannot be reconstructed; later diagnostic success does not invalidate that failure. Preserve the tag and artifacts instead of moving/replacing them; use v0.3.3's fresh identity and its own validation.
+
 ## Normal reparenting and real RSS
 
-A process remains the same PID/group/start identity when its parent exits and it is adopted. The previous collector rejected real VmRSS solely because the parent PID changed. v0.3.2 reuses the existing stable-identity comparison and rejects group/start drift within a read or across attempts. Missing RSS for live, unknown or inaccessible processes still fails; the existing maximum three attempts, intervals, deadlines and independent cleanup proof remain unchanged.
+A process remains the same PID/group/start identity when its parent exits and it is adopted. The previous collector rejected real VmRSS solely because the parent PID changed. v0.3.3 reuses the existing stable-identity comparison and rejects group/start drift within a read or across attempts. Missing RSS for live, unknown or inaccessible processes still fails; the existing maximum three attempts, intervals, deadlines and independent cleanup proof remain unchanged.
 
 A controlled, actual Linux parent/child reparenting probe rejected the sample before the fix, then returned RSS equal to real `/proc` VmRSS afterward; registered authority independently proved the owned group gone. Seven new regression cases failed before and passed after. A later CI instance's stage-only log does not prove that exact instance had this race. Literal diagnostic/default-stage, wording and source-regex assertions were retired rather than re-pinned; failure status, measured RSS, privacy and cleanup requirements remain.
 
 ## Installation and verification scope
 
-Follow the README's v0.3.2 tag-change procedure. Even when source remove/add retains the previous cache, Codex CLI 0.162.1 `plugin add` can remove that cache. Do not manually delete the old durable runtime. Verify the new identity and `installedPath`, explicit installation, doctor, host restart and a document operation. The v0.3.1 markdown-it 14.3.3 security fix remains, as do nine tools and read-only HWP/HWPX writing.
+Follow the README's v0.3.3 tag-change procedure. Even when source remove/add retains the previous cache, Codex CLI 0.162.1 `plugin add` can remove that cache. Do not manually delete the old durable runtime. Verify the new identity and `installedPath`, explicit installation, doctor, host restart and a document operation. The v0.3.1 markdown-it 14.3.3 security fix remains, as do nine tools and read-only HWP/HWPX writing.
 
-Preserve the v0.3.1 tag, assets and historical verification. Judge this patch's publication and platform checks only by its own v0.3.2 release evidence above. Hosted macOS is not physical-Mac/Desktop/Claude Code/Hancom GUI validation. Publish only ZIP, SPDX, provenance and SHA256SUMS from the same exact immutable-tag run that passes the full gate and attestation; never substitute a local rebuild.
+Preserve the v0.3.1 tag, assets and historical verification. Judge this patch's publication and platform checks only by its own v0.3.3 release evidence above. Hosted macOS is not physical-Mac/Desktop/Claude Code/Hancom GUI validation. Publish only ZIP, SPDX, provenance and SHA256SUMS from the same exact immutable-tag run that passes the full gate and attestation; never substitute a local rebuild.
 
 ## Historical v0.3.1 public record
 

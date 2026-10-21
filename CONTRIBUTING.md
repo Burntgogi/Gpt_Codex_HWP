@@ -138,18 +138,22 @@ Kordoc, rhwp, hwpx-editing-skill, or another third-party component.
 
 ## Release publication handoff
 
-### v0.3.2 publication procedure
+### v0.3.3 publication procedure
 
-Use plugin `0.3.2+codex.20261021115738` and Claude cache `0.3.2-codex.20261021115738`. Preserve published v0.3.1. After all required checks and owner review, tag only the exact neutral-author/committer release commit whose tree matches merged main. Never move an existing tag. Resolve `v0.3.2^{commit}` to its exact 40-character SHA and dispatch the workflow **at that tag**, not at main with only a checkout override:
+Use plugin `0.3.3+codex.20261021134251` and Claude cache `0.3.3-codex.20261021134251`. Preserve published v0.3.1 and the unpublished immutable v0.3.2 tag. After all required checks and owner review, tag only the exact neutral-author/committer release commit whose tree matches merged main. Never move an existing tag. Resolve `v0.3.3^{commit}` to its exact 40-character SHA and dispatch the workflow **at that tag**, not at main with only a checkout override:
 
 ```bash
-gh workflow run release-verify.yml --repo Burntgogi/Gpt_Codex_HWP --ref v0.3.2 \
-  -f release_ref=v0.3.2 \
-  -f expected_release_sha="$(git rev-parse 'v0.3.2^{commit}')" \
-  -f release_version=0.3.2
+gh workflow run release-verify.yml --repo Burntgogi/Gpt_Codex_HWP --ref v0.3.3 \
+  -f release_ref=v0.3.3 \
+  -f expected_release_sha="$(git rev-parse 'v0.3.3^{commit}')" \
+  -f release_version=0.3.3
 ```
 
-Require the full build gate and all three attestation steps. Publish only that same run's `gpt-codex-hwp-0.3.2.zip`, `gpt-codex-hwp-0.3.2.spdx.json`, `provenance.json` and `SHA256SUMS`. Independently verify checksums, exact repo/source SHA/ref/workflow@tag, GitHub-hosted runner and certificate run invocation; compare actual installed-cache bytes against the verified ZIP before runtime/doctor/document smoke. No local rebuild, repackage, synthetic RSS or incomplete cleanup is acceptable evidence. Record actual results in the GitHub Release after observing them; do not infer publication or physical Mac use from CI.
+Require the full build gate and all three attestation steps. Publish only that same run's `gpt-codex-hwp-0.3.3.zip`, `gpt-codex-hwp-0.3.3.spdx.json`, `provenance.json` and `SHA256SUMS`. Independently verify checksums, exact repo/source SHA/ref/workflow@tag, GitHub-hosted runner and certificate run invocation; compare actual installed-cache bytes against the verified ZIP before runtime/doctor/document smoke. No local rebuild, repackage, synthetic RSS or incomplete cleanup is acceptable evidence. Record actual results in the GitHub Release after observing them; do not infer publication or physical Mac use from CI.
+
+### Unpublished v0.3.2 candidate
+
+Keep `v0.3.2` at neutral-owner commit `f02d7ff416f76ee34fbd3bc0f31ab501988148fc`. Full-tag gate and attestation run [39599590179](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599590179) passed, but original postmerge main Windows run [39599469450](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599469450) timed out in the artifact suite. No GitHub Release was published. A later passing diagnostic is not recovery or historical-cause proof. Do not move this tag, replace its candidate artifacts, or reuse its passed gate for a new release.
 
 ### Historical v0.3.1 publication
 
