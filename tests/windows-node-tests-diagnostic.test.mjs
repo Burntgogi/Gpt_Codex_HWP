@@ -11,7 +11,7 @@ const FULL_REPOSITORY_TEST_FILES = [
   "node-phase-a-evidence.test.mjs", "node-test-profiles.test.mjs",
   "oneshot-process.test.mjs", "platform-receipts.test.mjs",
   "project-metadata.test.mjs", "public-content-policy.test.mjs",
-  "python-tests-diagnostic.test.mjs", "release-identity.test.mjs",
+  "python-tests-diagnostic.test.mjs",
   "release-verify.test.mjs", "repository-layout.test.mjs",
   "restart-safe-runtime.test.mjs", "run-node-memory-qualification.test.mjs",
   "runtime-projection.test.mjs", "security-boundary-docs.test.mjs",

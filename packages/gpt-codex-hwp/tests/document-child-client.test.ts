@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type StdioOptions } from "node:child_process";
+import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
   closeSync,
@@ -2691,6 +2691,7 @@ const createPosixProcessTreeSupervisorForTest = (
       registerProcessTreeTelemetryRoot?(
         identity: RegisteredProcessGroupIdentity,
       ): void;
+      flushProcessTreeTelemetry?(): Promise<boolean>;
       finishProcessTreeTelemetry?(): void;
       processTreeRss?(): Readonly<{ baselineBytes: number; peakBytes: number }> | undefined;
       terminate(): Promise<ProcessTreeTerminationReceipt>;
@@ -2795,33 +2796,95 @@ test("Linux RSS revalidates a missing VmRSS until the exact process disappears",
   assert.equal(readIndex, 4);
 });
 
-test("Linux RSS revalidates a missing VmRSS until the same identity is stably exited", async () => {
-  const pid = 8_093;
-  const reads = [
-    linuxProcStat(pid, "S", 1, pid, 80_930),
-    "Name:\tfixture\nState:\tS (sleeping)\n",
-    linuxProcStat(pid, "S", 1, pid, 80_930),
-    linuxProcStat(pid, "Z", 1, pid, 80_930),
-    "Name:\tfixture\nState:\tZ (zombie)\n",
-    linuxProcStat(pid, "Z", 1, pid, 80_930),
-  ];
-  let readIndex = 0;
-
-  const result = await snapshotLinuxProcessForTest(pid, true, async () => {
-    const value = reads[readIndex++];
-    if (value === undefined) throw new Error("unexpected proc read");
-    return value;
-  });
-
-  assert.deepEqual(result, {
-    pid,
-    parentPid: 1,
-    processGroupId: pid,
-    identity: "80930",
-    startOrder: 80_930,
-    rssBytes: 0,
-  });
-  assert.equal(readIndex, 6);
+test("Linux exit-race sampling exposes complete RSS only after exact final exit proof", async (t) => {
+  for (const outcome of [
+    "Z", "X", "live", "unknown", "stale-exit-status",
+    "reused-within-read", "reused-between-attempts", "inaccessible",
+  ] as const) {
+    await t.test(outcome, async () => {
+      const rootPid = 8_093;
+      const childPid = 8_094;
+      const childStart = 80_940;
+      const exited = outcome === "Z" || outcome === "X";
+      const childStat = (state: string, start = childStart): string =>
+        linuxProcStat(childPid, state, rootPid, rootPid, start);
+      const missingStatus = "Name:\tfixture\nState:\tS (sleeping)\n";
+      const reused = outcome === "reused-within-read" || outcome === "reused-between-attempts";
+      const reads = [
+        ...Array.from({ length: 2 }, () => [
+          childStat("S"), missingStatus, childStat("S"),
+        ]).flat(),
+        childStat("S", outcome === "reused-between-attempts" ? childStart + 1 : childStart),
+        outcome === "stale-exit-status" ? "Name:\tfixture\nState:\tZ (zombie)\n" : missingStatus,
+        childStat(exited ? outcome : reused ? "Z" : outcome === "unknown" ? "?" : "S",
+          reused ? childStart + 1 : childStart),
+      ];
+      let readIndex = 0;
+      let exiting = false;
+      const measuredProcess = (pid: number, rssKiB: number) => snapshotLinuxProcessForTest(
+        pid,
+        true,
+        async (path) => path.endsWith("/status")
+          ? `Name:\tfixture\nState:\tS (sleeping)\nVmRSS:\t${rssKiB} kB\n`
+          : linuxProcStat(pid, "S", pid === rootPid ? process.pid : rootPid, rootPid, pid * 10),
+      );
+      const tracker = createPosixProcessTelemetryTrackerForTest(rootPid, "linux", {
+        root: () => measuredProcess(rootPid, 47),
+        tree: async () => {
+          const root = await measuredProcess(rootPid, exiting ? 127 : 47);
+          assert.ok(root);
+          const child = exiting
+            ? await snapshotLinuxProcessForTest(childPid, true, async () => {
+                const value = reads[readIndex++];
+                if (outcome === "inaccessible" && readIndex === 8) throw errno("EACCES");
+                if (value === undefined) throw new Error("unexpected proc read");
+                return value;
+              })
+            : await measuredProcess(childPid, 53);
+          return child === undefined ? [root] : [root, child];
+        },
+      });
+      const signals: Array<NodeJS.Signals | 0> = [];
+      const supervisor = await createPosixProcessTreeSupervisorForTest(
+        { pid: rootPid } as ChildProcess,
+        "linux",
+        {
+          registeredSupervisor: telemetryRegisteredSupervisor(rootPid, signals),
+          tracker,
+          scheduleInterval: () => ({ unref() {} }),
+          clearScheduledInterval: () => {},
+          deferProcessTreeTelemetryStop: true,
+        },
+      );
+      assert.equal(await supervisor.processTreeTelemetryReady, true);
+      assert.deepEqual(supervisor.processTreeRss?.(), {
+        baselineBytes: (47 + 53) * 1024,
+        peakBytes: (47 + 53) * 1024,
+      });
+      exiting = true;
+      supervisor.registerProcessTreeTelemetryRoot!({
+        pid: rootPid,
+        parentPid: process.pid,
+        processGroupId: rootPid,
+        identity: String(rootPid * 10),
+        startOrder: rootPid * 10,
+      });
+      assert.equal(await telemetryBounded(supervisor.flushProcessTreeTelemetry!()), exited);
+      assert.equal(readIndex, outcome === "inaccessible" ? 8 : 9);
+      const expectedRss = exited
+        ? { baselineBytes: (47 + 53) * 1024, peakBytes: 127 * 1024 }
+        : undefined;
+      assert.deepEqual(supervisor.processTreeRss?.(), expectedRss);
+      assert.deepEqual(await supervisor.terminate(), {
+        gone: true,
+        proof: "registered-groups-empty",
+        registeredIdentityCount: 1,
+        remainingIdentityCount: 0,
+      });
+      assert.deepEqual(signals, ["SIGTERM", 0, "SIGKILL", 0]);
+      assert.deepEqual(supervisor.processTreeRss?.(), expectedRss);
+    });
+  }
 });
 
 test("Linux RSS revalidates a missing VmRSS until the same identity reports real RSS", async () => {

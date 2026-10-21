@@ -17,6 +17,7 @@ const DEFAULT_TEST_TIMEOUT_MS = 120_000;
 const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DOCUMENT_PROCESS_TEST_TIMEOUT_MS = 300_000;
+const MAX_NODE_TEST_TOP_LEVEL_ORDINAL = 999;
 const DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS = 600_000;
 // Files whose own per-test timeouts add up past the ordinary file budget; on
 // hosted runners a slow but healthy file was otherwise killed as a failure.
@@ -317,6 +318,11 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
     testSkipPattern: fileOptions.testSkipPattern,
     onSpawn: onTestFileSpawn,
+    maximumTopLevelTests: fileOptions.maximumTopLevelTests,
+    onFailedTopLevelOrdinal: fileOptions.onFailedTopLevelOrdinal,
+    onFailedTopLevelFailureKind: fileOptions.onFailedTopLevelFailureKind,
+    onCompletionKind: fileOptions.onCompletionKind,
+    onRunnerFailureKind: fileOptions.onRunnerFailureKind,
   }));
   const runAllowedRootsCase = options.runAllowedRootsCase ?? ((record) => executeTestFile(
     "allowed-roots.test.ts",
@@ -442,6 +448,10 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     let passed = false;
     let benchmarkReceipt;
     let documentReceipt;
+    let failedOrdinal;
+    let failedKind;
+    let completionKind;
+    let runnerFailureKind;
     const testTimeoutMs = boundedTimeout(
       options.testTimeoutMs,
       file === "document-child-client.test.ts"
@@ -470,10 +480,34 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           testSkipPattern,
           profile: profilePlan.name,
           onSpawn: onTestFileSpawn,
+          maximumTopLevelTests: MAX_NODE_TEST_TOP_LEVEL_ORDINAL,
+          onFailedTopLevelOrdinal: (value) => { failedOrdinal = value; },
+          onFailedTopLevelFailureKind: (value) => { failedKind = value; },
+          onCompletionKind: (value) => { completionKind = value; },
+          onRunnerFailureKind: (value) => { runnerFailureKind = value; },
         }) === true;
       }
     } catch { passed = false; }
     if (!passed) {
+      // Preserve evidence from the first bounded executor invocation. Specialized
+      // runners already emit their own receipt; an all-unknown duplicate adds no
+      // evidence and would consume their existing diagnostic byte budget.
+      if (failedOrdinal !== undefined || failedKind !== undefined
+        || completionKind !== undefined || runnerFailureKind !== undefined) {
+        const ordinal = Number.isSafeInteger(failedOrdinal)
+          && failedOrdinal >= 1
+          && failedOrdinal <= MAX_NODE_TEST_TOP_LEVEL_ORDINAL
+          ? failedOrdinal : "unavailable";
+        const failureKind = NODE_FAILURE_KINDS.has(failedKind) ? failedKind : "unknown";
+        const completion = NODE_COMPLETION_KINDS.has(completionKind) ? completionKind : "unknown";
+        const runnerFailure = NODE_RUNNER_FAILURE_KINDS.has(runnerFailureKind)
+          ? runnerFailureKind : "unknown";
+        stdout.write(
+          `${receiptPrefix}_NODE_TEST_FAILURE file=${file} ordinal=${ordinal} status=failed`
+          + ` failureKind=${failureKind} completionKind=${completion}`
+          + ` runnerFailureKind=${runnerFailure}\n`,
+        );
+      }
       if (file === "allowed-roots.test.ts") {
         for (const record of ALLOWED_ROOTS_CASES) {
           let casePassed = false;

@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
-  "pluginVersion": "0.3.0+codex.20261008150000",
-  "packageLockSha256": "34b7b4f00b454aa893a861a0881420e6a9af56e307ebf4743cf6222d8bfa2a3f",
+  "pluginVersion": "0.3.1+codex.20261021043114",
+  "packageLockSha256": "18be52f56d10f1476fcf7b159da9f024ff23e07fb6354ac94b5aa89b1d025352",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -12,7 +12,7 @@
     {
       "path": ".codex-plugin/plugin.json",
       "size": 1208,
-      "sha256": "febfd150479548ca4d73dcab82170c855ef7be5445e8926705846d34950248a8"
+      "sha256": "83a2548c23e7a24de1e75317b9abf50328d956dd128f82af6118aed0a133d402"
     },
     {
       "path": ".npmrc",
@@ -32,7 +32,7 @@
     {
       "path": "dist/generated/project-metadata.js",
       "size": 140,
-      "sha256": "e4ccce2f198ca2b10fdf8ebee14a811d7bf8cb79d11529540fe6efda32013a34"
+      "sha256": "b5fbb6ee71d7bf1db346e22b16e70523866de8ecb3b9894b0898a91145a17500"
     },
     {
       "path": "dist/install-runtime.js",
@@ -331,8 +331,8 @@
     },
     {
       "path": "dist/workers/posix-process-telemetry.js",
-      "size": 26105,
-      "sha256": "e31f2526b6218377e9123f054b94cb838bab842bcd4c2af58d835a0ccc4ce2fa"
+      "size": 26221,
+      "sha256": "b33b707b6a4d72cbf811515d6ede98630216a7132ef6e253286255a86ae3948c"
     },
     {
       "path": "dist/workers/registered-process-supervisor.js",
@@ -361,13 +361,13 @@
     },
     {
       "path": "package-lock.json",
-      "size": 87489,
-      "sha256": "34b7b4f00b454aa893a861a0881420e6a9af56e307ebf4743cf6222d8bfa2a3f"
+      "size": 87458,
+      "sha256": "18be52f56d10f1476fcf7b159da9f024ff23e07fb6354ac94b5aa89b1d025352"
     },
     {
       "path": "package.json",
       "size": 670,
-      "sha256": "5a110e5ced52a4d688613ebb9108b49caa6bec79eef7d4c3e3f1b66ebc2303c7"
+      "sha256": "4d1c7acc831db779a74fe298069e26964834bd19dc8e4cc3172458323ab492b9"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",

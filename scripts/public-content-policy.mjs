@@ -13,6 +13,16 @@ const DEFAULT_PROCESS_TIMEOUT_MS = 120_000;
 const MAX_PROCESS_TIMEOUT_MS = 15 * 60 * 1_000;
 const DEFAULT_TERMINATION_TIMEOUT_MS = 20_000;
 const MAX_TERMINATION_TIMEOUT_MS = 60_000;
+export const PUBLIC_PROCESS_FAILURE_DIAGNOSTICS = Object.freeze([
+  "startup", "termination",
+  "windows-ready-read", "windows-ready-mode2", "windows-ready-frame", "windows-ready-stderr",
+  "windows-terminate-write", "windows-rss-read", "windows-rss-frame",
+  "windows-gone-read", "windows-gone-frame", "windows-finalize",
+  "windows-helper-startup", "windows-helper-baseline-rss", "windows-helper-sampling",
+  "windows-helper-termination", "windows-helper-termination-discovery-or-rss-unavailable",
+  "windows-helper-termination-retained-handle-unavailable",
+  "windows-helper-termination-scan-exhausted", "windows-helper-rss-receipt",
+]);
 const ALLOWED_PUBLIC_DOCUMENT_PATH =
   "packages/gpt-codex-hwp/tests/fixtures/rhwp/re-01-hangul-only-hancom.hwp";
 const WINDOWS_RUNNER = fileURLToPath(new URL("./public-scan-command-runner.mjs", import.meta.url));
@@ -883,12 +893,23 @@ export async function runBoundedProcess(tool, args, options = {}) {
     || terminationTimeoutMs > MAX_TERMINATION_TIMEOUT_MS || typeof startProcess !== "function") {
     throw new TypeError("bounded process options are invalid");
   }
+  let failureDiagnostic;
+  const observeFailure = (code) => {
+    if (failureDiagnostic === undefined && PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.includes(code)) {
+      failureDiagnostic = code;
+    }
+  };
   let lifecycle;
-  try { lifecycle = await startProcess(tool, args, options); }
+  try {
+    lifecycle = await startProcess(tool, args, { ...options, onFailureDiagnostic: observeFailure });
+  }
   catch (error) {
-    return failedProcessReceipt({
-      timedOut: error?.code === "PUBLIC_PROCESS_TIMEOUT",
-      terminationFailed: error?.terminationFailed === true,
+    return Object.freeze({
+      ...failedProcessReceipt({
+        timedOut: error?.code === "PUBLIC_PROCESS_TIMEOUT",
+        terminationFailed: error?.terminationFailed === true,
+      }),
+      failureDiagnostic: failureDiagnostic ?? "startup",
     });
   }
   return await collectBoundedProcess(lifecycle.child, {
@@ -898,6 +919,7 @@ export async function runBoundedProcess(tool, args, options = {}) {
     maxOutputBytes,
     terminate: lifecycle.terminate,
     terminationTimeoutMs,
+    failureDiagnostic: () => failureDiagnostic,
   });
 }
 
@@ -953,6 +975,7 @@ async function startBoundedProcessInternal(tool, args, options, forceTracker, wi
           child,
           (owner) => { startupHelper = owner; },
           forceTracker,
+          options.onFailureDiagnostic,
         ),
       ]), deadline);
       supervisor = startup[1];
@@ -1018,6 +1041,7 @@ async function collectBoundedProcess(child, {
   maxOutputBytes,
   terminate,
   terminationTimeoutMs,
+  failureDiagnostic,
 }) {
   const ownerCloseReceipt = closeReceipt ?? closeReceiptFromObservedExit(exit);
   return await new Promise((resolvePromise) => {
@@ -1044,6 +1068,7 @@ async function collectBoundedProcess(child, {
         overflow,
         timedOut,
         terminationFailed: !treeGone,
+        ...(!treeGone ? { failureDiagnostic: failureDiagnostic?.() ?? "termination" } : {}),
       }));
     };
     const stop = async (reason) => {
@@ -1059,6 +1084,7 @@ async function collectBoundedProcess(child, {
       resolvePromise(Object.freeze({
         ...failedProcessReceipt({ overflow, timedOut }),
         terminationFailed: !treeGone,
+        ...(!treeGone ? { failureDiagnostic: failureDiagnostic?.() ?? "termination" } : {}),
       }));
     };
     const collect = (target) => (chunk) => {
@@ -1167,7 +1193,9 @@ export async function dispatchPublicProcessInput(child, input, payload, deadline
   await withinDeadline(dispatch, deadline);
 }
 
-async function createWindowsProcessSupervisor(child, observeHelper, forceTracker = false) {
+async function createWindowsProcessSupervisor(
+  child, observeHelper, forceTracker = false, onFailureDiagnostic,
+) {
   if (!Number.isInteger(child?.pid)) throw codedError("PUBLIC_PROCESS_START");
   const systemRoot = process.env.SystemRoot;
   if (typeof systemRoot !== "string" || !/^[A-Za-z]:[\\/]/u.test(systemRoot)) {
@@ -1196,9 +1224,19 @@ async function createWindowsProcessSupervisor(child, observeHelper, forceTracker
   let stderrBytes = 0;
   helper.stderr.on("data", (chunk) => { stderrBytes += chunk.length; });
   helper.stderr.on("error", () => { stderrBytes = Math.max(1, stderrBytes); });
-  const ready = await lines.next(10_000);
-  if (!new RegExp(`^GPT_CODEX_HWP_JOB READY ${child.pid} 1 [0-9]+$`, "u").test(ready)
-    || stderrBytes !== 0) {
+  let ready;
+  try { ready = await lines.next(10_000); }
+  catch (error) {
+    reportPublicProcessFailure(onFailureDiagnostic, "windows-ready-read");
+    throw error;
+  }
+  if (!new RegExp(`^GPT_CODEX_HWP_JOB READY ${child.pid} 1 [0-9]+$`, "u").test(ready)) {
+    const mode2 = new RegExp(`^GPT_CODEX_HWP_JOB READY ${child.pid} 2 [0-9]+$`, "u").test(ready);
+    reportPublicProcessFailure(onFailureDiagnostic, mode2 ? "windows-ready-mode2" : "windows-ready-frame");
+    throw codedError("PUBLIC_PROCESS_START");
+  }
+  if (stderrBytes !== 0) {
+    reportPublicProcessFailure(onFailureDiagnostic, "windows-ready-stderr");
     throw codedError("PUBLIC_PROCESS_START");
   }
   let active;
@@ -1213,6 +1251,7 @@ async function createWindowsProcessSupervisor(child, observeHelper, forceTracker
           stderrBytes,
           ...lines.transcriptReceipt(),
         }),
+        onFailureDiagnostic,
       });
       return active;
     },
@@ -1229,13 +1268,26 @@ export async function terminatePublicWindowsSupervisor({
   transcriptReceipt,
   frameTimeoutMs = 5_000,
   cleanupTimeoutMs = 1_000,
+  onFailureDiagnostic,
 }) {
   let proved = false;
+  let boundary = "windows-terminate-write";
   try {
     helper.stdin.end("TERMINATE\n");
-    const rss = parsePublicWindowsSupervisorRssFrame(await lines.next(frameTimeoutMs));
-    if (rss === undefined) return false;
-    const exactGone = await lines.next(frameTimeoutMs) === "GPT_CODEX_HWP_JOB GONE 0 1";
+    boundary = "windows-rss-read";
+    const rssFrame = await lines.next(frameTimeoutMs);
+    const rss = parsePublicWindowsSupervisorRssFrame(rssFrame);
+    if (rss === undefined) {
+      reportPublicProcessFailure(onFailureDiagnostic, publicSupervisorFailureDiagnostic(rssFrame, "windows-rss-frame"));
+      return false;
+    }
+    boundary = "windows-gone-read";
+    const goneFrame = await lines.next(frameTimeoutMs);
+    const exactGone = goneFrame === "GPT_CODEX_HWP_JOB GONE 0 1";
+    if (!exactGone) {
+      reportPublicProcessFailure(onFailureDiagnostic, publicSupervisorFailureDiagnostic(goneFrame, "windows-gone-frame"));
+    }
+    boundary = "windows-finalize";
     const finalized = await finalizePublicWindowsSupervisor({
       closeReceipt,
       forceClose: () => helper.kill(),
@@ -1243,14 +1295,27 @@ export async function terminatePublicWindowsSupervisor({
       transcriptReceipt,
     });
     proved = exactGone && finalized;
+    if (!proved) reportPublicProcessFailure(onFailureDiagnostic, boundary);
     return proved;
   } catch {
+    reportPublicProcessFailure(onFailureDiagnostic, boundary);
     return false;
   } finally {
     if (!proved) {
       await cleanupPublicProcessHelper(helper, closeReceipt, cleanupTimeoutMs);
     }
   }
+}
+
+function reportPublicProcessFailure(observer, code) {
+  if (typeof observer !== "function" || !PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.includes(code)) return;
+  try { observer(code); } catch { /* Diagnostics never establish or override cleanup proof. */ }
+}
+
+function publicSupervisorFailureDiagnostic(frame, fallback) {
+  const match = /^GPT_CODEX_HWP_JOB ERROR ([a-z-]{1,64}) [A-Za-z0-9_-]{1,48}$/u.exec(frame);
+  const code = match === null ? fallback : `windows-helper-${match[1]}`;
+  return PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.includes(code) ? code : fallback;
 }
 
 export function cleanupPublicProcessHelper(helper, closeReceipt, timeoutMs = 1_000) {

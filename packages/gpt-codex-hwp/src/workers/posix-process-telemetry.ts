@@ -688,8 +688,11 @@ async function snapshotLinuxProcess(
       );
       const before = parseLinuxStat(pid, statBefore);
       const after = parseLinuxStat(pid, statAfter);
-      if (before.identity !== after.identity || before.parentPid !== after.parentPid) return undefined;
-      if (expectedIdentity !== undefined && after.identity !== expectedIdentity) return undefined;
+      if (before.identity !== after.identity || before.parentPid !== after.parentPid ||
+        (expectedIdentity !== undefined && after.identity !== expectedIdentity)) {
+        if (requireRss) throw new Error("Linux process identity changed during RSS sampling");
+        return undefined;
+      }
       const record = linuxPosixProcessRecord(after);
       if (status === undefined) return Object.freeze({ ...record, rssBytes: 0 });
       const rssMatch = /^VmRSS:\s+([0-9]+)\s+kB$/mu.exec(status);
@@ -700,9 +703,9 @@ async function snapshotLinuxProcess(
         }
         return Object.freeze({ ...record, rssBytes });
       }
-      const statusState = /^State:\s+([A-Za-z])(?:\s|\()/mu.exec(status)?.[1];
-      if (before.state === after.state && statusState === after.state &&
-        (after.state === "Z" || after.state === "X")) {
+      // The final stat binds exit proof to this exact identity. Earlier reads
+      // may still describe its live state while exit releases its address space.
+      if (after.state === "Z" || after.state === "X") {
         return Object.freeze({ ...record, rssBytes: 0 });
       }
       if (attempt + 1 === attempts) throw new Error("Linux VmRSS unavailable");

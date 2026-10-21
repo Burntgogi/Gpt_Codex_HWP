@@ -10,13 +10,6 @@
   },
   "retained": [
     {
-      "invariantId": "release.bilingual-boundary",
-      "legacyOrdinal": 2,
-      "legacyTestName": "bilingual v0.1.4 release documentation states the same release boundary",
-      "suite": "release-metadata.test.ts",
-      "publicTestName": "bilingual release documentation states the same release boundary"
-    },
-    {
       "invariantId": "kordoc.archive-determinism",
       "legacyOrdinal": 3,
       "legacyTestName": "authenticated Kordoc archive generation is deterministic and source maps are excluded",
@@ -201,16 +194,15 @@
       "legacyTestName": "the staged runtime retains the agent branding metadata",
       "suite": "release-metadata.test.ts",
       "publicTestName": "the staged runtime retains the agent branding metadata"
-    },
-    {
-      "invariantId": "release.agent-installation",
-      "legacyOrdinal": 31,
-      "legacyTestName": "the staged runtime documents secure agent-assisted GitHub installation",
-      "suite": "release-metadata.test.ts",
-      "publicTestName": "the staged runtime documents secure agent-assisted GitHub installation"
     }
   ],
   "retired": [
+    {
+      "invariantId": "release.bilingual-boundary",
+      "legacyOrdinal": 2,
+      "legacyTestName": "bilingual v0.1.4 release documentation states the same release boundary",
+      "reason": "2026-10-21: Retired prose and release-status regex assertions. Historical v0.3.0 notes could satisfy them even when the current release was unpublished; they neither establish current publication nor verify runtime behavior. Immutable tag, exact SHA, full release gate, attestation, and actual installation remain the publication evidence."
+    },
     {
       "invariantId": "release.generated-tree-untracked",
       "legacyOrdinal": 1,
@@ -228,6 +220,12 @@
       "legacyOrdinal": 15,
       "legacyTestName": "distribution vendor builder separates development source from the runtime allowlist",
       "reason": "The former dual-tree development packager was removed; the single deterministic public projection retains the runtime allowlist invariant."
+    },
+    {
+      "invariantId": "release.agent-installation",
+      "legacyOrdinal": 31,
+      "legacyTestName": "the staged runtime documents secure agent-assisted GitHub installation",
+      "reason": "Retired the literal installation-document assertions, including v0.3.0 headings, anchors, tag pins, CLI invocation counts, and prose matching. These assertions checked documentation text and a test-only parser, not installed-runtime identity, provenance, path safety, or lifecycle behavior; those production behavior suites remain in place."
     }
   ]
 }

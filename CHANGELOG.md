@@ -4,6 +4,35 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-21
+
+- Publication requires the full immutable-tag release gate and attestation;
+  the GitHub Release and linked workflow record their actual results.
+
+- Update source and generated-runtime markdown-it from 14.3.1 to 14.3.3 for
+  [GHSA-gfr2-rv44-r23c](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-gfr2-rv44-r23c),
+  [GHSA-r7fv-28h4-cvq7](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-r7fv-28h4-cvq7),
+  and [GHSA-vfgh-jcmw-g37q](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-vfgh-jcmw-g37q).
+  Keep the existing 14.x API and parser options; no new PDF or MCP surface is enabled.
+- Use plugin version `0.3.1+codex.20261021043114` and Claude Code cache
+  directory `0.3.1-codex.20261021043114`, distinct from v0.3.0. Reinstall,
+  explicitly install the runtime, run doctor, restart the host, and verify one
+  document operation before removing any older working runtime.
+- Document the verified Codex marketplace pin-change sequence: remove only
+  the source registration, register the new tag, and reinstall while retaining
+  the previous plugin cache and durable runtime until verification succeeds.
+- Preserve a bounded ordinal and fixed failure classification from the first
+  source-test invocation in CI. Different Windows files failed initially and
+  passed later diagnostics, so later success is not a recovered root cause.
+  Keep the required checks, behavior tests, resource bounds and failure status.
+- Retain fixed Windows Job startup/RSS/GONE/finalization failure boundaries in
+  failed CI runtime-install receipts. Never print raw helper reasons or accept
+  an unverified process-tree cleanup as success.
+- Preserve Linux RSS history when a missing-`VmRSS` read ends with an
+  exact-identity terminal process state. Live, unreadable, unknown or reused
+  identities still invalidate telemetry; process-group absence remains a
+  separate required proof. Sampling and termination bounds are unchanged.
+
 ## [0.3.0] - 2026-10-08
 
 - Support Claude Code as a second host for the same plugin folder: a
@@ -253,6 +282,7 @@ This file records release tags and their publication status. Work under `Unrelea
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
 [Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...HEAD
+[0.3.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.5...v0.2.6

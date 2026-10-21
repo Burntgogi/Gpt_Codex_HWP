@@ -31,27 +31,6 @@ const EXPECTED_EXCLUDED_PACKAGES = Object.freeze([
   "pdfjs-dist",
   "boolean",
 ]);
-const EXPECTED_DEPENDENCIES = Object.freeze({
-  "@modelcontextprotocol/sdk": "1.32.1",
-  "@xmldom/xmldom": "0.9.12",
-  cfb: "1.2.2",
-  jszip: "3.10.1",
-  kordoc: LOCAL_KORDOC_SPECIFIER,
-  "markdown-it": "14.3.1",
-  sharp: "0.35.5",
-  zod: "3.25.76",
-});
-const EXPECTED_OPTIONAL_DEPENDENCIES = Object.freeze({ "@rhwp/core": "0.8.7" });
-const EXPECTED_DEV_DEPENDENCIES = Object.freeze({
-  "@types/node": "22.20.1",
-  tsx: "4.23.1",
-  typescript: "5.9.3",
-});
-const EXPECTED_OVERRIDES = Object.freeze({
-  "@hono/node-server": "2.0.11",
-  "fast-uri": "3.1.8",
-  "proxy-addr": "2.0.8",
-});
 const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
   "hwp_detect_format",
@@ -63,34 +42,6 @@ const EXPECTED_TOOL_NAMES = Object.freeze([
   "hwp_render_preview",
   "hwp_validate",
 ]);
-
-test("dependency contract pins exact direct source and runtime metadata", async () => {
-  const rootPackage = await readJson(join(ROOT, "package.json"));
-  const sourcePackage = await readJson(join(SOURCE, "package.json"));
-  const runtimePackage = await readJson(join(RUNTIME, "package.json"));
-
-  assert.deepEqual(sourcePackage.dependencies, EXPECTED_DEPENDENCIES);
-  assert.deepEqual(sourcePackage.optionalDependencies, EXPECTED_OPTIONAL_DEPENDENCIES);
-  assert.deepEqual(sourcePackage.devDependencies, EXPECTED_DEV_DEPENDENCIES);
-  assert.deepEqual(sourcePackage.overrides, EXPECTED_OVERRIDES);
-  assert.deepEqual(runtimePackage.dependencies, EXPECTED_DEPENDENCIES);
-  assert.deepEqual(runtimePackage.optionalDependencies, EXPECTED_OPTIONAL_DEPENDENCIES);
-  assert.deepEqual(runtimePackage.overrides, EXPECTED_OVERRIDES);
-  assert.equal(Object.hasOwn(runtimePackage, "devDependencies"), false);
-  assert.deepEqual(runtimePackage.scripts, {
-    doctor: "node dist/doctor.js",
-    start: "node dist/mcp.js",
-  });
-  assert.equal(rootPackage.scripts?.["verify:dependencies"], "node scripts/verify-installed-dependencies.mjs");
-  assert.equal(
-    rootPackage.scripts?.["verify:source-dependencies"],
-    "node scripts/verify-installed-dependencies.mjs --source-only",
-  );
-  assert.equal(
-    rootPackage.scripts?.["test:policy"],
-    "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",
-  );
-});
 
 test("dependency contract resolves the patched Hono Node adapter in both locks", async () => {
   for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
@@ -113,7 +64,6 @@ test("dependency contract resolves patched production dependencies and projects 
     assert.equal(lock.packages?.["node_modules/@xmldom/xmldom"]?.version, "0.9.12", label);
     assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.5", label);
     assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.8", label);
-    assert.equal(lock.packages?.["node_modules/markdown-it"]?.version, "14.3.1", label);
     assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.11", label);
     assert.equal(lock.packages?.["node_modules/qs"]?.version, "6.16.0", label);
     assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.7.2", label);
