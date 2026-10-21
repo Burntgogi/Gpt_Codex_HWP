@@ -1,3 +1,26 @@
+# Gpt_Codex_HWP v0.3.2 Release Notes
+
+- Prepared: 2026-10-21
+- Plugin version: `0.3.2+codex.20261021115738`
+- Claude Code cache: `0.3.2-codex.20261021115738`
+- Publication evidence: exact SHA, full gate, same-run attestation and four original assets on the [immutable v0.3.2 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.2)
+
+[한국어](RELEASE_NOTES.md) | [README](README.en.md)
+
+## Normal reparenting and real RSS
+
+A process remains the same PID/group/start identity when its parent exits and it is adopted. The previous collector rejected real VmRSS solely because the parent PID changed. v0.3.2 reuses the existing stable-identity comparison and rejects group/start drift within a read or across attempts. Missing RSS for live, unknown or inaccessible processes still fails; the existing maximum three attempts, intervals, deadlines and independent cleanup proof remain unchanged.
+
+A controlled, actual Linux parent/child reparenting probe rejected the sample before the fix, then returned RSS equal to real `/proc` VmRSS afterward; registered authority independently proved the owned group gone. Seven new regression cases failed before and passed after. A later CI instance's stage-only log does not prove that exact instance had this race. Literal diagnostic/default-stage, wording and source-regex assertions were retired rather than re-pinned; failure status, measured RSS, privacy and cleanup requirements remain.
+
+## Installation and verification scope
+
+Follow the README's v0.3.2 tag-change procedure. Even when source remove/add retains the previous cache, Codex CLI 0.162.1 `plugin add` can remove that cache. Do not manually delete the old durable runtime. Verify the new identity and `installedPath`, explicit installation, doctor, host restart and a document operation. The v0.3.1 markdown-it 14.3.3 security fix remains, as do nine tools and read-only HWP/HWPX writing.
+
+Preserve the v0.3.1 tag, assets and historical verification. Judge this patch's publication and platform checks only by its own v0.3.2 release evidence above. Hosted macOS is not physical-Mac/Desktop/Claude Code/Hancom GUI validation. Publish only ZIP, SPDX, provenance and SHA256SUMS from the same exact immutable-tag run that passes the full gate and attestation; never substitute a local rebuild.
+
+## Historical v0.3.1 public record
+
 # Gpt_Codex_HWP v0.3.1 Release Notes
 
 - Status: [v0.3.1 published](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1)

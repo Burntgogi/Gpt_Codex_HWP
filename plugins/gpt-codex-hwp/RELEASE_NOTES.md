@@ -1,3 +1,26 @@
+# Gpt_Codex_HWP v0.3.2 릴리즈 노트
+
+- 준비일: 2026-10-21
+- 플러그인 버전: `0.3.2+codex.20261021115738`
+- Claude Code 캐시: `0.3.2-codex.20261021115738`
+- 게시 증거: [불변 v0.3.2 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.2)의 정확한 SHA·전체 게이트·동일 실행 attestation과 원본 4개 자산
+
+[English](RELEASE_NOTES.en.md) | [README](README.md)
+
+## 정상 reparenting과 실제 RSS
+
+부모 프로세스가 종료되어 재부모화되더라도 PID·프로세스 그룹·시작 시각이 같으면 같은 프로세스입니다. 이전 수집기는 부모 PID 변화만으로 실제 VmRSS를 거부했습니다. v0.3.2는 기존 stable-identity 비교를 재사용하고 그룹·시작 identity의 읽기 내/재시도 간 변경은 거부합니다. live/unknown/권한 실패의 RSS 누락은 계속 실패하며, 기존 최대 3회 측정과 간격·타임아웃·별도 정리 증명은 바꾸지 않았습니다.
+
+실제 Linux 부모·자식 프로세스의 합법적인 재부모화를 제어해 수정 전 거부, 수정 후 실제 `/proc` VmRSS와 반환 RSS 일치, 별도 등록 authority의 그룹 부재 증명을 확인했습니다. 새 회귀 7건은 수정 전 실패·수정 후 성공했습니다. 후속 CI의 stage-only 로그만으로 그 개별 실패가 이 경합이었다고 단정하지 않습니다. 진단 문자열·기본 단계·문구·소스 정규식 검사는 재고정하지 않고 폐기했으며, 실제 실패 상태·RSS·비공개 내용 비노출·정리 조건은 보존했습니다.
+
+## 설치와 검증 범위
+
+README의 v0.3.2 태그 변경 절을 따르십시오. 소스 remove/add가 이전 캐시를 남겨도 Codex CLI 0.162.1의 `plugin add`는 이전 캐시를 정리할 수 있습니다. 이전 지속 런타임을 수동으로 삭제하지 말고 새 identity·`installedPath`·명시적 설치·doctor·호스트 재시작·문서 작업을 검증하십시오. v0.3.1의 markdown-it 14.3.3 패치는 유지하며 9개 도구·HWP 읽기 전용/HWPX 쓰기 정책은 바꾸지 않습니다.
+
+v0.3.1 태그·자산·검증 기록은 그대로 보존합니다. 새 버전의 게시와 플랫폼 검증은 위 v0.3.2 릴리즈의 실제 기록으로만 판단하십시오. 호스팅 macOS는 실제 Mac/Desktop/Claude Code/한컴 GUI 검증을 대신하지 않습니다. 게시 자산은 정확한 불변 태그의 전체 게이트와 attestation이 성공한 동일 실행의 ZIP·SPDX·provenance·SHA256SUMS여야 하며 로컬 재빌드를 대체하지 않습니다.
+
+## 과거 v0.3.1 공개 기록
+
 # Gpt_Codex_HWP v0.3.1 릴리즈 노트
 
 - 상태: [v0.3.1 게시 완료](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1)

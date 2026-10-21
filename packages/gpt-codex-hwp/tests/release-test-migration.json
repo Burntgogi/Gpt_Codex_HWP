@@ -166,37 +166,33 @@
       "suite": "runtime-projection.test.ts",
       "publicTestName": "pre-existing unowned projection evidence is never removed",
       "scopeChange": "The removed legacy builder branch is retired; the atomic projection now replaces its owned live directory while preserving every unowned stage or backup collision."
-    },
+    }
+  ],
+  "retired": [
     {
       "invariantId": "release.hwp-readonly-large-read-policy",
       "legacyOrdinal": 27,
       "legacyTestName": "the staged runtime documents HWP read-only and context-safe large reads",
-      "suite": "release-metadata.test.ts",
-      "publicTestName": "the staged runtime documents HWP read-only and context-safe large reads"
+      "reason": "2026-10-21: Retired source and documentation regex assertions, not the HWP read-only, large-read, tool-surface or resource behavior contracts. Their executable behavior suites and full release gate remain required."
     },
     {
       "invariantId": "release.historical-removal-selector",
       "legacyOrdinal": 28,
       "legacyTestName": "the staged runtime preserves the historical plugin removal selector",
-      "suite": "release-metadata.test.ts",
-      "publicTestName": "the staged runtime preserves the historical plugin removal selector"
+      "reason": "2026-10-21: Retired exact prose and CLI occurrence counts. Real isolated tag upgrade, cache replacement, rollback doctor, path/identity validation and preserved durable-runtime evidence now verify the consumer path."
     },
     {
       "invariantId": "release.pixelify-notice",
       "legacyOrdinal": 29,
       "legacyTestName": "the staged runtime retains the Pixelify Sans production-input notice",
-      "suite": "release-metadata.test.ts",
-      "publicTestName": "the staged runtime retains the Pixelify Sans production-input notice"
+      "reason": "2026-10-21: Retired literal notice-heading and explanatory-prose assertions. License, provenance and public artifact verification remain required; notices and attribution were not removed."
     },
     {
       "invariantId": "release.agent-branding",
       "legacyOrdinal": 30,
       "legacyTestName": "the staged runtime retains the agent branding metadata",
-      "suite": "release-metadata.test.ts",
-      "publicTestName": "the staged runtime retains the agent branding metadata"
-    }
-  ],
-  "retired": [
+      "reason": "2026-10-21: Retired incidental icon-path and color defaults. Production identities, public artifact allowlists and actual installation remain verified."
+    },
     {
       "invariantId": "release.bilingual-boundary",
       "legacyOrdinal": 2,

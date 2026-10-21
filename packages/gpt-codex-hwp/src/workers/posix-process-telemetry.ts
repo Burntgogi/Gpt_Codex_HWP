@@ -672,7 +672,7 @@ async function snapshotLinuxProcess(
   readProcText: LinuxProcTextReader = readBoundedProcText,
 ): Promise<PosixProcessRecord | undefined> {
   try {
-    let expectedIdentity: string | undefined;
+    let expectedIdentity: LinuxProcessStatRecord | undefined;
     const attempts = requireRss ? MAX_LINUX_MISSING_RSS_ATTEMPTS : 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const statBefore = await readProcText(
@@ -688,8 +688,9 @@ async function snapshotLinuxProcess(
       );
       const before = parseLinuxStat(pid, statBefore);
       const after = parseLinuxStat(pid, statAfter);
-      if (before.identity !== after.identity || before.parentPid !== after.parentPid ||
-        (expectedIdentity !== undefined && after.identity !== expectedIdentity)) {
+      // Normal reparenting is mutable metadata, not a new PID/group/start identity.
+      if (!samePosixStableIdentity(before, after) ||
+        (expectedIdentity !== undefined && !samePosixStableIdentity(after, expectedIdentity))) {
         if (requireRss) throw new Error("Linux process identity changed during RSS sampling");
         return undefined;
       }
@@ -709,7 +710,7 @@ async function snapshotLinuxProcess(
         return Object.freeze({ ...record, rssBytes: 0 });
       }
       if (attempt + 1 === attempts) throw new Error("Linux VmRSS unavailable");
-      expectedIdentity ??= after.identity;
+      expectedIdentity ??= after;
       await new Promise<void>((resolveWait) => setImmediate(resolveWait));
     }
     throw new Error("Linux VmRSS unavailable");

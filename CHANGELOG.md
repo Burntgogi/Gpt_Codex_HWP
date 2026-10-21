@@ -4,6 +4,25 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-21
+
+- Preserve measured Linux RSS across normal reparenting of the same
+  PID/process-group/start identity. Reject process-group or start-identity
+  drift both within a sample and between bounded attempts. Reuse the existing
+  stable-identity comparison; do not widen sampling or cleanup limits.
+- Reproduce the rejection with actual Linux processes before the change,
+  then prove real VmRSS equality and independent group cleanup afterward.
+  All seven new boundary regressions fail before and pass after.
+  The old CI instance's stage-only log does not identify its exact cause.
+- Retire implementation/prose/default-stage and whole-output assertions rather
+  than re-pin them. Retain failed-status, RSS, privacy and verified-cleanup
+  requirements, with legacy retirement provenance recorded.
+- Use fresh plugin `0.3.2+codex.20261021115738` and Claude cache
+  `0.3.2-codex.20261021115738`. Keep published v0.3.1 unchanged;
+  publication requires its own immutable-tag full gate and same-run attestation.
+- Correct cache-retention guidance and remove the obsolete v0.2.2 downgrade
+  instructions; recovery targets the prior patched public release.
+
 ## [0.3.1] - 2026-10-21
 
 - Published [v0.3.1](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1)
@@ -287,7 +306,8 @@ This file records release tags and their publication status. Work under `Unrelea
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.6...v0.2.7
