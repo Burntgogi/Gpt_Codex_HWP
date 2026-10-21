@@ -138,9 +138,9 @@ Kordoc, rhwp, hwpx-editing-skill, or another third-party component.
 
 ## Release publication handoff
 
-### v0.3.4 publication procedure (pending)
+### v0.3.4 publication procedure
 
-Use plugin `0.3.4+codex.20261021164358` and Claude cache `0.3.4-codex.20261021164358`. Tagging, full gate, attestation, publication and actual upgrade proof remain pending. Preserve published v0.3.1 and unpublished immutable v0.3.2/v0.3.3 tags. After all required checks and owner review, use the unchanged protected merge procedure without bypass or protection changes, then tag only the exact neutral-author/committer release commit whose tree matches merged main. Never move an existing tag. Resolve `v0.3.4^{commit}` to its exact 40-character SHA and dispatch the workflow **at that immutable tag**, not at main with only a checkout override:
+Use plugin `0.3.4+codex.20261021164358` and Claude cache `0.3.4-codex.20261021164358`. Require this version's own gate, attestation, public assets and actual upgrade evidence; prepared source does not establish publication. Preserve published v0.3.1 and unpublished immutable v0.3.2/v0.3.3 tags. After all required checks and owner review, use the unchanged protected merge procedure without bypass or protection changes, then tag only the exact neutral-author/committer release commit whose tree matches merged main. Never move an existing tag. Resolve `v0.3.4^{commit}` to its exact 40-character SHA and dispatch the workflow **at that immutable tag**, not at main with only a checkout override:
 
 ```bash
 gh workflow run release-verify.yml --repo Burntgogi/Gpt_Codex_HWP --ref v0.3.4 \

@@ -28,9 +28,9 @@
 
 Gpt_Codex_HWP is a local Codex and Claude Code plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
-## v0.3.4 original-failure and release-verification candidate
+## v0.3.4 original-failure and release verification
 
-The candidate identity is `0.3.4+codex.20261021164358`; the Claude Code cache is `0.3.4-codex.20261021164358`. The immutable tag's full gate and attestation, publication and upgrade verification are still pending. Do not install from the commands below until [v0.3.4 publication](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4) is actually confirmed.
+The identity is `0.3.4+codex.20261021164358`; the Claude Code cache is `0.3.4-codex.20261021164358`. Establish publication and verification status only from this version's own immutable-tag gate, attestation and original public assets. Do not install from the commands below until [v0.3.4 publication](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4) is actually confirmed.
 
 The release wrapper now preserves the original rich `WINDOWS_NODE_TEST_FAILURE` instead of replacing it with a trailing coarse file receipt. A real-child before/after probe retained failure status in both versions and preserved the original receipt after the correction. A separate retained-handle experiment passed both baseline and candidate, so it did not demonstrate a failure-before/fix-after regression. That speculative native change is excluded; original Windows sampling causes remain unknown.
 

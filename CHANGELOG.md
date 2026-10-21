@@ -4,7 +4,12 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
-## [0.3.4] - 2026-10-21 (unpublished candidate)
+## [0.3.4] - 2026-10-21
+
+Publication requires this version's own immutable-tag gate, strict attestation
+and original public assets. Confirm actual status on the
+[GitHub Release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4);
+prepared source alone is not a publication record.
 
 - Preserve the first bounded Windows Node failure receipt through the release
   wrapper instead of replacing it with a later coarse file receipt. Reject

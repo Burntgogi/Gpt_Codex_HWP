@@ -1,9 +1,9 @@
-# Gpt_Codex_HWP v0.3.4 릴리즈 후보 노트
+# Gpt_Codex_HWP v0.3.4 릴리즈 노트
 
 - 준비일: 2026-10-21 (UTC)
 - 플러그인 버전: `0.3.4+codex.20261021164358`
 - Claude Code 캐시: `0.3.4-codex.20261021164358`
-- 상태: 미게시 후보입니다. v0.3.4 자체 전체 태그 게이트·동일 실행 attestation·GitHub Release 게시·업그레이드는 아직 완료되지 않았습니다. 아래 설치 안내는 [불변 v0.3.4 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4)의 정확한 SHA와 원본 ZIP·SPDX·provenance·SHA256SUMS 4개 공개 자산을 실제로 검증한 뒤에만 적용하십시오. 다른 태그의 성공 기록은 대체 증거가 아닙니다.
+- 게시 확인: 아래 설치 안내는 [불변 v0.3.4 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4)의 정확한 SHA·자체 전체 태그 게이트·동일 실행 attestation과 원본 ZIP·SPDX·provenance·SHA256SUMS 4개 공개 자산을 실제로 검증한 뒤에만 적용하십시오. 소스 준비나 다른 태그의 성공 기록은 게시·설치·업그레이드 증거가 아닙니다.
 
 [English](RELEASE_NOTES.en.md) | [README](README.md)
 

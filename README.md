@@ -28,9 +28,9 @@
 
 Gpt_Codex_HWP는 Codex와 Claude Code에서 한국어 HWP/HWPX 문서를 읽고, 만들고, 수정하고, 검증하고, 미리 보는 로컬 플러그인입니다. HWPX를 정식 쓰기 형식으로 사용하고 기존 HWPX의 원시 ZIP/XML 구조를 가능한 한 보존합니다. 바이너리 HWP는 형식 감지·읽기·미리보기 전용이며, 읽은 내용은 새 HWPX로 저장합니다.
 
-## v0.3.4 원본 실패 영수증·릴리스 검증 후보
+## v0.3.4 원본 실패 영수증·릴리스 검증
 
-v0.3.4는 미게시 후보입니다. 원본 실패 증거 보존과 릴리스 계약을 수정하며 Windows 네이티브 수집기의 권한·identity·RSS·정리 정책은 바꾸지 않습니다. 별도 제어 실험에서 기존본과 핸들 재사용 수정안이 모두 통과했으므로, 실패 전·성공 후 증거가 없는 가설성 네이티브 변경은 배포안에서 제외했습니다. 과거 Windows sampling 실패의 정확한 원인은 여전히 미확정입니다.
+v0.3.4는 원본 실패 증거 보존과 릴리스 계약을 수정합니다. 게시 상태는 [해당 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4)의 실제 게이트·attestation·원본 공개 자산으로 확인하십시오. Windows 수집기의 권한·identity·RSS·정리 정책은 바꾸지 않습니다. 별도 제어 실험에서 기존본과 핸들 재사용 수정안이 모두 통과했으므로 가설성 네이티브 변경은 제외했습니다. 과거 Windows sampling 실패의 정확한 원인은 여전히 미확정입니다.
 
 릴리스 wrapper가 원본 상세 `WINDOWS_NODE_TEST_FAILURE`를 뒤따르는 거친 파일 영수증으로 덮어쓰던 문제를 수정합니다. 실제 자식 parser 비교에서 양쪽 모두 실패 상태를 유지하고 수정본은 원본 상세 영수증을 보존했습니다. 중복 MCP 도구 이름 literal과 단순 not-throw wrapper 대신 실제 초기화 서버의 canonical 전체 schema catalog·버전·stderr 검사를 유지합니다. 과거 native sampling·MCP 실패 원인 규명이나 native 수정 전·후 성공·게시를 주장하지 않습니다.
 

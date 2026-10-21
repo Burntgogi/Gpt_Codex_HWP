@@ -1,9 +1,9 @@
-# Gpt_Codex_HWP v0.3.4 Candidate Release Notes
+# Gpt_Codex_HWP v0.3.4 Release Notes
 
 - Prepared: 2026-10-21
 - Plugin version: `0.3.4+codex.20261021164358`
 - Claude Code cache: `0.3.4-codex.20261021164358`
-- Status: immutable v0.3.4 tag/full gate/attestation, publication and upgrade verification are pending. After actual publication, verify exact SHA, full gate, same-run attestation and four original assets on the [immutable v0.3.4 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4). Another tag's passed checks are not substitute evidence.
+- Publication check: verify exact SHA, this version's own full immutable-tag gate, same-run attestation and four original public assets on the [v0.3.4 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4) before using the installation instructions. Prepared source or another tag's passed checks do not establish publication, installation or upgrade.
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
