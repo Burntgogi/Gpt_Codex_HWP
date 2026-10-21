@@ -13,6 +13,9 @@ The release wrapper now preserves the original rich `WINDOWS_NODE_TEST_FAILURE` 
 
 Original Windows sampling causes remain unknown. A separate [real-handle experiment](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39638006755) passed actual RSS, native mode-1 and cleanup checks in both baseline and candidate; its workflow failed because the expected baseline failure did not occur. That is not a reproduced regression. The speculative native change and test are excluded; collector permissions, stable identity, RSS, execution and cleanup limits remain unchanged.
 
+Prepared PR #32's original [Windows run 39643306576](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39643306576) failed its then-`bp16` process-tree stress case at `windows-channel`, with root cleanup unverified. The same job's later full diagnostic pass is neither recovery nor historical cause proof. A separate proven loss allowed RSS parsing and later retries to overwrite an already observed supervisor error stage with generic channel failure. The observer now retains the first allowlisted specific failure. A real Node child emitting error frames produced `windows-channel` before and preserved original `windows-sampling` afterward; it generated and claimed no native Job, RSS or cleanup success. The original native cleanup cause remains unknown. Execution, measurement, identity and cleanup policy and the stress workload are unchanged.
+
+
 Duplicated MCP tool-name literals, the bare not-throw wrapper and source/command-copy assertions are retired. Actual initialized-server full-schema catalog, version, stderr, failure precedence, privacy and resource-bound checks remain. Preparatory Linux actual-runtime verification observed nine tools, 14,421 HWPX bytes, zero stderr and zero descendants, with passing child-client behavior checks. Neither replaces final-tag/publication/upgrade, Windows-native or physical Mac/Claude/Hancom GUI proof.
 
 ## Unpublished v0.3.3 candidate

@@ -132,7 +132,12 @@ const RECEIPT_KEYS = [
 ];
 const CASE_OUTCOME_KEYS = ["errorCode", "responseBytes", "status"];
 
-export function classifyBenchmarkSupervisorFrame(frame) {
+export function classifyBenchmarkSupervisorFrame(frame, previousStage = "channel") {
+  if (SAFE_BENCHMARK_DIAGNOSTIC_STAGES.has(previousStage)
+    && previousStage !== "windows-channel"
+    && (previousStage.startsWith("windows-") || previousStage.startsWith("posix-"))) {
+    return previousStage;
+  }
   if (typeof frame !== "string") return "channel";
   const windowsError = /^GPT_CODEX_HWP_JOB ERROR (startup|baseline-rss|sampling|termination|termination-(?:discovery-or-rss-unavailable|retained-handle-unavailable|scan-exhausted)|rss-receipt|finalizer|channel) [A-Za-z0-9_-]+$/u.exec(frame);
   if (windowsError !== null) return `windows-${windowsError[1]}`;
@@ -872,7 +877,7 @@ export async function executeBounded(
         .then(({ superviseDocumentProcessTree }) => superviseDocumentProcessTree(child, {
           deferProcessTreeTelemetryStop: process.platform !== "win32",
           frameObserver: (frame) => {
-            diagnosticStage = classifyBenchmarkSupervisorFrame(frame);
+            diagnosticStage = classifyBenchmarkSupervisorFrame(frame, diagnosticStage);
           },
         }))
       : Promise.resolve().then(() => supervisorFactory(child))).catch((error) => {

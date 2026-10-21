@@ -14,10 +14,16 @@ prepared source alone is not a publication record.
 - Preserve the first bounded Windows Node failure receipt through the release
   wrapper instead of replacing it with a later coarse file receipt. Reject
   malformed/private fields; receipt observation is not cleanup authority.
+- Preserve the first allowlisted benchmark supervisor error instead of masking
+  it with later generic channel errors. Actual error-child before/after proof
+  establishes receipt retention, not the cause of the original Windows stress
+  cleanup failure or native cleanup success. Keep all original resource bounds.
 - Remove the duplicated MCP tool-name list and redundant not-throw wrapper;
   validate the actual initialized server against the existing complete catalog.
 - Retire source/command-copy assertions rather than pinning implementation text.
   Retain actual stage execution, failure precedence, privacy and resource bounds.
+- Align the English Claude Code installation tag and cache identity with v0.3.4
+  metadata rather than directing users to the unpublished v0.3.3 candidate.
 
 ## [0.3.3] - 2026-10-21 (unpublished candidate)
 
@@ -358,7 +364,8 @@ this tag and candidate artifacts rather than retagging or replacing them.
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.4
 [0.3.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.3
 [0.3.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...v0.3.1
