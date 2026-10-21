@@ -18,6 +18,8 @@ prepared source alone is not a publication record.
   validate the actual initialized server against the existing complete catalog.
 - Retire source/command-copy assertions rather than pinning implementation text.
   Retain actual stage execution, failure precedence, privacy and resource bounds.
+- Align the English Claude Code installation tag and cache identity with v0.3.4
+  metadata rather than directing users to the unpublished v0.3.3 candidate.
 
 ## [0.3.3] - 2026-10-21 (unpublished candidate)
 
@@ -358,7 +360,8 @@ this tag and candidate artifacts rather than retagging or replacing them.
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.4
 [0.3.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.3
 [0.3.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...v0.3.1

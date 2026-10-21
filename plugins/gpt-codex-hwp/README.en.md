@@ -191,18 +191,18 @@ codex plugin remove hwp-korean-docs@hwp-local
 
 ## Claude Code installation
 
-Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support is included from `v0.3.0`. After confirming v0.3.3 publication, pin `#v0.3.3` instead of tracking `main`; keep the old durable runtime until the new installation passes doctor and one document operation. Actual Claude Code GUI installation and use were not verified for this release.
+Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support is included from `v0.3.0`. After confirming v0.3.4 publication, pin `#v0.3.4` instead of tracking `main`; keep the old durable runtime until the new installation passes doctor and one document operation. Actual Claude Code GUI installation and use were not verified for this release.
 
 Inside a Claude Code session:
 
 ```text
-/plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.3
+/plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.4
 /plugin install gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
-From a terminal, use `claude plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.3` and `claude plugin install gpt-codex-hwp@gpt-codex-hwp-local`.
+From a terminal, use `claude plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.4` and `claude plugin install gpt-codex-hwp@gpt-codex-hwp-local`.
 
-1. The installed plugin lives at `~/.claude/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` (or under `CLAUDE_CONFIG_DIR` when set). Verify plugin version `0.3.3+codex.20261021134251`. Claude Code replaces the `+` in the version with `-`, so this release's directory is `0.3.3-codex.20261021134251`; the runtime recognizes this layout as a Claude Code installation.
+1. The installed plugin lives at `~/.claude/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` (or under `CLAUDE_CONFIG_DIR` when set). Verify plugin version `0.3.4+codex.20261021164358`. Claude Code replaces the `+` in the version with `-`, so this release's directory is `0.3.4-codex.20261021164358`; the runtime recognizes this layout as a Claude Code installation.
 2. From that directory, run the same explicit runtime installer and doctor as on Codex.
 
 ```bash
