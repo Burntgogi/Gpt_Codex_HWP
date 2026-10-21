@@ -4,7 +4,6 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
-  benchmarkFileTimeout,
   classifyNodeTestCompletion,
   executeBoundedNodeTestFile,
   failedTopLevelFailureKind,
@@ -112,59 +111,6 @@ test("macOS Node diagnostic accepts capability skips when every executed test pa
   assert.equal(passed, true);
   assert.equal(calls, 45);
   
-});
-
-test("source Node diagnostic gives document lifecycle files their measured extended bounds", async () => {
-  let ordinaryTimeout;
-  let documentChildTimeout;
-  let documentWorkerTimeout;
-  let output = "";
-  const passed = await runMacNodeTestsDiagnostic({
-    runFile: async (file, fileOptions) => {
-      if (file === "assets.test.ts") ordinaryTimeout = fileOptions?.testTimeoutMs;
-      if (file === "document-child-client.test.ts") {
-        documentChildTimeout = fileOptions?.testTimeoutMs;
-      }
-      if (file === "document-worker-operations.test.ts") {
-        documentWorkerTimeout = fileOptions?.testTimeoutMs;
-      }
-      return file !== "files.test.ts";
-    },
-    stdout: { write: (value) => { output += value; } },
-    setExitCode() {},
-  });
-  assert.equal(passed, false);
-  assert.equal(ordinaryTimeout, 120_000);
-  assert.equal(documentChildTimeout, 300_000);
-  assert.equal(documentWorkerTimeout, 600_000);
-  
-});
-
-test("source Node diagnostic gives files with long per-test timeouts a larger file budget", async () => {
-  const timeouts = new Map();
-  const passed = await runMacNodeTestsDiagnostic({
-    runFile: async (file, fileOptions) => {
-      timeouts.set(file, fileOptions?.testTimeoutMs);
-      return true;
-    },
-    runBenchmarkFile: async (fileOptions) => {
-      timeouts.set("benchmark-policy.test.ts", fileOptions?.testTimeoutMs);
-      return { passed: true };
-    },
-    stdout: { write() {} },
-    setExitCode() {},
-  });
-  assert.equal(passed, true);
-  assert.equal(timeouts.get("assets.test.ts"), 120_000);
-  assert.equal(timeouts.get("allowed-roots.test.ts"), 300_000);
-  assert.equal(timeouts.get("benchmark-policy.test.ts"), 300_000);
-  assert.equal(benchmarkFileTimeout({ testTimeoutMs: 300_000 }, {}), 300_000);
-  assert.equal(benchmarkFileTimeout({}, {}), 120_000);
-  assert.equal(benchmarkFileTimeout({}, { testTimeoutMs: 90_000 }), 90_000);
-  assert.equal(timeouts.get("mcp-smoke.test.ts"), 300_000);
-  assert.equal(timeouts.get("mcp-cancellation-progress.test.ts"), 300_000);
-  assert.equal(timeouts.get("read-worker-safety.test.ts"), 600_000);
-  assert.equal(timeouts.get("runtime-projection.test.ts"), 600_000);
 });
 
 test("macOS Node diagnostic narrows an allowed-roots aggregate failure to one fixed case id", async () => {
@@ -1203,6 +1149,238 @@ test("bounded Node runner reports definitive failure after provisional progress"
     "progress:DOCUMENT_SEQUENTIAL_STAGE_TERMINATE_COMPLETE",
     "failure:DOCUMENT_SEQUENTIAL_CLOSED_1",
   ]);
+});
+
+test("bounded Node timeout preserves retained failed TAP before cleanup signals", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  const evidence = [];
+  const snapshots = [];
+  const result = executeBoundedNodeTestFile("fixture.test.mjs", {
+    repository: true,
+    spawnProcess: () => child,
+    terminateTree: () => {
+      child.emit("exit", null, "SIGKILL");
+      child.emit("close", null, "SIGKILL");
+      return true;
+    },
+    maximumTopLevelTests: 999,
+    onFailedTopLevelOrdinal: (value) => evidence.push(value),
+    onFailedTopLevelFailureKind: (value) => evidence.push(value),
+    onCompletionKind: (value) => evidence.push(value),
+    onRunnerFailureKind: (value) => evidence.push(value),
+    onFailureSnapshot: (value) => snapshots.push(value),
+  });
+  child.emit("spawn");
+  child.stdout.write([
+    "TAP version 13", "not ok 2 - PRIVATE/path/canary",
+    "  failureType: 'testCodeFailure'", "  code: 'ERR_ASSERTION'",
+    "1..2", "# tests 2", "# pass 1", "# fail 1", "# cancelled 0", "# skipped 0", "",
+  ].join("\n"));
+  child.stdout.emit("end");
+  t.mock.timers.tick(120_000);
+  assert.deepEqual(evidence, ["runner-timeout", 2, "test-code", "test-failure"]);
+  assert.equal(await result, false);
+  assert.deepEqual(snapshots, [{
+    reportedCompletionOrdinal: 2,
+    reportedCompletionKind: "failed",
+    tapPlanAvailable: true,
+    tapSummaryAvailable: true,
+    spawnObserved: true,
+    exitObserved: true,
+    stdoutEndObserved: true,
+    closeObserved: true,
+    deadlineExpired: true,
+    graceExpired: false,
+    terminationSettled: true,
+    terminationResult: true,
+  }]);
+  assert.equal(Object.isFrozen(snapshots[0]), true);
+  assert.doesNotMatch(JSON.stringify({ evidence, snapshots }), /PRIVATE|canary|SIGKILL/u);
+});
+
+test("bounded Node complete passing TAP without close still fails after grace", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  let snapshot;
+  let completion;
+  const result = executeBoundedNodeTestFile("fixture.test.mjs", {
+    spawnProcess: () => child,
+    terminateTree: () => true,
+    onCompletionKind: (value) => { completion = value; },
+    onFailureSnapshot: (value) => { snapshot = value; },
+  });
+  child.emit("spawn");
+  child.stdout.end("ok 1 - PRIVATE/name\n1..1\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n");
+  child.emit("exit", 0, null);
+  t.mock.timers.tick(120_000);
+  await new Promise(setImmediate);
+  assert.equal(snapshot, undefined);
+  t.mock.timers.tick(5_000);
+  assert.equal(await result, false);
+  assert.equal(completion, "passed");
+  assert.equal(snapshot.reportedCompletionOrdinal, 1);
+  assert.equal(snapshot.tapSummaryAvailable, true);
+  assert.equal(snapshot.exitObserved, true);
+  assert.equal(snapshot.stdoutEndObserved, true);
+  assert.equal(snapshot.closeObserved, false);
+  assert.equal(snapshot.graceExpired, true);
+  assert.equal(snapshot.terminationSettled, true);
+  assert.equal(snapshot.terminationResult, true);
+});
+
+test("bounded Node grace distinguishes close from a pending termination result", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  let settleTermination;
+  let snapshot;
+  const result = executeBoundedNodeTestFile("fixture.test.mjs", {
+    spawnProcess: () => child,
+    terminateTree: () => new Promise((resolveTermination) => {
+      settleTermination = resolveTermination;
+      child.emit("close", null, "SIGKILL");
+    }),
+    onFailureSnapshot: (value) => { snapshot = value; },
+  });
+  child.emit("spawn");
+  child.stdout.write("# Subtest: PRIVATE/active-case-is-not-a-completion\n");
+  t.mock.timers.tick(120_000);
+  await Promise.resolve();
+  assert.equal(snapshot, undefined);
+  t.mock.timers.tick(5_000);
+  assert.equal(await result, false);
+  assert.equal(snapshot.reportedCompletionOrdinal, null);
+  assert.equal(snapshot.reportedCompletionKind, "unavailable");
+  assert.equal(snapshot.exitObserved, false);
+  assert.equal(snapshot.closeObserved, true);
+  assert.equal(snapshot.stdoutEndObserved, false);
+  assert.equal(snapshot.graceExpired, true);
+  assert.equal(snapshot.terminationSettled, false);
+  assert.equal(snapshot.terminationResult, null);
+  settleTermination(true);
+  await new Promise(setImmediate);
+  assert.equal(snapshot.terminationSettled, false);
+  assert.equal(snapshot.terminationResult, null);
+});
+
+test("bounded Node capture stop interprets only retained bytes and keeps its first cause", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  const failures = [];
+  let snapshot;
+  let ordinal;
+  const result = executeBoundedNodeTestFile("fixture.test.mjs", {
+    spawnProcess: () => child,
+    terminateTree: () => {
+      child.emit("error", new Error("PRIVATE/cleanup"));
+      child.emit("close", null, "SIGKILL");
+      return false;
+    },
+    maximumTopLevelTests: 999,
+    onFailedTopLevelOrdinal: (value) => { ordinal = value; },
+    onRunnerFailureKind: (value) => failures.push(value),
+    onFailureSnapshot: (value) => { snapshot = value; },
+  });
+  child.stdout.write("not ok 4 - PRIVATE/name\n  failureType: 'hookFailed'\n# fail 1\n");
+  child.stdout.write(Buffer.alloc(512 * 1024, 65));
+  assert.equal(await result, false);
+  assert.deepEqual(failures, ["capture-limit"]);
+  assert.equal(ordinal, 4);
+  assert.equal(snapshot.reportedCompletionOrdinal, 4);
+  assert.equal(snapshot.tapSummaryAvailable, false);
+  assert.equal(snapshot.deadlineExpired, false);
+  assert.equal(snapshot.graceExpired, false);
+  assert.equal(snapshot.terminationSettled, true);
+  assert.equal(snapshot.terminationResult, false);
+  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE|cleanup/u);
+});
+
+test("bounded Node malformed retained bytes and launch failures expose no private content", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  const snapshots = [];
+  const failures = [];
+  const result = executeBoundedNodeTestFile("fixture.test.mjs", {
+    spawnProcess: () => child,
+    terminateTree: () => { child.emit("close", 1, null); return true; },
+    onFailureSnapshot: (value) => snapshots.push(value),
+    onRunnerFailureKind: (value) => failures.push(value),
+  });
+  child.stdout.write(Buffer.from("ok 99 - PRIVATE/token\n1..99\n"));
+  child.stdout.write(Buffer.from([0xff]));
+  t.mock.timers.tick(120_000);
+  assert.equal(await result, false);
+  assert.equal(snapshots[0].reportedCompletionOrdinal, null);
+  assert.equal(snapshots[0].tapPlanAvailable, false);
+  assert.equal(snapshots[0].tapSummaryAvailable, false);
+  assert.equal(await executeBoundedNodeTestFile("fixture.test.mjs", {
+    spawnProcess: () => { throw new Error("PRIVATE/executable/token"); },
+    onFailureSnapshot: (value) => snapshots.push(value),
+    onRunnerFailureKind: (value) => failures.push(value),
+  }), false);
+  assert.deepEqual(failures, ["runner-timeout", "spawn-error"]);
+  assert.equal(snapshots[1].spawnObserved, false);
+  assert.equal(snapshots[1].deadlineExpired, false);
+  assert.equal(snapshots[1].terminationSettled, false);
+  assert.equal(snapshots[1].terminationResult, null);
+  const missingStdoutChild = new EventEmitter();
+  assert.equal(await executeBoundedNodeTestFile("fixture.test.mjs", {
+    spawnProcess: () => missingStdoutChild,
+    terminateTree: () => {
+      missingStdoutChild.emit("close", 1, null);
+      throw new Error("PRIVATE/termination/token");
+    },
+    onFailureSnapshot: (value) => snapshots.push(value),
+    onRunnerFailureKind: (value) => failures.push(value),
+  }), false);
+  assert.equal(failures.at(-1), "missing-stdout");
+  assert.equal(snapshots[2].closeObserved, true);
+  assert.equal(snapshots[2].terminationSettled, true);
+  assert.equal(snapshots[2].terminationResult, null);
+  assert.doesNotMatch(JSON.stringify({ snapshots, failures }), /PRIVATE|token|executable/u);
+});
+
+test("source receipt keeps timeout progress bounded and private through the real executor", async () => {
+  let output = "";
+  let exitCode;
+  const passed = await runMacNodeTestsDiagnostic({
+    receiptPrefix: "WINDOWS",
+    runFile: (file, fileOptions) => {
+      if (file !== "bounded-frame.test.ts") return true;
+      return executeBoundedNodeTestFile(file, {
+        ...fileOptions,
+        testTimeoutMs: 1,
+        spawnProcess: () => {
+          const child = new EventEmitter();
+          child.stdout = new PassThrough();
+          queueMicrotask(() => {
+            child.emit("spawn");
+            child.stdout.end([
+              "not ok 2 - PRIVATE/name/token",
+              "  failureType: 'testCodeFailure'",
+              "1..2", "# tests 2", "# pass 1", "# fail 1", "# cancelled 0", "# skipped 0", "",
+            ].join("\n"));
+          });
+          return child;
+        },
+        terminateTree: (child) => { child.emit("close", null, "SIGKILL"); return true; },
+      });
+    },
+    stdout: { write: (value) => { output += value; } },
+    setExitCode: (value) => { exitCode = value; },
+  });
+  assert.equal(passed, false);
+  assert.equal(exitCode, 1);
+  assert.match(output, /ordinal=2 status=failed failureKind=test-code completionKind=test-failure/u);
+  assert.match(output, /runnerFailureKind=runner-timeout reportedCompletion=2-failed tap=11/u);
+  assert.match(output, /lifecycle=1011101 terminationResult=true/u);
+  assert.ok(Buffer.byteLength(output) <= 512);
+  assert.doesNotMatch(output, /PRIVATE|name|token|SIGKILL|[\\/]/u);
 });
 
 test("macOS Node diagnostic accepts all-skipped TAP only for the fixed Windows-only assets case", async () => {

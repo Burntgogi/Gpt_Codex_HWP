@@ -4,7 +4,38 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
-## [0.3.2] - 2026-10-21
+## [0.3.3] - 2026-10-21
+
+- Share bounded immutable Git blob batches between artifact production,
+  verification and platform receipts; remove per-runtime-file process fan-out.
+  Preserve content, identity, privacy, framing and file/aggregate byte bounds.
+- Preserve original stopped-run TAP and lifecycle evidence without turning
+  passing TAP, termination settlement or a helper result into cleanup proof.
+  Keep execution, grace and capture limits unchanged. Real-child before/after
+  probes retain failure and independently verify group absence.
+- Both variants passed both orders of the bounded Windows experiment.
+  Completion times improved; the old main timeout's exact cause remains unknown.
+  Retire default-only and source-regex assertions, not behavior coverage.
+- Isolate mutable projection sources so privacy rejection tests cannot modify
+  the checkout or interfere with real runtime verification. Synchronize real
+  SIGTERM cancellation on handler readiness instead of a fixed sleep, keep
+  existing test/close deadlines, and dispose the completed close timer.
+- Order the Windows detached-descendant crash fixture after actual liveness
+  observation instead of assuming progress arrives before a 100 ms self-kill.
+  Require native Job Object mode 1, measured RSS and verified zero membership;
+  reject non-ESRCH process-probe failures rather than accepting unknown cleanup.
+  Keep the existing execution and cleanup deadlines.
+- Include the Linux reparenting correction from the unpublished v0.3.2 candidate
+  and the markdown-it 14.3.3 security fix from published v0.3.1.
+- Use fresh plugin `0.3.3+codex.20261021134251` and Claude cache
+  `0.3.3-codex.20261021134251`. Require its own exact-tag full gate,
+  same-run attestation and original assets; preserve previous tags and releases.
+
+## [0.3.2] - 2026-10-21 (unpublished candidate)
+
+The immutable tag's full gate and attestation passed, but original postmerge
+main Windows artifact tests timed out. No GitHub Release was published; preserve
+this tag and candidate artifacts rather than retagging or replacing them.
 
 - Preserve measured Linux RSS across normal reparenting of the same
   PID/process-group/start identity. Reject process-group or start-identity
@@ -306,7 +337,8 @@ This file records release tags and their publication status. Work under `Unrelea
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.3
 [0.3.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.2.7...v0.3.0

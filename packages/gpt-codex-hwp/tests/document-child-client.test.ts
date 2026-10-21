@@ -10,6 +10,7 @@ import {
   readFileSync,
   readSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1700,14 +1701,14 @@ test("Windows lifecycle supervisor removes a detached descendant after the engin
   skip: process.platform !== "win32" ? "Windows Job Objects are Windows-only" : false,
 }, async () => {
   const owned = createOwnedFiles();
+  const crashPermitPath = `${owned.outputPath}.crash-permit`;
   let descendantPid: number | undefined;
   let descendantObservedAlive = false;
   const supervisorFrames: string[] = [];
   try {
     const client = createProductionDocumentChildClient({
       childEntry: fixturePath,
-      childArguments: ["descendant-then-crash", "250"],
-      treeTerminator: async () => true,
+      childArguments: ["descendant-observed-then-crash", "250", crashPermitPath],
       jobSupervisorFrameObserver: (frame) => supervisorFrames.push(frame),
     });
     await assert.rejects(
@@ -1722,18 +1723,20 @@ test("Windows lifecycle supervisor removes a detached descendant after the engin
             try {
               process.kill(completed, 0);
               descendantObservedAlive = true;
+              writeFileSync(crashPermitPath, "observed\n", { flag: "wx", mode: 0o600 });
             } catch {}
           },
         },
       ),
       (error: unknown) => safeCode(error) === "ENGINE_CRASH",
     );
-    assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ [12] [0-9]+$/u);
+    assert.match(supervisorFrames[0] ?? "", /^GPT_CODEX_HWP_JOB READY [0-9]+ 1 [0-9]+$/u);
     assert.match(supervisorFrames[1] ?? "", /^GPT_CODEX_HWP_JOB RSS [1-9][0-9]* [1-9][0-9]*$/u);
-    assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB GONE 0 [12]$/u);
+    assert.match(supervisorFrames[2] ?? "", /^GPT_CODEX_HWP_JOB GONE 0 1$/u);
     assert.equal(typeof descendantPid, "number");
     assert.equal(descendantObservedAlive, true);
     await waitUntilProcessIsGone(descendantPid!);
+    descendantPid = undefined;
   } finally {
     if (descendantPid !== undefined) {
       try { process.kill(descendantPid, "SIGKILL"); } catch {}
@@ -4797,12 +4800,13 @@ async function waitUntilProcessIsGone(pid: number): Promise<void> {
   while (Date.now() < deadline) {
     try {
       process.kill(pid, 0);
-    } catch {
-      return;
+    } catch (error) {
+      if (safeCode(error) === "ESRCH") return;
+      assert.fail("descendant absence could not be verified");
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.fail(`descendant process ${pid} survived tree termination`);
+  assert.fail("descendant process survived tree termination");
 }
 
 function readPidLog(path: string): number[] {

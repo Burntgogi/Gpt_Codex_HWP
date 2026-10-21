@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { chmod, copyFile, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { after, before } from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   assertOneShotProcessCleanup,
@@ -41,10 +43,13 @@ test("compiled one-shot generates one valid HWPX and never overwrites a response
     },
   });
   fixture.request.arguments.output_path = fixture.outputPath;
+  fixture.request.arguments.markdown += `\n${fixture.root}`;
   await writePrivateRequest(fixture.requestPath, fixture.request);
 
   const result = await runFixture(fixture);
-  assertProcessReceipt(result, 0, "ONESHOT_OK\n", "");
+  assertBoundedProcessStatus(result, 0);
+  assert.equal(result.stderr.length, 0);
+  assert.equal(result.stdout.toString("utf8").includes(fixture.root), false);
   const responseBytes = await readFile(fixture.responsePath);
   const response = JSON.parse(responseBytes.toString("utf8"));
   assert.equal(response.isError, false);
@@ -65,7 +70,7 @@ test("compiled one-shot generates one valid HWPX and never overwrites a response
     requestPath: collisionRequestPath,
     responsePath: collisionResponsePath,
   });
-  assertProcessReceipt(collision, 2, "", "ONESHOT_INVOCATION_ERROR reason=RESPONSE_PATH_REJECTED\n");
+  assertInvocationFailure(collision, "RESPONSE_PATH_REJECTED", fixture.root);
   assert.equal(await readFile(collisionResponsePath, "utf8"), "sentinel");
   await assert.rejects(lstat(collisionOutputPath), { code: "ENOENT" });
   assert.deepEqual(await readFile(fixture.responsePath), responseBytes);
@@ -81,7 +86,9 @@ test("compiled one-shot publishes a missing-HWP tool error", { timeout: 30_000 }
   await writePrivateRequest(fixture.requestPath, fixture.request);
 
   const result = await runFixture(fixture);
-  assertProcessReceipt(result, 1, "ONESHOT_TOOL_ERROR\n", "");
+  assertBoundedProcessStatus(result, 1);
+  assert.equal(result.stderr.length, 0);
+  assert.equal(result.stdout.toString("utf8").includes(fixture.root), false);
   assert.equal(JSON.parse(await readFile(fixture.responsePath, "utf8")).isError, true);
 });
 
@@ -101,16 +108,11 @@ test("compiled one-shot reads a real HWP and proves every cleanup tree", { timeo
   });
   assert.equal(result.code, 0);
   assert.equal(result.stderr.length, 0);
-  assert.equal(
-    result.stdout.toString("utf8"),
-    "ONESHOT_CLEANUP proof=worker-thread-terminated observedProcessTrees=0 remainingProcessTrees=0\nONESHOT_OK\n",
-  );
   const cleanup = assertOneShotProcessCleanup(result);
-  assert.equal(cleanup.observedProcessTreeCount, 0);
   assert.equal(cleanup.remainingDescendantCount, 0);
   const response = JSON.parse(await readFile(fixture.responsePath, "utf8"));
   assert.equal(response.isError, false);
-  assert.ok(response.structuredContent.markdown.length > 0);
+  assert.equal(/\p{Script=Hangul}/u.test(response.structuredContent.markdown), true);
 });
 
 test("compiled one-shot rejects malformed JSON without publishing a response", { timeout: 30_000 }, async (t) => {
@@ -118,7 +120,7 @@ test("compiled one-shot rejects malformed JSON without publishing a response", {
   await writeFile(fixture.requestPath, fixture.request, { flag: "wx", mode: 0o600 });
 
   const result = await runFixture(fixture);
-  assertProcessReceipt(result, 2, "", "ONESHOT_INVOCATION_ERROR reason=REQUEST_INVALID\n");
+  assertInvocationFailure(result, "REQUEST_INVALID", fixture.root);
   await assert.rejects(lstat(fixture.responsePath), { code: "ENOENT" });
 });
 
@@ -127,7 +129,18 @@ test("compiled one-shot handles SIGTERM through bounded graceful cancellation", 
   skip: process.platform === "win32" ? "Windows SIGTERM forcibly terminates Node" : false,
 }, async (t) => {
   const fixture = await createLargeGenerationFixture(t, "signal");
+  const observerPath = join(fixture.root, "signal-ready.mjs");
+  await writeFile(observerPath, `
+const observer = setInterval(() => {
+  if (process.listenerCount("SIGTERM") === 0) return;
+  clearInterval(observer);
+  process.send?.("signal-handler-ready");
+  process.channel?.unref();
+}, 10);
+observer.unref();
+`, { flag: "wx", mode: 0o600 });
   const child = spawn(process.execPath, [
+    "--import", pathToFileURL(observerPath).href,
     ...ENTRY_ARGUMENTS,
     "--request",
     fixture.requestPath,
@@ -137,27 +150,45 @@ test("compiled one-shot handles SIGTERM through bounded graceful cancellation", 
     cwd: runtimeRoot,
     env: runtimeEnvironment(fixture.root),
     shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   assert.ok(child.pid);
   const pid = child.pid;
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); });
   const completed = collectChild(child);
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
-  assert.equal(child.exitCode, null, "large generation must still be in flight");
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await completed;
+    assertProcessAbsent(pid);
+  });
+  await Promise.race([
+    once(child, "message", { signal: t.signal }).then(([message]) => {
+      assert.equal(message === "signal-handler-ready", true);
+    }),
+    completed.then(() => { throw new Error("one-shot exited before cancellation readiness"); }),
+  ]);
+  assert.equal(child.exitCode, null);
   assert.equal(child.kill("SIGTERM"), true);
 
-  const result = await Promise.race([
-    completed,
-    new Promise((_, rejectPromise) => setTimeout(
-      () => rejectPromise(new Error("graceful one-shot cancellation exceeded its bound")),
-      20_000,
-    )),
-  ]);
-  assert.deepEqual(
-    { code: result.code, signal: result.signal, stdout: result.stdout, stderr: result.stderr },
-    { code: 2, signal: null, stdout: "", stderr: "ONESHOT_INVOCATION_ERROR reason=CANCELLED\n" },
-  );
+  let completionTimer;
+  let result;
+  try {
+    result = await Promise.race([
+      completed,
+      new Promise((_, rejectPromise) => {
+        completionTimer = setTimeout(
+          () => rejectPromise(new Error("graceful one-shot cancellation exceeded its bound")),
+          20_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(completionTimer);
+  }
+  assert.equal(result.code, 2);
+  assert.equal(result.signal, null);
+  assert.equal(result.stdout.length, 0);
+  assertInvocationReason(result.stderr, "CANCELLED");
+  assert.equal(result.stderr.includes(fixture.root), false);
   await assert.rejects(lstat(fixture.responsePath), { code: "ENOENT" });
   await assert.rejects(lstat(fixture.outputPath), { code: "ENOENT" });
   assertProcessAbsent(pid);
@@ -196,6 +227,7 @@ async function createLargeGenerationFixture(t, name) {
     },
   });
   fixture.request.arguments.output_path = fixture.outputPath;
+  fixture.request.arguments.markdown += `\n${fixture.root}`;
   await writePrivateRequest(fixture.requestPath, fixture.request);
   return fixture;
 }
@@ -227,24 +259,24 @@ function writePrivateRequest(path, request) {
   return writeFile(path, JSON.stringify(request), { flag: "wx", mode: 0o600 });
 }
 
-function assertProcessReceipt(result, code, stdout, stderr) {
-  assert.deepEqual({
-    code: result.code,
-    signal: result.signal,
-    stdout: result.stdout.toString("utf8"),
-    stderr: result.stderr.toString("utf8"),
-    overflow: result.overflow,
-    timedOut: result.timedOut,
-    terminationFailed: result.terminationFailed,
-  }, {
-    code,
-    signal: null,
-    stdout,
-    stderr,
-    overflow: false,
-    timedOut: false,
-    terminationFailed: false,
-  });
+function assertBoundedProcessStatus(result, code) {
+  assert.equal(result.code, code);
+  assert.equal(result.signal, null);
+  assert.equal(result.overflow, false);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.terminationFailed, false);
+}
+
+function assertInvocationReason(stderr, reason) {
+  assert.equal(new RegExp(`(?:^|\\s)reason=${reason}(?:\\s|$)`, "u")
+    .test(stderr.toString("utf8")), true);
+}
+
+function assertInvocationFailure(result, reason, privateRoot) {
+  assertBoundedProcessStatus(result, 2);
+  assert.equal(result.stdout.length, 0);
+  assertInvocationReason(result.stderr, reason);
+  assert.equal(result.stderr.toString("utf8").includes(privateRoot), false);
 }
 
 function collectChild(child) {

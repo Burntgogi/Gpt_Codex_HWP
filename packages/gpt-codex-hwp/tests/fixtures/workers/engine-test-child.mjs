@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync, writeSync } from "node:fs";
 
 const mode = process.argv[2] ?? "success";
 const delayMs = Number.parseInt(process.argv[3] ?? "250", 10);
@@ -166,6 +166,27 @@ readRequest().then((request) => {
     });
     appendFileSync(pidLogPath, `${process.pid}\n${descendant.pid}\n`);
     setInterval(() => {}, 1000);
+    return;
+  }
+  if (mode === "descendant-observed-then-crash") {
+    const crashPermitPath = process.argv[4];
+    if (typeof crashPermitPath !== "string" || crashPermitPath.length === 0) {
+      throw new Error("controlled crash requires an owned permit path");
+    }
+    const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+      detached: process.platform === "win32",
+    });
+    sendControl({
+      ...event(request, "progress"),
+      completed: descendant.pid,
+      total: Number.MAX_SAFE_INTEGER,
+    });
+    const observer = setInterval(() => {
+      if (!existsSync(crashPermitPath)) return;
+      clearInterval(observer);
+      process.kill(process.pid, "SIGKILL");
+    }, 5);
     return;
   }
   if (mode === "descendant-then-crash") {

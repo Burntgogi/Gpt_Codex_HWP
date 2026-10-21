@@ -262,19 +262,6 @@ test("release artifacts reject unsafe source and output states", async (t) => {
   });
 });
 
-test("release artifact builder never deletes caller output after it takes ownership", async () => {
-  const source = await readFile(
-    new URL("../release-scripts/build-release-artifacts.mjs", import.meta.url),
-    "utf8",
-  );
-  assert.doesNotMatch(source, /removeOwnedDirectory\s*\(/u);
-  assert.doesNotMatch(source, /\brm\s*\(\s*output\b/u);
-  assert.match(
-    source,
-    /buildRuntime\(\{\s*root,\s*outputRoot: stageRoot,\s*subprocessEnvironment: releaseSubprocessEnvironment\(\),\s*\}\)/u,
-  );
-});
-
 test("release artifact builder never deletes a private staging replacement on failure", async (t) => {
   const fixture = await createReleaseFixture(t);
   const victim = join(fixture.parent, "private-stage-victim");
@@ -800,7 +787,7 @@ async function createReleaseFixture(t: test.TestContext) {
   const parent = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-release-test-",
   });
-  t.after(async () => { await rm(parent, { recursive: true, force: true, maxRetries: 5 }); });
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 5 }));
   const root = join(parent, "repository");
   await mkdir(root, { recursive: true });
   const runtimeRoot = join(root, "plugins", "gpt-codex-hwp");
