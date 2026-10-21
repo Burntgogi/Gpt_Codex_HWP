@@ -14,6 +14,10 @@ prepared source alone is not a publication record.
 - Preserve the first bounded Windows Node failure receipt through the release
   wrapper instead of replacing it with a later coarse file receipt. Reject
   malformed/private fields; receipt observation is not cleanup authority.
+- Preserve the first allowlisted benchmark supervisor error instead of masking
+  it with later generic channel errors. Actual error-child before/after proof
+  establishes receipt retention, not the cause of the original Windows stress
+  cleanup failure or native cleanup success. Keep all original resource bounds.
 - Remove the duplicated MCP tool-name list and redundant not-throw wrapper;
   validate the actual initialized server against the existing complete catalog.
 - Retire source/command-copy assertions rather than pinning implementation text.

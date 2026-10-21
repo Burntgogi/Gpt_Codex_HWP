@@ -13,6 +13,9 @@
 
 릴리스 wrapper가 원래의 상세 `WINDOWS_NODE_TEST_FAILURE`를 뒤따르는 거친 파일 영수증으로 덮어쓰지 않도록 수정했습니다. 실제 자식 parser 수정 전·후 비교에서 양쪽 모두 실패 상태를 유지하고 수정본만 원본 상세 영수증을 보존했으며 준비된 동작 검사도 통과했습니다. 중복 MCP 도구 이름 literal과 단순 not-throw wrapper, 소스·명령 복사 검사는 제거하고 실제 초기화 서버의 전체 schema catalog·버전·stderr, 실패 우선순위·비공개 내용 비노출·자원 제한 검사는 유지합니다.
 
+준비 PR #32의 원본 [Windows 실행 39643306576](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39643306576)은 당시 process-tree stress case `bp16`에서 `windows-channel`, root 정리 미검증으로 실패했습니다. 같은 job의 후속 전체 진단 통과는 원본 복구나 원인 증명이 아닙니다. 기존 관측 경로가 실제 supervisor 오류 단계를 받은 뒤 RSS 파싱·재시도의 일반 channel 오류로 덮을 수 있는 별도 결함을 확인했습니다. 첫 allowlist 오류 단계를 보존하도록 고쳤고, 실제 Node 자식의 오류 프레임 처리에서 수정 전 `windows-channel`, 수정 후 원본 `windows-sampling` 보존을 확인했습니다. 이 실험은 native Job·RSS·정리 성공을 생성하거나 주장하지 않습니다. 원본 native 정리 실패의 정확한 원인은 여전히 미확정이며 실행·측정·identity·정리 정책과 stress workload는 그대로입니다.
+
+
 준비 중 Linux 실제 런타임의 도구 9개·HWPX 14,421 bytes·stderr 0 bytes·남은 감독 자손 0개와 child-client 동작 검사를 확인했습니다. 이 기록은 최종 태그·게시·업그레이드나 Windows native·실제 Mac/Claude/한컴 GUI 성공을 대신하지 않습니다.
 
 ## 제한을 유지한 릴리스 경로 개선
