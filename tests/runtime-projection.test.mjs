@@ -599,6 +599,7 @@ test("runtime drift reports only relative path and expected and actual hashes", 
 test("fresh compiler output cannot include a stale source dist file", async () => {
   const staleSource = join(SOURCE, "dist", "stale-output-must-not-ship.js");
   const output = join(temporaryRoot, "fresh-dist");
+  await mkdir(dirname(staleSource), { recursive: true });
   await writeFile(staleSource, "throw new Error('stale');\n", "utf8");
   try {
     await buildRuntime({ root: ROOT, outputRoot: output });
