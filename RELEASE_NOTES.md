@@ -15,6 +15,15 @@ history scanner는 기존 strict public-process 실패 observer를 bounded batch
 
 이미 삭제한 source-copy 테스트의 낡은 catalog 항목을 제거하고 oracle dispatch는 불안정한 `rv32` ordinal 대신 의미 flag를 사용합니다. 부수적인 source·default·전체 출력·mock echo 단언은 재고정하지 않고 폐기합니다. 이는 증거 손실 수정이지 원본 native·`pc17` 원인 해결이나 설명이 아닙니다.
 
+## 준비 중 첫 플랫폼 실패와 worker fixture 순서
+
+준비 head `0c03cbd`의 원본 [CI 39658607959](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39658607959)는 Windows 실제 runtime-install 정리 중 `windows-helper-sampling`, macOS `document-worker-client.test.ts` ordinal 7에서 실패했습니다. 후자는 ready 이전/이후 crash·OOM 서명·잘못된 event와 각 복구를 검사하며, 원본 로그는 정확한 하위 경우를 남기지 않았습니다.
+
+별도로 worker fixture가 public port에 ready를 보낸 직후 다른 내부 error port로 uncaught error를 보내므로 caller의 ready 관측 순서를 보장하지 못하는 결함을 확인했습니다. direct-client·MCP factory 두 곳을 같은 test-owned 4-byte shared gate로 이관했습니다. 기존 유효 ready의 동기 listener가 끝난 뒤 microtask가 gate를 열고 fixture가 원래 uncaught error를 발생시킵니다. production 프로토콜·메모리·실행·정리 제한과 OOM 서명 분류는 그대로이며 실제 heap exhaustion을 주장하지 않습니다. 실제 worker의 ready 전달만 100ms 지연한 제어 실험에서 수정 전 error 시 ready 미관측, 수정 후 ready 관측을 확인했고 양쪽 worker는 실제 uncaught error로 exit 1이었습니다. 실제 client·MCP crash 검사는 통과했지만 원본 macOS 인스턴스의 원인 증명은 아닙니다.
+
+별도 원래 한도의 실제 [Windows 설치 native 연산 관측 39660747064](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39660747064)은 9 tools·HWPX 14,421 bytes·stderr 0·잔여 자손 0으로 통과했고 실패 연산 기록은 없었습니다. 따라서 원본 실패 복구나 native 수정으로 취급하지 않습니다. 관측용 PowerShell 변경은 배포 코드가 아니며 원본 sampling 원인은 여전히 미확정입니다.
+
+
 ## 불변 미게시 v0.3.4 기록
 
 `v0.3.4`는 neutral owner `58d48d0eb76914245ee2142a6f6681008c8a6f24`에 보존하며 정상 병합 main `931f82bfe2c0babc60caf2c0f7726f05bcbad936`과 tree가 정확히 같았습니다. 모든 [PR CI 39647945797](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945797)·[Security 39647945795](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945795)와 원본 [main CI 39649661879](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39649661879)·Security는 통과했고 보호 정책은 바꾸지 않았습니다. 원본 [전체 태그 게이트 39651543739](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39651543739)는 초기 10 MiB smoke 통과 뒤 node-tests에서 `WINDOWS_REPOSITORY_TEST_CASE case=pc17 status=failed`로 실패했습니다. 자산·attestation·Release는 없습니다.

@@ -25,6 +25,12 @@ operation with one-shot/descendant exit before claiming upgrade success.
 - Remove the obsolete catalog entry for the deleted source-copy test and use a
   semantic oracle flag instead of the brittle `rv32` ordinal. Retire incidental
   source/default/whole-output/mock-echo assertions rather than re-pinning them.
+- Make the shared real-worker crash fixture wait on a test-owned four-byte
+  ready-observed gate before its uncaught error. Migrate both direct-client and
+  MCP factories; keep production protocol and all resource/termination limits.
+  Controlled real-worker ordering fails before and passes after; the original
+  macOS instance remains unproven. OOM-signature classification is not a claim
+  of actual heap exhaustion.
 - Keep native collector/C#/PowerShell, permissions, mode-1, identity, RSS,
   execution/capture/cleanup bounds and stress workload unchanged. This corrects
   evidence loss, not the unknown original native/`pc17` cause; no native, RSS,

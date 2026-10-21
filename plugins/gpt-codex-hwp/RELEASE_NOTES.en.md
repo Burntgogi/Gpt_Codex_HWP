@@ -15,6 +15,15 @@ The history scanner forwards its existing strict public-process failure observer
 
 Remove the obsolete catalog entry for the already deleted source-copy test; oracle dispatch uses a semantic flag rather than the brittle `rv32` ordinal. Retire incidental source/default/whole-output/mock-echo assertions rather than re-pinning them. These are evidence-retention corrections, not a fix or explanation of the original native/`pc17` cause.
 
+## First preparatory platform failures and worker-fixture ordering
+
+Prepared head `0c03cbd` failed original [CI 39658607959](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39658607959): actual Windows runtime-install cleanup at `windows-helper-sampling`, and macOS `document-worker-client.test.ts` ordinal 7. The latter covers pre/post-ready crash, OOM-signature, malformed events and each recovery; its original subscenario was not retained.
+
+An independent fixture defect posted ready on the public port then immediately raised an uncaught error on a separate internal error port, without guaranteeing caller readiness observation. Both direct-client and MCP factories now supply the same test-owned four-byte shared gate. A microtask releases it after the valid ready event's synchronous listeners finish; the fixture then throws its original uncaught error. Production protocol, memory/execution/termination bounds and OOM-signature classification are unchanged; actual heap exhaustion is not claimed. A controlled real-worker probe delaying only public ready delivery by 100 ms observed no readiness at error before, then observed readiness after; both workers actually exited 1 from the uncaught error. Actual client/MCP crash checks passed, but this does not establish the original macOS instance's cause.
+
+A separate unchanged-bound actual [Windows install/native-operation observation 39660747064](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39660747064) passed nine tools/HWPX 14,421 bytes/zero stderr/zero descendants and recorded no failing operation. It is neither original recovery nor a native fix. Its observation-only PowerShell changes are not release code; the original sampling cause remains unknown.
+
+
 ## Unpublished immutable v0.3.4 record
 
 Preserve `v0.3.4` at neutral owner `58d48d0eb76914245ee2142a6f6681008c8a6f24`, whose tree exactly matched normally merged main `931f82bfe2c0babc60caf2c0f7726f05bcbad936`. All PR checks in [CI 39647945797](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945797) and [Security 39647945795](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945795), and original [main CI 39649661879](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39649661879) plus Security passed; branch protection was unchanged. The original [full tag gate 39651543739](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39651543739) passed initial 10 MiB smoke, then failed node-tests with `WINDOWS_REPOSITORY_TEST_CASE case=pc17 status=failed`. No artifacts, attestation or release followed.
