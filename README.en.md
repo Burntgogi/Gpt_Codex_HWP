@@ -96,13 +96,13 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for exact usage scopes, p
 
 ## Development and Platform Validation
 
-This project was developed primarily on Windows x64 and validated there. macOS Apple Silicon plugin-runtime CI is configured, but it must not be described as passed or validated until a successful receipt for the current HEAD exists. Actual use with Codex Desktop and Hancom Office Hangul on macOS remains unverified. macOS remains a compatibility target. Full macOS support is not claimed.
+This project was developed primarily on Windows x64 and validated there. [Windows x64, macOS arm64, and Linux CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39585790921) passed on the reviewed v0.3.1 commit `4180a8d35e01aa95205a39c60ae9686486f6f9cb`. That does not validate actual use with Codex Desktop and Hancom Office Hangul on macOS. macOS remains a compatibility target; full macOS support is not claimed.
 
 Per-release test and audit results are recorded in each [GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases) note.
 
 ## v0.3.1 installation from GitHub
 
-The following commands target `v0.3.1` and must be used only after the owner publishes that release. `v0.3.0` is the prior public release; its historical verification does not replace v0.3.1 evidence. Review the [release notes](RELEASE_NOTES.en.md) first. Upgrade by reinstalling under the new plugin/cache identity, explicitly installing its runtime, running doctor, restarting the host, and verifying one document operation. Do not remove the older working plugin or runtime before success.
+The [v0.3.1 security release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1) is published. The commands below pin that immutable tag. Historical v0.3.0 records do not replace new-version evidence; actual results are in the [release notes](RELEASE_NOTES.en.md). Upgrade by reinstalling under the new plugin/cache identity, explicitly installing its runtime, running doctor, restarting the host, and verifying one document operation. Do not manually delete the old durable runtime before success.
 
 ### Changing the tag of an existing installation
 
@@ -114,11 +114,13 @@ codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.1 --json
 $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
 ```
 
-`marketplace remove` removes the source registration, not the plugin. A real isolated upgrade with Codex CLI 0.162.1 retained the old plugin cache and durable runtime. Validate the new returned JSON using steps 4–6 below. Do not delete the older version directory until the new runtime completes a verified document operation.
+`marketplace remove` removes the source registration, not the plugin. In an isolated Linux profile with Codex CLI 0.162.1, source removal and re-registration preserved the previous cache, but the new `plugin add` removed that older plugin cache. The old durable runtime's lock and installation receipt stayed unchanged. Do not assume the old cache survives. Validate the new returned JSON using steps 4–6 below, and do not manually delete the old durable runtime before success.
+
+If new-version verification fails, close the hosts and repeat the three commands above with tag `v0.3.0` to recreate its cache. Require JSON `version` equal to `0.3.0+codex.20261008150000`, validate `installedPath` against that identity, then run doctor. In the same isolated profile, this restored `DOCTOR_OK` without reinstalling the previous runtime. The old tag still contains known markdown-it security issues: this is temporary recovery, not a security fix. Stop processing untrusted documents and return to a patched version.
 
 A user can ask a Codex agent:
 
-> After its publication is confirmed, install the security release `v0.3.1` of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, and run the explicit runtime installer and `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation. Keep the older working runtime until verification succeeds.
+> Install the published security release `v0.3.1` of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, and run the explicit runtime installer and `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation. Keep the old durable runtime until verification succeeds.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
@@ -152,11 +154,11 @@ try {
 ```
 
 6. `doctor` is diagnostic only: it does not install or repair anything and is not an MCP tool. Its JSON contains only safe status codes, booleans, versions, and counts; missing optional capabilities such as Python, rhwp, or the pinned test fixture remain separate from required failures.
-7. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration. On `RUNTIME_NOT_INSTALLED`, stop retrying the document operation and rerun the installer from the validated path. Require one HWP/HWPX operation to succeed, verify the generated output, and confirm that the one-shot process and descendants exit. Worker-only, child-only, and mixed cleanup receipts with zero remaining supervised process trees are part of this check. Hosted check results are limited to the v0.3.0 release PR commit, and physical Mac use remains unverified. If verification fails, keep the older working plugin and report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
+7. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. Verify that the plugin and skill are visible and `/mcp` has no default `gpt-codex-hwp` registration. On `RUNTIME_NOT_INSTALLED`, stop retrying the document operation and rerun the installer from the validated path. Require one HWP/HWPX operation to succeed, verify the generated output, and confirm that the one-shot process and descendants exit. Worker-only, child-only, and mixed cleanup receipts with zero remaining supervised process trees are part of this check. See the platform-validation section above for the distinction between hosted and physical-device evidence. If verification fails, do not manually delete the old durable runtime; report only the error and `installedPath`. Do not report tokens, environment variables, or user document contents.
 
 ## Installation and Migration
 
-Use this sequence for a release upgrade only after v0.3.1 publication. Its new identity does not reuse the old runtime; updating dependencies in the old directory is not an upgrade:
+Use this sequence for the v0.3.1 release upgrade. Its new identity does not reuse the old runtime; updating dependencies in the old directory is not an upgrade:
 
 1. Register the tag-pinned marketplace.
 ```powershell
@@ -194,7 +196,7 @@ Validate that the returned `version` and `installedPath` identify the actual v0.
 
 ## Claude Code installation
 
-Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support is included from `v0.3.0`. After v0.3.1 publication, pin `#v0.3.1` instead of tracking `main`; keep the older working runtime until the new installation passes doctor and one document operation.
+Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support is included from `v0.3.0`. Pin the published `#v0.3.1` tag instead of tracking `main`; keep the old durable runtime until the new installation passes doctor and one document operation. Actual Claude Code GUI installation and use were not verified for this release.
 
 Inside a Claude Code session:
 

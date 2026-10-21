@@ -96,13 +96,13 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 ## 개발 및 플랫폼 검증 상태
 
-이 프로젝트는 주로 Windows x64에서 개발하고 실제 검증했습니다. macOS Apple Silicon 플러그인 런타임 CI는 구성되어 있지만, 현재 HEAD에 대한 성공 영수증이 확인되기 전에는 이 CI를 통과 또는 검증 완료로 표현하지 않습니다. 실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정은 검증하지 않았습니다. 따라서 macOS는 호환 대상이며 macOS 완전 지원을 주장하지 않습니다.
+이 프로젝트는 주로 Windows x64에서 개발하고 실제 검증했습니다. v0.3.1의 검토 commit `4180a8d35e01aa95205a39c60ae9686486f6f9cb`에서 [Windows x64·macOS arm64·Linux CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39585790921)가 통과했습니다. 이는 실제 macOS에서 Codex Desktop과 한컴오피스 한글을 사용하는 과정의 검증이 아닙니다. macOS는 호환 대상이며 완전 지원을 주장하지 않습니다.
 
 릴리스별 테스트·감사 결과는 각 [GitHub 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases)의 노트에 기록합니다.
 
 ## v0.3.1 GitHub 설치
 
-아래 명령은 `v0.3.1`을 대상으로 하며 소유자가 릴리즈를 게시한 뒤에만 사용하십시오. 직전 공개 릴리즈는 `v0.3.0`이며 그 과거 검증 기록을 v0.3.1의 근거로 대신하지 않습니다. [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오. 업그레이드는 새 플러그인·캐시 identity로 재설치하고 런타임 명시적 설치, doctor, 호스트 재시작과 문서 작업 하나를 검증하는 절차입니다. 성공하기 전에 기존에 작동하는 플러그인이나 런타임을 제거하지 마십시오.
+[v0.3.1 보안 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1)가 게시되었습니다. 아래 명령은 이 불변 태그를 고정합니다. 직전 공개 릴리즈 v0.3.0의 기록을 새 버전의 검증 근거로 대신하지 않으며, 실제 결과는 [릴리즈 노트](RELEASE_NOTES.md)에 있습니다. 업그레이드는 새 플러그인·캐시 identity로 재설치하고 런타임 명시적 설치, doctor, 호스트 재시작과 문서 작업 하나를 검증하는 절차입니다. 성공하기 전에는 이전 지속 런타임을 수동으로 삭제하지 마십시오.
 
 ### 기존 설치의 태그 변경
 
@@ -114,11 +114,13 @@ codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.1 --json
 $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
 ```
 
-`marketplace remove`는 소스 등록 제거이며 `plugin remove`가 아닙니다. Codex CLI 0.162.1의 격리된 실제 업그레이드에서 기존 플러그인 캐시와 지속 런타임이 유지됨을 확인했습니다. 반환된 새 JSON을 아래 4–6단계 기준으로 검증하십시오. 새 런타임의 문서 작업이 성공하기 전에는 이전 버전 디렉터리를 삭제하지 마십시오.
+`marketplace remove`는 소스 등록 제거이며 `plugin remove`가 아닙니다. Codex CLI 0.162.1의 격리 Linux 프로필에서 소스 제거·재등록 후에는 이전 캐시가 남았지만, 새 `plugin add`는 이전 플러그인 캐시를 정리했습니다. 이전 지속 런타임의 lock·설치 영수증은 바뀌지 않았습니다. 이전 캐시가 항상 남는다고 가정하지 마십시오. 반환된 새 JSON을 아래 4–6단계 기준으로 검증하고, 성공 전에는 이전 지속 런타임을 수동으로 삭제하지 마십시오.
+
+새 버전 검증에 실패하면 호스트를 닫고 위 세 명령의 태그를 `v0.3.0`으로 바꿔 이전 캐시를 다시 만들 수 있습니다. 이때 JSON `version`은 `0.3.0+codex.20261008150000`이어야 하며, 해당 identity의 `installedPath`를 검증한 뒤 doctor를 실행하십시오. 같은 격리 프로필에서 이전 런타임 재설치 없이 `DOCTOR_OK` 복구를 확인했습니다. 이전 태그에는 알려진 markdown-it 보안 문제가 남아 있으므로 임시 복구 수단일 뿐이며, 미신뢰 문서 처리를 중단하고 패치 버전으로 복귀하십시오.
 
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
-> 게시 완료가 확인되면 `Burntgogi/Gpt_Codex_HWP`의 보안 릴리즈 `v0.3.1`을 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 명시적 런타임 설치기와 `doctor`를 실행하세요. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 열고 `/mcp`에 기본 `gpt-codex-hwp`가 등록되지 않는지와 문서 작업 후 one-shot 프로세스가 종료되는지 확인해 주세요. 검증이 성공할 때까지 기존 작동 런타임을 유지하세요.
+> `Burntgogi/Gpt_Codex_HWP`의 게시된 보안 릴리즈 `v0.3.1`을 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 명시적 런타임 설치기와 `doctor`를 실행하세요. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 열고 `/mcp`에 기본 `gpt-codex-hwp`가 등록되지 않는지와 문서 작업 후 one-shot 프로세스가 종료되는지 확인해 주세요. 검증이 성공할 때까지 이전 지속 런타임을 유지하세요.
 
 1. Git, Codex CLI, Node.js 22 이상과 npm을 확인합니다. `after-paragraph` 이미지 삽입에만 Python 3.10 이상이 추가로 필요합니다.
 2. 움직이는 `main` 대신 릴리스 태그를 고정해 마켓플레이스를 등록합니다.
@@ -152,11 +154,11 @@ try {
 ```
 
 6. `doctor`는 진단 전용이며 설치나 복구를 수행하지 않고 MCP 도구가 아닙니다. JSON에는 안전한 상태 코드, 불리언, 버전과 개수만 포함되며 Python·rhwp·고정 테스트 fixture 같은 선택 기능의 부재는 필수 실패와 분리됩니다.
-7. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 경로에서 설치기를 다시 실행합니다. HWP/HWPX 작업 하나가 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인합니다. worker-only·child-only·mixed 종료 영수증과 감독된 나머지 프로세스 트리 0개가 검증 대상입니다. hosted 검사 결과는 v0.3.0 릴리스 PR 커밋에 한정된 기록이며 실제 Mac 사용은 미검증입니다. 실패하면 기존에 작동하는 플러그인을 제거하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
+7. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 여십시오. 새 작업만으로는 충분하지 않습니다. 플러그인과 스킬이 보이고 `/mcp`에 `gpt-codex-hwp`가 기본 등록되지 않는지 확인합니다. `RUNTIME_NOT_INSTALLED`가 나오면 문서 작업을 반복하지 말고 검증한 경로에서 설치기를 다시 실행합니다. HWP/HWPX 작업 하나가 성공했는지 확인하고 생성 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인합니다. worker-only·child-only·mixed 종료 영수증과 감독된 나머지 프로세스 트리 0개가 검증 대상입니다. 호스팅과 실제 기기의 검증 범위는 위 플랫폼 검증 상태 절을 따릅니다. 실패하면 이전 지속 런타임을 수동으로 삭제하지 말고 오류와 `installedPath`만 보고합니다. 토큰, 환경 변수, 사용자 문서 내용은 보고하지 않습니다.
 
 ## 설치 및 마이그레이션
 
-릴리즈 업그레이드에는 v0.3.1 게시 후 다음 순서를 지키십시오. 새 identity는 이전 런타임을 재사용하지 않으므로 이전 디렉터리의 의존성만 갱신하는 것은 업그레이드가 아닙니다.
+v0.3.1 릴리즈 업그레이드에는 다음 순서를 지키십시오. 새 identity는 이전 런타임을 재사용하지 않으므로 이전 디렉터리의 의존성만 갱신하는 것은 업그레이드가 아닙니다.
 
 1. 태그를 고정한 마켓플레이스를 등록합니다.
 ```powershell
@@ -194,7 +196,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 
 ## Claude Code 설치
 
-같은 플러그인 폴더를 Claude Code에서도 씁니다. 저장소 루트의 `.claude-plugin/marketplace.json`이 `plugins/gpt-codex-hwp`를 가리키며, 마켓플레이스 이름은 Codex와 같은 `gpt-codex-hwp-local`입니다. Claude Code 지원은 `v0.3.0`부터 포함됩니다. v0.3.1 게시 후 움직이는 `main` 대신 `#v0.3.1`로 태그를 고정하십시오. 새 설치의 doctor와 문서 작업 하나가 성공할 때까지 기존 작동 런타임을 유지하십시오.
+같은 플러그인 폴더를 Claude Code에서도 씁니다. 저장소 루트의 `.claude-plugin/marketplace.json`이 `plugins/gpt-codex-hwp`를 가리키며, 마켓플레이스 이름은 Codex와 같은 `gpt-codex-hwp-local`입니다. Claude Code 지원은 `v0.3.0`부터 포함됩니다. 움직이는 `main` 대신 게시된 `#v0.3.1` 태그를 고정하십시오. 새 설치의 doctor와 문서 작업 하나가 성공할 때까지 이전 지속 런타임을 유지하십시오. 이번 릴리즈의 실제 Claude Code GUI 설치·사용은 검증하지 않았습니다.
 
 Claude Code 세션 안에서:
 

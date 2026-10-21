@@ -1,7 +1,7 @@
 # Gpt_Codex_HWP v0.3.1 Release Notes
 
-- Publication requirement: only assets that pass the immutable-tag full release gate and attestation
-- Prepared: 2026-10-21
+- Status: [v0.3.1 published](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1)
+- Published: 2026-10-21T11:32:22Z
 - Plugin version: `0.3.1+codex.20261021043114`
 - Claude Code cache directory: `0.3.1-codex.20261021043114`
 
@@ -13,20 +13,24 @@ v0.3.1 updates source and generated-runtime markdown-it from 14.3.1 to 14.3.3 fo
 
 ## Installation and upgrade
 
-Use the README's `v0.3.1` tag-pinned installation commands only after the owner publishes that release. v0.3.0 is the prior public release. Reinstall the plugin and validate that `version` is `0.3.1+codex.20261021043114` and `installedPath` identifies the new cache directory (Claude Code spells `+` as `-`). The new identity does not reuse the older runtime; updating the old runtime's dependencies in place is not an upgrade.
+Use the README's published `v0.3.1` tag-pinned installation commands. v0.3.0 is the prior public release. Reinstall the plugin and validate that `version` is `0.3.1+codex.20261021043114` and `installedPath` identifies the new cache directory (Claude Code spells `+` as `-`). The new identity does not reuse the older runtime; updating the old runtime's dependencies in place is not an upgrade.
 
-For Codex already pinned to another tag, close the host and remove only its source registration with `codex plugin marketplace remove gpt-codex-hwp-local --json`, then run `marketplace add ... --ref v0.3.1 --json` and `plugin add ... --json`. Repeating `marketplace add` on the existing registration does not change its ref. Do not manually delete the previous plugin cache or durable runtime. The README's existing-installation tag-change section contains the complete commands.
+For Codex already pinned to another tag, close the host and remove only its source registration with `codex plugin marketplace remove gpt-codex-hwp-local --json`, then run `marketplace add ... --ref v0.3.1 --json` and `plugin add ... --json`. Repeating `marketplace add` on the existing registration does not change its ref. In the isolated Linux upgrade with Codex CLI 0.162.1, `plugin add` removed the old cache while the old durable runtime's lock and receipt stayed unchanged. The [README tag-change section](README.en.md#changing-the-tag-of-an-existing-installation) has the exact commands and the verified old-tag cache recovery that passed doctor. Do not manually delete the old durable runtime.
 
 From the validated new `installedPath`, explicitly run:
 
     node dist/install-runtime.js --json
     node dist/doctor.js --json
 
-Require `RUNTIME_INSTALL_OK` and `DOCTOR_OK`. Fully close and reopen every active Codex CLI and Desktop host, or the Claude Code session. Complete one document operation, verify its output, and confirm that the one-shot process and descendants exit. Keep the older working plugin and durable runtime until these steps succeed; remove only an exact unused version directory afterward.
+Require `RUNTIME_INSTALL_OK` and `DOCTOR_OK`. Fully close and reopen every active Codex CLI and Desktop host, or the Claude Code session. Complete one document operation, verify its output, and confirm that the one-shot process and descendants exit. Do not manually delete the old durable runtime before these steps succeed; remove only an exact unused version directory afterward.
 
 ## Verification and publication boundary
 
-The v0.3.0 records below are historical, not v0.3.1 verification. Check the GitHub release and its linked workflow for actual v0.3.1 hosted checks, attestation, and publication results. Physical Mac validation remains unverified. The owner must publish only the ZIP, SPDX SBOM, provenance, and checksums from the same successful immutable-tag full-gate and attestation run; local rebuilds are not distribution artifacts.
+- [Windows x64, macOS arm64, and Linux CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39585790921) and [Security policy](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39585790893) passed on tag commit `4180a8d35e01aa95205a39c60ae9686486f6f9cb`. Its tree matched main `633421e39e0ecad35817bcfe8b061f7b80da7ea8` at merge, and [post-merge CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39587356229) also passed. No protection changes or merge bypass were used.
+- [Immutable-tag full gate and attestation run 39589053351](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39589053351) succeeded. Only that run's ZIP, SPDX SBOM, provenance, and SHA256SUMS were published; GitHub asset digests match those originals. All three subject signatures were independently verified against the exact repo, source SHA/ref, workflow@tag, GitHub-hosted runner, and same run invocation. The existing artifact verifier also confirmed 135 runtime files, 152 production packages, nine tools, source commit/tree, and checksums.
+- A fresh isolated Linux profile with actual Codex CLI 0.162.1 verified the v0.3.0 → v0.3.1 tag upgrade. All 135 cached files match the verified ZIP byte for byte. The new runtime returned `RUNTIME_INSTALL_OK` and `DOCTOR_OK`, used markdown-it 14.3.3, and generated/validated HWPX (14,421 bytes) with zero stderr bytes and zero remaining supervised descendants. The old durable runtime's lock and receipt hashes stayed unchanged.
+
+The historical v0.3.0 records below do not replace this evidence. Hosted macOS success is not physical-Mac validation of Codex Desktop, Claude Code, or Hancom Office GUI use. The user's default profile and running hosts were untouched; restart and verify a document operation in the actual installation environment. No local rebuild was used as a distribution artifact.
 
 ## Historical v0.3.0 release record (2026-10-08)
 

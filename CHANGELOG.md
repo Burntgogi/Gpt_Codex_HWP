@@ -6,8 +6,11 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [0.3.1] - 2026-10-21
 
-- Publication requires the full immutable-tag release gate and attestation;
-  the GitHub Release and linked workflow record their actual results.
+- Published [v0.3.1](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1)
+  after [immutable-tag full gate and attestation run 39589053351](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39589053351).
+  Only that run's four original assets were published. All three subject
+  signatures bind the exact source SHA/ref, workflow@tag and hosted run;
+  GitHub asset digests match the independently verified originals.
 
 - Update source and generated-runtime markdown-it from 14.3.1 to 14.3.3 for
   [GHSA-gfr2-rv44-r23c](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-gfr2-rv44-r23c),
@@ -19,8 +22,11 @@ This file records release tags and their publication status. Work under `Unrelea
   explicitly install the runtime, run doctor, restart the host, and verify one
   document operation before removing any older working runtime.
 - Document the verified Codex marketplace pin-change sequence: remove only
-  the source registration, register the new tag, and reinstall while retaining
-  the previous plugin cache and durable runtime until verification succeeds.
+  the source registration, register the new tag, and reinstall. Codex CLI
+  0.162.1 on isolated Linux preserves the old cache through source re-registration,
+  then removes it on `plugin add`; the old durable lock and receipt stay unchanged.
+  Re-registering the old tag restores its cache and passes doctor without
+  reinstalling the old runtime. This is temporary recovery, not a security fix.
 - Preserve a bounded ordinal and fixed failure classification from the first
   source-test invocation in CI. Different Windows files failed initially and
   passed later diagnostics, so later success is not a recovered root cause.

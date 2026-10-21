@@ -1,7 +1,7 @@
 # Gpt_Codex_HWP v0.3.1 릴리즈 노트
 
-- 게시 조건: 불변 태그의 전체 릴리즈 게이트와 attestation이 성공한 자산만 게시
-- 준비일: 2026-10-21
+- 상태: [v0.3.1 게시 완료](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.1)
+- 게시 시각: 2026-10-21T11:32:22Z
 - 플러그인 버전: `0.3.1+codex.20261021043114`
 - Claude Code 캐시 디렉터리: `0.3.1-codex.20261021043114`
 
@@ -13,20 +13,24 @@ v0.3.1은 소스와 생성 런타임의 markdown-it을 14.3.1에서 14.3.3으로
 
 ## 설치와 업그레이드
 
-소유자가 릴리즈를 게시한 뒤에만 README의 `v0.3.1` 태그 고정 설치 명령을 사용하십시오. 직전 공개 릴리즈는 v0.3.0입니다. 플러그인을 다시 설치하고 `version`이 `0.3.1+codex.20261021043114`이며 `installedPath`가 새 캐시 디렉터리인지 확인하십시오(Claude Code에서는 `+`를 `-`로 표기). 새 identity는 이전 런타임을 재사용하지 않으며, 이전 런타임의 의존성만 제자리에서 갱신하는 것은 업그레이드가 아닙니다.
+README의 게시된 `v0.3.1` 태그 고정 설치 명령을 사용하십시오. 직전 공개 릴리즈는 v0.3.0입니다. 플러그인을 다시 설치하고 `version`이 `0.3.1+codex.20261021043114`이며 `installedPath`가 새 캐시 디렉터리인지 확인하십시오(Claude Code에서는 `+`를 `-`로 표기). 새 identity는 이전 런타임을 재사용하지 않으며, 이전 런타임의 의존성만 제자리에서 갱신하는 것은 업그레이드가 아닙니다.
 
-이미 다른 태그를 등록한 Codex에서는 호스트를 닫고 `codex plugin marketplace remove gpt-codex-hwp-local --json`으로 소스 등록만 제거한 다음 `marketplace add ... --ref v0.3.1 --json`과 `plugin add ... --json`을 실행하십시오. 기존 등록에 `marketplace add`를 다시 호출하는 것만으로는 ref가 변경되지 않습니다. 이전 플러그인 캐시와 지속 런타임을 직접 지우지 마십시오. 전체 명령은 README의 기존 설치 태그 변경 절에 있습니다.
+이미 다른 태그를 등록한 Codex에서는 호스트를 닫고 `codex plugin marketplace remove gpt-codex-hwp-local --json`으로 소스 등록만 제거한 다음 `marketplace add ... --ref v0.3.1 --json`과 `plugin add ... --json`을 실행하십시오. 기존 등록에 `marketplace add`를 다시 호출하는 것만으로는 ref가 변경되지 않습니다. Codex CLI 0.162.1의 격리 Linux 업그레이드에서 `plugin add`가 이전 캐시를 정리했지만 이전 지속 런타임의 lock·영수증은 그대로였습니다. [README 태그 변경 절](README.md#기존-설치의-태그-변경)에 정확한 명령과 이전 태그 캐시를 복구해 doctor를 통과한 경로가 있습니다. 이전 지속 런타임을 직접 지우지 마십시오.
 
 검증한 새 `installedPath`에서 명시적으로 실행하십시오.
 
     node dist/install-runtime.js --json
     node dist/doctor.js --json
 
-`RUNTIME_INSTALL_OK`와 `DOCTOR_OK`를 확인하십시오. 실행 중인 모든 Codex CLI와 Desktop 호스트, 또는 Claude Code 세션을 완전히 닫았다가 다시 여십시오. 문서 작업 하나를 완료하고 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인하십시오. 이 절차가 성공할 때까지 기존에 작동하는 플러그인과 지속 런타임을 유지하고, 성공 후에만 더 이상 쓰지 않는 정확한 버전 디렉터리를 제거하십시오.
+`RUNTIME_INSTALL_OK`와 `DOCTOR_OK`를 확인하십시오. 실행 중인 모든 Codex CLI와 Desktop 호스트, 또는 Claude Code 세션을 완전히 닫았다가 다시 여십시오. 문서 작업 하나를 완료하고 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인하십시오. 이 절차가 성공할 때까지 이전 지속 런타임을 수동으로 삭제하지 말고, 성공 후에만 더 이상 쓰지 않는 정확한 버전 디렉터리를 제거하십시오.
 
 ## 검증과 게시 경계
 
-아래 v0.3.0 기록은 과거 기록이며 v0.3.1 검증 근거가 아닙니다. v0.3.1의 실제 호스팅 검사·attestation·게시 결과는 GitHub 릴리즈와 연결된 워크플로에서 확인하십시오. 실제 Mac 검증도 미완료입니다. 소유자는 불변 태그의 전체 게이트와 attestation이 성공한 동일 실행의 ZIP·SPDX SBOM·provenance·체크섬만 게시해야 합니다. 로컬 재빌드 결과는 배포 자산으로 사용하지 않습니다.
+- 태그 commit `4180a8d35e01aa95205a39c60ae9686486f6f9cb`의 [Windows x64·macOS arm64·Linux CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39585790921)와 [Security policy](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39585790893)가 성공했습니다. 병합 당시 main `633421e39e0ecad35817bcfe8b061f7b80da7ea8`과 tree가 동일하며 [병합 후 CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39587356229)도 성공했습니다. 보호 변경이나 예외 병합은 없었습니다.
+- [불변 태그 전체 게이트·attestation 실행 39589053351](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39589053351)이 성공했습니다. 같은 실행의 ZIP·SPDX SBOM·provenance·SHA256SUMS만 게시했고 GitHub 자산 digest가 원본과 일치합니다. 세 subject의 서명을 정확한 repo·source SHA/ref·workflow@tag·GitHub-hosted runner·같은 run invocation에 묶어 독립 검증했습니다. 기존 산출물 검사도 135 runtime files·152 production packages·9 tools와 source commit/tree·체크섬 일치를 확인했습니다.
+- 실제 Codex CLI 0.162.1의 fresh 격리 Linux 프로필에서 v0.3.0 → v0.3.1 태그 업그레이드를 확인했습니다. 캐시 135개 파일이 검증 ZIP과 바이트 단위로 같고, 새 런타임의 `RUNTIME_INSTALL_OK`, `DOCTOR_OK`, markdown-it 14.3.3, HWPX 생성/검증(14,421 bytes), stderr 0 bytes, 남은 감독 자손 0개를 확인했습니다. 이전 지속 런타임의 lock·receipt hash는 불변입니다.
+
+아래 v0.3.0 기록은 과거 기록이며 위 검증을 대신하지 않습니다. 호스팅 macOS 성공은 실제 Mac의 Codex Desktop·Claude Code·한컴오피스 GUI 검증이 아닙니다. 사용자 기본 프로필과 실행 중인 호스트는 변경하지 않았으며 실제 사용 환경의 재시작·문서 작업은 설치 후 확인해야 합니다. 로컬 재빌드는 배포 자산으로 사용하지 않았습니다.
 
 ## 과거 v0.3.0 릴리즈 기록 (2026-10-08)
 
