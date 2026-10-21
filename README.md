@@ -104,6 +104,18 @@ Gpt_Codex_HWP는 [Kordoc](https://github.com/chrisryugj/kordoc), [rhwp](https://
 
 아래 명령은 `v0.3.1`을 대상으로 하며 소유자가 릴리즈를 게시한 뒤에만 사용하십시오. 직전 공개 릴리즈는 `v0.3.0`이며 그 과거 검증 기록을 v0.3.1의 근거로 대신하지 않습니다. [릴리즈 노트](RELEASE_NOTES.md)를 먼저 확인하십시오. 업그레이드는 새 플러그인·캐시 identity로 재설치하고 런타임 명시적 설치, doctor, 호스트 재시작과 문서 작업 하나를 검증하는 절차입니다. 성공하기 전에 기존에 작동하는 플러그인이나 런타임을 제거하지 마십시오.
 
+### 기존 설치의 태그 변경
+
+실행 중인 Codex 호스트를 먼저 닫으십시오. 기존 마켓플레이스가 `v0.3.0`처럼 다른 ref에 고정돼 있으면 `marketplace add --ref v0.3.1`만으로는 변경되지 않고 `already added from a different source` 오류가 납니다. `marketplace upgrade`도 등록된 ref를 새로 읽을 뿐 태그를 바꾸지 않습니다. 소스 등록을 제거한 뒤 새 태그로 다시 등록합니다.
+
+```powershell
+codex plugin marketplace remove gpt-codex-hwp-local --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.1 --json
+$installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
+```
+
+`marketplace remove`는 소스 등록 제거이며 `plugin remove`가 아닙니다. Codex CLI 0.162.1의 격리된 실제 업그레이드에서 기존 플러그인 캐시와 지속 런타임이 유지됨을 확인했습니다. 반환된 새 JSON을 아래 4–6단계 기준으로 검증하십시오. 새 런타임의 문서 작업이 성공하기 전에는 이전 버전 디렉터리를 삭제하지 마십시오.
+
 사용자는 Codex 에이전트에게 다음과 같이 요청할 수 있습니다.
 
 > 게시 완료가 확인되면 `Burntgogi/Gpt_Codex_HWP`의 보안 릴리즈 `v0.3.1`을 설치해 주세요. 이 절의 순서를 따르고 `installedPath`를 검증한 뒤 명시적 런타임 설치기와 `doctor`를 실행하세요. 실행 중인 모든 Codex CLI와 Desktop 호스트를 한 번 닫았다가 다시 열고 `/mcp`에 기본 `gpt-codex-hwp`가 등록되지 않는지와 문서 작업 후 one-shot 프로세스가 종료되는지 확인해 주세요. 검증이 성공할 때까지 기존 작동 런타임을 유지하세요.

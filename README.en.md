@@ -104,6 +104,18 @@ Per-release test and audit results are recorded in each [GitHub release](https:/
 
 The following commands target `v0.3.1` and must be used only after the owner publishes that release. `v0.3.0` is the prior public release; its historical verification does not replace v0.3.1 evidence. Review the [release notes](RELEASE_NOTES.en.md) first. Upgrade by reinstalling under the new plugin/cache identity, explicitly installing its runtime, running doctor, restarting the host, and verifying one document operation. Do not remove the older working plugin or runtime before success.
 
+### Changing the tag of an existing installation
+
+Close active Codex hosts first. If the marketplace is pinned to another ref such as `v0.3.0`, `marketplace add --ref v0.3.1` alone fails with `already added from a different source`. `marketplace upgrade` refreshes the registered ref; it does not change the tag. Remove the source registration and register the new tag:
+
+```powershell
+codex plugin marketplace remove gpt-codex-hwp-local --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.1 --json
+$installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
+```
+
+`marketplace remove` removes the source registration, not the plugin. A real isolated upgrade with Codex CLI 0.162.1 retained the old plugin cache and durable runtime. Validate the new returned JSON using steps 4–6 below. Do not delete the older version directory until the new runtime completes a verified document operation.
+
 A user can ask a Codex agent:
 
 > After its publication is confirmed, install the security release `v0.3.1` of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, and run the explicit runtime installer and `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation. Keep the older working runtime until verification succeeds.

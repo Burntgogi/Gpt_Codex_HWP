@@ -17,6 +17,7 @@ const DEFAULT_TEST_TIMEOUT_MS = 120_000;
 const MAX_TEST_TIMEOUT_MS = 600_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DOCUMENT_PROCESS_TEST_TIMEOUT_MS = 300_000;
+const DOCUMENT_CHILD_CLIENT_TOP_LEVEL_TESTS = 120;
 const DOCUMENT_WORKER_OPERATIONS_TEST_TIMEOUT_MS = 600_000;
 // Files whose own per-test timeouts add up past the ordinary file budget; on
 // hosted runners a slow but healthy file was otherwise killed as a failure.
@@ -317,6 +318,11 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     closeTimeoutMs: boundedTimeout(options.closeTimeoutMs, DEFAULT_CLOSE_TIMEOUT_MS),
     testSkipPattern: fileOptions.testSkipPattern,
     onSpawn: onTestFileSpawn,
+    maximumTopLevelTests: fileOptions.maximumTopLevelTests,
+    onFailedTopLevelOrdinal: fileOptions.onFailedTopLevelOrdinal,
+    onFailedTopLevelFailureKind: fileOptions.onFailedTopLevelFailureKind,
+    onCompletionKind: fileOptions.onCompletionKind,
+    onRunnerFailureKind: fileOptions.onRunnerFailureKind,
   }));
   const runAllowedRootsCase = options.runAllowedRootsCase ?? ((record) => executeTestFile(
     "allowed-roots.test.ts",
@@ -442,6 +448,10 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     let passed = false;
     let benchmarkReceipt;
     let documentReceipt;
+    let documentChildOrdinal;
+    let documentChildFailureKind;
+    let documentChildCompletionKind;
+    let documentChildRunnerFailureKind;
     const testTimeoutMs = boundedTimeout(
       options.testTimeoutMs,
       file === "document-child-client.test.ts"
@@ -470,10 +480,36 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           testSkipPattern,
           profile: profilePlan.name,
           onSpawn: onTestFileSpawn,
+          ...(file === "document-child-client.test.ts" ? {
+            maximumTopLevelTests: DOCUMENT_CHILD_CLIENT_TOP_LEVEL_TESTS,
+            onFailedTopLevelOrdinal: (value) => { documentChildOrdinal = value; },
+            onFailedTopLevelFailureKind: (value) => { documentChildFailureKind = value; },
+            onCompletionKind: (value) => { documentChildCompletionKind = value; },
+            onRunnerFailureKind: (value) => { documentChildRunnerFailureKind = value; },
+          } : {}),
         }) === true;
       }
     } catch { passed = false; }
     if (!passed) {
+      if (file === "document-child-client.test.ts") {
+        // Preserve the original file run: a later diagnostic passed after the
+        // hosted Windows failure, so rerunning cannot recover its failing case.
+        const ordinal = Number.isSafeInteger(documentChildOrdinal)
+          && documentChildOrdinal >= 1
+          && documentChildOrdinal <= DOCUMENT_CHILD_CLIENT_TOP_LEVEL_TESTS
+          ? documentChildOrdinal : "unavailable";
+        const failureKind = NODE_FAILURE_KINDS.has(documentChildFailureKind)
+          ? documentChildFailureKind : "unknown";
+        const completionKind = NODE_COMPLETION_KINDS.has(documentChildCompletionKind)
+          ? documentChildCompletionKind : "unknown";
+        const runnerFailureKind = NODE_RUNNER_FAILURE_KINDS.has(documentChildRunnerFailureKind)
+          ? documentChildRunnerFailureKind : "unknown";
+        stdout.write(
+          `${receiptPrefix}_DOCUMENT_CHILD_RECEIPT ordinal=${ordinal} status=failed`
+          + ` failureKind=${failureKind} completionKind=${completionKind}`
+          + ` runnerFailureKind=${runnerFailureKind}\n`,
+        );
+      }
       if (file === "allowed-roots.test.ts") {
         for (const record of ALLOWED_ROOTS_CASES) {
           let casePassed = false;

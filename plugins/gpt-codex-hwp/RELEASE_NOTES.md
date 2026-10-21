@@ -15,6 +15,8 @@ v0.3.1은 소스와 생성 런타임의 markdown-it을 14.3.1에서 14.3.3으로
 
 소유자가 릴리즈를 게시한 뒤에만 README의 `v0.3.1` 태그 고정 설치 명령을 사용하십시오. 직전 공개 릴리즈는 v0.3.0입니다. 플러그인을 다시 설치하고 `version`이 `0.3.1+codex.20261021043114`이며 `installedPath`가 새 캐시 디렉터리인지 확인하십시오(Claude Code에서는 `+`를 `-`로 표기). 새 identity는 이전 런타임을 재사용하지 않으며, 이전 런타임의 의존성만 제자리에서 갱신하는 것은 업그레이드가 아닙니다.
 
+이미 다른 태그를 등록한 Codex에서는 호스트를 닫고 `codex plugin marketplace remove gpt-codex-hwp-local --json`으로 소스 등록만 제거한 다음 `marketplace add ... --ref v0.3.1 --json`과 `plugin add ... --json`을 실행하십시오. 기존 등록에 `marketplace add`를 다시 호출하는 것만으로는 ref가 변경되지 않습니다. 이전 플러그인 캐시와 지속 런타임을 직접 지우지 마십시오. 전체 명령은 README의 기존 설치 태그 변경 절에 있습니다.
+
 검증한 새 `installedPath`에서 명시적으로 실행하십시오.
 
     node dist/install-runtime.js --json

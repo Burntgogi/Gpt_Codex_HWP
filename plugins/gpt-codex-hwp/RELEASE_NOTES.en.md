@@ -15,6 +15,8 @@ v0.3.1 updates source and generated-runtime markdown-it from 14.3.1 to 14.3.3 fo
 
 Use the README's `v0.3.1` tag-pinned installation commands only after the owner publishes that release. v0.3.0 is the prior public release. Reinstall the plugin and validate that `version` is `0.3.1+codex.20261021043114` and `installedPath` identifies the new cache directory (Claude Code spells `+` as `-`). The new identity does not reuse the older runtime; updating the old runtime's dependencies in place is not an upgrade.
 
+For Codex already pinned to another tag, close the host and remove only its source registration with `codex plugin marketplace remove gpt-codex-hwp-local --json`, then run `marketplace add ... --ref v0.3.1 --json` and `plugin add ... --json`. Repeating `marketplace add` on the existing registration does not change its ref. Do not manually delete the previous plugin cache or durable runtime. The README's existing-installation tag-change section contains the complete commands.
+
 From the validated new `installedPath`, explicitly run:
 
     node dist/install-runtime.js --json

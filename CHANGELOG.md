@@ -18,6 +18,9 @@ This file records release tags and their publication status. Work under `Unrelea
   directory `0.3.1-codex.20261021043114`, distinct from v0.3.0. Reinstall,
   explicitly install the runtime, run doctor, restart the host, and verify one
   document operation before removing any older working runtime.
+- Document the verified Codex marketplace pin-change sequence: remove only
+  the source registration, register the new tag, and reinstall while retaining
+  the previous plugin cache and durable runtime until verification succeeds.
 
 ## [0.3.0] - 2026-10-08
 
