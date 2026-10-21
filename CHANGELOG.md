@@ -20,6 +20,11 @@ This file records release tags and their publication status. Work under `Unrelea
   the checkout or interfere with real runtime verification. Synchronize real
   SIGTERM cancellation on handler readiness instead of a fixed sleep, keep
   existing test/close deadlines, and dispose the completed close timer.
+- Order the Windows detached-descendant crash fixture after actual liveness
+  observation instead of assuming progress arrives before a 100 ms self-kill.
+  Require native Job Object mode 1, measured RSS and verified zero membership;
+  reject non-ESRCH process-probe failures rather than accepting unknown cleanup.
+  Keep the existing execution and cleanup deadlines.
 - Include the Linux reparenting correction from the unpublished v0.3.2 candidate
   and the markdown-it 14.3.3 security fix from published v0.3.1.
 - Use fresh plugin `0.3.3+codex.20261021134251` and Claude cache
