@@ -21,6 +21,10 @@ This file records release tags and their publication status. Work under `Unrelea
 - Document the verified Codex marketplace pin-change sequence: remove only
   the source registration, register the new tag, and reinstall while retaining
   the previous plugin cache and durable runtime until verification succeeds.
+- Preserve a bounded ordinal and fixed failure classification from the first
+  source-test invocation in CI. Different Windows files failed initially and
+  passed later diagnostics, so later success is not a recovered root cause.
+  Keep the required checks, behavior tests, resource bounds and failure status.
 
 ## [0.3.0] - 2026-10-08
 
