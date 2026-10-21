@@ -157,6 +157,8 @@ The fixed-diagnostic selector must retain the first actual allowlisted TAP error
 
 Preserve the failed first v0.3.5 PR-head run [39658607959](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39658607959): Windows runtime-install cleanup/helper-sampling and macOS worker ordinal 7 failed. The shared real-worker fixture now waits for its existing valid ready event to be consumed through a test-owned four-byte gate before its uncaught error, with both direct/MCP consumers migrated and production protocol/bounds unchanged. Controlled real-worker failure-before/pass-after proves fixture ordering, not the original instance's cause. Actual install observation [39660747064](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39660747064) passed with no failure-operation records; do not call that original recovery, carry its diagnostic PowerShell into release, or change RSS/identity/cleanup authority.
 
+Material fixture head `8f3faf8` passed original macOS/Linux CI39661963812, while original Windows one-shot cleanup still failed at helper sampling. Preserve that failure. The unchanged ERROR phase now carries a fixed operation-only reason for snapshot/open/parent/state/working-set/command-read/command-value; only the strict public boundary decoder refines those names. Native C# bytes and all authority, measured-RSS, command, execution/capture/termination bounds remain unchanged. No extra query or raw private diagnostic is added, and this is not a native-fix claim. A sampling label alone cannot distinguish failed discovery, memory measurement or command completion.
+
 
 ### Unpublished immutable v0.3.4
 

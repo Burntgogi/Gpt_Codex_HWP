@@ -23,6 +23,8 @@ history scanner는 기존 strict public-process 실패 observer를 bounded batch
 
 별도 원래 한도의 실제 [Windows 설치 native 연산 관측 39660747064](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39660747064)은 9 tools·HWPX 14,421 bytes·stderr 0·잔여 자손 0으로 통과했고 실패 연산 기록은 없었습니다. 따라서 원본 실패 복구나 native 수정으로 취급하지 않습니다. 관측용 PowerShell 변경은 배포 코드가 아니며 원본 sampling 원인은 여전히 미확정입니다.
 
+수정 fixture head `8f3faf8`의 원본 [CI 39661963812](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39661963812)는 macOS·Linux를 통과했지만 Windows 실제 one-shot 정리가 다시 `windows-helper-sampling`으로 실패해 병합·태그를 보류했습니다. sampling은 discovery/RSS 외에 command 완료도 포함합니다. 현재 경로는 기존 bounded ERROR reason에 snapshot/open/parent/state/working-set/command-read/command-value의 고정 연산 이름만 보존하고 strict public 진단으로 전달합니다. 추가 쿼리·경로·PID·raw 예외 문자열이나 권한·C# 바이너리·측정·정리 제한 변경은 없으며 원본 native 원인 해결을 주장하지 않습니다.
+
 
 ## 불변 미게시 v0.3.4 기록
 

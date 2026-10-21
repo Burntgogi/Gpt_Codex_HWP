@@ -31,10 +31,16 @@ operation with one-shot/descendant exit before claiming upgrade success.
   Controlled real-worker ordering fails before and passes after; the original
   macOS instance remains unproven. OOM-signature classification is not a claim
   of actual heap exhaustion.
-- Keep native collector/C#/PowerShell, permissions, mode-1, identity, RSS,
-  execution/capture/cleanup bounds and stress workload unchanged. This corrects
-  evidence loss, not the unknown original native/`pc17` cause; no native, RSS,
-  cleanup, default-user or physical Mac/Claude/Hancom GUI success is implied.
+- Preserve original material-head [CI 39661963812](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39661963812):
+  macOS/Linux passed, Windows one-shot cleanup failed at helper sampling.
+  Sampling includes snapshot/open/parent/state/working-set and command completion;
+  retain only those fixed operation enums through the original bounded ERROR
+  reason and strict public diagnostic, without paths/PIDs/raw error text.
+- Keep native C# binary, permissions, mode-1, identity, measured RSS,
+  execution/capture/cleanup bounds and stress workload unchanged. The PowerShell
+  operation label does not change authority, execute a query or establish cleanup.
+  This preserves evidence, not the unknown original native/`pc17` cause; no native,
+  RSS, cleanup, default-user or physical Mac/Claude/Hancom GUI success is implied.
 - Use plugin `0.3.5+codex.20261021184753` and Claude cache
   `0.3.5-codex.20261021184753`; preserve all older immutable tags and public v0.3.1.
 

@@ -19,6 +19,10 @@ export const PUBLIC_PROCESS_FAILURE_DIAGNOSTICS = Object.freeze([
   "windows-terminate-write", "windows-rss-read", "windows-rss-frame",
   "windows-gone-read", "windows-gone-frame", "windows-finalize",
   "windows-helper-startup", "windows-helper-baseline-rss", "windows-helper-sampling",
+  "windows-helper-sampling-snapshot", "windows-helper-sampling-open",
+  "windows-helper-sampling-parent", "windows-helper-sampling-state",
+  "windows-helper-sampling-working-set",
+  "windows-helper-sampling-command-read", "windows-helper-sampling-command-value",
   "windows-helper-termination", "windows-helper-termination-discovery-or-rss-unavailable",
   "windows-helper-termination-retained-handle-unavailable",
   "windows-helper-termination-scan-exhausted", "windows-helper-rss-receipt",
@@ -1313,8 +1317,12 @@ function reportPublicProcessFailure(observer, code) {
 }
 
 function publicSupervisorFailureDiagnostic(frame, fallback) {
-  const match = /^GPT_CODEX_HWP_JOB ERROR ([a-z-]{1,64}) [A-Za-z0-9_-]{1,48}$/u.exec(frame);
-  const code = match === null ? fallback : `windows-helper-${match[1]}`;
+  const match = /^GPT_CODEX_HWP_JOB ERROR ([a-z-]{1,64}) ([A-Za-z0-9_-]{1,48})$/u.exec(frame);
+  const operation = match?.[1] === "sampling"
+    ? /^operation_(snapshot|open|parent|state|working-set|command-read|command-value)$/u.exec(match[2])?.[1]
+    : undefined;
+  const code = match === null ? fallback
+    : `windows-helper-${match[1]}${operation === undefined ? "" : `-${operation}`}`;
   return PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.includes(code) ? code : fallback;
 }
 

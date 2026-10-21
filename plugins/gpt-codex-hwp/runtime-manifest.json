@@ -346,8 +346,8 @@
     },
     {
       "path": "dist/workers/windows-job-supervisor.ps1",
-      "size": 11793,
-      "sha256": "56e58ddf32f8ae01d9ded7d9254f4ab6ddd6026a1733e113da6f899c22055b0f"
+      "size": 12319,
+      "sha256": "69877abfc1b8a67c993611e7c08208b33f9f747a98a508dd69fa78f7afa65dc3"
     },
     {
       "path": "examples/mcp-manual.json",

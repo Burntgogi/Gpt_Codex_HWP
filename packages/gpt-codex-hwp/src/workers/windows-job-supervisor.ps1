@@ -53,18 +53,21 @@ function Find-RetainedParent($record) {
 }
 
 function Update-TrackedIdentities {
+  $script:samplingOperation = 'snapshot'
   $records = @([GptCodexHwpJob]::SnapshotProcesses())
   $changed = $true
   while ($changed) {
     $changed = $false
     foreach ($hint in $records) {
       if (-not $retainedByPid.ContainsKey($hint.ParentId)) { continue }
+      $script:samplingOperation = 'open'
       $record = [GptCodexHwpJob]::OpenSnapshotExact($hint.Id, $hint.ParentId)
       if ($null -eq $record) { continue }
       $adopted = $false
       try {
         $key = Get-IdentityKey $record
         if ($retained.ContainsKey($key)) { continue }
+        $script:samplingOperation = 'parent'
         $parent = Find-RetainedParent $record
         if ($null -eq $parent -or $record.CreationTime -lt $rootCreation) { continue }
         if ($retained.Count -ge 4096) { throw 'retained identity limit exceeded' }
@@ -95,6 +98,7 @@ function Update-TrackedIdentities {
 function Get-LiveTracked {
   $live = @()
   foreach ($entry in @($retained.Values)) {
+    $script:samplingOperation = 'state'
     if ([GptCodexHwpJob]::HandleState($entry.Handle) -eq 1) { $live += $entry }
   }
   return @($live)
@@ -117,6 +121,7 @@ function Get-TerminationOrder {
 function Measure-TrackedWorkingSet($records) {
   [long]$total = 0
   foreach ($entry in @(Get-LiveTracked)) {
+    $script:samplingOperation = 'working-set'
     [long]$workingSet = [GptCodexHwpJob]::WorkingSetHandle($entry.Handle)
     if ($workingSet -lt 0) { continue }
     if ($workingSet -lt 0 -or $total -gt ([long]::MaxValue - $workingSet)) {
@@ -262,7 +267,9 @@ try {
     if ($elapsed -gt $maxDiscoveryPollMs) { $maxDiscoveryPollMs = $elapsed }
     [System.Threading.Thread]::Sleep(20)
   }
+  $script:samplingOperation = 'command-read'
   $command = $commandTask.GetAwaiter().GetResult()
+  $script:samplingOperation = 'command-value'
   if ($command -ne 'TERMINATE') { throw 'invalid supervisor command' }
   $failureStage = 'termination'
   if ($mode -eq 1 -and -not [GptCodexHwpJob]::TerminateJobObject($job, 137)) {
@@ -292,6 +299,9 @@ try {
   if ($null -ne $_.Exception.InnerException) { $reason = $_.Exception.InnerException.Message }
   $safeReason = ($reason -replace '[^A-Za-z0-9_-]', '_')
   if ($safeReason.Length -gt 48) { $safeReason = $safeReason.Substring(0, 48) }
+  if ($failureStage -eq 'sampling' -and $script:samplingOperation -in @('snapshot', 'open', 'parent', 'state', 'working-set', 'command-read', 'command-value')) {
+    $safeReason = "operation_$script:samplingOperation"
+  }
   [Console]::Out.WriteLine("GPT_CODEX_HWP_JOB ERROR $failureStage $safeReason")
   [Console]::Out.Flush()
 } finally {

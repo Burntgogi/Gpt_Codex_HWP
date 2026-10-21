@@ -23,6 +23,8 @@ An independent fixture defect posted ready on the public port then immediately r
 
 A separate unchanged-bound actual [Windows install/native-operation observation 39660747064](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39660747064) passed nine tools/HWPX 14,421 bytes/zero stderr/zero descendants and recorded no failing operation. It is neither original recovery nor a native fix. Its observation-only PowerShell changes are not release code; the original sampling cause remains unknown.
 
+Original [CI 39661963812](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39661963812) at corrected fixture head `8f3faf8` passed macOS/Linux but failed actual Windows one-shot cleanup at `windows-helper-sampling`; merge/tag remain held. Sampling also covers command completion, not just discovery/RSS. The original bounded ERROR reason now preserves only fixed snapshot/open/parent/state/working-set/command-read/command-value operation labels into strict public diagnostics. No extra query, path, PID, raw exception text, permission, C# binary, measurement or cleanup bound changes; this does not resolve the original native cause.
+
 
 ## Unpublished immutable v0.3.4 record
 
