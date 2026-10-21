@@ -23,6 +23,9 @@ const runnerKinds = new Set([
   "spawn-error", "missing-stdout", "stdout-error", "child-error", "invalid-chunk",
   "capture-limit", "runner-timeout", "unknown",
 ]);
+const completionKinds = new Set([
+  "passed", "test-failure", "cancelled", "nonzero-clean-tap", "invalid-summary", "child-signal",
+]);
 let stage = "arguments";
 let ownedRoot;
 let baselineRoot;
@@ -116,7 +119,7 @@ async function probe(variant, repositoryRoot) {
     },
     onFailedTopLevelOrdinal(value) { failedOrdinal = boundedOrdinal(value); },
     onFailedTopLevelFailureKind(value) { failureKind = failureKinds.has(value) ? value : "unknown"; },
-    onCompletionKind(value) { completionKind = ["passed", "failed"].includes(value) ? value : "unavailable"; },
+    onCompletionKind(value) { completionKind = completionKinds.has(value) ? value : "unavailable"; },
     onRunnerFailureKind(value) { runnerFailureKind = runnerKinds.has(value) ? value : "unknown"; },
     onFailureSnapshot(value) { snapshot = safeSnapshot(value); },
   });
