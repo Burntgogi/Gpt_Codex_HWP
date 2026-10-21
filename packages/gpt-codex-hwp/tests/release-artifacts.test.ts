@@ -14,8 +14,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
-import test from "node:test";
+import nodeTest, { type TestContext } from "node:test";
 import { deflateRawSync } from "node:zlib";
 
 import {
@@ -46,6 +47,40 @@ const TOOL_NAMES = [
   "hwp_render_preview",
   "hwp_validate",
 ];
+
+type ArtifactProbePhase =
+  | "body-enter" | "body-complete" | "body-error"
+  | "fixture-enter" | "fixture-ready"
+  | "fixture-cleanup-enter" | "fixture-cleanup-complete" | "fixture-cleanup-error"
+  | "prepare-enter" | "prepare-complete" | "prepare-error";
+const artifactProbeEnabled = process.env.HWP_ARTIFACT_BUDGET_PROBE === "1";
+const artifactProbeStarted = performance.now();
+let registeredArtifactOrdinal = 0;
+let activeArtifactOrdinal = 0;
+
+function artifactProbePhase(ordinal: number, phase: ArtifactProbePhase): void {
+  if (!artifactProbeEnabled) return;
+  const elapsedMs = Math.max(0, Math.floor(performance.now() - artifactProbeStarted));
+  process.stdout.write(`HWP_ARTIFACT_PHASE ordinal=${ordinal} phase=${phase} elapsedMs=${elapsedMs}\n`);
+}
+
+function test(name: string, body: (context: TestContext) => unknown) {
+  const ordinal = ++registeredArtifactOrdinal;
+  return nodeTest(name, async (context) => {
+    const previous = activeArtifactOrdinal;
+    activeArtifactOrdinal = ordinal;
+    artifactProbePhase(ordinal, "body-enter");
+    try {
+      await body(context);
+      artifactProbePhase(ordinal, "body-complete");
+    } catch (error) {
+      artifactProbePhase(ordinal, "body-error");
+      throw error;
+    } finally {
+      activeArtifactOrdinal = previous;
+    }
+  });
+}
 
 test("release artifacts are deterministic and independently verifiable", async (t) => {
   const fixture = await createReleaseFixture(t);
@@ -796,11 +831,22 @@ test("release artifacts verifier fails closed on tampering and unexpected output
   );
 });
 
-async function createReleaseFixture(t: test.TestContext) {
+async function createReleaseFixture(t: TestContext) {
+  const ordinal = activeArtifactOrdinal;
+  artifactProbePhase(ordinal, "fixture-enter");
   const parent = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-release-test-",
   });
-  t.after(async () => { await rm(parent, { recursive: true, force: true, maxRetries: 5 }); });
+  t.after(async () => {
+    artifactProbePhase(ordinal, "fixture-cleanup-enter");
+    try {
+      await rm(parent, { recursive: true, force: true, maxRetries: 5 });
+      artifactProbePhase(ordinal, "fixture-cleanup-complete");
+    } catch (error) {
+      artifactProbePhase(ordinal, "fixture-cleanup-error");
+      throw error;
+    }
+  });
   const root = join(parent, "repository");
   await mkdir(root, { recursive: true });
   const runtimeRoot = join(root, "plugins", "gpt-codex-hwp");
@@ -914,20 +960,28 @@ async function createReleaseFixture(t: test.TestContext) {
   const runtimeFiles = (await gitOutput(root, [
     "ls-tree", "-r", "--name-only", "HEAD", "--", "plugins/gpt-codex-hwp",
   ])).trim().split("\n").map((path) => path.slice("plugins/gpt-codex-hwp/".length)).sort();
+  artifactProbePhase(ordinal, "fixture-ready");
   return {
     parent,
     root,
     runtimeFiles,
     prepareRuntime: async ({ stageRoot }: { stageRoot: string }) => {
-      await cp(runtimeRoot, stageRoot, { recursive: true, errorOnExist: true, force: false });
-      const metadata = await lstat(stageRoot);
-      assert.equal(metadata.isDirectory(), true);
+      artifactProbePhase(ordinal, "prepare-enter");
+      try {
+        await cp(runtimeRoot, stageRoot, { recursive: true, errorOnExist: true, force: false });
+        const metadata = await lstat(stageRoot);
+        assert.equal(metadata.isDirectory(), true);
+        artifactProbePhase(ordinal, "prepare-complete");
+      } catch (error) {
+        artifactProbePhase(ordinal, "prepare-error");
+        throw error;
+      }
     },
   };
 }
 
 async function temporaryDirectoryAlias(
-  t: test.TestContext,
+  t: TestContext,
   prefix: string,
 ): Promise<{ canonicalParent: string; path: string } | undefined> {
   const base = await createCanonicalTemporaryDirectory({ prefix });

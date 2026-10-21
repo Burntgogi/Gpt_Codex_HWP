@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 import { assertPublicContentBuffer } from "./public-content-policy.mjs";
+import { readGitBlobBatch } from "./git-blob-batch.mjs";
 import {
   noReplaceGitArguments,
   releaseSubprocessEnvironment,
@@ -127,18 +128,25 @@ export async function verifyReleaseArtifacts(options = {}) {
   assertRestartSafeZipContractForTest(zipEntries);
   assertVerifiedZipPrivacyForTest(zipEntries);
   const allowlist = await trackedRuntimeAllowlist(root, source.commit);
-  if (JSON.stringify(zipEntries.map(({ name }) => name)) !== JSON.stringify(allowlist)) {
+  if (JSON.stringify(zipEntries.map(({ name }) => name)) !== JSON.stringify(allowlist.map(({ path }) => path))) {
     throw verificationError("RELEASE_ARTIFACTS_RUNTIME_ALLOWLIST");
   }
   if (zipEntries.some((entry) => entry.epoch !== provenance.reproducibleEpoch - (provenance.reproducibleEpoch % 2)
     || entry.mode !== 0o100644 || entry.compression !== "deflate")) {
     throw verificationError("RELEASE_ARTIFACTS_ZIP_METADATA");
   }
+  const committedBlobs = await readGitBlobBatch(root, allowlist, {
+    maxFileBytes: MAX_FILE_BYTES,
+    maxTotalBytes: MAX_TOTAL_BYTES,
+    maxOutputBytes: MAX_TOTAL_BYTES + 16 * 1024 * 1024,
+    invalidCode: "RELEASE_ARTIFACTS_INPUT_INVALID",
+    missingCode: "RELEASE_ARTIFACTS_INPUT_MISSING",
+    gitCode: "RELEASE_ARTIFACTS_GIT_INVALID",
+  });
   let totalBytes = 0;
-  for (const entry of zipEntries) {
-    const expected = await readGitBlob(
-      root, source.commit, `${RUNTIME_PREFIX}${entry.name}`, MAX_FILE_BYTES,
-    );
+  for (let index = 0; index < zipEntries.length; index += 1) {
+    const entry = zipEntries[index];
+    const expected = committedBlobs[index];
     if (!expected.equals(entry.bytes)) throw verificationError("RELEASE_ARTIFACTS_RUNTIME_CONTENT");
     totalBytes += entry.bytes.length;
     if (totalBytes > MAX_TOTAL_BYTES) throw verificationError("RELEASE_ARTIFACTS_ZIP_INVALID");
@@ -611,17 +619,27 @@ async function assertSourceUnchanged(root, expected) {
 
 async function trackedRuntimeAllowlist(root, commit) {
   const output = await git(root, ["ls-tree", "-r", "-z", commit, "--", `plugins/${PRODUCT}`]);
-  const paths = output.split("\0").filter(Boolean).map((line) => {
-    const match = /^(\d{6})\s+blob\s+[a-f0-9]+\t(.+)$/u.exec(line);
-    if (!match || match[1] !== "100644" || !match[2].startsWith(RUNTIME_PREFIX)) {
+  if (output.length !== 0 && !output.endsWith("\0")) {
+    throw verificationError("RELEASE_ARTIFACTS_ENTRY_UNSAFE");
+  }
+  const records = (output.length === 0 ? [] : output.slice(0, -1).split("\0")).map((line) => {
+    const match = /^(100644) blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
+    if (!match || !match[3].startsWith(RUNTIME_PREFIX)) {
       throw verificationError("RELEASE_ARTIFACTS_ENTRY_UNSAFE");
     }
-    const path = match[2].slice(RUNTIME_PREFIX.length);
+    const path = match[3].slice(RUNTIME_PREFIX.length);
     validateArchiveName(path);
-    return path;
-  }).sort(asciiCompare);
-  if (paths.length === 0) throw verificationError("RELEASE_ARTIFACTS_RUNTIME_ALLOWLIST");
-  return paths;
+    return { path, objectId: match[2] };
+  }).sort((left, right) => asciiCompare(left.path, right.path));
+  if (records.length === 0) throw verificationError("RELEASE_ARTIFACTS_RUNTIME_ALLOWLIST");
+  if (records.length > MAX_FILES) throw verificationError("RELEASE_ARTIFACTS_ENTRY_UNSAFE");
+  const folded = new Set();
+  for (const { path } of records) {
+    const lower = path.toLowerCase();
+    if (folded.has(lower)) throw verificationError("RELEASE_ARTIFACTS_ENTRY_CASE_COLLISION");
+    folded.add(lower);
+  }
+  return records;
 }
 
 function productionGraph(lock) {

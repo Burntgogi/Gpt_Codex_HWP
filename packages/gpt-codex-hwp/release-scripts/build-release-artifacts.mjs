@@ -18,6 +18,7 @@ import { deflateRawSync } from "node:zlib";
 import { buildRuntime, compareRuntime } from "../../../scripts/project-runtime.mjs";
 import { assertPublicContentBuffer } from "../../../scripts/public-content-policy.mjs";
 import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
+import { readGitBlobBatch } from "../../../scripts/git-blob-batch.mjs";
 import {
   noReplaceGitArguments,
   releaseSubprocessEnvironment,
@@ -76,8 +77,8 @@ export async function buildReleaseArtifacts(options = {}) {
     root, source.commit, `packages/${PRODUCT}/package-lock.json`, MAX_LOCK_BYTES,
   );
   const version = requiredVersion(sourcePackage.version);
-  const runtimeAllowlist = await trackedRuntimeAllowlist(root, source.commit);
-  if (runtimeAllowlist.length === 0) throw releaseError("RELEASE_ARTIFACTS_INPUT_MISSING");
+  const runtimeRecords = await trackedRuntimeAllowlist(root, source.commit);
+  if (runtimeRecords.length === 0) throw releaseError("RELEASE_ARTIFACTS_INPUT_MISSING");
 
   let outputIdentity;
   const outputHandles = [];
@@ -90,16 +91,22 @@ export async function buildReleaseArtifacts(options = {}) {
   try {
     const stageRoot = join(privateRoot, "runtime");
     await prepareRuntime({ root, stageRoot });
-    const runtimeEntries = await collectRuntimeEntries(stageRoot, runtimeAllowlist);
-    for (const entry of runtimeEntries) {
-      const committed = await readGitBlob(
-        root, source.commit, `${RUNTIME_PREFIX}${entry.path}`, MAX_FILE_BYTES,
-      );
+    const runtimeEntries = await collectRuntimeEntries(stageRoot, runtimeRecords.map(({ path }) => path));
+    const committedBlobs = await readGitBlobBatch(root, runtimeRecords, {
+      maxFileBytes: MAX_FILE_BYTES,
+      maxTotalBytes: MAX_TOTAL_BYTES,
+      maxOutputBytes: MAX_TOTAL_BYTES + 16 * 1024 * 1024,
+      invalidCode: "RELEASE_ARTIFACTS_INPUT_INVALID",
+      missingCode: "RELEASE_ARTIFACTS_INPUT_MISSING",
+      gitCode: "RELEASE_ARTIFACTS_GIT_INVALID",
+    });
+    for (let index = 0; index < runtimeEntries.length; index += 1) {
+      const entry = runtimeEntries[index];
       const projected = await readRegularFileBounded(
         join(root, "plugins", PRODUCT, ...entry.path.split("/")), MAX_FILE_BYTES,
       );
       if (!projected.equals(entry.bytes)) throw releaseError("RELEASE_ARTIFACTS_RUNTIME_CONTENT");
-      entry.bytes = committed;
+      entry.bytes = committedBlobs[index];
     }
     const kordoc = await readKordocProvenance(stageRoot);
     assertReleaseArchivePrivacyForTest(runtimeEntries);
@@ -382,17 +389,21 @@ async function collectRuntimeEntries(stageRoot, allowlist) {
 
 async function trackedRuntimeAllowlist(root, commit) {
   const output = await git(root, ["ls-tree", "-r", "-z", commit, "--", `plugins/${PRODUCT}`]);
-  const records = output.split("\0").filter(Boolean).map((line) => {
-    const match = /^(\d{6})\s+blob\s+[a-f0-9]+\t(.+)$/u.exec(line);
-    if (!match || match[1] !== "100644" || !match[2].startsWith(RUNTIME_PREFIX)) {
+  if (output.length !== 0 && !output.endsWith("\0")) {
+    throw releaseError("RELEASE_ARTIFACTS_ENTRY_UNSAFE");
+  }
+  const records = (output.length === 0 ? [] : output.slice(0, -1).split("\0")).map((line) => {
+    const match = /^(100644) blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
+    if (!match || !match[3].startsWith(RUNTIME_PREFIX)) {
       throw releaseError("RELEASE_ARTIFACTS_ENTRY_UNSAFE");
     }
-    const path = match[2].slice(RUNTIME_PREFIX.length);
+    const path = match[3].slice(RUNTIME_PREFIX.length);
     validateArchiveName(path);
-    return path;
-  }).sort(asciiCompare);
+    return { path, objectId: match[2] };
+  }).sort((left, right) => asciiCompare(left.path, right.path));
+  if (records.length > MAX_FILES) throw releaseError("RELEASE_ARTIFACTS_ENTRY_UNSAFE");
   const folded = new Set();
-  for (const path of records) {
+  for (const { path } of records) {
     const lower = path.toLowerCase();
     if (folded.has(lower)) throw releaseError("RELEASE_ARTIFACTS_ENTRY_CASE_COLLISION");
     folded.add(lower);
@@ -802,27 +813,6 @@ async function readGitJson(root, commit, path, maximumBytes) {
   if (Buffer.byteLength(serialized) !== size) throw releaseError("RELEASE_ARTIFACTS_INPUT_INVALID");
   try { return JSON.parse(serialized); }
   catch { throw releaseError("RELEASE_ARTIFACTS_INPUT_INVALID"); }
-}
-
-async function readGitBlob(root, commit, path, maximumBytes) {
-  const object = `${commit}:${path}`;
-  const size = Number(singleLine(await git(root, ["cat-file", "-s", object]), /^\d+$/u));
-  if (!Number.isSafeInteger(size) || size < 0 || size > maximumBytes) {
-    throw releaseError("RELEASE_ARTIFACTS_INPUT_INVALID");
-  }
-  let result;
-  try {
-    result = await executeFile("git", noReplaceGitArguments(["show", object]), {
-      cwd: root,
-      encoding: "buffer",
-      env: releaseSubprocessEnvironment(),
-      maxBuffer: maximumBytes + 1,
-      windowsHide: true,
-    });
-  } catch { throw releaseError("RELEASE_ARTIFACTS_INPUT_MISSING"); }
-  const bytes = Buffer.from(result.stdout);
-  if (bytes.length !== size) throw releaseError("RELEASE_ARTIFACTS_INPUT_INVALID");
-  return bytes;
 }
 
 async function readRequired(path, maximumBytes = MAX_FILE_BYTES) {

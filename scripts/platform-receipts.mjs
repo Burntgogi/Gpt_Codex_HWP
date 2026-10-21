@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 
+import { readGitBlobBatch } from "./git-blob-batch.mjs";
 import {
   formatReleaseStageDiagnostic,
   REQUIRED_RELEASE_STAGES,
@@ -390,37 +391,17 @@ export async function hashTrackedRuntimeAtHead(rootValue, commitValue = "HEAD") 
   }
   if (records.length === 0) throw receiptError("PLATFORM_RECEIPT_RUNTIME_INVALID");
 
-  const input = Buffer.from(`${records.map((record) => record.objectId).join("\n")}\n`, "ascii");
-  const batch = await runGit(root, ["cat-file", "--batch"], {
-    input,
+  const contents = await readGitBlobBatch(root, records, {
+    maxFileBytes: MAX_RUNTIME_FILE_BYTES,
+    maxTotalBytes: MAX_RUNTIME_TOTAL_BYTES,
     maxOutputBytes: MAX_RUNTIME_TOTAL_BYTES + MAX_GIT_OUTPUT_BYTES,
+    invalidCode: "PLATFORM_RECEIPT_RUNTIME_INVALID",
+    gitCode: "PLATFORM_RECEIPT_GIT_INVALID",
   });
   const digest = createHash("sha256");
-  let batchOffset = 0;
-  let totalBytes = 0;
-  for (const record of records) {
-    const newline = batch.indexOf(0x0a, batchOffset);
-    if (newline < 0) throw receiptError("PLATFORM_RECEIPT_RUNTIME_INVALID");
-    const header = batch.subarray(batchOffset, newline).toString("ascii");
-    const match = /^([a-f0-9]{40}) blob ([0-9]+)$/u.exec(header);
-    if (match === null || match[1] !== record.objectId) {
-      throw receiptError("PLATFORM_RECEIPT_RUNTIME_INVALID");
-    }
-    const bytes = Number(match[2]);
-    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > MAX_RUNTIME_FILE_BYTES) {
-      throw receiptError("PLATFORM_RECEIPT_RUNTIME_INVALID");
-    }
-    const contentStart = newline + 1;
-    const contentEnd = contentStart + bytes;
-    if (contentEnd >= batch.length || batch[contentEnd] !== 0x0a) {
-      throw receiptError("PLATFORM_RECEIPT_RUNTIME_INVALID");
-    }
-    const content = batch.subarray(contentStart, contentEnd);
-    batchOffset = contentEnd + 1;
-    totalBytes += content.length;
-    if (totalBytes > MAX_RUNTIME_TOTAL_BYTES) {
-      throw receiptError("PLATFORM_RECEIPT_RUNTIME_INVALID");
-    }
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    const content = contents[index];
     digest.update(record.mode, "ascii");
     digest.update("\0", "ascii");
     digest.update(record.path, "utf8");
@@ -430,7 +411,6 @@ export async function hashTrackedRuntimeAtHead(rootValue, commitValue = "HEAD") 
     digest.update(createHash("sha256").update(content).digest("hex"), "ascii");
     digest.update("\n", "ascii");
   }
-  if (batchOffset !== batch.length) throw receiptError("PLATFORM_RECEIPT_RUNTIME_INVALID");
   return digest.digest("hex");
 }
 
@@ -483,41 +463,21 @@ async function assertExactHeadWorktree(root, commit) {
     }
   }
 
-  const input = Buffer.from(`${headRecords.map((record) => record.objectId).join("\n")}\n`, "ascii");
-  const batch = await runGit(root, ["cat-file", "--batch"], {
-    input,
+  const contents = await readGitBlobBatch(root, headRecords, {
+    maxFileBytes: MAX_TRACKED_FILE_BYTES,
+    maxTotalBytes: MAX_TRACKED_TOTAL_BYTES,
     maxOutputBytes: MAX_TRACKED_TOTAL_BYTES + MAX_GIT_OUTPUT_BYTES,
+    invalidCode: "PLATFORM_RECEIPT_REPOSITORY_INVALID",
+    gitCode: "PLATFORM_RECEIPT_GIT_INVALID",
   });
-  let batchOffset = 0;
-  let totalBytes = 0;
-  for (const record of headRecords) {
-    const newline = batch.indexOf(0x0a, batchOffset);
-    if (newline < 0) throw receiptError("PLATFORM_RECEIPT_REPOSITORY_INVALID");
-    const header = batch.subarray(batchOffset, newline).toString("ascii");
-    const match = /^([a-f0-9]{40}) blob ([0-9]+)$/u.exec(header);
-    if (match === null || match[1] !== record.objectId) {
-      throw receiptError("PLATFORM_RECEIPT_REPOSITORY_INVALID");
-    }
-    const bytes = Number(match[2]);
-    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > MAX_TRACKED_FILE_BYTES) {
-      throw receiptError("PLATFORM_RECEIPT_REPOSITORY_INVALID");
-    }
-    const contentStart = newline + 1;
-    const contentEnd = contentStart + bytes;
-    if (contentEnd >= batch.length || batch[contentEnd] !== 0x0a) {
-      throw receiptError("PLATFORM_RECEIPT_REPOSITORY_INVALID");
-    }
-    batchOffset = contentEnd + 1;
-    totalBytes += bytes;
-    if (totalBytes > MAX_TRACKED_TOTAL_BYTES) {
-      throw receiptError("PLATFORM_RECEIPT_REPOSITORY_INVALID");
-    }
-    const worktreeBytes = await readTrackedWorktreeFile(root, record.path, bytes, record.mode);
-    if (!worktreeBytes.equals(batch.subarray(contentStart, contentEnd))) {
+  for (let index = 0; index < headRecords.length; index += 1) {
+    const record = headRecords[index];
+    const content = contents[index];
+    const worktreeBytes = await readTrackedWorktreeFile(root, record.path, content.length, record.mode);
+    if (!worktreeBytes.equals(content)) {
       throw receiptError("PLATFORM_RECEIPT_SOURCE_DIRTY");
     }
   }
-  if (batchOffset !== batch.length) throw receiptError("PLATFORM_RECEIPT_REPOSITORY_INVALID");
 }
 
 function parseHeadRecords(listing) {
@@ -744,17 +704,15 @@ async function readBoundedFile(path, maximumBytes, code) {
 
 async function runGit(root, args, options = {}) {
   const maxOutputBytes = options.maxOutputBytes ?? MAX_GIT_OUTPUT_BYTES;
-  const input = options.input;
   if (
     !Number.isSafeInteger(maxOutputBytes)
     || maxOutputBytes < 1
     || maxOutputBytes > MAX_RUNTIME_TOTAL_BYTES + MAX_GIT_OUTPUT_BYTES
-    || (input !== undefined && !Buffer.isBuffer(input))
   ) {
     throw receiptError("PLATFORM_RECEIPT_GIT_INVALID");
   }
   return await new Promise((resolvePromise, reject) => {
-    const child = execFile("git", noReplaceGitArguments(args), {
+    execFile("git", noReplaceGitArguments(args), {
       cwd: root,
       encoding: "buffer",
       env: releaseSubprocessEnvironment(),
@@ -773,7 +731,6 @@ async function runGit(root, args, options = {}) {
       }
       resolvePromise(stdout);
     });
-    if (input !== undefined) child.stdin?.end(input);
   });
 }
 

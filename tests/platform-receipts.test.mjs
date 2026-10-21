@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { parseGitBlobBatch, readGitBlobBatch } from "../scripts/git-blob-batch.mjs";
+
 import {
   buildPlatformReceipt,
   collectPlatformExpectation,
@@ -246,6 +248,113 @@ test("platform receipt derives strict evidence only from a complete passed relea
       /PLATFORM_RECEIPT_RELEASE_INVALID/u,
     );
   }
+});
+
+test("Git blob batch preserves immutable binary and empty blobs with exact byte bounds", async (t) => {
+  const root = await createRepository(t);
+  const binary = Buffer.from([0, 10, 13, 255, 128, 97, 0, 10]);
+  const runtimePath = join(root, "plugins", "gpt-codex-hwp", "binary.dat");
+  await writeFile(runtimePath, binary);
+  await writeFile(join(root, "empty.dat"), Buffer.alloc(0));
+  git(root, "add", ".");
+  git(root, "commit", "-m", "binary blobs");
+  const commit = git(root, "rev-parse", "HEAD");
+  const records = ["plugins/gpt-codex-hwp/binary.dat", "empty.dat", "plugins/gpt-codex-hwp/binary.dat"]
+    .map((path) => ({ objectId: git(root, "rev-parse", `${commit}:${path}`) }));
+  const options = {
+    maxFileBytes: binary.length,
+    maxTotalBytes: binary.length * 2,
+    maxOutputBytes: 4096,
+    invalidCode: "PLATFORM_RECEIPT_RUNTIME_INVALID",
+    missingCode: "PLATFORM_RECEIPT_INPUT_MISSING",
+    gitCode: "PLATFORM_RECEIPT_GIT_INVALID",
+  };
+  const digest = await hashTrackedRuntimeAtHead(root, commit);
+  await writeFile(runtimePath, Buffer.alloc(binary.length, 42));
+  git(root, "add", ".");
+  assert.deepEqual(await readGitBlobBatch(root, records, options), [binary, Buffer.alloc(0), binary]);
+  assert.equal(await hashTrackedRuntimeAtHead(root, commit), digest);
+  await assert.rejects(
+    readGitBlobBatch(root, records, { ...options, maxFileBytes: binary.length - 1 }),
+    { code: options.invalidCode },
+  );
+  await assert.rejects(
+    readGitBlobBatch(root, records, { ...options, maxTotalBytes: binary.length * 2 - 1 }),
+    { code: options.invalidCode },
+  );
+  await assert.rejects(
+    readGitBlobBatch(root, [{ objectId: "0".repeat(40) }], options),
+    { code: options.missingCode },
+  );
+  await assert.rejects(
+    readGitBlobBatch(root, [{ objectId: commit }], options),
+    { code: options.invalidCode },
+  );
+  await assert.rejects(
+    readGitBlobBatch(root, [{ objectId: `${records[0].objectId}\nHEAD` }], options),
+    { code: options.invalidCode },
+  );
+});
+
+test("Git blob batch consumes binary framing exactly, including repeated and empty objects", () => {
+  const objectId = "a".repeat(40);
+  const emptyId = "b".repeat(40);
+  const binary = Buffer.from(`\0\n${emptyId} blob 0\n\n\xff`, "latin1");
+  const frame = Buffer.concat([Buffer.from(`${objectId} blob ${binary.length}\n`), binary, Buffer.from("\n")]);
+  const batch = Buffer.concat([frame, Buffer.from(`${emptyId} blob 0\n\n`), frame]);
+  const records = [{ objectId }, { objectId: emptyId }, { objectId }];
+  const options = {
+    maxFileBytes: binary.length,
+    maxTotalBytes: binary.length * 2,
+    maxOutputBytes: batch.length,
+    invalidCode: "PLATFORM_RECEIPT_RUNTIME_INVALID",
+  };
+  assert.deepEqual(parseGitBlobBatch(batch, records, options), [binary, Buffer.alloc(0), binary]);
+  assert.throws(
+    () => parseGitBlobBatch(batch, records, { ...options, maxOutputBytes: batch.length - 1 }),
+    { code: options.invalidCode },
+  );
+  assert.deepEqual(parseGitBlobBatch(Buffer.alloc(0), [], options), []);
+  assert.throws(() => parseGitBlobBatch(Buffer.from("\n"), [], options), { code: options.invalidCode });
+});
+
+test("Git blob batch rejects missing identities, unsafe sizes, truncation and trailing output without disclosure", () => {
+  const objectId = "a".repeat(40);
+  const records = [{ objectId }];
+  const options = {
+    maxFileBytes: 8,
+    maxTotalBytes: 8,
+    maxOutputBytes: 4096,
+    invalidCode: "PLATFORM_RECEIPT_RUNTIME_INVALID",
+  };
+  for (const serialized of [
+    "",
+    `${objectId} missing\n`,
+    `${"b".repeat(40)} blob 1\nx\n`,
+    `${objectId} tree 1\nx\n`,
+    `${objectId} commit 1\nx\n`,
+    `${objectId} blob -1\n\n`,
+    `${objectId} blob 9007199254740992\n\n`,
+    `${objectId} blob 9\n123456789\n`,
+    `${objectId} blob 1`,
+    `${objectId} blob 2\nx\n`,
+    `${objectId} blob 1\nx`,
+    `${objectId} blob 1\nx!`,
+    `${objectId} blob 1\nx\nprivate-output`,
+    `${objectId} blob 0\n\n${objectId} blob 0\n\n`,
+    `${objectId} blob 1\r\nx\n`,
+    `\xe1${objectId.slice(1)} blob 1\nx\n`,
+  ]) {
+    assert.throws(
+      () => parseGitBlobBatch(Buffer.from(serialized, "latin1"), records, options),
+      { code: options.invalidCode, message: options.invalidCode },
+    );
+  }
+  const two = Buffer.from(`${objectId} blob 1\nx\n${objectId} blob 1\ny\n`);
+  assert.throws(
+    () => parseGitBlobBatch(two, [records[0], records[0]], { ...options, maxTotalBytes: 1 }),
+    { code: options.invalidCode },
+  );
 });
 
 test("platform expectation binds exact clean HEAD tree version platform and runtime projection", async (t) => {

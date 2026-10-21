@@ -1,0 +1,50 @@
+name: Artifact budget investigation
+
+on:
+  push:
+    branches: [fix/artifact-source-budget]
+
+permissions: {}
+
+jobs:
+  compare:
+    name: Windows artifact probe (${{ matrix.order }})
+    runs-on: windows-2025
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        order: [baseline-first, candidate-first]
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.sha }}
+      HWP_REQUIRE_RHWP: "1"
+      HWP_ARTIFACT_BUDGET_PROBE: "1"
+      HWP_ARTIFACT_PROBE_ORDER: ${{ matrix.order }}
+      ARTIFACT_BUDGET_REPORT: ${{ runner.temp }}/artifact-budget-${{ matrix.order }}.json
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+          package-manager-cache: false
+      - name: Assert exact owner head and Windows x64
+        run: node -e "const {execFileSync}=require('node:child_process');if(process.platform!=='win32'||process.arch!=='x64'||process.env.EXPECTED_HEAD_SHA!==execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim())process.exit(1)"
+      - name: Fresh candidate source dependency install
+        timeout-minutes: 10
+        run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
+      - name: Compare both variants once under original file budget
+        timeout-minutes: 10
+        run: npm run diagnose:artifact-budget
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        if: ${{ !cancelled() }}
+        with:
+          name: artifact-budget-${{ matrix.order }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/artifact-budget-${{ matrix.order }}.json
+          if-no-files-found: error
+          retention-days: 7

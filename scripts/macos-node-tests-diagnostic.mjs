@@ -323,6 +323,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     onFailedTopLevelFailureKind: fileOptions.onFailedTopLevelFailureKind,
     onCompletionKind: fileOptions.onCompletionKind,
     onRunnerFailureKind: fileOptions.onRunnerFailureKind,
+    onFailureSnapshot: fileOptions.onFailureSnapshot,
   }));
   const runAllowedRootsCase = options.runAllowedRootsCase ?? ((record) => executeTestFile(
     "allowed-roots.test.ts",
@@ -452,6 +453,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
     let failedKind;
     let completionKind;
     let runnerFailureKind;
+    let failureSnapshot;
     const testTimeoutMs = boundedTimeout(
       options.testTimeoutMs,
       file === "document-child-client.test.ts"
@@ -485,6 +487,7 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
           onFailedTopLevelFailureKind: (value) => { failedKind = value; },
           onCompletionKind: (value) => { completionKind = value; },
           onRunnerFailureKind: (value) => { runnerFailureKind = value; },
+          onFailureSnapshot: (value) => { failureSnapshot = value; },
         }) === true;
       }
     } catch { passed = false; }
@@ -493,7 +496,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       // runners already emit their own receipt; an all-unknown duplicate adds no
       // evidence and would consume their existing diagnostic byte budget.
       if (failedOrdinal !== undefined || failedKind !== undefined
-        || completionKind !== undefined || runnerFailureKind !== undefined) {
+        || completionKind !== undefined || runnerFailureKind !== undefined
+        || failureSnapshot !== undefined) {
         const ordinal = Number.isSafeInteger(failedOrdinal)
           && failedOrdinal >= 1
           && failedOrdinal <= MAX_NODE_TEST_TOP_LEVEL_ORDINAL
@@ -505,7 +509,8 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
         stdout.write(
           `${receiptPrefix}_NODE_TEST_FAILURE file=${file} ordinal=${ordinal} status=failed`
           + ` failureKind=${failureKind} completionKind=${completion}`
-          + ` runnerFailureKind=${runnerFailure}\n`,
+          + ` runnerFailureKind=${runnerFailure}`
+          + formatFailureSnapshot(failureSnapshot) + "\n",
         );
       }
       if (file === "allowed-roots.test.ts") {
@@ -1347,6 +1352,19 @@ export function executeBoundedNodeTestFile(file, options = {}) {
     let testTimer;
     let closeTimer;
     let childClosed = false;
+    let spawnObserved = false;
+    let exitObserved = false;
+    let stdoutEndObserved = false;
+    let exitCode;
+    let exitSignal;
+    let deadlineExpired = false;
+    let graceExpired = false;
+    let terminationResult = null;
+    let evidenceForwarded = false;
+    let reportedCompletionOrdinal = null;
+    let reportedCompletionKind = "unavailable";
+    let tapPlanAvailable = false;
+    let tapSummaryAvailable = false;
     let terminationSettled = false;
     let runnerFailureReported = false;
     const reportRunnerFailure = (kind) => {
@@ -1354,12 +1372,60 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       runnerFailureReported = true;
       try { options.onRunnerFailureKind(kind); } catch {}
     };
+    const forwardEvidence = (code, signal) => {
+      if (evidenceForwarded) return;
+      evidenceForwarded = true;
+      forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
+      forwardFixedDiagnostic(chunks, capturedBytes, options);
+      forwardBenchmarkProcessTreeProgress(chunks, capturedBytes, options);
+      forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
+      forwardFailedNestedOrdinal(chunks, capturedBytes, options);
+      forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
+      forwardFailedTopLevelTestCodeReason(chunks, capturedBytes, options);
+      forwardFailedTopLevelAssertionOrigin(chunks, capturedBytes, options);
+      forwardCompletionKind(chunks, capturedBytes, code, signal, options);
+    };
+    const collectReportedProgress = () => {
+      let text;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, capturedBytes));
+      } catch { return; }
+      // Only reported top-level completions count, never an announced/active case.
+      for (const match of text.matchAll(/^(not ok|ok) ([1-9][0-9]*) - [^\r\n]*\r?\n/gmu)) {
+        const ordinal = Number(match[2]);
+        reportedCompletionOrdinal = Number.isSafeInteger(ordinal)
+          && ordinal <= MAX_NODE_TEST_TOP_LEVEL_ORDINAL ? ordinal : null;
+        reportedCompletionKind = reportedCompletionOrdinal === null
+          ? "unavailable" : match[1] === "ok" ? "passed" : "failed";
+      }
+      tapPlanAvailable = /^1\.\.(?:0|[1-9][0-9]*)\r?$/mu.test(text);
+      tapSummaryAvailable = classifyNodeTestCompletion(text, 0, null) !== "invalid-summary";
+    };
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(testTimer);
       clearTimeout(closeTimer);
       child?.stdout?.destroy();
+      if (!value && typeof options.onFailureSnapshot === "function") {
+        try {
+          collectReportedProgress();
+          options.onFailureSnapshot(Object.freeze({
+            reportedCompletionOrdinal,
+            reportedCompletionKind,
+            tapPlanAvailable,
+            tapSummaryAvailable,
+            spawnObserved,
+            exitObserved,
+            stdoutEndObserved,
+            closeObserved: childClosed,
+            deadlineExpired,
+            graceExpired,
+            terminationSettled,
+            terminationResult,
+          }));
+        } catch {}
+      }
       resolveTest(value);
     };
     const stopUnverified = (kind) => {
@@ -1367,13 +1433,17 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       reportRunnerFailure(kind);
       stopping = true;
       clearTimeout(testTimer);
+      // Freeze retained TAP evidence before termination can add exit/close signals.
+      forwardEvidence(exitObserved ? exitCode : 0, exitObserved ? exitSignal : null);
       closeTimer = setTimeout(() => {
+        graceExpired = true;
         child?.stdout?.destroy();
         child?.unref?.();
         finish(false);
       }, closeTimeoutMs);
-      void Promise.resolve().then(() => terminateProcessTree(child)).catch(() => false)
-        .then(() => {
+      void Promise.resolve().then(() => terminateProcessTree(child)).catch(() => null)
+        .then((result) => {
+          terminationResult = typeof result === "boolean" ? result : null;
           terminationSettled = true;
           if (childClosed) finish(false);
         });
@@ -1404,47 +1474,75 @@ export function executeBoundedNodeTestFile(file, options = {}) {
       return;
     }
     child.once("spawn", () => {
+      spawnObserved = true;
       try { options.onSpawn?.(); } catch {}
+    });
+    child.once("exit", (code, signal) => {
+      if (settled) return;
+      exitObserved = true;
+      exitCode = code;
+      exitSignal = signal;
+    });
+    child.once("error", () => stopUnverified("child-error"));
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      childClosed = true;
+      if (stopping) {
+        if (terminationSettled) finish(false);
+      } else {
+        forwardEvidence(code, signal);
+        finish(code === 0 && signal === null && validTapReceipt(
+          chunks, capturedBytes, options.allowAllSkipped === true,
+        ));
+      }
     });
     if (child.stdout === null || child.stdout === undefined || !("on" in child.stdout)) {
       stopUnverified("missing-stdout");
       return;
     }
     child.stdout.once("error", () => stopUnverified("stdout-error"));
+    child.stdout.once("end", () => { if (!settled) stdoutEndObserved = true; });
     child.stdout.on("data", (chunk) => {
       if (settled || stopping || !Buffer.isBuffer(chunk)) {
         if (!Buffer.isBuffer(chunk)) stopUnverified("invalid-chunk");
         return;
       }
-      capturedBytes += chunk.byteLength;
-      if (capturedBytes > MAX_CAPTURE_BYTES) {
+      if (capturedBytes + chunk.byteLength > MAX_CAPTURE_BYTES) {
         stopUnverified("capture-limit");
         return;
       }
+      capturedBytes += chunk.byteLength;
       chunks.push(chunk);
     });
-    child.once("error", () => stopUnverified("child-error"));
-    child.once("close", (code, signal) => {
-      if (stopping) {
-        childClosed = true;
-        if (terminationSettled) finish(false);
-      } else {
-        forwardFixedProgressDiagnostic(chunks, capturedBytes, options);
-        forwardFixedDiagnostic(chunks, capturedBytes, options);
-        forwardBenchmarkProcessTreeProgress(chunks, capturedBytes, options);
-        forwardFailedTopLevelOrdinal(chunks, capturedBytes, options);
-        forwardFailedNestedOrdinal(chunks, capturedBytes, options);
-        forwardFailedTopLevelFailureKind(chunks, capturedBytes, options);
-        forwardFailedTopLevelTestCodeReason(chunks, capturedBytes, options);
-        forwardFailedTopLevelAssertionOrigin(chunks, capturedBytes, options);
-        forwardCompletionKind(chunks, capturedBytes, code, signal, options);
-        finish(code === 0 && signal === null && validTapReceipt(
-          chunks, capturedBytes, options.allowAllSkipped === true,
-        ));
-      }
-    });
-    testTimer = setTimeout(() => stopUnverified("runner-timeout"), testTimeoutMs);
+    testTimer = setTimeout(() => {
+      deadlineExpired = true;
+      stopUnverified("runner-timeout");
+    }, testTimeoutMs);
   });
+}
+
+function formatFailureSnapshot(snapshot) {
+  if (snapshot === null || typeof snapshot !== "object") return "";
+  const ordinal = Number.isSafeInteger(snapshot.reportedCompletionOrdinal)
+    && snapshot.reportedCompletionOrdinal >= 1
+    && snapshot.reportedCompletionOrdinal <= MAX_NODE_TEST_TOP_LEVEL_ORDINAL
+    ? snapshot.reportedCompletionOrdinal : "unavailable";
+  const kind = ["passed", "failed"].includes(snapshot.reportedCompletionKind)
+    ? snapshot.reportedCompletionKind : "unavailable";
+  // Fixed tuples: TAP = plan/summary; lifecycle = spawn/exit/stdout-end/close/
+  // deadline/grace/termination-settled. A true termination result is only the
+  // helper's reported Boolean, not independent proof that descendants are gone.
+  const bit = (value) => value === true ? "1" : value === false ? "0" : "u";
+  const tap = [snapshot.tapPlanAvailable, snapshot.tapSummaryAvailable].map(bit).join("");
+  const lifecycle = [
+    snapshot.spawnObserved, snapshot.exitObserved, snapshot.stdoutEndObserved,
+    snapshot.closeObserved, snapshot.deadlineExpired, snapshot.graceExpired,
+    snapshot.terminationSettled,
+  ].map(bit).join("");
+  const termination = typeof snapshot.terminationResult === "boolean"
+    ? String(snapshot.terminationResult) : "unavailable";
+  return ` reportedCompletion=${ordinal}-${kind} tap=${tap}`
+    + ` lifecycle=${lifecycle} terminationResult=${termination}`;
 }
 
 const executeTestFile = executeBoundedNodeTestFile;

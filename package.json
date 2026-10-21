@@ -39,6 +39,7 @@
     "test:repository": "node --test --test-concurrency=1 tests/*.test.mjs",
     "test:policy": "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
+    "diagnose:artifact-budget": "node scripts/artifact-budget-probe.mjs",
     "test": "npm run test:repository && npm run test:official-doc && npm run test:source",
     "test:python": "npm --prefix packages/gpt-codex-hwp run test:python",
     "test:official-doc": "node --test tests/korean-official-doc/lint-official-doc.test.mjs"
