@@ -16,6 +16,10 @@ This file records release tags and their publication status. Work under `Unrelea
 - Both variants passed both orders of the bounded Windows experiment.
   Completion times improved; the old main timeout's exact cause remains unknown.
   Retire default-only and source-regex assertions, not behavior coverage.
+- Isolate mutable projection sources so privacy rejection tests cannot modify
+  the checkout or interfere with real runtime verification. Synchronize real
+  SIGTERM cancellation on handler readiness instead of a fixed sleep, keep
+  existing test/close deadlines, and dispose the completed close timer.
 - Include the Linux reparenting correction from the unpublished v0.3.2 candidate
   and the markdown-it 14.3.3 security fix from published v0.3.1.
 - Use fresh plugin `0.3.3+codex.20261021134251` and Claude cache

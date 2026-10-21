@@ -91,7 +91,8 @@
       "legacyOrdinal": 16,
       "legacyTestName": "public runtime builder stages only branded executable files",
       "suite": "runtime-projection.test.ts",
-      "publicTestName": "public runtime projection stages only branded executable files"
+      "publicTestName": "public runtime projection excludes development and private payloads",
+      "scopeChange": "2026-10-21: Retired bare file-presence, branding, script/default snapshots, byte-copy and nonempty assertions. Development/private payload exclusion, the native DLL allowlist and production-only dependencies remain behavioral contracts, now using isolated mutable source fixtures."
     },
     {
       "invariantId": "privacy.projection-rejects-sensitive-content",

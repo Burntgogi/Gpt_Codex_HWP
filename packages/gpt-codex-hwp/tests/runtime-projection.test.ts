@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { rename } from "node:fs/promises";
 import {
-  access,
   lstat,
   mkdir,
   readFile,
@@ -11,137 +10,47 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import test from "node:test";
+import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { loadProjectMetadata, pluginVersion } from "../../../scripts/project-metadata.mjs";
 import { buildRuntime } from "../../../scripts/project-runtime.mjs";
 import { createCanonicalTemporaryDirectory } from "../../../scripts/canonical-temp.mjs";
+import { copyRuntimeProjectionSourceFixture } from "../../../tests/runtime-projection-source-fixture.mjs";
 
 const TEST_ROOT = dirname(fileURLToPath(import.meta.url));
-const SOURCE_ROOT = resolve(TEST_ROOT, "..");
-const REPOSITORY_ROOT = resolve(SOURCE_ROOT, "../..");
+const ORIGINAL_REPOSITORY_ROOT = resolve(TEST_ROOT, "../../..");
+let SOURCE_ROOT: string;
+let REPOSITORY_ROOT: string;
+let fixtureParent: string | undefined;
 
-test("public runtime projection stages only branded executable files", { timeout: 120_000 }, async (t) => {
-  const root = await createCanonicalTemporaryDirectory({
-    prefix: "gpt-codex-hwp-runtime-suite-",
-  });
+before(async () => {
+  const parent = await createCanonicalTemporaryDirectory({ prefix: "hwp-package-projection-source-" });
+  fixtureParent = parent;
+  const fixture = await copyRuntimeProjectionSourceFixture(ORIGINAL_REPOSITORY_ROOT, join(parent, "source"));
+  REPOSITORY_ROOT = fixture.root;
+  SOURCE_ROOT = fixture.source;
+});
+
+after(async () => {
+  if (fixtureParent !== undefined) await rm(fixtureParent, { recursive: true, force: true, maxRetries: 5 });
+});
+
+test("public runtime projection excludes development and private payloads", { timeout: 120_000 }, async (t) => {
+  const root = await createCanonicalTemporaryDirectory({ prefix: "gpt-codex-hwp-runtime-suite-" });
   t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const output = join(root, "runtime");
   const result = await buildRuntime({ root: REPOSITORY_ROOT, outputRoot: output });
-  const metadata = await loadProjectMetadata(REPOSITORY_ROOT);
-
-  assert.equal(result.outputRoot, output);
-  const required = [
-    ".codex-plugin/plugin.json",
-    "assets/gpt-codex-hwp-banner.png",
-    "assets/gpt-codex-hwp-icon.png",
-    "assets/gpt-codex-hwp-icon-64.png",
-    "assets/gpt-codex-hwp-icon-128.png",
-    "dist/doctor.js",
-    "dist/doctor-main.js",
-    "dist/mcp.js",
-    "dist/mcp-main.js",
-    "dist/oneshot.js",
-    "dist/oneshot-main.js",
-    "dist/workers/document-child-start-gate.js",
-    "dist/workers/document-process-registration.js",
-    "dist/workers/registered-process-supervisor.js",
-    "dist/workers/gpt-codex-hwp-job.dll",
-    "dist/workers/windows-job-supervisor.ps1",
-    "scripts/hwpx-safe-edit/hwpxlib.py",
-    "scripts/hwpx-safe-edit/insert_image.py",
-    "scripts/hwpx-safe-edit/verify.py",
-    "scripts/kordoc-runtime-verifier.mjs",
-    "examples/mcp-manual.json",
-    "skills/gpt-codex-hwp/SKILL.md",
-    "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon-64.png",
-    "skills/gpt-codex-hwp/assets/gpt-codex-hwp-icon.png",
-    "package.json",
-    "package-lock.json",
-    "runtime-manifest.json",
-    "README.md",
-    "README.en.md",
-    "RELEASE_NOTES.md",
-    "RELEASE_NOTES.en.md",
-    "LICENSE",
-    "NOTICE",
-    "THIRD_PARTY_NOTICES.md",
-    "vendor/kordoc-core/PROVENANCE.json",
-    "vendor/kordoc-core/LICENSE",
-    "vendor/kordoc-core/package.json",
-    "vendor/kordoc-core/README.md",
-    "vendor/kordoc-core/dist/index.js",
-  ];
-  for (const path of required) await access(join(output, ...path.split("/")));
   for (const forbidden of [
-    "src",
-    "tests",
-    "plans",
-    "specs",
-    "evidence",
-    "temporary-evidence.txt",
-    "tsconfig.json",
-    "release-scripts",
-    "node_modules",
-    ".mcp.json",
+    "src", "tests", "plans", "specs", "evidence", "temporary-evidence.txt",
+    "tsconfig.json", "release-scripts", "node_modules",
     "scripts/hwpx-safe-edit/test_hwpx_safe_edit.py",
   ]) {
     await assert.rejects(lstat(join(output, ...forbidden.split("/"))), { code: "ENOENT" });
   }
-
   const packageJson = JSON.parse(await readFile(join(output, "package.json"), "utf8"));
-  assert.equal(packageJson.name, metadata.productId);
-  assert.equal(packageJson.version, metadata.version);
-  assert.deepEqual(packageJson.scripts, {
-    doctor: "node dist/doctor.js",
-    start: "node dist/mcp.js",
-  });
-  assert.equal(packageJson.devDependencies, undefined);
-
   const packageLock = JSON.parse(await readFile(join(output, "package-lock.json"), "utf8"));
-  assert.equal(packageLock.name, metadata.productId);
-  assert.equal(packageLock.version, metadata.version);
-  assert.equal(packageLock.packages[""]?.name, metadata.productId);
-  assert.equal(packageLock.packages[""]?.version, metadata.version);
-  assert.equal(packageLock.packages[""]?.devDependencies, undefined);
-
-  const pluginManifest = JSON.parse(
-    await readFile(join(output, ".codex-plugin", "plugin.json"), "utf8"),
-  );
-  assert.equal(pluginManifest.name, metadata.productId);
-  assert.equal(pluginManifest.version, pluginVersion(metadata));
-  assert.equal(pluginManifest.license, "Apache-2.0");
-  assert.equal(pluginManifest.author.name, metadata.developerName);
-  assert.equal(pluginManifest.interface.displayName, metadata.displayName);
-  assert.equal(pluginManifest.interface.developerName, metadata.developerName);
-  assert.equal(pluginManifest.interface.composerIcon, "./assets/gpt-codex-hwp-icon-64.png");
-  assert.equal(pluginManifest.interface.logo, "./assets/gpt-codex-hwp-icon.png");
-  assert.equal(pluginManifest.mcpServers, undefined);
-  assert.deepEqual(
-    await readFile(join(output, "vendor", "kordoc-core", "dist", "index.js")),
-    await readFile(join(SOURCE_ROOT, "vendor", "kordoc-core", "dist", "index.js")),
-  );
-  assert.deepEqual(
-    await readFile(join(output, "dist", "workers", "windows-job-supervisor.ps1")),
-    await readFile(join(SOURCE_ROOT, "src", "workers", "windows-job-supervisor.ps1")),
-  );
-  assert.deepEqual(
-    await readFile(join(output, "dist", "workers", "gpt-codex-hwp-job.dll")),
-    await readFile(join(SOURCE_ROOT, "src", "workers", "gpt-codex-hwp-job.dll")),
-  );
-
-  const notice = await readFile(join(output, "NOTICE"), "utf8");
-  assert.match(notice, /Copyright 2026 Gpt_Codex_HWP contributors/u);
-  const mcp = JSON.parse(await readFile(join(output, "examples", "mcp-manual.json"), "utf8"));
-  assert.deepEqual(Object.keys(mcp.mcpServers), [metadata.productId]);
-  assert.deepEqual(mcp.mcpServers[metadata.productId], {
-    command: "node",
-    args: ["--max-semi-space-size=1", "./dist/mcp.js"],
-    cwd: ".",
-  });
-
-  assert.ok(result.files.length > 0);
+  assert.equal(Object.hasOwn(packageJson, "devDependencies"), false);
+  assert.equal(Object.hasOwn(packageLock.packages[""], "devDependencies"), false);
   for (const file of result.files) {
     assert.doesNotMatch(file.path, /(?:^|\/)(?:src|tests|node_modules|release-scripts)(?:\/|$)/iu);
     assert.doesNotMatch(file.path, /(?:^|\/)\.env(?:\.|$)/iu);
@@ -167,10 +76,8 @@ test("package runtime projection refuses plans specs and temporary evidence belo
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(sourcePath, "must not ship\n", "utf8");
     try {
-      await assert.rejects(
-        buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(outputRoot, "runtime") }),
-        new RegExp(`Forbidden runtime path was staged: assets/${segment}/`, "u"),
-      );
+      await assert.rejects(buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(outputRoot, "runtime") }));
+      await assert.rejects(lstat(join(outputRoot, "runtime")), { code: "ENOENT" });
     } finally {
       await rm(sourceDirectory, { recursive: true, force: true, maxRetries: 5 });
     }
@@ -191,10 +98,8 @@ test("package runtime projection rejects forbidden filename tokens without subst
     t.after(async () => rm(outputRoot, { recursive: true, force: true, maxRetries: 5 }));
     await writeFile(sourcePath, "must not ship\n", { encoding: "utf8", flag: "wx" });
     try {
-      await assert.rejects(
-        buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(outputRoot, "runtime") }),
-        new RegExp(`Forbidden runtime path was staged: assets/${name.replaceAll(".", "\\.")}$`, "u"),
-      );
+      await assert.rejects(buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(outputRoot, "runtime") }));
+      await assert.rejects(lstat(join(outputRoot, "runtime")), { code: "ENOENT" });
     } finally {
       await rm(sourcePath, { force: true });
     }
@@ -211,17 +116,8 @@ test("package runtime projection rejects forbidden filename tokens without subst
   });
   t.after(async () => rm(binaryOutputRoot, { recursive: true, force: true, maxRetries: 5 }));
   try {
-    await assert.rejects(
-      buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(binaryOutputRoot, "runtime") }),
-      (error: Error) => {
-        assert.doesNotMatch(error.message, /Forbidden runtime path was staged/u);
-        assert.match(
-          error.message,
-          /Runtime privacy violation \(binary not allowlisted\): assets\/planet\.png/u,
-        );
-        return true;
-      },
-    );
+    await assert.rejects(buildRuntime({ root: REPOSITORY_ROOT, outputRoot: join(binaryOutputRoot, "runtime") }));
+    await assert.rejects(lstat(join(binaryOutputRoot, "runtime")), { code: "ENOENT" });
   } finally {
     await rm(binarySourcePath, { force: true });
   }

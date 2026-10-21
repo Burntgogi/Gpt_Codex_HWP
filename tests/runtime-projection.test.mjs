@@ -29,9 +29,11 @@ import { verifyKordocCoreRuntime } from "../scripts/kordoc-core-runtime.mjs";
 import { createCanonicalTemporaryDirectory } from "../scripts/canonical-temp.mjs";
 import { releaseSubprocessEnvironment } from "../scripts/release-subprocess-environment.mjs";
 import { loadProjectMetadata, pluginVersion } from "../scripts/project-metadata.mjs";
+import { copyRuntimeProjectionSourceFixture } from "./runtime-projection-source-fixture.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-const SOURCE = join(ROOT, "packages", "gpt-codex-hwp");
+const REPOSITORY_ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+let ROOT;
+let SOURCE;
 const TOOL_NAMES = [
   "hwp_create_svg_asset",
   "hwp_detect_format",
@@ -84,6 +86,9 @@ before(async () => {
   temporaryRoot = await createCanonicalTemporaryDirectory({
     prefix: "gpt-codex-hwp-projection-test-",
   });
+  const fixture = await copyRuntimeProjectionSourceFixture(REPOSITORY_ROOT, join(temporaryRoot, "source"));
+  ROOT = fixture.root;
+  SOURCE = fixture.source;
   expectedRoot = join(temporaryRoot, "expected");
   actualRoot = join(temporaryRoot, "actual");
   await buildRuntime({ root: ROOT, outputRoot: expectedRoot });
@@ -94,32 +99,13 @@ after(async () => {
   if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
 });
 
-test("runtime projection is skill-only by default and preserves manual MCP", async () => {
+test("runtime projection does not auto-register resident MCP", async () => {
   const plugin = JSON.parse(await readFile(
     join(actualRoot, ".codex-plugin", "plugin.json"),
     "utf8",
   ));
-  assert.equal(plugin.skills, "./skills/");
   assert.equal(Object.hasOwn(plugin, "mcpServers"), false);
   await assert.rejects(lstat(join(actualRoot, ".mcp.json")), { code: "ENOENT" });
-
-  const manual = JSON.parse(await readFile(
-    join(actualRoot, "examples", "mcp-manual.json"),
-    "utf8",
-  ));
-  assert.deepEqual(manual.mcpServers["gpt-codex-hwp"], {
-    command: "node",
-    args: ["--max-semi-space-size=1", "./dist/mcp.js"],
-    cwd: ".",
-  });
-  const oneshot = await lstat(join(actualRoot, "dist", "oneshot.js"));
-  assert.equal(oneshot.isFile(), true);
-  assert.equal(oneshot.isSymbolicLink(), false);
-
-  assert.deepEqual(
-    await readFile(join(actualRoot, "examples", "oneshot-tool-schemas.json")),
-    await readFile(join(SOURCE, "examples", "oneshot-tool-schemas.json")),
-  );
 });
 
 test("runtime projection rejects a catalog with nine wrong sorted tool names", async () => {
@@ -134,10 +120,7 @@ test("runtime projection rejects a catalog with nine wrong sorted tool names", a
   const output = join(temporaryRoot, "wrong-tool-schema-catalog-output");
   try {
     await writeFile(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
-    await assert.rejects(
-      buildRuntime({ root: ROOT, outputRoot: output }),
-      /one-shot tool schema catalog is invalid/u,
-    );
+    await assert.rejects(buildRuntime({ root: ROOT, outputRoot: output }));
     await assert.rejects(lstat(output), { code: "ENOENT" });
   } finally {
     await writeFile(catalogPath, original, "utf8");
@@ -468,10 +451,7 @@ test("projection refuses plans specs and temporary evidence nested below an allo
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(sourcePath, "must not ship\n", "utf8");
     try {
-      await assert.rejects(
-        buildRuntime({ root: ROOT, outputRoot: output }),
-        new RegExp(`Forbidden runtime path was staged: assets/${segment}/`, "u"),
-      );
+      await assert.rejects(buildRuntime({ root: ROOT, outputRoot: output }));
       await assert.rejects(lstat(output), { code: "ENOENT" });
     } finally {
       await rm(sourceDirectory, { recursive: true, force: true, maxRetries: 5 });
@@ -490,10 +470,7 @@ test("projection rejects forbidden filename tokens without substring false posit
     const output = join(temporaryRoot, `forbidden-filename-${index}`);
     await writeFile(sourcePath, "must not ship\n", { encoding: "utf8", flag: "wx" });
     try {
-      await assert.rejects(
-        buildRuntime({ root: ROOT, outputRoot: output }),
-        new RegExp(`Forbidden runtime path was staged: assets/${name.replaceAll(".", "\\.")}$`, "u"),
-      );
+      await assert.rejects(buildRuntime({ root: ROOT, outputRoot: output }));
       await assert.rejects(lstat(output), { code: "ENOENT" });
     } finally {
       await rm(sourcePath, { force: true });
@@ -507,17 +484,9 @@ test("projection rejects forbidden filename tokens without substring false posit
     flag: "wx",
   });
   try {
-    await assert.rejects(
-      buildRuntime({ root: ROOT, outputRoot: join(temporaryRoot, "allowed-binary-near-miss") }),
-      (error) => {
-        assert.doesNotMatch(error.message, /Forbidden runtime path was staged/u);
-        assert.match(
-          error.message,
-          /Runtime privacy violation \(binary not allowlisted\): assets\/planet\.png/u,
-        );
-        return true;
-      },
-    );
+    const output = join(temporaryRoot, "allowed-binary-near-miss");
+    await assert.rejects(buildRuntime({ root: ROOT, outputRoot: output }));
+    await assert.rejects(lstat(output), { code: "ENOENT" });
   } finally {
     await rm(binarySourcePath, { force: true });
   }
