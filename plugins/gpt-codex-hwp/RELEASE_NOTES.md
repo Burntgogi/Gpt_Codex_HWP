@@ -1,3 +1,33 @@
+# Gpt_Codex_HWP v0.3.1 릴리즈 노트
+
+- 게시 조건: 불변 태그의 전체 릴리즈 게이트와 attestation이 성공한 자산만 게시
+- 준비일: 2026-10-21
+- 플러그인 버전: `0.3.1+codex.20261021043114`
+- Claude Code 캐시 디렉터리: `0.3.1-codex.20261021043114`
+
+[English](RELEASE_NOTES.en.md) | [README](README.md)
+
+## 보안 패치
+
+v0.3.1은 소스와 생성 런타임의 markdown-it을 14.3.1에서 14.3.3으로 갱신해 [GHSA-gfr2-rv44-r23c](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-gfr2-rv44-r23c), [GHSA-r7fv-28h4-cvq7](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-r7fv-28h4-cvq7), [GHSA-vfgh-jcmw-g37q](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-vfgh-jcmw-g37q)에 대응합니다. 기존 14.x API와 파서 옵션을 유지하며 새 기능, PDF 지원이나 MCP 도구를 추가하지 않습니다.
+
+## 설치와 업그레이드
+
+소유자가 릴리즈를 게시한 뒤에만 README의 `v0.3.1` 태그 고정 설치 명령을 사용하십시오. 직전 공개 릴리즈는 v0.3.0입니다. 플러그인을 다시 설치하고 `version`이 `0.3.1+codex.20261021043114`이며 `installedPath`가 새 캐시 디렉터리인지 확인하십시오(Claude Code에서는 `+`를 `-`로 표기). 새 identity는 이전 런타임을 재사용하지 않으며, 이전 런타임의 의존성만 제자리에서 갱신하는 것은 업그레이드가 아닙니다.
+
+검증한 새 `installedPath`에서 명시적으로 실행하십시오.
+
+    node dist/install-runtime.js --json
+    node dist/doctor.js --json
+
+`RUNTIME_INSTALL_OK`와 `DOCTOR_OK`를 확인하십시오. 실행 중인 모든 Codex CLI와 Desktop 호스트, 또는 Claude Code 세션을 완전히 닫았다가 다시 여십시오. 문서 작업 하나를 완료하고 결과를 검증한 뒤 one-shot 프로세스와 하위 프로세스 종료를 확인하십시오. 이 절차가 성공할 때까지 기존에 작동하는 플러그인과 지속 런타임을 유지하고, 성공 후에만 더 이상 쓰지 않는 정확한 버전 디렉터리를 제거하십시오.
+
+## 검증과 게시 경계
+
+아래 v0.3.0 기록은 과거 기록이며 v0.3.1 검증 근거가 아닙니다. v0.3.1의 실제 호스팅 검사·attestation·게시 결과는 GitHub 릴리즈와 연결된 워크플로에서 확인하십시오. 실제 Mac 검증도 미완료입니다. 소유자는 불변 태그의 전체 게이트와 attestation이 성공한 동일 실행의 ZIP·SPDX SBOM·provenance·체크섬만 게시해야 합니다. 로컬 재빌드 결과는 배포 자산으로 사용하지 않습니다.
+
+## 과거 v0.3.0 릴리즈 기록 (2026-10-08)
+
 # Gpt_Codex_HWP v0.3.0 릴리즈 노트
 
 - 상태: 정식 릴리즈

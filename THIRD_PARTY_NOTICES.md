@@ -105,10 +105,10 @@ Thank you to Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso
 ## markdown-it
 
 - Repository: <https://github.com/markdown-it/markdown-it>
-- Version: `14.3.1` (`14.3.1`)
+- Version: `14.3.3` (`14.3.3`)
 - Copyright: `Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.`
 - License: MIT
-- Registry integrity: `sha512-4Ej49aYTDFIQ+uBkfX8GBvJGccoARxxPep+7aWTs55ozbjQJpW9M26Fe53vnGgvLeVzva/amzjQQaQu9w0vMhA==`
+- Registry integrity: `sha512-L//tDAkjTjJCU6pBUSBTgs3Kg4InVaZuUZog/b6V12UKhcDQ7S78877ibbCanRExwPuYP1CZD7Gd2dxSy1GXRg==`
 - Use in this project: Markdown parsing inside the vendored Kordoc Core runtime; declared directly so the runtime lock pins the patched version.
 
 Thank you to Vitaly Puzrin, Alex Kocharin, and the markdown-it contributors for the CommonMark parser.

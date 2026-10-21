@@ -1,3 +1,33 @@
+# Gpt_Codex_HWP v0.3.1 Release Notes
+
+- Publication requirement: only assets that pass the immutable-tag full release gate and attestation
+- Prepared: 2026-10-21
+- Plugin version: `0.3.1+codex.20261021043114`
+- Claude Code cache directory: `0.3.1-codex.20261021043114`
+
+[한국어](RELEASE_NOTES.md) | [README](README.en.md)
+
+## Security patch
+
+v0.3.1 updates source and generated-runtime markdown-it from 14.3.1 to 14.3.3 for [GHSA-gfr2-rv44-r23c](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-gfr2-rv44-r23c), [GHSA-r7fv-28h4-cvq7](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-r7fv-28h4-cvq7), and [GHSA-vfgh-jcmw-g37q](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-vfgh-jcmw-g37q). The existing 14.x API and parser options remain; no new capabilities, PDF support, or MCP surface are enabled.
+
+## Installation and upgrade
+
+Use the README's `v0.3.1` tag-pinned installation commands only after the owner publishes that release. v0.3.0 is the prior public release. Reinstall the plugin and validate that `version` is `0.3.1+codex.20261021043114` and `installedPath` identifies the new cache directory (Claude Code spells `+` as `-`). The new identity does not reuse the older runtime; updating the old runtime's dependencies in place is not an upgrade.
+
+From the validated new `installedPath`, explicitly run:
+
+    node dist/install-runtime.js --json
+    node dist/doctor.js --json
+
+Require `RUNTIME_INSTALL_OK` and `DOCTOR_OK`. Fully close and reopen every active Codex CLI and Desktop host, or the Claude Code session. Complete one document operation, verify its output, and confirm that the one-shot process and descendants exit. Keep the older working plugin and durable runtime until these steps succeed; remove only an exact unused version directory afterward.
+
+## Verification and publication boundary
+
+The v0.3.0 records below are historical, not v0.3.1 verification. Check the GitHub release and its linked workflow for actual v0.3.1 hosted checks, attestation, and publication results. Physical Mac validation remains unverified. The owner must publish only the ZIP, SPDX SBOM, provenance, and checksums from the same successful immutable-tag full-gate and attestation run; local rebuilds are not distribution artifacts.
+
+## Historical v0.3.0 release record (2026-10-08)
+
 # Gpt_Codex_HWP v0.3.0 Release Notes
 
 - Status: final release

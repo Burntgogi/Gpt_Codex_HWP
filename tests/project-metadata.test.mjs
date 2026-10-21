@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
 import {
   loadProjectMetadata,
@@ -12,7 +11,6 @@ import {
   syncProjectMetadata,
 } from "../scripts/project-metadata.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const GENERATED_PATH = join(
   "packages",
   "gpt-codex-hwp",
@@ -34,15 +32,16 @@ const BASE_ROOT_PACKAGE = {
   },
 };
 
-test("root metadata is validated, frozen, and synchronized", async () => {
-  const metadata = await loadProjectMetadata(ROOT);
+test("metadata is validated, frozen, and synchronized", async (t) => {
+  const fixture = await createSyncFixture(t);
+  await syncProjectMetadata({ root: fixture, check: false });
+  const metadata = await loadProjectMetadata(fixture);
 
   assert.equal(metadata.productId, "gpt-codex-hwp");
   assert.equal(metadata.displayName, "Gpt_Codex_HWP");
-  assert.equal(metadata.version, "0.3.0");
+  assert.equal(metadata.version, "0.2.0");
   assert.match(metadata.codexBuildId, /^[0-9]{14}$/u);
-  assert.ok(metadata.codexBuildId > "20260809212902");
-  assert.equal(pluginVersion(metadata), `0.3.0+codex.${metadata.codexBuildId}`);
+  assert.equal(pluginVersion(metadata), "0.2.0+codex.20260713023606");
   assert.equal(metadata.legacyUninstallSelector, "hwp-korean-docs@hwp-local");
   assert.equal(Object.isFrozen(metadata), true);
   assert.equal(
@@ -50,10 +49,10 @@ test("root metadata is validated, frozen, and synchronized", async () => {
     `export const PROJECT_METADATA = Object.freeze({\n` +
       `  productId: "gpt-codex-hwp",\n` +
       `  displayName: "Gpt_Codex_HWP",\n` +
-      `  version: "0.3.0",\n` +
+      `  version: "0.2.0",\n` +
       `} as const);\n`,
   );
-  await assert.doesNotReject(syncProjectMetadata({ root: ROOT, check: true }));
+  await assert.doesNotReject(syncProjectMetadata({ root: fixture, check: true }));
 });
 
 test("metadata loader rejects missing or empty values", async (t) => {
