@@ -489,21 +489,25 @@ export async function runMacNodeTestsDiagnostic(options = {}) {
       }
     } catch { passed = false; }
     if (!passed) {
-      // Preserve the first invocation: later Windows diagnostics have passed
-      // after different source files failed, losing the original case.
-      const ordinal = Number.isSafeInteger(failedOrdinal)
-        && failedOrdinal >= 1
-        && failedOrdinal <= MAX_NODE_TEST_TOP_LEVEL_ORDINAL
-        ? failedOrdinal : "unavailable";
-      const failureKind = NODE_FAILURE_KINDS.has(failedKind) ? failedKind : "unknown";
-      const completion = NODE_COMPLETION_KINDS.has(completionKind) ? completionKind : "unknown";
-      const runnerFailure = NODE_RUNNER_FAILURE_KINDS.has(runnerFailureKind)
-        ? runnerFailureKind : "unknown";
-      stdout.write(
-        `${receiptPrefix}_NODE_TEST_FAILURE file=${file} ordinal=${ordinal} status=failed`
-        + ` failureKind=${failureKind} completionKind=${completion}`
-        + ` runnerFailureKind=${runnerFailure}\n`,
-      );
+      // Preserve evidence from the first bounded executor invocation. Specialized
+      // runners already emit their own receipt; an all-unknown duplicate adds no
+      // evidence and would consume their existing diagnostic byte budget.
+      if (failedOrdinal !== undefined || failedKind !== undefined
+        || completionKind !== undefined || runnerFailureKind !== undefined) {
+        const ordinal = Number.isSafeInteger(failedOrdinal)
+          && failedOrdinal >= 1
+          && failedOrdinal <= MAX_NODE_TEST_TOP_LEVEL_ORDINAL
+          ? failedOrdinal : "unavailable";
+        const failureKind = NODE_FAILURE_KINDS.has(failedKind) ? failedKind : "unknown";
+        const completion = NODE_COMPLETION_KINDS.has(completionKind) ? completionKind : "unknown";
+        const runnerFailure = NODE_RUNNER_FAILURE_KINDS.has(runnerFailureKind)
+          ? runnerFailureKind : "unknown";
+        stdout.write(
+          `${receiptPrefix}_NODE_TEST_FAILURE file=${file} ordinal=${ordinal} status=failed`
+          + ` failureKind=${failureKind} completionKind=${completion}`
+          + ` runnerFailureKind=${runnerFailure}\n`,
+        );
+      }
       if (file === "allowed-roots.test.ts") {
         for (const record of ALLOWED_ROOTS_CASES) {
           let casePassed = false;
