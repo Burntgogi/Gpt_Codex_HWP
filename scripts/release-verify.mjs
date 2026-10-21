@@ -275,8 +275,9 @@ function failedStageOutcome(stageName, commandIndex, result) {
 
 function selectNodeTestFailureDiagnostic(result) {
   const output = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replaceAll("\r\n", "\n");
-  const isolatedReceipt = output.split("\n").map((line) => line.trim())
-    .findLast((line) => isSafeIsolatedNodeTestReceipt(line));
+  const lines = output.split("\n").map((line) => line.trim());
+  const isolatedReceipt = lines.find((line) => isSafeNodeTestFailureReceipt(line))
+    ?? lines.findLast((line) => isSafeIsolatedNodeTestReceipt(line));
   if (isolatedReceipt !== undefined) {
     return Object.freeze({ kind: "node-tests-runner", receipt: isolatedReceipt });
   }
@@ -297,8 +298,13 @@ function selectNodeTestFailureDiagnostic(result) {
   });
 }
 
+function isSafeNodeTestFailureReceipt(value) {
+  return /^WINDOWS_NODE_TEST_FAILURE file=[a-z0-9-]{1,96}\.test\.ts ordinal=(?:[1-9][0-9]{0,2}|unavailable) status=failed failureKind=(?:test-timeout|hook-failure|test-code|async-failure|cancelled|unknown) completionKind=(?:passed|test-failure|cancelled|nonzero-clean-tap|invalid-summary|child-signal|unknown) runnerFailureKind=(?:spawn-error|missing-stdout|stdout-error|child-error|invalid-chunk|capture-limit|runner-timeout|unknown)(?: reportedCompletion=(?:[1-9][0-9]{0,2}|unavailable)-(?:passed|failed|unavailable) tap=[01u]{2} lifecycle=[01u]{7} terminationResult=(?:true|false|unavailable))?$/u.test(value);
+}
+
 function isSafeIsolatedNodeTestReceipt(value) {
-  return /^WINDOWS_(?:REPOSITORY_TEST_INVENTORY|SOURCE_NODE_DIAGNOSTIC) status=failed$/u.test(value)
+  return isSafeNodeTestFailureReceipt(value)
+    || /^WINDOWS_(?:REPOSITORY_TEST_INVENTORY|SOURCE_NODE_DIAGNOSTIC) status=failed$/u.test(value)
     || /^WINDOWS_REPOSITORY_TEST_CASE case=[a-z0-9-]{1,64} status=failed$/u.test(value)
     || /^WINDOWS_REPOSITORY_TEST_FILE file=[a-z0-9-]{1,96}\.test\.mjs status=failed$/u.test(value)
     || /^WINDOWS_NODE_TEST_CASE case=[a-z0-9-]{1,64} status=failed$/u.test(value)

@@ -4,7 +4,28 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
-## [0.3.3] - 2026-10-21
+## [0.3.4] - 2026-10-21
+
+Publication requires this version's own immutable-tag gate, strict attestation
+and original public assets. Confirm actual status on the
+[GitHub Release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4);
+prepared source alone is not a publication record.
+
+- Preserve the first bounded Windows Node failure receipt through the release
+  wrapper instead of replacing it with a later coarse file receipt. Reject
+  malformed/private fields; receipt observation is not cleanup authority.
+- Remove the duplicated MCP tool-name list and redundant not-throw wrapper;
+  validate the actual initialized server against the existing complete catalog.
+- Retire source/command-copy assertions rather than pinning implementation text.
+  Retain actual stage execution, failure precedence, privacy and resource bounds.
+
+## [0.3.3] - 2026-10-21 (unpublished candidate)
+
+All four PR checks passed and the protected merge preserved the exact tree.
+Original postmerge Windows runtime smoke then failed at helper sampling; the
+immutable tag's full gate also failed in MCP smoke. No release assets or
+attestations were produced. Preserve the tag; later passing diagnostics do not
+recover the original failures or identify their historical causes.
 
 - Share bounded immutable Git blob batches between artifact production,
   verification and platform receipts; remove per-runtime-file process fan-out.
