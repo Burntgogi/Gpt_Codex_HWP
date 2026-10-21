@@ -1,13 +1,25 @@
-# Gpt_Codex_HWP v0.3.4 릴리즈 노트
+# Gpt_Codex_HWP v0.3.5 릴리즈 노트
 
 - 준비일: 2026-10-21 (UTC)
-- 플러그인 버전: `0.3.4+codex.20261021164358`
-- Claude Code 캐시: `0.3.4-codex.20261021164358`
-- 게시 확인: 아래 설치 안내는 [불변 v0.3.4 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4)의 정확한 SHA·자체 전체 태그 게이트·동일 실행 attestation과 원본 ZIP·SPDX·provenance·SHA256SUMS 4개 공개 자산을 실제로 검증한 뒤에만 적용하십시오. 소스 준비나 다른 태그의 성공 기록은 게시·설치·업그레이드 증거가 아닙니다.
+- 플러그인 버전: `0.3.5+codex.20261021184753`
+- Claude Code 캐시: `0.3.5-codex.20261021184753`
+- 게시 확인: 아래 설치 안내는 [불변 v0.3.5 릴리즈](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.5)의 정확한 SHA·자체 전체 태그 게이트·동일 실행의 strict subject attestation 3개와 원본 ZIP·SPDX·provenance·SHA256SUMS 4개 공개 자산을 실제로 검증한 뒤에만 적용하십시오. 소스 준비나 다른 태그의 성공 기록은 게시·설치·업그레이드 증거가 아닙니다.
 
 [English](RELEASE_NOTES.en.md) | [README](README.md)
 
 ## 원본 실패 영수증 보존
+
+고정 진단 선택기가 설정 코드 순서가 아니라 실제 TAP 오류의 시간순으로 첫 allowlist 오류를 보존합니다. 여러 Node case가 실패하는 실제 자식에서 수정 전 `LATER_FIXED_FAILURE`, 수정 후 `FIRST_FIXED_FAILURE`를 선택했고 양쪽 모두 자식·파일 실패를 유지했습니다. 영구 실제 자식 회귀는 수정 전 실패·수정 후 통과했습니다.
+
+history scanner는 기존 strict public-process 실패 observer를 bounded batch에 전달합니다. 원본 `pc17` replacement-ref 비공개 tree 보안 테스트의 실제 보안 finding 단언 2개와 workload·정책·제한은 모두 유지하며, wrapper는 원본 예외를 cause로 보존하면서 고정 단계 또는 기존 안전한 process-code 진단을 보고합니다. 실제 Git `cat-file` 명령 실패 smoke는 수정 전 거친 `pc17`, 수정 후 bounded `pc17-replace-scan`이었고 양쪽 모두 exit 1입니다. native·RSS·정리 성공 증명을 합성하지 않습니다. native collector·C#·PowerShell, 권한·mode 1·identity·RSS·실행·캡처·정리 제한은 그대로입니다.
+
+이미 삭제한 source-copy 테스트의 낡은 catalog 항목을 제거하고 oracle dispatch는 불안정한 `rv32` ordinal 대신 의미 flag를 사용합니다. 부수적인 source·default·전체 출력·mock echo 단언은 재고정하지 않고 폐기합니다. 이는 증거 손실 수정이지 원본 native·`pc17` 원인 해결이나 설명이 아닙니다.
+
+## 불변 미게시 v0.3.4 기록
+
+`v0.3.4`는 neutral owner `58d48d0eb76914245ee2142a6f6681008c8a6f24`에 보존하며 정상 병합 main `931f82bfe2c0babc60caf2c0f7726f05bcbad936`과 tree가 정확히 같았습니다. 모든 [PR CI 39647945797](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945797)·[Security 39647945795](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945795)와 원본 [main CI 39649661879](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39649661879)·Security는 통과했고 보호 정책은 바꾸지 않았습니다. 원본 [전체 태그 게이트 39651543739](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39651543739)는 초기 10 MiB smoke 통과 뒤 node-tests에서 `WINDOWS_REPOSITORY_TEST_CASE case=pc17 status=failed`로 실패했습니다. 자산·attestation·Release는 없습니다.
+
+후속 실제 계측 full-file [Windows 진단 39653661700](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39653661700)은 모든 replacement 단계를 통과했고 `historyFailures`가 없었습니다. 원본 실패 복구나 과거 원인 증명은 아니며 정확한 원인은 여전히 미확정입니다. 이전 태그·실행을 보존하고 v0.3.5 자체 게이트 증거로 재사용하지 않습니다.
 
 원본 Windows sampling 실패의 정확한 원인은 미확정입니다. 별도 [실제 핸들 제어 실험](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39638006755)에서 기존본과 재사용 수정안이 모두 실제 RSS·native mode 1·정리 검사를 통과했고, 실험 workflow는 기대한 기존본 실패가 없어 실패했습니다. 따라서 회귀 재현으로 취급하지 않고 가설성 네이티브 수정과 테스트를 배포안에서 제외했습니다. 수집기의 권한·stable identity·RSS·실행·정리 제한은 그대로입니다.
 
@@ -32,19 +44,19 @@
 
 불변 `v0.3.3`의 owner는 `5ac9f568f4ac0c3d5cec14f54f2a68acf996bc19`이며 정상 병합 main `8e1ce2ae90038907873880ad96bd365d18a2526c`과 tree가 같습니다. [PR CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627644066)의 네 검사와 [Security](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627643973)는 통과했으나, [원본 병합 후 실행](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629542245)의 실제 Windows 런타임은 one-shot 정리 중 `windows-helper-sampling`에서 실패했습니다. [태그 전체 게이트](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629550109)는 초기 10 MiB smoke를 통과한 뒤 full node의 `mcp-smoke`에서 실패했습니다. 자산·attestation·Release는 없습니다.
 
-후속 [계측 native 실행](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633262366)은 실제 도구 9개·HWPX 14,421 bytes·stderr 0 bytes·남은 자손 0개였고, [변경 없는 MCP 실행](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633269000)도 통과했습니다. 그러나 원본 sampling·MCP 실패의 정확한 원인은 여전히 알 수 없으며 후속 성공이 원본 실패를 복구하거나 무효화하지 않습니다. 두 태그를 옮기지 않고 v0.3.4의 새 identity와 자체 검증 경로를 사용합니다.
+후속 [계측 native 실행](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633262366)은 실제 도구 9개·HWPX 14,421 bytes·stderr 0 bytes·남은 자손 0개였고, [변경 없는 MCP 실행](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633269000)도 통과했습니다. 그러나 원본 sampling·MCP 실패의 정확한 원인은 여전히 알 수 없으며 후속 성공이 원본 실패를 복구하거나 무효화하지 않습니다. 두 태그를 옮기지 않고 v0.3.5의 새 identity와 자체 검증 경로를 사용합니다.
 
 ## 정상 reparenting과 실제 RSS
 
-부모 프로세스가 종료되어 재부모화되더라도 PID·프로세스 그룹·시작 시각이 같으면 같은 프로세스입니다. 이전 수집기는 부모 PID 변화만으로 실제 VmRSS를 거부했습니다. v0.3.4는 v0.3.3 후보의 기존 stable-identity 비교 재사용을 유지하고 그룹·시작 identity의 읽기 내/재시도 간 변경은 거부합니다. live/unknown/권한 실패의 RSS 누락은 계속 실패하며, 기존 최대 3회 측정과 간격·타임아웃·별도 정리 증명은 바꾸지 않았습니다.
+부모 프로세스가 종료되어 재부모화되더라도 PID·프로세스 그룹·시작 시각이 같으면 같은 프로세스입니다. 이전 수집기는 부모 PID 변화만으로 실제 VmRSS를 거부했습니다. v0.3.5는 v0.3.3 후보의 기존 stable-identity 비교 재사용을 유지하고 그룹·시작 identity의 읽기 내/재시도 간 변경은 거부합니다. live/unknown/권한 실패의 RSS 누락은 계속 실패하며, 기존 최대 3회 측정과 간격·타임아웃·별도 정리 증명은 바꾸지 않았습니다.
 
 실제 Linux 부모·자식 프로세스의 합법적인 재부모화를 제어해 수정 전 거부, 수정 후 실제 `/proc` VmRSS와 반환 RSS 일치, 별도 등록 authority의 그룹 부재 증명을 확인했습니다. 새 회귀 7건은 수정 전 실패·수정 후 성공했습니다. 후속 CI의 stage-only 로그만으로 그 개별 실패가 이 경합이었다고 단정하지 않습니다. 진단 문자열·기본 단계·문구·소스 정규식 검사는 재고정하지 않고 폐기했으며, 실제 실패 상태·RSS·비공개 내용 비노출·정리 조건은 보존했습니다.
 
 ## 설치와 검증 범위
 
-v0.3.4 자체 게시 증거를 확인한 뒤 README의 v0.3.4 태그 변경 절을 따르십시오. 소스 remove/add가 이전 캐시를 남겨도 Codex CLI 0.162.1의 `plugin add`는 이전 캐시를 정리할 수 있습니다. 이전 지속 런타임을 수동으로 삭제하지 말고 새 identity·`installedPath`·명시적 설치·doctor·호스트 재시작·문서 작업을 검증하십시오. v0.3.1의 markdown-it 14.3.3 패치는 유지하며 9개 도구·HWP 읽기 전용/HWPX 쓰기 정책은 바꾸지 않습니다.
+v0.3.5 자체 게시 증거를 확인한 뒤 README의 v0.3.5 태그 변경 절을 따르고, 검증한 원본 공개 ZIP과 설치 캐시 바이트 비교를 포함한 실제 격리 profile 업그레이드를 요구하십시오. 소스 remove/add가 이전 캐시를 남겨도 Codex CLI 0.162.1의 `plugin add`는 이전 캐시를 정리할 수 있습니다. 이전 지속 런타임을 수동으로 삭제하지 말고 새 identity·`installedPath`·명시적 설치·doctor·호스트 재시작·문서 작업과 one-shot·자손 종료를 검증하십시오. v0.3.1의 markdown-it 14.3.3 패치는 유지하며 9개 도구·HWP 읽기 전용/HWPX 쓰기 정책은 바꾸지 않습니다.
 
-v0.3.1 태그·자산·검증 기록은 그대로 보존합니다. 새 버전의 게시와 플랫폼 검증은 위 v0.3.4 릴리즈의 실제 기록으로만 판단하십시오. 호스팅 macOS는 실제 Mac/Desktop/Claude Code/한컴 GUI 검증을 대신하지 않습니다. 게시 자산은 정확한 불변 태그의 전체 게이트와 attestation이 성공한 동일 실행의 ZIP·SPDX·provenance·SHA256SUMS여야 하며 로컬 재빌드를 대체하지 않습니다.
+v0.3.1 태그·자산·검증 기록과 불변 미게시 v0.3.2·v0.3.3·v0.3.4 태그는 그대로 보존합니다. 새 버전의 게시와 플랫폼 검증은 위 v0.3.5 릴리즈의 실제 기록으로만 판단하십시오. 호스팅 macOS는 실제 Mac/Desktop/Claude Code/한컴 GUI 검증을 대신하지 않으며 기본 사용자 설치를 주장하지 않습니다. 게시 자산은 정확한 불변 태그의 전체 게이트와 strict subject attestation 3개가 성공한 동일 실행의 ZIP·SPDX·provenance·SHA256SUMS여야 하며 로컬 재빌드를 대체하지 않습니다.
 
 ## 과거 v0.3.1 공개 기록
 

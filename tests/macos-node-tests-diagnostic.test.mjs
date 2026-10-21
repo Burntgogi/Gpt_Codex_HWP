@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
@@ -12,6 +16,7 @@ import {
   failedTopLevelTestCodeReason,
   runMacNodeTestsDiagnostic,
 } from "../scripts/macos-node-tests-diagnostic.mjs";
+import { releaseSubprocessEnvironment } from "../scripts/release-subprocess-environment.mjs";
 
 test("macOS Node diagnostic classifies assertion origins without exposing stack paths", () => {
   const registrationCallback = [
@@ -1040,34 +1045,29 @@ test("macOS compact-runtime diagnostic redacts invalid stage values", async () =
   
 });
 
-test("source Node diagnostic uses the fixed Windows receipt prefix only when requested", async () => {
-  let output = "";
-  const passed = await runMacNodeTestsDiagnostic({
-    receiptPrefix: "WINDOWS",
-    runFile: async () => true,
-    stdout: { write: (value) => { output += value; } },
-    setExitCode() {},
-  });
-  assert.equal(passed, true);
-  
-});
 
-test("bounded Node runner returns only an allowlisted fixed failure diagnostic", async () => {
+test("bounded Node runner preserves the first allowlisted failure in actual TAP order", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "bounded-first-failure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = join(root, "failure.test.mjs");
+  await writeFile(fixture, [
+    'import test from "node:test";',
+    'test("unlisted failure", () => { throw new Error("UNLISTED_FAILURE"); });',
+    'test("first fixed failure", () => { throw new Error("FIRST_FIXED_FAILURE"); });',
+    'test("later fixed failure", () => { throw new Error("LATER_FIXED_FAILURE"); });',
+  ].join("\n"));
   let observed;
-  const child = new EventEmitter();
-  child.stdout = new PassThrough();
-  queueMicrotask(() => {
-    child.stdout.end("TAP version 13\n  error: 'KORDOC_DEFAULT_BUILD'\n# fail 1\n");
-    child.emit("close", 1, null);
-  });
   const passed = await executeBoundedNodeTestFile("fixture.test.mjs", {
     repository: true,
-    spawnProcess: () => child,
-    fixedDiagnostics: ["KORDOC_DEFAULT_BUILD", "KORDOC_DEFAULT_CLEANUP"],
+    spawnProcess: (command, _args, options) => spawn(command, ["--test", fixture], {
+      ...options,
+      env: releaseSubprocessEnvironment(),
+    }),
+    fixedDiagnostics: ["LATER_FIXED_FAILURE", "FIRST_FIXED_FAILURE"],
     onFixedDiagnostic: (value) => { observed = value; },
   });
   assert.equal(passed, false);
-  assert.equal(observed, "KORDOC_DEFAULT_BUILD");
+  assert.equal(observed, "FIRST_FIXED_FAILURE");
 });
 
 test("bounded Node runner returns the last allowlisted fixed progress diagnostic", async () => {

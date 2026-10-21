@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml"><img alt="Security" src="https://github.com/Burntgogi/Gpt_Codex_HWP/actions/workflows/security.yml/badge.svg"></a>
-  <img alt="Version v0.3.4 candidate" src="https://img.shields.io/badge/version-v0.3.4_candidate-2EA44F">
+  <img alt="Version v0.3.5" src="https://img.shields.io/badge/version-v0.3.5-2EA44F">
   <img alt="Node.js 22 or later" src="https://img.shields.io/badge/Node.js-22%2B-43853D">
   <a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -18,7 +18,7 @@
   <a href="README.md">한국어</a> ·
   <a href="README.en.md">English</a> ·
   <a href="#real-hwpx-output">See the result</a> ·
-  <a href="#v032-installation-from-github">Quick install</a> ·
+  <a href="#v035-installation-from-github">Quick install</a> ·
   <a href="#claude-code-installation">Claude Code</a> ·
   <a href="#format-support">Format support</a> ·
   <a href="#safety">Security</a>
@@ -28,11 +28,13 @@
 
 Gpt_Codex_HWP is a local Codex and Claude Code plugin for reading, creating, editing, validating, and previewing Korean HWP/HWPX documents. HWPX is the supported write format, and edits preserve the existing raw ZIP/XML structure whenever possible. Classic HWP is a read-only input format for detection, reading, and preview; its content can be saved as a new HWPX.
 
-## v0.3.4 original-failure and release verification
+## v0.3.5 original-failure retention and release verification
 
-The identity is `0.3.4+codex.20261021164358`; the Claude Code cache is `0.3.4-codex.20261021164358`. Establish publication and verification status only from this version's own immutable-tag gate, attestation and original public assets. Do not install from the commands below until [v0.3.4 publication](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4) is actually confirmed.
+The identity is `0.3.5+codex.20261021184753`; the Claude Code cache is `0.3.5-codex.20261021184753`. Identity is not publication proof. Before installing, confirm [v0.3.5 publication](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.5), its exact immutable-tag SHA, successful full-tag gate and same-run attestation, and the four original public assets: ZIP, SPDX, provenance and SHA256SUMS.
 
-The release wrapper now preserves the original rich `WINDOWS_NODE_TEST_FAILURE` instead of replacing it with a trailing coarse file receipt. A real-child before/after probe retained failure status in both versions and preserved the original receipt after the correction. A separate retained-handle experiment passed both baseline and candidate, so it did not demonstrate a failure-before/fix-after regression. That speculative native change is excluded; original Windows sampling causes remain unknown.
+The original [v0.3.4 full-tag gate](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39651543739) passed its initial 10 MiB smoke, then failed `node-tests` with `WINDOWS_REPOSITORY_TEST_CASE case=pc17 status=failed`, the replacement-ref hidden-private-tree security case. It produced no release artifacts, attestation or release. The later instrumented full-file [Windows diagnostic](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39653661700) passed all replacement stages with no `historyFailures`; it neither recovers that original gate nor proves its cause. The exact original cause remains unknown; old tags and runs are preserved.
+
+v0.3.5 retains the first allowlisted error in actual TAP order, rather than selecting a later error by configured-code order. A real-child regression failed before and passed after, while the failing child/file remained failed. The history scanner forwards its existing strict process-failure observer to the bounded batch; `pc17` preserves both security-findings assertions and the original exception as its cause, reporting bounded stage `pc17-replace-scan` or an existing safe process code. A real Git `cat-file` command-fault smoke changed the coarse `pc17` receipt to `pc17-replace-scan`, with exit 1 both before and after. This corrects evidence loss, not the original native/pc17 cause. Native collectors, permissions, identity/RSS, workload, execution/capture/cleanup bounds and failure status remain unchanged; no native/RSS/cleanup proof is synthesized.
 
 The inherited Linux reparenting correction preserves measured RSS for the same PID/group/start identity. Existing handle-based RSS reads, stable identity checks, native mode-1 zero-membership proof, sampling, failure/cleanup, capture and deadline bounds remain unchanged: no fallback, invented zero RSS or new retry. The duplicated MCP tool-name literal and bare not-throw wrapper are retired; actual initialized-server canonical full-schema catalog, version and stderr checks remain. Fresh Linux actual-runtime evidence is nine tools, 14,421 HWPX bytes, zero stderr and zero descendants; it is not Windows-native or physical GUI proof.
 
@@ -46,7 +48,7 @@ The inherited Linux reparenting correction preserves measured RSS for the same P
 
 ## Previous releases
 
-The public releases before `v0.3.4`, newest first, are `v0.3.1`, `v0.3.0`, `v0.2.7`, and `v0.2.5`. `v0.2.7` updated the packages reported in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18). `v0.3.3`, `v0.3.2`, `v0.2.3`, `v0.2.4`, and `v0.2.6` are immutable unpublished candidate tags with no GitHub Release or public Release assets. `v0.2.2` introduced read-only HWP, HWPX writing, default one-shot execution, and the 100 MiB CI-verified envelope. See the [changelog](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for retained history.
+The public releases before `v0.3.5`, newest first, are `v0.3.1`, `v0.3.0`, `v0.2.7`, and `v0.2.5`. `v0.2.7` updated the packages reported in [dependency audit issue #18](https://github.com/Burntgogi/Gpt_Codex_HWP/issues/18). `v0.3.4`, `v0.3.3`, `v0.3.2`, `v0.2.3`, `v0.2.4`, and `v0.2.6` are immutable unpublished tags with no GitHub Release or public Release assets. v0.3.3's original main native run failed at `windows-helper-sampling` and its full tag Node run at `mcp-smoke`; later successful diagnostics do not recover those failures or prove their causes. Failed tags and original runs remain unchanged. `v0.2.2` introduced read-only HWP, HWPX writing, default one-shot execution, and the 100 MiB CI-verified envelope. See the [changelog](https://github.com/Burntgogi/Gpt_Codex_HWP/blob/main/CHANGELOG.md) and [English release notes](RELEASE_NOTES.en.md) for retained history.
 
 ## Features
 
@@ -108,17 +110,17 @@ This project was developed primarily on Windows x64 and validated there. The pas
 
 Per-release test and audit results are recorded in each [GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases) note.
 
-## v0.3.4 installation from GitHub (publication pending)
+## v0.3.5 installation from GitHub
 
-The commands below are conditional instructions for `v0.3.4`, not evidence that it is published. First confirm actual publication and successful full-tag gate and attestation on [that GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4). Source changes or an older version's passed CI do not establish publication. Review the [release notes](RELEASE_NOTES.en.md), reinstall under the new plugin/cache identity, explicitly install the runtime, run doctor, restart the host and verify a document operation. Do not manually delete the old durable runtime before success.
+The commands below are conditional instructions for `v0.3.5`, not evidence that it is published. First confirm [that GitHub release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.5), its exact immutable-tag SHA, successful full-tag gate and same-run attestation, and the four original public assets: ZIP, SPDX, provenance and SHA256SUMS. Source changes, identity strings or an older version's passed CI do not establish publication. Review the [release notes](RELEASE_NOTES.en.md), reinstall under the new plugin/cache identity, explicitly install the runtime, run doctor, restart the host and verify a document operation. Do not manually delete the old durable runtime before success.
 
 ### Changing the tag of an existing installation
 
-Close active Codex hosts first. If the marketplace is pinned to another ref such as `v0.3.1`, `marketplace add --ref v0.3.4` alone fails with `already added from a different source`. `marketplace upgrade` refreshes the registered ref; it does not change the tag. Remove the source registration and register the new tag:
+Close active Codex hosts first. If the marketplace is pinned to another ref such as `v0.3.1`, `marketplace add --ref v0.3.5` alone fails with `already added from a different source`. `marketplace upgrade` refreshes the registered ref; it does not change the tag. Remove the source registration and register the new tag:
 
 ```powershell
 codex plugin marketplace remove gpt-codex-hwp-local --json
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.4 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.5 --json
 $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | ConvertFrom-Json
 ```
 
@@ -128,13 +130,13 @@ If new-version verification fails, close the hosts and repeat the three commands
 
 A user can ask a Codex agent:
 
-> Once publication of `v0.3.4` is confirmed, install that pinned tag of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, and run the explicit runtime installer and `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation. Keep the old durable runtime until verification succeeds.
+> Once `v0.3.5` publication, its own full-tag gate, same-run attestation and four original public assets are confirmed, install that pinned tag of `Burntgogi/Gpt_Codex_HWP`. Follow this section, validate `installedPath`, and run the explicit runtime installer and `doctor` from the installed path. Close and reopen every active Codex CLI and Desktop host once, verify that `/mcp` has no default `gpt-codex-hwp` registration, and confirm that the one-shot process exits after a document operation. Keep the old durable runtime until verification succeeds.
 
 1. Check Git, the Codex CLI, Node.js 22 or later, and npm. Python 3.10 or later is additionally required only for `after-paragraph` image insertion.
 2. Pin the release tag instead of registering the moving `main` branch.
 
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.4 --json
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.5 --json
 ```
 
 Verify that the returned JSON has `marketplaceName` equal to `gpt-codex-hwp-local`.
@@ -146,7 +148,7 @@ $installed = codex plugin add gpt-codex-hwp@gpt-codex-hwp-local --json | Convert
 $installedPath = [System.IO.Path]::GetFullPath([string]$installed.installedPath)
 ```
 
-4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and `version` equal to `0.3.4+codex.20261021164358`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. The runtime must contain `.codex-plugin/plugin.json`, `runtime-manifest.json`, `package.json`, `package-lock.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`; `.codex-plugin/plugin.json` must set `skills` to `./skills/` and have no `mcpServers` property. Never evaluate a JSON string as a command or run npm from an unexpected path.
+4. Verify that the installation JSON has `pluginId` equal to `gpt-codex-hwp@gpt-codex-hwp-local` and `version` equal to `0.3.5+codex.20261021184753`. Verify that `installedPath` is an absolute path to an existing directory and ends with the exact cache identity `plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>`. The runtime must contain `.codex-plugin/plugin.json`, `runtime-manifest.json`, `package.json`, `package-lock.json`, `dist/install-runtime.js`, `dist/runtime-bootstrap.js`, `dist/doctor.js`, `dist/oneshot.js`, `dist/mcp.js`, `examples/oneshot-tool-schemas.json`, and `examples/mcp-manual.json`; `.codex-plugin/plugin.json` must set `skills` to `./skills/` and have no `mcpServers` property. Never evaluate a JSON string as a command or run npm from an unexpected path.
 5. From that exact validated path, install and diagnose the platform runtime. On Windows x64, confirm that installed production dependencies are at most 64 MiB.
 
 ```powershell
@@ -166,11 +168,11 @@ try {
 
 ## Installation and Migration
 
-After confirming v0.3.4 publication, use this upgrade sequence. Its new identity does not reuse the old runtime; updating dependencies in the old directory is not an upgrade. Existing installations must first use the source remove/add procedure above:
+After confirming v0.3.5 publication, its own full-tag gate, same-run attestation and four original public assets as above, use this upgrade sequence. Its new identity does not reuse the old runtime; updating dependencies in the old directory is not an upgrade. Existing installations must first use the source remove/add procedure above:
 
 1. Register the tag-pinned marketplace.
 ```powershell
-codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.4
+codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.5
 ```
 
 2. Install the new plugin.
@@ -178,7 +180,7 @@ codex plugin marketplace add Burntgogi/Gpt_Codex_HWP --ref v0.3.4
 codex plugin add gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
-This command alone does not prepare production dependencies. Validate that `version` is `0.3.4+codex.20261021164358`; from its validated `installedPath`, run `node dist/install-runtime.js --json` and require `RUNTIME_INSTALL_OK`, then run `node dist/doctor.js --json` and require `DOCTOR_OK`.
+This command alone does not prepare production dependencies. Validate that `version` is `0.3.5+codex.20261021184753`; from its validated `installedPath`, run `node dist/install-runtime.js --json` and require `RUNTIME_INSTALL_OK`, then run `node dist/doctor.js --json` and require `DOCTOR_OK`.
 
 3. Close and reopen every active Codex CLI and Desktop host once; opening a new task alone is not sufficient. The `gpt-codex-hwp@gpt-codex-hwp-local` plugin and skill must be visible, while `/mcp` must not register `gpt-codex-hwp` by default. Run one skill operation and confirm that its one-shot process exits.
 
@@ -191,22 +193,22 @@ codex plugin remove hwp-korean-docs@hwp-local
 
 ## Claude Code installation
 
-Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support is included from `v0.3.0`. After confirming v0.3.4 publication, pin `#v0.3.4` instead of tracking `main`; keep the old durable runtime until the new installation passes doctor and one document operation. Actual Claude Code GUI installation and use were not verified for this release.
+Claude Code uses the same plugin folder. The repository-root `.claude-plugin/marketplace.json` points to `plugins/gpt-codex-hwp`, and the marketplace name matches Codex: `gpt-codex-hwp-local`. Claude Code support is included from `v0.3.0`. After confirming v0.3.5 publication, its own full-tag gate, same-run attestation and four original public assets as above, pin `#v0.3.5` instead of tracking `main`; keep the old durable runtime until the new installation passes doctor and one document operation. Actual Claude Code GUI installation and use were not verified for this release.
 
 Inside a Claude Code session:
 
 ```text
-/plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.4
+/plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.5
 /plugin install gpt-codex-hwp@gpt-codex-hwp-local
 ```
 
-From a terminal, use `claude plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.4` and `claude plugin install gpt-codex-hwp@gpt-codex-hwp-local`.
+From a terminal, use `claude plugin marketplace add Burntgogi/Gpt_Codex_HWP#v0.3.5` and `claude plugin install gpt-codex-hwp@gpt-codex-hwp-local`.
 
-1. The installed plugin lives at `~/.claude/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` (or under `CLAUDE_CONFIG_DIR` when set). Verify plugin version `0.3.4+codex.20261021164358`. Claude Code replaces the `+` in the version with `-`, so this release's directory is `0.3.4-codex.20261021164358`; the runtime recognizes this layout as a Claude Code installation.
+1. The installed plugin lives at `~/.claude/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version>` (or under `CLAUDE_CONFIG_DIR` when set). Verify plugin version `0.3.5+codex.20261021184753`. Claude Code replaces the `+` in the version with `-`, so this version's directory is `0.3.5-codex.20261021184753`; the runtime recognizes this layout as a Claude Code installation.
 2. From that directory, run the same explicit runtime installer and doctor as on Codex.
 
 ```bash
-cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/<version directory>"
+cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/gpt-codex-hwp-local/gpt-codex-hwp/0.3.5-codex.20261021184753"
 node dist/install-runtime.js --json   # require code RUNTIME_INSTALL_OK
 node dist/doctor.js --json            # require code DOCTOR_OK
 ```
@@ -214,7 +216,7 @@ node dist/doctor.js --json            # require code DOCTOR_OK
 In PowerShell (replace `$env:USERPROFILE\.claude` with `CLAUDE_CONFIG_DIR` when it is set):
 
 ```powershell
-Push-Location -LiteralPath "$env:USERPROFILE\.claude\plugins\cache\gpt-codex-hwp-local\gpt-codex-hwp\<version directory>"
+Push-Location -LiteralPath "$env:USERPROFILE\.claude\plugins\cache\gpt-codex-hwp-local\gpt-codex-hwp\0.3.5-codex.20261021184753"
 try {
   $runtime = node dist/install-runtime.js --json | ConvertFrom-Json
   if ($LASTEXITCODE -ne 0 -or $runtime.code -ne "RUNTIME_INSTALL_OK") { throw "runtime installation failed" }
@@ -225,7 +227,7 @@ try {
 3. Production dependencies are stored under `~/.claude/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<major>` and are not shared with the Codex runtime.
 4. Restart the Claude Code session and confirm the `/gpt-codex-hwp:gpt-codex-hwp` skill is listed. No MCP server is registered by default; the skill runs `dist/oneshot.js` once per operation.
 
-The Claude Code path was checked on Windows x64 by installing into an isolated `CLAUDE_CONFIG_DIR` and running the runtime installer, doctor, and HWPX generate, validate, read, and preview. Claude Code on macOS is not yet verified.
+The historical Claude Code path was checked on Windows x64 by installing into an isolated `CLAUDE_CONFIG_DIR` and running the runtime installer, doctor, and HWPX generate, validate, read, and preview. That is not v0.3.5 installation/publication, default-user-profile or actual Claude Code GUI proof. Claude Code on macOS is not yet verified.
 
 ## Recommended companion skills (optional)
 
@@ -241,7 +243,7 @@ Check each repository's latest release tag and installation guide first; the com
 
 ## Durable runtime storage and removal
 
-v0.3.1 retains v0.3.0's storage outside the host-managed cache: at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>` for Codex, and in the same layout under `<CLAUDE_CONFIG_DIR or ~/.claude>/plugin-runtime-data/gpt-codex-hwp/` for Claude Code. The full plugin version is `0.3.1+codex.20261021043114` in both durable-runtime layouts; only Claude Code's plugin cache replaces `+` with `-`. For example, Node.js 22 on Windows x64 uses the `win32-x64-node22` runtime key. Different Node major versions coexist without replacing each other even when they share one Codex profile.
+v0.3.5 retains v0.3.0's storage outside the host-managed cache: at `$CODEX_HOME/plugin-runtime-data/gpt-codex-hwp/<full-plugin-version>/<platform>-<arch>-node<Node-major>` for Codex, and in the same layout under `<CLAUDE_CONFIG_DIR or ~/.claude>/plugin-runtime-data/gpt-codex-hwp/` for Claude Code. The full plugin version is `0.3.5+codex.20261021184753` in both durable-runtime layouts; only Claude Code's plugin cache replaces `+` with `-`. For example, Node.js 22 on Windows x64 uses the `win32-x64-node22` runtime key. Different Node major versions coexist without replacing each other even when they share one Codex profile.
 
 Installation size varies by platform and npm; this release does not guarantee a smaller runtime. Do not assume that removing the plugin also removes this out-of-cache data. Before cleanup, fully close every Codex CLI and Desktop host, or the Claude Code session, verify the exact unused `<full-plugin-version>` directory, and remove only that directory manually. Remove the parent `gpt-codex-hwp` runtime-data directory only after every Gpt_Codex_HWP version has been uninstalled. A later installation recreates the runtime by running `node dist/install-runtime.js --json` from a validated `installedPath`.
 

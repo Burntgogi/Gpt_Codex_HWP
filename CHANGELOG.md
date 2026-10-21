@@ -4,12 +4,49 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
-## [0.3.4] - 2026-10-21
+## [0.3.5] - 2026-10-21
 
-Publication requires this version's own immutable-tag gate, strict attestation
-and original public assets. Confirm actual status on the
-[GitHub Release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4);
-prepared source alone is not a publication record.
+Publication requires this version's own full immutable-tag gate, all three strict
+subject attestations and four original public assets from the same run. Confirm
+actual status on the [GitHub Release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.5);
+prepared source alone is not a publication record. Require actual isolated-profile
+upgrade, verified ZIP/cache byte comparison, explicit install, doctor and document
+operation with one-shot/descendant exit before claiming upgrade success.
+
+- Select the first actual allowlisted TAP error chronologically rather than by
+  configured-code order. A real multi-failure child changed `LATER_FIXED_FAILURE`
+  to `FIRST_FIXED_FAILURE`; both child and file remained failed. The permanent
+  real-child regression failed before and passed after.
+- Forward the existing strict public-process observer to the bounded history
+  batch. Keep both `pc17` replacement-ref private-tree security findings assertions,
+  workload, policy and bounds; retain the original exception as cause and report
+  the fixed stage or existing safe process enum. Actual Git `cat-file` fault smoke
+  changed coarse `pc17` to `pc17-replace-scan`, with exit 1 in both versions.
+- Remove the obsolete catalog entry for the deleted source-copy test and use a
+  semantic oracle flag instead of the brittle `rv32` ordinal. Retire incidental
+  source/default/whole-output/mock-echo assertions rather than re-pinning them.
+- Keep native collector/C#/PowerShell, permissions, mode-1, identity, RSS,
+  execution/capture/cleanup bounds and stress workload unchanged. This corrects
+  evidence loss, not the unknown original native/`pc17` cause; no native, RSS,
+  cleanup, default-user or physical Mac/Claude/Hancom GUI success is implied.
+- Use plugin `0.3.5+codex.20261021184753` and Claude cache
+  `0.3.5-codex.20261021184753`; preserve all older immutable tags and public v0.3.1.
+
+## [0.3.4] - 2026-10-21 (immutable unpublished candidate)
+
+Neutral owner `58d48d0eb76914245ee2142a6f6681008c8a6f24` exactly matched normally
+merged main `931f82bfe2c0babc60caf2c0f7726f05bcbad936` by tree. All PR checks in
+[CI 39647945797](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945797)
+and [Security 39647945795](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945795),
+plus original [main CI 39649661879](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39649661879)
+and Security passed; protection was unchanged. Original
+[full tag gate 39651543739](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39651543739)
+passed initial 10 MiB smoke, then failed node-tests with
+`WINDOWS_REPOSITORY_TEST_CASE case=pc17 status=failed`. No artifacts, attestation
+or release followed. Later actual instrumented full-file
+[Windows diagnostic 39653661700](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39653661700)
+passed every replacement stage with no `historyFailures`; it is neither original
+failure recovery nor historical-cause proof. Preserve this tag and its runs.
 
 - Preserve the first bounded Windows Node failure receipt through the release
   wrapper instead of replacing it with a later coarse file receipt. Reject
@@ -364,7 +401,8 @@ this tag and candidate artifacts rather than retagging or replacing them.
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.5
 [0.3.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.4
 [0.3.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.3
 [0.3.2]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.2

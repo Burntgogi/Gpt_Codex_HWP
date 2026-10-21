@@ -1734,13 +1734,11 @@ function forwardFixedDiagnostic(chunks, capturedBytes, options) {
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
   catch { return; }
-  for (const code of options.fixedDiagnostics) {
-    if (typeof code !== "string" || !/^[A-Z][A-Z0-9_]{0,63}$/u.test(code)) continue;
-    const escaped = code.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    if (new RegExp(`^  error: '${escaped}'$`, "mu").test(text)) {
-      try { options.onFixedDiagnostic(code); } catch {}
-      return;
-    }
+  for (const match of text.matchAll(/^  error: '([A-Z][A-Z0-9_]{0,63})'\r?$/gmu)) {
+    const code = match[1];
+    if (!options.fixedDiagnostics.includes(code)) continue;
+    try { options.onFixedDiagnostic(code); } catch {}
+    return;
   }
 }
 

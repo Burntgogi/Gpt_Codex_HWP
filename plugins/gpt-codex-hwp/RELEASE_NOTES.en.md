@@ -1,13 +1,25 @@
-# Gpt_Codex_HWP v0.3.4 Release Notes
+# Gpt_Codex_HWP v0.3.5 Release Notes
 
 - Prepared: 2026-10-21
-- Plugin version: `0.3.4+codex.20261021164358`
-- Claude Code cache: `0.3.4-codex.20261021164358`
-- Publication check: verify exact SHA, this version's own full immutable-tag gate, same-run attestation and four original public assets on the [v0.3.4 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.4) before using the installation instructions. Prepared source or another tag's passed checks do not establish publication, installation or upgrade.
+- Plugin version: `0.3.5+codex.20261021184753`
+- Claude Code cache: `0.3.5-codex.20261021184753`
+- Publication check: verify exact SHA, this version's own full immutable-tag gate, all three strict subject attestations and four original public assets on the [v0.3.5 release](https://github.com/Burntgogi/Gpt_Codex_HWP/releases/tag/v0.3.5) before using the installation instructions. Prepared source or another tag's passed checks do not establish publication, installation or upgrade.
 
 [한국어](RELEASE_NOTES.md) | [README](README.en.md)
 
 ## Original failure receipt retention
+
+The fixed-diagnostic selector now scans allowlisted TAP errors chronologically, not in configured-code order. A real child with multiple failed Node cases selected `LATER_FIXED_FAILURE` before and `FIRST_FIXED_FAILURE` after; child/file failure remained failure. The permanent real-child regression failed before and passed after.
+
+The history scanner forwards its existing strict public-process failure observer to the bounded batch. The original `pc17` replacement-ref hidden-private-tree security test retains both actual security findings assertions and its workload, policy and bounds; its wrapper retains the original exception as cause while reporting a fixed stage or existing safe process-code diagnostic. A real Git `cat-file` command-fault smoke changed coarse `pc17` to bounded `pc17-replace-scan`, with exit 1 in both versions. No native/RSS/cleanup proof is synthesized. Native collector/C#/PowerShell, permissions, mode-1, identity, RSS and execution/capture/cleanup limits remain unchanged.
+
+Remove the obsolete catalog entry for the already deleted source-copy test; oracle dispatch uses a semantic flag rather than the brittle `rv32` ordinal. Retire incidental source/default/whole-output/mock-echo assertions rather than re-pinning them. These are evidence-retention corrections, not a fix or explanation of the original native/`pc17` cause.
+
+## Unpublished immutable v0.3.4 record
+
+Preserve `v0.3.4` at neutral owner `58d48d0eb76914245ee2142a6f6681008c8a6f24`, whose tree exactly matched normally merged main `931f82bfe2c0babc60caf2c0f7726f05bcbad936`. All PR checks in [CI 39647945797](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945797) and [Security 39647945795](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39647945795), and original [main CI 39649661879](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39649661879) plus Security passed; branch protection was unchanged. The original [full tag gate 39651543739](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39651543739) passed initial 10 MiB smoke, then failed node-tests with `WINDOWS_REPOSITORY_TEST_CASE case=pc17 status=failed`. No artifacts, attestation or release followed.
+
+The later actual instrumented full-file [Windows diagnostic 39653661700](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39653661700) passed all replacement stages and had no `historyFailures`. It neither recovers the original failed gate nor proves its historical cause; that cause remains unknown. Preserve the old tag and runs; do not reuse them as v0.3.5 gate evidence.
 
 The release wrapper now preserves the original rich `WINDOWS_NODE_TEST_FAILURE` rather than discarding it for a trailing coarse file receipt. A real-child parser probe before and after retained failed status in both versions and kept the original rich receipt after the correction; prepared behavioral verification passed.
 
@@ -22,7 +34,7 @@ Duplicated MCP tool-name literals, the bare not-throw wrapper and source/command
 
 Preserve immutable `v0.3.3` at neutral-owner source `5ac9f568f4ac0c3d5cec14f54f2a68acf996bc19`, whose tree exactly matched normally merged main `8e1ce2ae90038907873880ad96bd365d18a2526c`. All four PR checks in [39627644066](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627644066) and [Security 39627643973](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39627643973) passed. Original [postmerge 39629542245](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629542245) failed actual Windows runtime one-shot cleanup at `windows-helper-sampling`; [tag full gate 39629550109](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39629550109) passed its initial 10 MiB smoke but failed the full Node gate at `mcp-smoke`. No assets, attestation or release were produced.
 
-Later instrumented [native 39633262366](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633262366) passed actual nine-tool/HWPX 14,421-byte/zero-stderr/zero-descendant verification, and unchanged [MCP 39633269000](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633269000) passed. These diagnostics do not identify either original cause or recover either original failed run. Exact original sampling/MCP causes remain unknown. Never move or replace the tag or reuse its checks as v0.3.4 evidence.
+Later instrumented [native 39633262366](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633262366) passed actual nine-tool/HWPX 14,421-byte/zero-stderr/zero-descendant verification, and unchanged [MCP 39633269000](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39633269000) passed. These diagnostics do not identify either original cause or recover either original failed run. Exact original sampling/MCP causes remain unknown. Never move or replace the tag or reuse its checks as v0.3.5 evidence.
 
 ## Release-path improvements without relaxed limits
 
@@ -34,7 +46,7 @@ The [counterbalanced Windows experiment](https://github.com/Burntgogi/Gpt_Codex_
 
 ## Unpublished v0.3.2 candidate
 
-The immutable `v0.3.2` tag remains at neutral-owner source `f02d7ff416f76ee34fbd3bc0f31ab501988148fc`. Its [full gate and attestation](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599590179) passed, but the original Windows `release-artifacts.test.ts` exceeded its deadline in [postmerge main CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599469450), so no GitHub Release was published. Its exact historical cause cannot be reconstructed; later diagnostic success does not invalidate that failure. Preserve the tag and artifacts instead of moving/replacing them; use v0.3.4's fresh identity and its own validation.
+The immutable `v0.3.2` tag remains at neutral-owner source `f02d7ff416f76ee34fbd3bc0f31ab501988148fc`. Its [full gate and attestation](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599590179) passed, but the original Windows `release-artifacts.test.ts` exceeded its deadline in [postmerge main CI](https://github.com/Burntgogi/Gpt_Codex_HWP/actions/runs/39599469450), so no GitHub Release was published. Its exact historical cause cannot be reconstructed; later diagnostic success does not invalidate that failure. Preserve the tag and artifacts instead of moving/replacing them; use v0.3.5's fresh identity and its own validation.
 
 ## Normal reparenting and real RSS
 
@@ -44,9 +56,9 @@ A controlled, actual Linux parent/child reparenting probe rejected the sample be
 
 ## Installation and verification scope
 
-Only after actual publication, follow the README's v0.3.4 tag-change procedure. Even when source remove/add retains the previous cache, Codex CLI 0.162.1 `plugin add` can remove that cache. Do not manually delete the old durable runtime. Verify the new identity and `installedPath`, explicit installation, doctor, host restart and a document operation. The v0.3.1 markdown-it 14.3.3 security fix remains, as do nine tools and read-only HWP/HWPX writing.
+Only after actual publication, follow the README's v0.3.5 tag-change procedure and require an actual isolated-profile upgrade against the verified original public ZIP, including installed-cache byte comparison. Even when source remove/add retains the previous cache, Codex CLI 0.162.1 `plugin add` can remove that cache. Do not manually delete the old durable runtime. Verify the new identity and `installedPath`, explicit installation, doctor, host restart and a document operation with one-shot/descendant exit. The v0.3.1 markdown-it 14.3.3 security fix remains, as do nine tools and read-only HWP/HWPX writing.
 
-Preserve the v0.3.1 tag, assets and historical verification and the unpublished v0.3.2/v0.3.3 tags. Judge this patch's publication and platform checks only by its own v0.3.4 release evidence. Hosted macOS is not physical-Mac/Desktop/Claude Code/Hancom GUI validation; no default-user installation is claimed. Publish only ZIP, SPDX, provenance and SHA256SUMS from the same exact immutable-tag run that passes the full gate and all three strict attestations; never substitute a local rebuild.
+Preserve the v0.3.1 tag, assets and historical verification and the unpublished immutable v0.3.2/v0.3.3/v0.3.4 tags. Judge this patch's publication and platform checks only by its own v0.3.5 release evidence. Hosted macOS is not physical-Mac/Desktop/Claude Code/Hancom GUI validation; no default-user installation is claimed. Publish only ZIP, SPDX, provenance and SHA256SUMS from the same exact immutable-tag run that passes the full gate and all three strict attestations; never substitute a local rebuild.
 
 ## Historical v0.3.1 public record
 

@@ -144,7 +144,7 @@ export async function scanPublicHistory(options = {}) {
     } else {
       throw historyFailure();
     }
-  });
+  }, options.onFailureDiagnostic);
 
   validateFrozenTagTargets(frozenReleaseTags, tagTargets, objectTypes);
   addTaggedRootTrees(tagTargets, objectTypes, rootTrees);
@@ -516,7 +516,7 @@ function parseObjectRecords(bytes) {
   return Object.freeze({ objectIds: [...new Set(objectIds)], objectLabels });
 }
 
-async function readObjectsBatch(root, objectIds, visit) {
+async function readObjectsBatch(root, objectIds, visit, onFailureDiagnostic) {
   const input = Buffer.from(`${objectIds.join("\n")}\n`, "ascii");
   let lifecycle;
   try {
@@ -524,6 +524,7 @@ async function readObjectsBatch(root, objectIds, visit) {
       "--no-replace-objects", "-C", root, "cat-file", "--batch",
     ], {
       env: gitEnvironment(),
+      onFailureDiagnostic,
       input,
       timeoutMs: 15 * 60 * 1_000,
     });
