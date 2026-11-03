@@ -47,10 +47,10 @@ test("dependency contract resolves the patched Hono Node adapter in both locks",
   for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
     const lock = await readJson(join(root, "package-lock.json"));
     const adapter = lock.packages?.["node_modules/@hono/node-server"];
-    assert.equal(adapter?.version, "2.0.11", label);
+    assert.equal(adapter?.version, "2.1.3", label);
     assert.equal(
       adapter?.resolved,
-      "https://registry.npmjs.org/@hono/node-server/-/node-server-2.0.11.tgz",
+      "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.3.tgz",
       label,
     );
   }
@@ -61,12 +61,20 @@ test("dependency contract resolves patched production dependencies and projects 
   for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
     const lock = await readJson(join(root, "package-lock.json"));
     locks.set(label, lock);
+    assert.deepEqual(
+      Object.entries(lock.packages)
+        .filter(([path]) => path.endsWith("/node_modules/zod") || path === "node_modules/zod")
+        .map(([, record]) => record.version),
+      ["4.6.7"],
+      label,
+    );
+    assert.equal(lock.packages?.["node_modules/body-parser"]?.version, "2.4.0", label);
     assert.equal(lock.packages?.["node_modules/@xmldom/xmldom"]?.version, "0.9.12", label);
     assert.equal(lock.packages?.["node_modules/sharp"]?.version, "0.35.5", label);
-    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.8", label);
-    assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.11", label);
-    assert.equal(lock.packages?.["node_modules/qs"]?.version, "6.16.0", label);
-    assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.7.2", label);
+    assert.equal(lock.packages?.["node_modules/fast-uri"]?.version, "3.1.9", label);
+    assert.equal(lock.packages?.["node_modules/hono"]?.version, "4.13.16", label);
+    assert.equal(lock.packages?.["node_modules/qs"]?.version, "6.17.1", label);
+    assert.equal(lock.packages?.["node_modules/ip-address"]?.version, "10.7.5", label);
   }
 
   assert.deepEqual(
@@ -84,6 +92,18 @@ test("dependency contract resolves patched production dependencies and projects 
   for (const path of ["node_modules/@emnapi/runtime", "node_modules/tslib"]) {
     assert.equal(Object.hasOwn(locks.get("runtime").packages[path], "cpu"), false, path);
   }
+});
+
+test("installed Zod rejects an oversized array before reading any elements", () => {
+  const requireSource = createRequire(join(SOURCE, "package.json"));
+  const { z } = requireSource("zod");
+  const input = Array(10_001);
+  Object.defineProperty(input, 0, {
+    get() { assert.fail("An oversized array must be rejected before element validation."); },
+  });
+  const result = z.array(z.string()).max(10_000).safeParse(input);
+  assert.equal(result.success, false);
+  assert.deepEqual(result.error.issues.map((issue) => issue.code), ["too_big"]);
 });
 
 test("installed URI normalization folds percent-encoded uppercase hosts", () => {

@@ -65,9 +65,9 @@ Thank you to Edward Kim and the rhwp contributors for making this optional Rust/
 ## Model Context Protocol TypeScript SDK
 
 - Repository: <https://github.com/modelcontextprotocol/typescript-sdk>
-- Version: `@modelcontextprotocol/sdk` `1.32.1` (upstream tag `1.32.1`)
+- Version: `@modelcontextprotocol/sdk` `1.32.2` (upstream tag `1.32.2`)
 - Copyright: `Copyright (c) 2024 Anthropic, PBC`
-- License: MIT for the fixed `1.32.1` source and package (the upstream repository has announced a move to Apache-2.0 for later versions; recheck on upgrade)
+- License: MIT for the fixed `1.32.2` source and package (the upstream repository has announced a move to Apache-2.0 for later versions; recheck on upgrade)
 - Use in this project: MCP server, stdio transport, request/result types, and tool registration.
 
 Thank you to the modelcontextprotocol maintainers and contributors for the TypeScript MCP implementation.
@@ -116,7 +116,7 @@ Thank you to Vitaly Puzrin, Alex Kocharin, and the markdown-it contributors for 
 ## fast-uri
 
 - Repository: <https://github.com/fastify/fast-uri>
-- Version: `3.1.8` (`v3.1.8`)
+- Version: `3.1.9` (`v3.1.9`)
 - Copyright: `Copyright (c) 2011-2021, Gary Court`; `Copyright (c) 2021-present The Fastify team`
 - License: BSD-3-Clause
 - Registry integrity: `sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==`
@@ -139,7 +139,7 @@ Thank you to Lovell Fuller and the Sharp contributors for the cross-platform ima
 ## Zod
 
 - Repository: <https://github.com/colinhacks/zod>
-- Version: `3.25.76` (`v3.25.76`)
+- Version: `4.6.7` (`v4.6.7`)
 - Copyright: `Copyright (c) 2025 Colin McDonnell`
 - License: MIT
 - Use in this project: runtime schemas and validation for the public MCP tool inputs.

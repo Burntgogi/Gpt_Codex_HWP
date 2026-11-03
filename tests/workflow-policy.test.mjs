@@ -544,7 +544,8 @@ function assertSecurityWorkflowPolicy(workflow) {
     "npm run security:scan-history",
     "npm ci --ignore-scripts --prefix packages/gpt-codex-hwp",
     "npm run runtime:check",
-    "npm audit --omit=dev --prefix packages/gpt-codex-hwp",
+    "npm audit --package-lock-only --prefix packages/gpt-codex-hwp",
+    "npm audit --package-lock-only --prefix plugins/gpt-codex-hwp",
     "npm run test:policy",
     "git diff --exit-code -- .",
   ];
@@ -557,11 +558,11 @@ function assertSecurityWorkflowPolicy(workflow) {
   }
   assert.doesNotMatch(job, /github-repository-policy|GH_TOKEN|github\.token/u,
     "required PR checks cannot depend on repository-admin credentials");
-  assert.doesNotMatch(job, /npm ci[^\r\n]*--prefix plugins\/gpt-codex-hwp|npm audit[^\r\n]*--prefix plugins\/gpt-codex-hwp/u);
+  assert.doesNotMatch(job, /npm ci[^\r\n]*--prefix plugins\/gpt-codex-hwp/u);
   assert.doesNotMatch(job, /release:artifacts|verify:release-artifacts|RELEASE_ARTIFACT_DIR|actions\/(?:upload-artifact|attest)|id-token:\s*write/u);
   assert.doesNotMatch(job, /git config --local|git remote set-url/u);
   assert.doesNotMatch(job, /^        (?:continue-on-error|if|shell):/mu);
-  assert.equal(countMatches(job, /npm audit --omit=dev --prefix packages\/gpt-codex-hwp/gu), 1);
+  assert.equal(countMatches(job, /\bnpm audit\b/gu), 2);
   assert.equal(countMatches(job, /npm run test:policy/gu), 1);
   assertPinnedActions(workflow);
 }
@@ -573,7 +574,8 @@ test("Security policy rejects duplicated audit, release ownership, weaker cancel
     ["policy replacement", workflow.replace("npm run test:policy", "npm test")],
     ["policy duplication", workflow.replace("npm run test:policy", "npm run test:policy && npm run test:policy")],
     ["runtime install", workflow.replace("npm run runtime:check", "npm ci --ignore-scripts --prefix plugins/gpt-codex-hwp --omit=dev\n      - run: npm run runtime:check")],
-    ["runtime audit", workflow.replace("npm run runtime:check", "npm run runtime:check\n      - run: npm audit --omit=dev --prefix plugins/gpt-codex-hwp")],
+    ["duplicate runtime audit", workflow.replace("npm run runtime:check", "npm run runtime:check\n      - run: npm audit --package-lock-only --prefix plugins/gpt-codex-hwp")],
+    ["missing runtime audit", workflow.replace("npm audit --package-lock-only --prefix plugins/gpt-codex-hwp", "npm --version")],
     ["release ownership", workflow.replace("npm run test:policy", "npm run release:artifacts\n      - run: npm run test:policy")],
     ["write permission", workflow.replace("permissions: {}", "permissions:\n  issues: write")],
     ["default shell", workflow.replace("permissions: {}", "permissions: {}\ndefaults: { run: { shell: bash -c \"source {0}; exit 0\" } }")],

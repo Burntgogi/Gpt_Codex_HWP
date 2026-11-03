@@ -880,7 +880,7 @@ async function createReleaseFixture(t: test.TestContext) {
   );
   await writeJson(join(runtimeRoot, "vendor", "kordoc-core", "PROVENANCE.json"), {
     schemaVersion: 2,
-    generatorVersion: 2,
+    generatorVersion: 3,
     source: {
       name: "kordoc",
       version: "3.18.1",
