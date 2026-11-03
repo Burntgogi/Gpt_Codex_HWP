@@ -1,3 +1,9 @@
+# Gpt_Codex_HWP v0.3.6 Release Notes
+
+Upgrade Zod to 4.6.7 and the MCP SDK to 1.32.2. Keep the vendored Kordoc document library while omitting its unused standalone CLI, MCP, and their dependencies. Security CI audits both lockfiles.
+
+---
+
 # Gpt_Codex_HWP v0.3.5 Release Notes
 
 - Prepared: 2026-10-21
