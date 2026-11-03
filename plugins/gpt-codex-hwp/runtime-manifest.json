@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "productId": "gpt-codex-hwp",
   "pluginVersion": "0.3.5+codex.20261021184753",
-  "packageLockSha256": "6544a4f080b6dca6fdeee72485d2c61bf863796caa8e5422f198ff8b212ed050",
+  "packageLockSha256": "416385b706c9eb398cd4954e10890f45b0cb9d721fa4a8bc742c5654efc1b653",
   "mainEntries": [
     "dist/doctor-main.js",
     "dist/mcp-main.js",
@@ -356,18 +356,18 @@
     },
     {
       "path": "examples/oneshot-tool-schemas.json",
-      "size": 4530,
-      "sha256": "f896284631f2863c874cb28c98a2fe6ece54397227f5c8032580d22d536b1198"
+      "size": 3959,
+      "sha256": "1e43a32583fa4d6d2e06f4b16f31b7afd0bc52a93cd444fecc0f1b6e06bfa472"
     },
     {
       "path": "package-lock.json",
-      "size": 87458,
-      "sha256": "6544a4f080b6dca6fdeee72485d2c61bf863796caa8e5422f198ff8b212ed050"
+      "size": 87065,
+      "sha256": "416385b706c9eb398cd4954e10890f45b0cb9d721fa4a8bc742c5654efc1b653"
     },
     {
       "path": "package.json",
-      "size": 670,
-      "sha256": "d2add2a79bfe44f99d1444e60868cc0dc41320dcd138879094e03c0ad78694fe"
+      "size": 743,
+      "sha256": "741421eabab7f84a38290a7d1be1ef4d7f74bf18b9aa6be793d117676bb5f31a"
     },
     {
       "path": "scripts/hwpx-safe-edit/hwpxlib.py",
@@ -386,8 +386,8 @@
     },
     {
       "path": "scripts/kordoc-runtime-verifier.mjs",
-      "size": 10103,
-      "sha256": "3050d3b08ad089843e448f10d64606c2c33fea4e81a69d4ed003584df95fc3ad"
+      "size": 10677,
+      "sha256": "0d2a6e89e0030103538f19a1831d37e9874790cbbbe7b84ba438cda1d01853de"
     },
     {
       "path": "vendor/kordoc-core/LICENSE",
@@ -396,8 +396,8 @@
     },
     {
       "path": "vendor/kordoc-core/PROVENANCE.json",
-      "size": 6658,
-      "sha256": "aac3477049b83eaf260ef3181a9f095d8060c643fa589060750ac06ddf1f7399"
+      "size": 6210,
+      "sha256": "8137904c89cafa765c1d70ea8b266018fe79345adbe6279f3087d5d395fa12b9"
     },
     {
       "path": "vendor/kordoc-core/README.md",
@@ -475,11 +475,6 @@
       "sha256": "50a2a2895d2ce5bf7d21fc7b2df315e431dccc57ceee49b566355ba71588b246"
     },
     {
-      "path": "vendor/kordoc-core/dist/cli.js",
-      "size": 31266,
-      "sha256": "130306b25e2512c05f0411eb69ae0fcf6b7aa9340632f602e1eb694e8c7a427e"
-    },
-    {
       "path": "vendor/kordoc-core/dist/detect-RI2MQ33K.js",
       "size": 392,
       "sha256": "5953f82f7898a2434ce8859f7e496006eaf4133d3fcc07cac9adb5b124f70714"
@@ -518,11 +513,6 @@
       "path": "vendor/kordoc-core/dist/index.js",
       "size": 702192,
       "sha256": "e7de567e1abc2a961c4e190529f2f7d52763c468a687ec5b6b9aabbd5e540010"
-    },
-    {
-      "path": "vendor/kordoc-core/dist/mcp.js",
-      "size": 34920,
-      "sha256": "fc0aa20ebd4b6eb2a5a615fb41e31f746c52f66ee2541dd70bf60128eaee244a"
     },
     {
       "path": "vendor/kordoc-core/dist/page-range-737B4EZW.js",
@@ -580,19 +570,14 @@
       "sha256": "a2e4ef0096f28a4c62bea004bc1cd3161bcaaf14a6ab9cb579ceb21c5e35841d"
     },
     {
-      "path": "vendor/kordoc-core/dist/setup-57FB3LSP.js",
-      "size": 8076,
-      "sha256": "8402dc271183a053cd9df266c311363ea2d69cc4412fc631d375bed79ac6c1ab"
-    },
-    {
       "path": "vendor/kordoc-core/dist/watch-2MNRQWGV.js",
       "size": 6495,
       "sha256": "6f3a5561275e46c9635a8a2354c8954e4bc04014315d569d47ec66b3dfd259d6"
     },
     {
       "path": "vendor/kordoc-core/package.json",
-      "size": 1100,
-      "sha256": "ed72b3e96d436a72c9cf4c04ccf4db6adb20c6fd85a0b5002688c318c780d06e"
+      "size": 1006,
+      "sha256": "9202e24c0e6a22f30c590028dc7295de53a6ae5f69bb51724014aafc1a58c8a6"
     }
   ]
 }

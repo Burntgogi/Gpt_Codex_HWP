@@ -41,8 +41,10 @@ jobs:
         run: npm ci --ignore-scripts --prefix packages/gpt-codex-hwp
       - name: Verify projected runtime is current
         run: npm run runtime:check
-      - name: Audit source production dependencies
-        run: npm audit --omit=dev --prefix packages/gpt-codex-hwp
+      - name: Audit source dependency lock
+        run: npm audit --package-lock-only --prefix packages/gpt-codex-hwp
+      - name: Audit distribution dependency lock
+        run: npm audit --package-lock-only --prefix plugins/gpt-codex-hwp
       - name: Verify workflow, repository, and dependency policies
         run: npm run test:policy
       - name: Reject generated repository changes

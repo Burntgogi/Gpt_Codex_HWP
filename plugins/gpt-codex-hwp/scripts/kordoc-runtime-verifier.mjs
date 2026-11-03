@@ -10,7 +10,7 @@ export const KORDOC_SOURCE = Object.freeze({
   integrity: "sha512-/SrgNK9RKnz1wdlhOvBeJi6+pNSO+vZeBHMxKd8TvfIkuinQBpwbE+W76TGNsMC7bxx2NJhNQAJPqCyD5ltiGA==",
 });
 
-export const KORDOC_GENERATOR_VERSION = 2;
+export const KORDOC_GENERATOR_VERSION = 3;
 export const KORDOC_LIMITS = Object.freeze({
   archiveBytes: 32 * 1024 * 1024,
   expandedBytes: 64 * 1024 * 1024,
@@ -36,16 +36,26 @@ export const KORDOC_PACKAGE_FIELDS = Object.freeze([
   "repository",
 ]);
 
+export function isKordocStandaloneEntry(path) {
+  return /^dist\/(?:cli\.js|mcp\.js|setup-[A-Z0-9]+\.js)$/u.test(path);
+}
+
 const TOP_LEVEL = Object.freeze(["dist", "LICENSE", "package.json", "PROVENANCE.json", "README.md"]);
 const PROVENANCE_FIELDS = Object.freeze(["schemaVersion", "generatorVersion", "source", "archive", "files"]);
 const MAX_TOTAL_FILE_BYTES = KORDOC_LIMITS.expandedBytes;
 
 export function kordocPackageSubset(source) {
-  return Object.fromEntries(
+  const subset = Object.fromEntries(
     KORDOC_PACKAGE_FIELDS
       .filter((field) => source[field] !== undefined)
       .map((field) => [field, source[field]]),
   );
+  if (subset.dependencies !== undefined) {
+    // These are used only by the upstream CLI and MCP entry points.
+    const { zod, commander, "@modelcontextprotocol/sdk": sdk, ...libraryDependencies } = subset.dependencies;
+    subset.dependencies = libraryDependencies;
+  }
+  return subset;
 }
 
 export async function kordocFileRecords(vendorRoot, excluded = new Set()) {
@@ -66,6 +76,7 @@ export async function verifyKordocCoreRuntime(vendorRoot, expectedSource = KORDO
     KORDOC_PACKAGE_FIELDS.filter((field) => packageJson[field] !== undefined),
     "package fields",
   );
+  assertSame(packageJson, kordocPackageSubset(packageJson), "library-only package");
   if (packageJson.name !== expectedSource.name || packageJson.version !== expectedSource.version) {
     throw new Error("Vendored Kordoc identity is invalid.");
   }
@@ -88,8 +99,8 @@ export async function verifyKordocCoreRuntime(vendorRoot, expectedSource = KORDO
     throw new Error("Kordoc provenance file records are invalid.");
   }
   const actual = await fileRecords(boundary, new Set(["PROVENANCE.json"]));
-  if (actual.some((record) => record.path.endsWith(".map"))) {
-    throw new Error("Vendored Kordoc source maps are forbidden.");
+  if (actual.some((record) => record.path.endsWith(".map") || isKordocStandaloneEntry(record.path))) {
+    throw new Error("Vendored Kordoc source maps and standalone entry points are forbidden.");
   }
   assertSame(actual, provenance.files, "provenance file records");
   return Object.freeze(structuredClone(provenance));

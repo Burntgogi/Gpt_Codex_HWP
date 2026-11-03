@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 import { assertPublicContentBuffer } from "./public-content-policy.mjs";
+import { KORDOC_GENERATOR_VERSION } from "./kordoc-runtime-verifier.mjs";
 import { readGitBlobBatch } from "./git-blob-batch.mjs";
 import {
   noReplaceGitArguments,
@@ -554,7 +555,7 @@ function verifyKordoc(entries, provenance) {
   const recordEntry = entries.find(({ name }) => name === "vendor/kordoc-core/PROVENANCE.json");
   if (recordEntry === undefined) throw verificationError("RELEASE_ARTIFACTS_KORDOC_INVALID");
   const record = parseJson(recordEntry.bytes, "RELEASE_ARTIFACTS_KORDOC_INVALID");
-  if (!isRecord(record) || record.schemaVersion !== 2 || record.generatorVersion !== 2
+  if (!isRecord(record) || record.schemaVersion !== 2 || record.generatorVersion !== KORDOC_GENERATOR_VERSION
     || record.source?.name !== "kordoc" || record.source?.version !== provenance.kordoc?.source?.version
     || record.source?.integrity !== provenance.kordoc?.source?.integrity
     || record.source?.resolved !== provenance.kordoc?.source?.resolved

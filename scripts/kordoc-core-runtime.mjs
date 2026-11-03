@@ -14,6 +14,7 @@ import {
   KORDOC_GENERATOR_VERSION,
   KORDOC_LIMITS,
   KORDOC_SOURCE,
+  isKordocStandaloneEntry,
   kordocFileRecords,
   kordocPackageSubset,
   verifyKordocCoreRuntime,
@@ -143,7 +144,7 @@ function selectedArchiveFiles(entries) {
       path === "package/README.md" ||
       path.startsWith("package/dist/");
     if (!allowed) throw new Error(`Unexpected regular file in Kordoc archive: ${path}`);
-    if (path.endsWith(".map")) continue;
+    if (path.endsWith(".map") || isKordocStandaloneEntry(path.slice("package/".length))) continue;
     selected.set(path.slice("package/".length), bytes);
   }
   for (const required of ["package.json", "LICENSE", "README.md"]) {

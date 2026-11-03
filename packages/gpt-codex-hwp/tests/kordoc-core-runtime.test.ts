@@ -53,7 +53,7 @@ test("authenticated Kordoc archive generation is deterministic and source maps a
 
   t.diagnostic("KORDOC_KC01_STAGE_GENERATED_ASSERTIONS");
   assert.equal(generated.schemaVersion, 2);
-  assert.equal(generated.generatorVersion, 2);
+  assert.equal(generated.generatorVersion, 3);
   assert.equal(generated.archive.sha512, expectedSource.integrity);
   t.diagnostic("KORDOC_KC01_STAGE_PACKAGE_ASSERTIONS");
   const packageJson = JSON.parse(await readFile(join(first, "package.json"), "utf8"));
