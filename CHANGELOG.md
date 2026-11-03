@@ -4,6 +4,12 @@ This file records release tags and their publication status. Work under `Unrelea
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-04
+
+- Update Zod and the MCP SDK and resolve remaining npm dependency advisories.
+- Ship Kordoc as a document library without its standalone CLI and MCP.
+- Audit both source and distribution lockfiles in Security policy CI.
+
 ## [0.3.5] - 2026-10-21
 
 Publication requires this version's own full immutable-tag gate, all three strict
@@ -413,7 +419,8 @@ this tag and candidate artifacts rather than retagging or replacing them.
 
 - Published the initial Windows x64 validated Gpt_Codex_HWP release.
 
-[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.5
 [0.3.4]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.4
 [0.3.3]: https://github.com/Burntgogi/Gpt_Codex_HWP/compare/v0.3.1...v0.3.3
