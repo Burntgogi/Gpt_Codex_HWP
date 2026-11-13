@@ -128,6 +128,45 @@ test("one-shot and large smoke preserve a redacted installation process failure 
   }
 });
 
+test("installation diagnostics preserve only allowlisted stages and process-failure precedence", async () => {
+  for (const [runSmoke, prefix] of [
+    [smokeModule.runInstalledOneShotSmoke, "RUNTIME_SMOKE"],
+    [smokeModule.runInstalledLargeDocumentSmoke, "LARGE_DOCUMENT_SMOKE"],
+  ]) {
+    for (const [stage, fields, expected] of [
+      ["npm-ci", {}, "nonzero installStage=npm-ci"],
+      ["npm-ls", {}, "nonzero installStage=npm-ls"],
+      ["doctor", {}, "nonzero installStage=doctor"],
+      ["acl", {}, "nonzero installStage=acl"],
+      ["quarantine", {}, "nonzero installStage=quarantine"],
+      ["publish", {}, "nonzero installStage=publish"],
+      ["PRIVATE/path", {}, "nonzero"],
+      ["npm-ci", { timedOut: true }, "timeout"],
+      ["npm-ci", { overflow: true }, "output-limit"],
+      ["npm-ci", { terminationFailed: true }, "cleanup"],
+    ]) {
+      let output = "";
+      const result = await runSmoke({
+        prepareRuntime: () => smokeModule.prepareRestartSafeRuntime({
+          buildRuntime: async () => {},
+          runProcess: async () => ({
+            ...successfulProcess(), code: 1,
+            stdout: Buffer.from(JSON.stringify({
+              schemaVersion: 1, code: "RUNTIME_INSTALL_FAILED", ok: false,
+              stage, detail: "PRIVATE/path PRIVATE_STDERR",
+            })),
+            stderr: Buffer.from("PRIVATE_STDERR"), ...fields,
+          }),
+        }),
+        stdout: { write(value) { output += value; return true; } },
+        setExitCode() {},
+      });
+      assert.equal(result, false);
+      assert.equal(output, `${prefix} status=failed stage=runtime-install reason=${expected}\n`);
+    }
+  }
+});
+
 test("one-shot smoke classifies process failures using only fixed redacted reasons", async () => {
   for (const [fields, reason] of [
     [{ timedOut: true }, "timeout"],
@@ -183,11 +222,13 @@ function successfulProcess() {
 test("default installed runtime smoke invokes the real compiled one-shot and verifies bounded cleanup", async () => {
   assert.equal(typeof smokeModule.runInstalledOneShotSmoke, "function");
   let output = "";
+  let exitCode;
   const receipt = await smokeModule.runInstalledOneShotSmoke({
     stdout: { write(value) { output += value; return true; } },
-    setExitCode(code) { assert.equal(code, 0); },
+    setExitCode(code) { exitCode = code; },
   });
 
+  assert.equal(exitCode, 0, output);
   assert.ok(receipt.hwpxBytes > 4);
   assert.equal(receipt.remainingDescendantCount, 0);
   assert.match(output, /^RUNTIME_SMOKE status=passed tools=9 hwpxBytes=\d+ hwpx=passed stderrBytes=0 remainingDescendants=0\n$/u);

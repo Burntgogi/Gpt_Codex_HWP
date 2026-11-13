@@ -47,10 +47,10 @@ test("dependency contract resolves the patched Hono Node adapter in both locks",
   for (const [label, root] of [["source", SOURCE], ["runtime", RUNTIME]]) {
     const lock = await readJson(join(root, "package-lock.json"));
     const adapter = lock.packages?.["node_modules/@hono/node-server"];
-    assert.equal(adapter?.version, "2.1.3", label);
+    assert.equal(adapter?.version, "2.1.6", label);
     assert.equal(
       adapter?.resolved,
-      "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.3.tgz",
+      "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.6.tgz",
       label,
     );
   }

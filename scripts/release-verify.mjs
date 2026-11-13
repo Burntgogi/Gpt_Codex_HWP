@@ -28,6 +28,7 @@ const TOOL_COUNT = 9;
 const executeFile = promisify(execFile);
 const GIT_IDENTITY_PATTERN = /^[a-f0-9]{40}$/u;
 const LARGE_DOCUMENT_FAILURE_PATTERN = /^LARGE_DOCUMENT_SMOKE status=failed stage=[a-z0-9-]+(?: reason=(?:timeout|output-limit|cleanup|signal|nonzero|stderr|stdout|invalid-result))?$/u;
+const RUNTIME_INSTALL_FAILURE_PATTERN = /^LARGE_DOCUMENT_SMOKE status=failed stage=runtime-install reason=nonzero installStage=(?:parents|lock|existing-runtime|stage-create|acl|manifest-copy|npm-ci|npm-ls|dependency-tree|doctor|receipt|quarantine|publish)$/u;
 
 export const REQUIRED_RELEASE_STAGES = Object.freeze([
   "metadata",
@@ -316,6 +317,7 @@ function selectDocumentBenchmarkFailureReceipt(result) {
     .split(/\r?\n/u)
     .map((line) => line.trim());
   const patterns = [
+    RUNTIME_INSTALL_FAILURE_PATTERN,
     LARGE_DOCUMENT_FAILURE_PATTERN,
     /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u,
     /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u,
@@ -357,7 +359,8 @@ function normalizedDocumentBenchmarkDiagnostic(value) {
 }
 
 function isSafeDocumentBenchmarkReceipt(value) {
-  return LARGE_DOCUMENT_FAILURE_PATTERN.test(value)
+  return RUNTIME_INSTALL_FAILURE_PATTERN.test(value)
+    || LARGE_DOCUMENT_FAILURE_PATTERN.test(value)
     || /^BENCHMARK_RUNNER_(?:CHILD_ERROR|NONZERO|OUTPUT_LIMIT|SIGNAL|SPAWN_ERROR|STAGE_TIMEOUT|TIMEOUT|UNAVAILABLE)$/u.test(value)
     || /^BENCHMARK_TERMINATION_FAILED stage=[a-z0-9-]+$/u.test(value)
     || /^BENCHMARK_SNAPSHOT_FAILURE stage=[a-z0-9-]+$/u.test(value)

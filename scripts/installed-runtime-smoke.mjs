@@ -32,6 +32,10 @@ const MAX_ONESHOT_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_HWPX_BYTES = 8 * 1024 * 1024;
 const ONESHOT_CLEANUP_EVIDENCE_ENV = "GPT_CODEX_HWP_ONESHOT_CLEANUP_EVIDENCE";
 const INSTALL_TIMEOUT_MS = 12 * 60 * 1000;
+const RUNTIME_INSTALL_STAGES = new Set([
+  "parents", "lock", "existing-runtime", "stage-create", "acl", "manifest-copy",
+  "npm-ci", "npm-ls", "dependency-tree", "doctor", "receipt", "quarantine", "publish",
+]);
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const SVG_INPUT = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="#000"/></svg>';
@@ -189,6 +193,7 @@ class RuntimeProcessFailure extends Error {
     super("One-shot process failed.");
     this.reason = reason;
     this.diagnostic = PUBLIC_PROCESS_FAILURE_DIAGNOSTICS.includes(diagnostic) ? diagnostic : undefined;
+    this.installStage = undefined;
   }
 }
 
@@ -375,6 +380,7 @@ export async function runInstalledOneShotSmoke(options = {}) {
     if (error instanceof RuntimeProcessFailure) {
       failureReason = error.reason;
       failureBoundary = error.diagnostic;
+      if (error.installStage !== undefined) failureReason += ` installStage=${error.installStage}`;
     }
   } finally {
     if (cleanupRoot !== undefined) {
@@ -510,6 +516,7 @@ export async function runInstalledLargeDocumentSmoke(options = {}) {
     if (error instanceof RuntimeProcessFailure) {
       failureReason = error.reason;
       failureBoundary = error.diagnostic;
+      if (error.installStage !== undefined) failureReason += ` installStage=${error.installStage}`;
     }
   } finally {
     if (cleanupRoot !== undefined) {
@@ -555,7 +562,21 @@ export async function prepareRestartSafeRuntime(options = {}) {
       timeoutMs: INSTALL_TIMEOUT_MS,
       maxOutputBytes: MAX_MCP_FRAME_BYTES,
     });
-    assertSuccessfulOneShotProcess(result, false);
+    try {
+      assertSuccessfulOneShotProcess(result, false);
+    } catch (error) {
+      // Preserve timeout/overflow/cleanup precedence and never print raw command output.
+      if (error instanceof RuntimeProcessFailure && error.reason === "nonzero"
+        && result.stdout.length <= 4096) {
+        try {
+          const failure = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.stdout));
+          if (failure?.schemaVersion === 1 && failure.ok === false
+            && ["RUNTIME_INSTALL_FAILED", "RUNTIME_INSTALL_BUSY"].includes(failure.code)
+            && RUNTIME_INSTALL_STAGES.has(failure.stage)) error.installStage = failure.stage;
+        } catch { /* Malformed or non-allowlisted diagnostics stay private. */ }
+      }
+      throw error;
+    }
     const receipt = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.stdout));
     if (receipt?.code !== "RUNTIME_INSTALL_OK" || receipt.ok !== true || receipt.toolCount !== 9) {
       throw new Error("Restart-safe runtime installation failed.");

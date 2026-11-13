@@ -956,6 +956,26 @@ test("large-document smoke stage preserves only allowlisted process failure reas
   }
 });
 
+test("release diagnostics retain allowlisted runtime install stages without private output", async () => {
+  for (const stage of ["npm-ci", "npm-ls", "doctor", "acl", "quarantine", "publish"]) {
+    const receipt = `LARGE_DOCUMENT_SMOKE status=failed stage=runtime-install reason=nonzero installStage=${stage}`;
+    const result = await runStageCommand(
+      nodeStage("document-benchmark", `process.stdout.write(${JSON.stringify(receipt + "\nPRIVATE/path\n")}); process.exit(7)`),
+      { timeoutMs: 2_000, maxOutputBytes: 1_024 },
+    );
+    assert.deepEqual(result, {
+      status: "failed", diagnostic: { kind: "document-benchmark", command: 1, receipt },
+    });
+    assert.equal(formatReleaseStageDiagnostic(result.diagnostic), `DOCUMENT_BENCHMARK_FIRST_FAILURE command=1 ${receipt}`);
+  }
+  for (const stage of ["PRIVATE/path", "npm-ci PRIVATE_STDERR", "npm-ci\nPRIVATE/path", "unknown"]) {
+    assert.equal(formatReleaseStageDiagnostic({
+      kind: "document-benchmark", command: 1,
+      receipt: `LARGE_DOCUMENT_SMOKE status=failed stage=runtime-install reason=nonzero installStage=${stage}`,
+    }), undefined);
+  }
+});
+
 test("document benchmark stage maps a silent nonzero child to one fixed runner receipt", async () => {
   const result = await runStageCommand(
     nodeStage("document-benchmark", "process.exit(9)"),

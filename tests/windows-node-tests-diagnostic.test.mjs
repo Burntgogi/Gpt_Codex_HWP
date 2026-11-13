@@ -5,7 +5,7 @@ import { runWindowsNodeTestsDiagnostic } from "../scripts/windows-node-tests-dia
 
 const FULL_REPOSITORY_TEST_FILES = [
   "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
-  "governance-docs.test.mjs", "installed-runtime-smoke.test.mjs",
+  "governance-docs.test.mjs", "hono-security.test.mjs", "installed-runtime-smoke.test.mjs",
   "kordoc-runtime-ownership.test.mjs", "macos-node-tests-diagnostic.test.mjs",
   "macos-posix-controls.test.mjs", "node-memory-gate.test.mjs",
   "node-phase-a-evidence.test.mjs", "node-test-profiles.test.mjs",

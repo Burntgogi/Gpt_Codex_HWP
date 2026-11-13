@@ -20,11 +20,17 @@ const TOOL_NAMES = Object.freeze([
     "hwp_render_preview",
     "hwp_validate",
 ]);
+export const RUNTIME_INSTALL_STAGES = Object.freeze([
+    "parents", "lock", "existing-runtime", "stage-create", "acl", "manifest-copy",
+    "npm-ci", "npm-ls", "dependency-tree", "doctor", "receipt", "quarantine", "publish",
+]);
 export class RuntimeInstallError extends Error {
     code;
-    constructor(code) {
+    stage;
+    constructor(code, stage) {
         super(code);
         this.code = code;
+        this.stage = stage;
         this.name = "RuntimeInstallError";
     }
 }
@@ -33,32 +39,50 @@ export async function installRuntime(importMetaUrl, options = {}) {
     const now = options.now ?? (() => new Date());
     const randomId = options.randomId ?? (() => randomBytes(16).toString("hex"));
     const runCommand = options.runCommand ?? runBoundedCommand;
-    const secureDirectory = options.secureDirectory ?? secureRuntimeDirectory;
+    const secureDirectory = async (path) => {
+        try {
+            if (await (options.secureDirectory ?? secureRuntimeDirectory)(path))
+                return true;
+        }
+        catch { /* Only the fixed ACL boundary is public. */ }
+        throw new RuntimeInstallError("RUNTIME_INSTALL_FAILED", "acl");
+    };
     const finalRoot = resolveDurableRoot(identity);
     const versionRoot = dirname(finalRoot);
-    await ensureRuntimeParents(identity, secureDirectory);
     const platformKey = runtimePlatformKey(identity);
     const lockPath = join(versionRoot, `.${platformKey}.install.lock`);
-    const lock = await acquireInstallLock(lockPath, now(), randomId);
+    let stage = "parents";
+    let lock;
     let ownedStage;
     try {
+        await ensureRuntimeParents(identity, secureDirectory);
+        stage = "lock";
+        lock = await acquireInstallLock(lockPath, now(), randomId);
+        stage = "existing-runtime";
         const existing = await existingRuntime(importMetaUrl, identity, options, runCommand);
         if (existing !== undefined)
             return existing;
+        stage = "stage-create";
         const stagePath = join(versionRoot, `.${platformKey}.stage-${requiredRandomId(randomId())}`);
         await mkdir(stagePath, { recursive: false, mode: 0o700 });
         ownedStage = await ownDirectory(stagePath);
         if (!await secureDirectory(stagePath))
             throw installFailure();
+        stage = "manifest-copy";
         await copyManifestFiles(identity, stagePath);
+        stage = "npm-ci";
         await runNpm(identity, stagePath, [
             "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--install-links=true",
         ], runCommand);
+        stage = "npm-ls";
         const dependencyTree = await runNpm(identity, stagePath, [
             "ls", "--omit=dev", "--json", "--install-links=true",
         ], runCommand);
+        stage = "dependency-tree";
         assertDependencyTree(dependencyTree.stdout, identity);
+        stage = "doctor";
         const validation = await validateStagedRuntime(stagePath);
+        stage = "receipt";
         const receipt = buildReceipt(identity, now(), validation.toolCount);
         await writeFile(join(stagePath, "install-receipt.json"), `${JSON.stringify(receipt)}\n`, {
             encoding: "utf8",
@@ -66,22 +90,28 @@ export async function installRuntime(importMetaUrl, options = {}) {
             mode: 0o600,
         });
         if (await pathExists(finalRoot)) {
+            stage = "quarantine";
             const invalidPath = join(versionRoot, `.${platformKey}.invalid-${requiredRandomId(randomId())}`);
             await rename(finalRoot, invalidPath);
         }
+        stage = "publish";
         await rename(stagePath, finalRoot);
         ownedStage = undefined;
         return receipt;
     }
     catch (error) {
-        if (error instanceof RuntimeBootstrapError || error instanceof RuntimeInstallError)
+        if (error instanceof RuntimeBootstrapError)
             throw error;
-        throw installFailure();
+        if (error instanceof RuntimeInstallError) {
+            throw new RuntimeInstallError(error.code, error.stage ?? stage);
+        }
+        throw new RuntimeInstallError("RUNTIME_INSTALL_FAILED", stage);
     }
     finally {
         if (ownedStage !== undefined)
             await removeOwnedDirectory(ownedStage, randomId).catch(() => undefined);
-        await releaseInstallLock(lock).catch(() => undefined);
+        if (lock !== undefined)
+            await releaseInstallLock(lock).catch(() => undefined);
     }
 }
 export async function installRuntimeEntry(args = process.argv.slice(2), io = {
@@ -98,12 +128,16 @@ export async function installRuntimeEntry(args = process.argv.slice(2), io = {
         return 0;
     }
     catch (error) {
-        const code = error instanceof RuntimeInstallError || error instanceof RuntimeBootstrapError
-            ? error.code
-            : "RUNTIME_INSTALL_FAILED";
-        io.stdout(`${JSON.stringify({ schemaVersion: 1, code, ok: false })}\n`);
+        io.stdout(`${JSON.stringify(runtimeInstallFailureReport(error))}\n`);
         return 1;
     }
+}
+export function runtimeInstallFailureReport(error) {
+    const code = error instanceof RuntimeInstallError || error instanceof RuntimeBootstrapError
+        ? error.code : "RUNTIME_INSTALL_FAILED";
+    const stage = error instanceof RuntimeInstallError && error.stage !== undefined
+        && RUNTIME_INSTALL_STAGES.includes(error.stage) ? error.stage : undefined;
+    return Object.freeze({ schemaVersion: 1, code, ok: false, ...(stage === undefined ? {} : { stage }) });
 }
 async function existingRuntime(importMetaUrl, identity, options, runCommand) {
     try {
