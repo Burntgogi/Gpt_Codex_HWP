@@ -37,7 +37,7 @@
     "memory:gate": "node scripts/node-memory-gate.mjs evaluate",
     "verify:runtime-smoke": "node scripts/installed-runtime-smoke.mjs",
     "test:repository": "node --test --test-concurrency=1 tests/*.test.mjs",
-    "test:policy": "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs",
+    "test:policy": "node --test tests/workflow-policy.test.mjs tests/github-policy.test.mjs tests/dependency-contract.test.mjs tests/hono-security.test.mjs",
     "test:source": "npm --prefix packages/gpt-codex-hwp test",
     "test": "npm run test:repository && npm run test:official-doc && npm run test:source",
     "test:python": "npm --prefix packages/gpt-codex-hwp run test:python",

@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import {
   RuntimeInstallError,
   installRuntime,
+  runtimeInstallFailureReport,
   type RuntimeCommandSpec,
 } from "../src/install-runtime.js";
 import {
@@ -142,6 +143,7 @@ test("runtime installer rejects an active lock without touching an earlier versi
     }),
     (error: unknown) => error instanceof RuntimeInstallError
       && error.code === "RUNTIME_INSTALL_BUSY"
+      && error.stage === "lock"
       && error.message === "RUNTIME_INSTALL_BUSY",
   );
   assert.equal(await readFile(join(oldRuntime, "keep.txt"), "utf8"), "keep\n");
@@ -167,6 +169,7 @@ test("runtime installer removes only its failed stage and emits no private comma
     }),
     (error: unknown) => error instanceof RuntimeInstallError
       && error.code === "RUNTIME_INSTALL_FAILED"
+      && error.stage === "npm-ci"
       && error.message === "RUNTIME_INSTALL_FAILED",
   );
   const versionRoot = join(fixture.codexHome, "plugin-runtime-data", PRODUCT, PLUGIN_VERSION);
@@ -286,8 +289,66 @@ test("runtime installer rejects doctor failure and tool-count drift", async (t) 
         secureDirectory: async () => true,
       }),
       (error: unknown) => error instanceof RuntimeInstallError
-        && error.code === "RUNTIME_INSTALL_FAILED",
+        && error.code === "RUNTIME_INSTALL_FAILED" && error.stage === "doctor",
     );
+  }
+});
+
+test("runtime installer distinguishes npm ci, npm ls, dependency tree and ACL failures", async (t) => {
+  for (const boundary of ["npm-ci", "npm-ls", "dependency-tree", "acl"] as const) {
+    const fixture = await createInstallerFixture(t);
+    const runner = createNpmRunner([]);
+    await assert.rejects(installRuntime(fixture.installerUrl, {
+      codexHome: fixture.codexHome,
+      runCommand: async (spec) => {
+        const result = await runner(spec);
+        if ((boundary === "npm-ci" && spec.args.includes("ci"))
+          || (boundary === "npm-ls" && spec.args.includes("ls"))) {
+          return { ...result, code: 1, stderr: Buffer.from("PRIVATE/path PRIVATE_STDERR") };
+        }
+        return boundary === "dependency-tree" && spec.args.includes("ls")
+          ? { ...result, stdout: Buffer.from("PRIVATE/path") } : result;
+      },
+      secureDirectory: async () => {
+        if (boundary === "acl") throw new Error("PRIVATE/path");
+        return true;
+      },
+    }), (error: unknown) => {
+      assert.deepEqual(runtimeInstallFailureReport(error), {
+        schemaVersion: 1, code: "RUNTIME_INSTALL_FAILED", ok: false, stage: boundary,
+      });
+      return true;
+    });
+    await assert.rejects(lstat(fixture.durableRoot), { code: "ENOENT" });
+  }
+});
+
+test("runtime installer labels failed quarantine renames and preserves the existing runtime", async (t) => {
+  const fixture = await createInstallerFixture(t);
+  const versionRoot = join(fixture.durableRoot, "..");
+  const invalidPath = join(versionRoot, `.${RUNTIME_KEY}.invalid-${"c".repeat(32)}`);
+  for (const path of [fixture.durableRoot, invalidPath]) {
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, "keep.txt"), "preserve\n");
+  }
+  await assert.rejects(installRuntime(fixture.installerUrl, {
+    codexHome: fixture.codexHome,
+    randomId: sequence("a".repeat(32), "b".repeat(32), "c".repeat(32)),
+    runCommand: createNpmRunner([]),
+    secureDirectory: async () => true,
+  }), (error: unknown) => error instanceof RuntimeInstallError && error.stage === "quarantine");
+  assert.equal(await readFile(join(fixture.durableRoot, "keep.txt"), "utf8"), "preserve\n");
+  assert.equal((await readdir(versionRoot)).some((name) => name.includes(".stage-")), false);
+});
+
+test("runtime failure reports omit exception text and unknown stage values", () => {
+  const forged = Object.assign(new RuntimeInstallError("RUNTIME_INSTALL_FAILED"), {
+    stage: "PRIVATE/path", message: "PRIVATE_STDERR",
+  });
+  for (const error of [forged, new Error("PRIVATE/path")]) {
+    assert.deepEqual(runtimeInstallFailureReport(error), {
+      schemaVersion: 1, code: "RUNTIME_INSTALL_FAILED", ok: false,
+    });
   }
 });
 

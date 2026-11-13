@@ -11,7 +11,7 @@ import { PUBLIC_PROCESS_FAILURE_DIAGNOSTICS } from "./public-content-policy.mjs"
 
 const PR_REPOSITORY_TEST_FILES = Object.freeze([
   "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
-  "governance-docs.test.mjs", "kordoc-runtime-ownership.test.mjs",
+  "governance-docs.test.mjs", "hono-security.test.mjs", "kordoc-runtime-ownership.test.mjs",
   "macos-node-tests-diagnostic.test.mjs", "macos-posix-controls.test.mjs",
   "platform-receipts.test.mjs", "project-metadata.test.mjs",
   "public-content-policy.test.mjs",
@@ -21,7 +21,7 @@ const PR_REPOSITORY_TEST_FILES = Object.freeze([
 ]);
 const FULL_REPOSITORY_TEST_FILES = Object.freeze([
   "dependency-contract.test.mjs", "doctor.test.mjs", "github-policy.test.mjs",
-  "governance-docs.test.mjs", "installed-runtime-smoke.test.mjs",
+  "governance-docs.test.mjs", "hono-security.test.mjs", "installed-runtime-smoke.test.mjs",
   "kordoc-runtime-ownership.test.mjs", "macos-node-tests-diagnostic.test.mjs",
   "macos-posix-controls.test.mjs", "node-memory-gate.test.mjs",
   "node-phase-a-evidence.test.mjs", "node-test-profiles.test.mjs",
