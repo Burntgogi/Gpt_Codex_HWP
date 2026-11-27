@@ -19,7 +19,7 @@ export const SOURCE_NODE_TEST_FILES = Object.freeze([
   "oneshot-tool-schemas.test.ts", "oneshot.test.ts",
   "output-budget-atomicity.test.ts", "patch.test.ts", "paths.test.ts",
   "protection.test.ts", "public-runtime-privacy.test.ts", "read-worker-safety.test.ts",
-  "release-artifacts.test.ts", "release-metadata.test.ts", "result.test.ts",
+  "reflow-layout.test.ts", "release-artifacts.test.ts", "release-metadata.test.ts", "result.test.ts",
   "rhwp-backend.test.ts", "runtime-bootstrap.test.ts", "runtime-installation.test.ts",
   "runtime-projection.test.ts", "tools.test.ts",
   "validation-regressions.test.ts", "windows-hosted-diagnostic.test.ts",

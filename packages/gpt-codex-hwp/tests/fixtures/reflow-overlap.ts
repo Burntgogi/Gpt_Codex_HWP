@@ -3,10 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { markdownToHwpx, renderHwpxToSvg, validateHwpx } from "kordoc";
 import { normalizeGeneratedFontReferences } from "../../src/shared/hwpx-font-integrity.js";
-import { handleHwpInsertImage } from "../../src/tools/assets.js";
 
-export async function createReflowOverlapFixture(root: string) {
-  await mkdir(root, { recursive: true });
+export async function createReflowSource() {
   const markdown = [
     "# 표와 그림 겹침 재현",
     "",
@@ -24,6 +22,13 @@ export async function createReflowOverlapFixture(root: string) {
     "AFTERIMAGEMARKER 그림 다음 문단입니다.",
   ].join("\n");
   const source = (await normalizeGeneratedFontReferences(await markdownToHwpx(markdown))).bytes;
+  return { source, markdown };
+}
+
+export async function createReflowOverlapFixture(root: string) {
+  const { handleHwpInsertImage } = await import("../../src/tools/assets.js");
+  await mkdir(root, { recursive: true });
+  const { source, markdown } = await createReflowSource();
   const sourcePath = join(root, "source.hwpx");
   const imagePath = join(root, "rectangle.svg");
   const outputPath = join(root, "mixed.hwpx");

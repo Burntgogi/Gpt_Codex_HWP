@@ -36,8 +36,8 @@
     },
     {
       "path": "dist/install-runtime.js",
-      "size": 19225,
-      "sha256": "a16bdb32c576fed5cbac66ecf4423f90f7ef938aeec37edc2d9c5ece36f34d24"
+      "size": 20052,
+      "sha256": "f6384be7e30cf458b6fba267b5cbffa54e3c4648c8085a768e41ff550bd93625"
     },
     {
       "path": "dist/mcp-main.js",
@@ -387,7 +387,7 @@
     {
       "path": "scripts/kordoc-runtime-verifier.mjs",
       "size": 10677,
-      "sha256": "0d2a6e89e0030103538f19a1831d37e9874790cbbbe7b84ba438cda1d01853de"
+      "sha256": "0230f941cb6e090803db93e12a9953af39d32d8c52cde4554e2aa3817e7b4bb2"
     },
     {
       "path": "vendor/kordoc-core/LICENSE",
@@ -397,7 +397,7 @@
     {
       "path": "vendor/kordoc-core/PROVENANCE.json",
       "size": 6210,
-      "sha256": "8137904c89cafa765c1d70ea8b266018fe79345adbe6279f3087d5d395fa12b9"
+      "sha256": "db8c3b59208e4afe5a83a492d718f9a460092c85672dc3d447af0530cddac9a0"
     },
     {
       "path": "vendor/kordoc-core/README.md",
@@ -456,8 +456,8 @@
     },
     {
       "path": "vendor/kordoc-core/dist/chunk-QMJJI6TD.js",
-      "size": 45543,
-      "sha256": "1aada2642704e20a36df88268b786e486294d1e943e54d196340d53fc750c3f8"
+      "size": 47083,
+      "sha256": "1e24da8ebfc2a6b14d605af890c3b9035eceda0c70a3b6bf55f7ca3491998ea8"
     },
     {
       "path": "vendor/kordoc-core/dist/chunk-R2H34FY5.cjs",
@@ -496,8 +496,8 @@
     },
     {
       "path": "vendor/kordoc-core/dist/index.cjs",
-      "size": 730184,
-      "sha256": "44c36eabab289c75d0f78663e6d990de5af116a60c7f6f5130cd9976c39f6160"
+      "size": 731724,
+      "sha256": "4dd09a6f9ad36981977ac597bf6381d100e46efb4ffec8e86972bea75233d576"
     },
     {
       "path": "vendor/kordoc-core/dist/index.d.cts",
@@ -511,8 +511,8 @@
     },
     {
       "path": "vendor/kordoc-core/dist/index.js",
-      "size": 702192,
-      "sha256": "e7de567e1abc2a961c4e190529f2f7d52763c468a687ec5b6b9aabbd5e540010"
+      "size": 703732,
+      "sha256": "3dec1ed38b566c22a4301b36726985e23af11ea042bb33bbcd06ad923b725f96"
     },
     {
       "path": "vendor/kordoc-core/dist/page-range-737B4EZW.js",

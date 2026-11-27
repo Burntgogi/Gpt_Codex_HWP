@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -38,6 +38,8 @@ test("runtime installer publishes a verified runtime and reuses it without npm c
   const fixture = await createInstallerFixture(t);
   const commands: RuntimeCommandSpec[] = [];
   const runCommand = createNpmRunner(commands);
+  const temporaryMoveErrors = process.platform === "win32" ? ["EPERM", "EBUSY"] : [];
+  let moveAttempts = 0;
 
   const first = await installRuntime(fixture.installerUrl, {
     codexHome: fixture.codexHome,
@@ -45,10 +47,17 @@ test("runtime installer publishes a verified runtime and reuses it without npm c
     randomId: sequence("1".repeat(32), "2".repeat(32), "3".repeat(32)),
     runCommand,
     secureDirectory: async () => true,
+    renameDirectory: async (source, destination) => {
+      moveAttempts++;
+      const code = temporaryMoveErrors.shift();
+      if (code) throw Object.assign(new Error("Directory in use"), { code });
+      await rename(source, destination);
+    },
   });
   assert.equal(first.code, "RUNTIME_INSTALL_OK");
   assert.equal(first.toolCount, 9);
   assert.equal(first.dependencyCount, 1);
+  assert.equal(moveAttempts, process.platform === "win32" ? 3 : 1);
   assert.equal((await lstat(join(fixture.durableRoot, "node_modules", "zod", "package.json"))).isFile(), true);
   assert.deepEqual(commands[0].args.slice(-6), [
     "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--install-links=true",

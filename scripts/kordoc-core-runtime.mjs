@@ -172,7 +172,94 @@ async function validatedInputs(tarballPath, expectedSource) {
   if (sourcePackage.repository?.url !== "https://github.com/chrisryugj/kordoc.git") {
     throw new Error("Kordoc repository does not match the audited source.");
   }
+  if (archiveIntegrity === KORDOC_SOURCE.integrity) patchReflowLayout(files);
   return { archiveIntegrity, files, sourcePackage };
+}
+
+// Keep these changes reproducible from the authenticated 3.18.1 archive.
+// Hancom layout-cache rendering keeps the upstream geometry.
+function patchReflowLayout(files) {
+  const renderers = [
+    ["dist/chunk-QMJJI6TD.js", "num2"],
+    ["dist/index.js", "num3"],
+    ["dist/index.cjs", "num3"],
+  ];
+  const tableHeight = 'const h = o.tag === "tbl" ? Math.max(o.height, measureTableHeight(o.el)) : o.height;';
+  const cellHeight = "c.rs === 1 ? cellContentExtent(c) : void 0";
+
+  for (const [path, numberAttribute] of renderers) {
+    let source = files.get(path)?.toString("utf8");
+    const replace = (before, after, occurrences = 1) => {
+      if (source === undefined || source.split(before).length !== occurrences + 1) {
+        throw new Error(`Kordoc reflow patch did not match the pinned renderer: ${path}`);
+      }
+      source = source.replaceAll(before, after);
+    };
+
+    replace(
+      "function reflowPara(p, doc, styles, areaW, startV, mode) {",
+      `function reflowPictureSpacing(o) {
+  if (o.inline || o.tag !== "pic" || o.el.getAttribute("textWrap") !== "TOP_AND_BOTTOM") return null;
+  const pos = findChildByLocalName(o.el, "pos");
+  if (!pos || pos.getAttribute("vertRelTo") !== "PARA") return null;
+  const margins = findChildByLocalName(o.el, "outMargin");
+  return {
+    before: Math.max(0, ${numberAttribute}(margins, "top") + ${numberAttribute}(pos, "vertOffset")),
+    after: Math.max(0, ${numberAttribute}(margins, "bottom"))
+  };
+}
+function reflowPictureStart(m, baseV) {
+  if (!m.chars.some((c) => c.ch !== "")) return baseV;
+  const last = m.segs[m.segs.length - 1];
+  return last ? last.vertpos + last.textheight + last.spacing : baseV;
+}
+function reflowPara(p, doc, styles, areaW, startV, mode) {`,
+    );
+    replace(
+      `${tableHeight}
+    objBottom = Math.max(objBottom, startV + h);`,
+      `const h = o.tag === "tbl" ? Math.max(o.height, measureTableHeight(o.el, true)) : o.height;
+    const picture = reflowPictureSpacing(o);
+    const bottom = picture ? (text.length ? textBottom : startV) + picture.before + h + picture.after : startV + h;
+    objBottom = Math.max(objBottom, bottom);`,
+    );
+    replace("function cellContentExtent(cell) {", "function cellContentExtent(cell, syntheticReflow) {");
+    replace(
+      tableHeight,
+      'const h = o.tag === "tbl" ? Math.max(o.height, measureTableHeight(o.el, syntheticReflow)) : o.height;',
+    );
+    replace(
+      '      const pos = findChildByLocalName(o.el, "pos");',
+      `      const picture = syntheticReflow && reflowPictureSpacing(o);
+      if (picture) {
+        ext = Math.max(ext, reflowPictureStart(m, baseV) + picture.before + o.height + picture.after);
+        continue;
+      }
+      const pos = findChildByLocalName(o.el, "pos");`,
+    );
+    replace("function measureTableHeight(tbl) {", "function measureTableHeight(tbl, syntheticReflow) {");
+    const colX = `const colX = solveBoundaries(colCons, nCols, ${numberAttribute}(tblSz, "width") || void 0);`;
+    replace(colX, `${colX}\n  const syntheticReflow = ctx.syntheticReflow;`);
+    replace(
+      cellHeight,
+      "c.rs === 1 ? cellContentExtent(c, syntheticReflow) + (syntheticReflow ? c.marginT + c.marginB : 0) : void 0",
+      2,
+    );
+    replace("const extent = cellContentExtent(c);", "const extent = cellContentExtent(c, syntheticReflow);");
+    replace(
+      "const { x, y } = anchorObject(o, ox, oy, baseV, areaW, ctx);",
+      `const pictureV = ctx.syntheticReflow && reflowPictureSpacing(o) ? reflowPictureStart(m, baseV) : baseV;
+      const { x, y } = anchorObject(o, ox, oy, pictureV, areaW, ctx);`,
+    );
+    replace(
+      "y = oy + anchor + omT + vo;",
+      `const picture = ctx.syntheticReflow && reflowPictureSpacing(o);
+    y = picture ? oy + baseV + picture.before : oy + anchor + omT + vo;`,
+    );
+    replace("    ...ctxBase,\n", "    ...ctxBase,\n    syntheticReflow: !hasCache,\n");
+
+    files.set(path, Buffer.from(source, "utf8"));
+  }
 }
 
 export async function buildKordocCoreRuntime({

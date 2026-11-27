@@ -368,6 +368,21 @@ function pitchFor(height, geom) {
       return Math.round(height * 1.6);
   }
 }
+function reflowPictureSpacing(o) {
+  if (o.inline || o.tag !== "pic" || o.el.getAttribute("textWrap") !== "TOP_AND_BOTTOM") return null;
+  const pos = findChildByLocalName(o.el, "pos");
+  if (!pos || pos.getAttribute("vertRelTo") !== "PARA") return null;
+  const margins = findChildByLocalName(o.el, "outMargin");
+  return {
+    before: Math.max(0, num2(margins, "top") + num2(pos, "vertOffset")),
+    after: Math.max(0, num2(margins, "bottom"))
+  };
+}
+function reflowPictureStart(m, baseV) {
+  if (!m.chars.some((c) => c.ch !== "")) return baseV;
+  const last = m.segs[m.segs.length - 1];
+  return last ? last.vertpos + last.textheight + last.spacing : baseV;
+}
 function reflowPara(p, doc, styles, areaW, startV, mode) {
   const m = buildPara(p);
   if (m.segs.length > 0) return null;
@@ -424,8 +439,10 @@ function reflowPara(p, doc, styles, areaW, startV, mode) {
   const textBottom = startV + wrap.starts.length * pitch;
   let objBottom = startV;
   for (const o of m.objs) {
-    const h = o.tag === "tbl" ? Math.max(o.height, measureTableHeight(o.el)) : o.height;
-    objBottom = Math.max(objBottom, startV + h);
+    const h = o.tag === "tbl" ? Math.max(o.height, measureTableHeight(o.el, true)) : o.height;
+    const picture = reflowPictureSpacing(o);
+    const bottom = picture ? (text.length ? textBottom : startV) + picture.before + h + picture.after : startV + h;
+    objBottom = Math.max(objBottom, bottom);
   }
   return { paraBottom: Math.max(textBottom, objBottom), spaceAfter: geom.spaceAfter };
 }
@@ -744,7 +761,8 @@ function drawPara(p, ox, oy, areaW, ctx, depth, segPages) {
       drawObject(o, x, yTop, baseV, areaW, ctx, depth);
     } else {
       if (segPages && segPages[0] !== void 0) ctx.page = segPages[0];
-      const { x, y } = anchorObject(o, ox, oy, baseV, areaW, ctx);
+      const pictureV = ctx.syntheticReflow && reflowPictureSpacing(o) ? reflowPictureStart(m, baseV) : baseV;
+      const { x, y } = anchorObject(o, ox, oy, pictureV, areaW, ctx);
       drawObject(o, x, y, baseV, areaW, ctx, depth);
     }
   }
@@ -771,7 +789,8 @@ function anchorObject(o, ox, oy, baseV, areaW, ctx) {
   } else if (wrap === "TOP_AND_BOTTOM") {
     const pushed = baseV - (omT + h + omB);
     const anchor = pushed >= -100 ? pushed : baseV;
-    y = oy + anchor + omT + vo;
+    const picture = ctx.syntheticReflow && reflowPictureSpacing(o);
+    y = picture ? oy + baseV + picture.before : oy + anchor + omT + vo;
   } else {
     y = oy + baseV + vo;
   }
@@ -852,7 +871,7 @@ function drawShape(o, x, y, ctx, depth) {
     for (const p of elements2(sub)) if (ln2(p) === "p") drawPara(p, x, y, w, ctx, depth + 1);
   }
 }
-function cellContentExtent(cell) {
+function cellContentExtent(cell, syntheticReflow) {
   if (!cell.sub) return 0;
   let ext = 0;
   for (const p of elements2(cell.sub)) {
@@ -862,8 +881,13 @@ function cellContentExtent(cell) {
     const baseV = m.segs[0]?.vertpos ?? 0;
     for (const o of m.objs) {
       if (o.inline) {
-        const h = o.tag === "tbl" ? Math.max(o.height, measureTableHeight(o.el)) : o.height;
+        const h = o.tag === "tbl" ? Math.max(o.height, measureTableHeight(o.el, syntheticReflow)) : o.height;
         ext = Math.max(ext, baseV + h);
+        continue;
+      }
+      const picture = syntheticReflow && reflowPictureSpacing(o);
+      if (picture) {
+        ext = Math.max(ext, reflowPictureStart(m, baseV) + picture.before + o.height + picture.after);
         continue;
       }
       const pos = findChildByLocalName(o.el, "pos");
@@ -913,12 +937,12 @@ function collectCells(tbl) {
   }
   return cells;
 }
-function measureTableHeight(tbl) {
+function measureTableHeight(tbl, syntheticReflow) {
   const cells = collectCells(tbl);
   if (cells.length === 0 || cells.length > 4096) return 0;
   const nRows = Math.max(...cells.map((c) => c.ra + c.rs));
   const rowH = solveRowHeights(
-    cells.map((c) => ({ rowAddr: c.ra, rowSpan: c.rs, height: c.h, contentH: c.rs === 1 ? cellContentExtent(c) : void 0 })),
+    cells.map((c) => ({ rowAddr: c.ra, rowSpan: c.rs, height: c.h, contentH: c.rs === 1 ? cellContentExtent(c, syntheticReflow) + (syntheticReflow ? c.marginT + c.marginB : 0) : void 0 })),
     nRows
   );
   let sum = 0;
@@ -938,8 +962,9 @@ function drawTable(tbl, tx, ty, ctx, depth) {
   const nRows = Math.max(...cells.map((c) => c.ra + c.rs));
   const colCons = cells.map((c) => ({ a: c.ca, b: c.ca + c.cs, size: c.w }));
   const colX = solveBoundaries(colCons, nCols, num2(tblSz, "width") || void 0);
+  const syntheticReflow = ctx.syntheticReflow;
   const rowH = solveRowHeights(
-    cells.map((c) => ({ rowAddr: c.ra, rowSpan: c.rs, height: c.h, contentH: c.rs === 1 ? cellContentExtent(c) : void 0 })),
+    cells.map((c) => ({ rowAddr: c.ra, rowSpan: c.rs, height: c.h, contentH: c.rs === 1 ? cellContentExtent(c, syntheticReflow) + (syntheticReflow ? c.marginT + c.marginB : 0) : void 0 })),
     nRows
   );
   const rowY = [0];
@@ -959,7 +984,7 @@ function drawTable(tbl, tx, ty, ctx, depth) {
     const { c } = g;
     if (!c.sub) continue;
     const innerH = g.h - c.marginT - c.marginB;
-    const extent = cellContentExtent(c);
+    const extent = cellContentExtent(c, syntheticReflow);
     const va = c.sub.getAttribute("vertAlign") ?? "TOP";
     let yoff = 0;
     if (va === "CENTER") yoff = Math.max(0, (innerH - extent) / 2);
@@ -1076,6 +1101,7 @@ function renderSectionToPages(root, geom, ctxBase, hasCache, reflowMode) {
   }
   const ctx = {
     ...ctxBase,
+    syntheticReflow: !hasCache,
     pages: Array.from({ length: nPages }, () => []),
     page: 0,
     geom
