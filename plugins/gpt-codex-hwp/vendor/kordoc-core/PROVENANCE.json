@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatorVersion": 3,
+  "generatorVersion": 4,
   "source": {
     "name": "kordoc",
     "version": "3.18.1",
@@ -63,8 +63,8 @@
     },
     {
       "path": "dist/chunk-QMJJI6TD.js",
-      "size": 45543,
-      "sha256": "1aada2642704e20a36df88268b786e486294d1e943e54d196340d53fc750c3f8"
+      "size": 47083,
+      "sha256": "1e24da8ebfc2a6b14d605af890c3b9035eceda0c70a3b6bf55f7ca3491998ea8"
     },
     {
       "path": "dist/chunk-R2H34FY5.cjs",
@@ -103,8 +103,8 @@
     },
     {
       "path": "dist/index.cjs",
-      "size": 730184,
-      "sha256": "44c36eabab289c75d0f78663e6d990de5af116a60c7f6f5130cd9976c39f6160"
+      "size": 731724,
+      "sha256": "4dd09a6f9ad36981977ac597bf6381d100e46efb4ffec8e86972bea75233d576"
     },
     {
       "path": "dist/index.d.cts",
@@ -118,8 +118,8 @@
     },
     {
       "path": "dist/index.js",
-      "size": 702192,
-      "sha256": "e7de567e1abc2a961c4e190529f2f7d52763c468a687ec5b6b9aabbd5e540010"
+      "size": 703732,
+      "sha256": "3dec1ed38b566c22a4301b36726985e23af11ea042bb33bbcd06ad923b725f96"
     },
     {
       "path": "dist/page-range-737B4EZW.js",

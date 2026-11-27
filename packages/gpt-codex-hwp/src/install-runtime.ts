@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 import { applyWindowsOwnerOnlyAcl } from "./shared/windows-owner-only-acl.js";
@@ -32,6 +33,7 @@ const LOCK_STALE_MS = 15 * 60 * 1000;
 const NPM_TIMEOUT_MS = 10 * 60 * 1000;
 const COMMAND_OUTPUT_BYTES = 64 * 1024;
 const LOCK_BYTES = 4096;
+const WINDOWS_RENAME_RETRIES_MS = [50, 150, 450];
 const TOOL_NAMES = Object.freeze([
   "hwp_create_svg_asset",
   "hwp_detect_format",
@@ -79,6 +81,7 @@ export interface RuntimeInstallOptions extends RuntimeBootstrapOptions {
   readonly randomId?: () => string;
   readonly runCommand?: (spec: RuntimeCommandSpec) => Promise<RuntimeCommandResult>;
   readonly secureDirectory?: (path: string) => Promise<boolean>;
+  readonly renameDirectory?: typeof rename;
 }
 
 export async function installRuntime(
@@ -89,6 +92,7 @@ export async function installRuntime(
   const now = options.now ?? (() => new Date());
   const randomId = options.randomId ?? (() => randomBytes(16).toString("hex"));
   const runCommand = options.runCommand ?? runBoundedCommand;
+  const renameDirectory = options.renameDirectory ?? rename;
   const secureDirectory = async (path: string): Promise<boolean> => {
     try {
       if (await (options.secureDirectory ?? secureRuntimeDirectory)(path)) return true;
@@ -140,10 +144,10 @@ export async function installRuntime(
     if (await pathExists(finalRoot)) {
       stage = "quarantine";
       const invalidPath = join(versionRoot, `.${platformKey}.invalid-${requiredRandomId(randomId())}`);
-      await rename(finalRoot, invalidPath);
+      await moveRuntimeDirectory(finalRoot, invalidPath, identity.platform, renameDirectory);
     }
     stage = "publish";
-    await rename(stagePath, finalRoot);
+    await moveRuntimeDirectory(stagePath, finalRoot, identity.platform, renameDirectory);
     ownedStage = undefined;
     return receipt;
   } catch (error) {
@@ -156,6 +160,26 @@ export async function installRuntime(
     if (ownedStage !== undefined) await removeOwnedDirectory(ownedStage, randomId).catch(() => undefined);
     if (lock !== undefined) await releaseInstallLock(lock).catch(() => undefined);
   }
+}
+
+async function moveRuntimeDirectory(
+  source: string,
+  destination: string,
+  platform: NodeJS.Platform,
+  renameDirectory: typeof rename,
+): Promise<void> {
+  if (platform === "win32") {
+    for (const wait of WINDOWS_RENAME_RETRIES_MS) {
+      try {
+        await renameDirectory(source, destination);
+        return;
+      } catch (error) {
+        if (!["EACCES", "EPERM", "EBUSY"].some((code) => hasCode(error, code))) throw error;
+        await delay(wait);
+      }
+    }
+  }
+  await renameDirectory(source, destination);
 }
 
 export async function installRuntimeEntry(

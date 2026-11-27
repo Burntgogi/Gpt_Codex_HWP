@@ -10,7 +10,7 @@ export const KORDOC_SOURCE = Object.freeze({
   integrity: "sha512-/SrgNK9RKnz1wdlhOvBeJi6+pNSO+vZeBHMxKd8TvfIkuinQBpwbE+W76TGNsMC7bxx2NJhNQAJPqCyD5ltiGA==",
 });
 
-export const KORDOC_GENERATOR_VERSION = 3;
+export const KORDOC_GENERATOR_VERSION = 4;
 export const KORDOC_LIMITS = Object.freeze({
   archiveBytes: 32 * 1024 * 1024,
   expandedBytes: 64 * 1024 * 1024,

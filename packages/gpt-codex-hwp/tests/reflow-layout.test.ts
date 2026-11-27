@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import { DOMParser } from "@xmldom/xmldom";
 import JSZip from "jszip";
 import { renderHwpxToSvg } from "kordoc";
-import { createReflowOverlapFixture } from "../tests/fixtures/reflow-overlap.js";
+import { createReflowOverlapFixture } from "./fixtures/reflow-overlap.js";
 
 let root: string;
 let fixture: Awaited<ReturnType<typeof createReflowOverlapFixture>>;
@@ -57,18 +57,46 @@ for (const label of ["table-only", "table-and-image"] as const) {
     // actual glyph descenders need additional room. This needs no installed font.
     assert.ok(lastBaseline <= rowEdges[2] - bottomPadding,
       `${label}: last baseline ${lastBaseline}pt, row bottom ${rowEdges[2]}pt, padding ${bottomPadding}pt`);
+    const nextParagraph = texts.find((node) => node.textContent?.startsWith("AFTERTABLEMARKER"));
+    assert.ok(nextParagraph);
+    assert.ok(Number(nextParagraph.getAttribute("y")) - Number(nextParagraph.getAttribute("font-size")) * 0.85
+      >= rowEdges[3] - 0.02, "the next paragraph starts after the whole table");
   });
 }
 
 test("after-paragraph image reserves space between its neighboring paragraphs", () => {
-  const texts = svgElements(fixture.mixedPreview.svg, "text");
+  assertPictureSpacing(fixture.mixedPreview.svg);
+});
+
+test("paragraph-anchored top-and-bottom image reserves its margins during synthetic reflow", async () => {
+  const zip = await JSZip.loadAsync(fixture.mixed);
+  const path = "Contents/section0.xml";
+  const section = new DOMParser().parseFromString(await zip.file(path)!.async("text"), "text/xml");
+  const picture = section.getElementsByTagName("hp:pic")[0];
+  assert.ok(picture);
+  const anchor = picture.getElementsByTagName("hp:pos")[0];
+  const margin = picture.getElementsByTagName("hp:outMargin")[0];
+  assert.ok(anchor && margin);
+  anchor.setAttribute("treatAsChar", "0");
+  anchor.setAttribute("vertRelTo", "PARA");
+  margin.setAttribute("top", "300");
+  margin.setAttribute("bottom", "400");
+  zip.file(path, section.toString());
+
+  const preview = await renderHwpxToSvg(await zip.generateAsync({ type: "uint8array" }), { reflow: true });
+  assertPictureSpacing(preview.svg, 4);
+});
+
+function assertPictureSpacing(svg: string, bottomMargin = 0) {
+  const texts = svgElements(svg, "text");
   const beforeImage = texts.find((node) => node.textContent?.startsWith("IMAGEANCHOR"));
   const afterImage = texts.find((node) => node.textContent?.startsWith("AFTERIMAGEMARKER"));
-  const images = svgElements(fixture.mixedPreview.svg, "use");
+  const images = svgElements(svg, "use");
   assert.ok(beforeImage && afterImage);
   assert.equal(images.length, 1);
   const top = Number(images[0].getAttribute("y"));
   const bottom = top + Number(images[0].getAttribute("height"));
-  assert.ok(top > Number(beforeImage.getAttribute("y")));
-  assert.ok(bottom <= Number(afterImage.getAttribute("y")) - Number(afterImage.getAttribute("font-size")) * 0.85 + 0.02);
-});
+  assert.ok(top > Number(beforeImage.getAttribute("y")), "the picture starts after the preceding text");
+  assert.ok(bottom + bottomMargin <= Number(afterImage.getAttribute("y")) - Number(afterImage.getAttribute("font-size")) * 0.85 + 0.02,
+    "the text after the picture starts below its bottom margin");
+}
