@@ -1,20 +1,53 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { after, before, test } from "node:test";
+import { before, test } from "node:test";
 import { DOMParser } from "@xmldom/xmldom";
 import JSZip from "jszip";
 import { renderHwpxToSvg } from "kordoc";
-import { createReflowOverlapFixture } from "./fixtures/reflow-overlap.js";
+import { createReflowSource } from "./fixtures/reflow-overlap.js";
 
-let root: string;
-let fixture: Awaited<ReturnType<typeof createReflowOverlapFixture>>;
+let fixture: Awaited<ReturnType<typeof createFixture>>;
 before(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), "hwp-reflow-overlap-")));
-  fixture = await createReflowOverlapFixture(root);
+  fixture = await createFixture();
 });
-after(async () => { if (root) await rm(root, { recursive: true, force: true, maxRetries: 5 }); });
+
+async function createFixture() {
+  const { source } = await createReflowSource();
+  const zip = await JSZip.loadAsync(source);
+  const sectionPath = "Contents/section0.xml";
+  const manifestPath = "Contents/content.hpf";
+  const section = new DOMParser().parseFromString(await zip.file(sectionPath)!.async("text"), "text/xml");
+  const anchor = Array.from(section.documentElement.childNodes).find(
+    (node) => node.nodeName === "hp:p" && node.textContent?.startsWith("IMAGEANCHOR"),
+  );
+  assert.ok(anchor);
+
+  // Give the renderer the same paragraph and picture geometry as the manual insertion fixture.
+  const imageParagraph = new DOMParser().parseFromString(
+    `<hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+              xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core" paraPrIDRef="0">
+       <hp:run charPrIDRef="0">
+         <hp:pic textWrap="TOP_AND_BOTTOM">
+           <hp:sz width="11906" height="5953"/>
+           <hp:pos treatAsChar="1" vertRelTo="PARA" horzRelTo="PARA"/>
+           <hp:outMargin top="0" bottom="0"/>
+           <hc:img binaryItemIDRef="image1"/>
+         </hp:pic>
+       </hp:run>
+     </hp:p>`, "text/xml",
+  ).documentElement;
+  section.documentElement.insertBefore(section.importNode(imageParagraph, true), anchor.nextSibling);
+  zip.file(sectionPath, section.toString());
+  const manifest = await zip.file(manifestPath)!.async("text");
+  zip.file(manifestPath, manifest.replace("</opf:manifest>",
+    '<opf:item id="image1" href="BinData/image1.png" media-type="image/png"/></opf:manifest>'));
+  zip.file("BinData/image1.png",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    { base64: true });
+  const mixed = await zip.generateAsync({ type: "uint8array" });
+  const sourcePreview = await renderHwpxToSvg(source, { reflow: true });
+  const mixedPreview = await renderHwpxToSvg(mixed, { reflow: true });
+  return { source, mixed, sourcePreview, mixedPreview };
+}
 
 function svgElements(svg: string, tag: string) {
   return Array.from(new DOMParser().parseFromString(svg, "image/svg+xml").getElementsByTagName(tag));
